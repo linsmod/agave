@@ -160,7 +160,10 @@ void ResourceHandleInternal::onData(const char* data, unsigned int length)
     if (m_cancelled || !m_client || !length)
         return;
 
-    m_client->didReceiveData(m_handle, data, (int)length, (int)length);
+    /* The last argument is the number of bytes received *so far*, not the size
+     * of this chunk: WebCore sizes its buffers from it. */
+    m_totalReceived += (int)length;
+    m_client->didReceiveData(m_handle, data, (int)length, m_totalReceived);
 }
 
 void ResourceHandleInternal::onComplete()

@@ -39,6 +39,7 @@ public:
         , m_hasResponse(false)
         , m_hasDownloadClient(false)
         , m_forSavingResource(false)
+        , m_totalReceived(0)
     {
     }
 
@@ -65,6 +66,7 @@ public:
     ResourceResponse      m_response;   /* last received response (download client) */
     AuthenticationChallenge m_currentWebChallenge;
     bool                  m_forSavingResource;
+    int                   m_totalReceived;   /* bytes received so far (didReceiveData) */
 
     bool needsDownloadClient() { return m_mightDownloadFromHandle && !m_hasDownloadClient; }
     bool needsResourceHandleForDownloading() { return m_mightDownloadFromHandle && !m_forSavingResource; }

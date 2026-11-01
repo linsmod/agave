@@ -44,3 +44,25 @@ ant 的 vendor 目录里有 boringssl、zlib-ng、pcre2，直接静态链进 `li
 
 `H:\ant` 需要 `js_call_value()`（`src/ant.c` + `include/internal.h`），
 见工作区的 `ant-js_call_value.md`。没有它，C 侧无法调用 JS 闭包。
+
+## 构建 Ant 时必须关掉 UBSan
+
+`zig cc` **默认开启 `-fsanitize=undefined`（含 alignment 检查）**。Ant 里有非对齐访问，
+一旦编译进去，某些脚本（例如百度首页的 `es6-polyfill`）在运行时会直接
+`panic: load of misaligned address ...` 把宿主进程带走 —— 表现就是"页面崩了"。
+
+重编 `H:\ant` 时必须带上：
+
+```powershell
+$env:PATH = "C:\msys64\usr\bin;C:\msys64\mingw64\bin;" + $env:PATH   # meson 需要 date
+$env:CC  = "zig cc -target x86_64-windows-gnu"
+$env:CXX = "zig c++ -target x86_64-windows-gnu"
+meson configure build-zig-dev `
+  -Dc_args="-fno-sanitize=undefined -fno-sanitize=alignment" `
+  -Dcpp_args="-fno-sanitize=undefined -fno-sanitize=alignment"
+meson compile -C build-zig-dev
+```
+
+副作用：`antbridge.dll` 从 43.7 MB 降到 **13.5 MB**（少了 UBSan 运行库）。
+`C:\msys64\usr\bin` 必须在 PATH 里，否则 meson 的 `version/meson.build` 找不到 `date`
+而让 `build.ninja` 重新生成失败。
