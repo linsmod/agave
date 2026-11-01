@@ -37,6 +37,10 @@
 #include "GCController.h"
 #include "Cache.h"
 
+#if ENABLE(ANTJS)
+#include "AntRuntime.h"
+#endif
+
 #if ENABLE(QJS)
 #include "global.h"
 #endif
@@ -882,6 +886,13 @@ MC_STATUS macross_initialize(MC_PIXEL_FORMAT format, int w, int h)
 		if (!ps_initialize())
 			return MC_STATUS_FAILED;
 
+#if ENABLE(ANTJS)
+		/* Task 1-2: bring up the Ant engine (antbridge.dll) alongside the legacy
+		 * one. The JSC API layer still uses KJS until task 2 replaces it. */
+		if (!AntRuntime::start())
+			return MC_STATUS_FAILED;
+#endif
+
 #if ENABLE(QJS)
         mescal::_global_initialize();
         GCController::init(GLOBAL()->runtime);
@@ -902,6 +913,9 @@ void macross_shutdown(void)
 	if (g_initialize) {
 		WebCore::eventShatdown();
 		globalDataSave();
+#if ENABLE(ANTJS)
+		AntRuntime::stop();
+#endif
 #if ENABLE(QJS)
         mescal::_global_shutdown();
 #endif

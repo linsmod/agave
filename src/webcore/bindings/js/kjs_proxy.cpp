@@ -39,6 +39,12 @@
 
 #include "NativeBinding.h"
 
+#if ENABLE(ANTJS)
+#include "AntRuntime.h"
+#include <stdlib.h>
+#include <string.h>
+#endif
+
 using namespace KJS;
 
 namespace WebCore {
@@ -67,6 +73,26 @@ JSValue* KJSProxy::evaluate(const String& filename, int baseLine, const String& 
 {
     // evaluate code. Returns the JS return value or 0
     // if there was none, an error occured or the type couldn't be converted.
+
+#if ENABLE(ANTJS)
+    /* Task 2: page scripts run on the Ant engine. The DOM surface is provided by
+     * the AntRuntime shim (document.title for now; elements come in task 3). */
+    if (AntRuntime::isRunning() && m_frame) {
+        CString code = str.utf8();
+        char* out = 0;
+        char* err = 0;
+
+        m_frame->keepAlive();
+        AntRuntime::bindDocument(m_frame->document());
+
+        if (!AntRuntime::evaluate(code.data(), code.length(), &out, &err) && err)
+            fprintf(stderr, "[antjs] %s\n", err);
+
+        free(out);
+        free(err);
+        return jsUndefined();
+    }
+#endif
 
     initScriptIfNeeded();
     // inlineCode is true for <a href="javascript:doSomething()">

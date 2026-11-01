@@ -24,6 +24,10 @@
 #include "config.h"
 #include "EventTargetNode.h"
 
+#if ENABLE(ANTJS)
+#include "AntRuntime.h"
+#endif
+
 #include "ContextMenuController.h"
 #include "Document.h"
 #include "Element.h"
@@ -315,7 +319,12 @@ bool EventTargetNode::dispatchEvent(PassRefPtr<Event> e, ExceptionCode& ec, bool
     }
 
     evt->setTarget(target);
-    
+
+#if ENABLE(ANTJS)
+    /* forward engine events to JS listeners registered through the Ant shim */
+    AntRuntime::dispatchEvent(this, evt.get());
+#endif
+
     RefPtr<FrameView> view = document()->view();
     
     return dispatchGenericEvent(evt.release(), ec, tempEvent);
