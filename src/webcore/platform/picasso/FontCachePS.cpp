@@ -11,6 +11,8 @@
 #include "FontData.h"
 #include "Font.h"
 #include "Debug.h"
+#include <stdio.h>
+#include <string.h>
 
 namespace WebCore
 {
@@ -22,7 +24,28 @@ void FontCache::platformInit()
 
 const FontData* FontCache::getFontDataForCharacters(const Font& font, const UChar* characters, int length)
 {
-    notImplemented();
+    /* The default Latin families (Arial, Helvetica, sans-serif) carry no CJK
+     * glyphs and picasso has no fontconfig style fallback on this platform, so
+     * every non-Latin character used to be drawn as a missing-glyph box. Route
+     * them to a family that does have the glyphs. */
+    static AtomicString cjkFamily("Microsoft YaHei");
+
+    if (!characters || length <= 0)
+        return 0;
+
+    for (int i = 0; i < length; ++i) {
+        UChar c = characters[i];
+        if (c < 0x0100)
+            continue;
+
+        {
+            FontPlatformData* platform = getCachedFontPlatformData(font.fontDescription(), cjkFamily, true);
+            if (!platform)
+                return 0;
+            return getCachedFontData(platform);
+        }
+    }
+
     return 0;
 }
 
@@ -61,7 +84,26 @@ FontPlatformData* FontCache::createFontPlatformData(const FontDescription& fontD
     else
         blod = FONT_WEIGHT_MEDIUM;
 
-    ps_font* font = ps_font_create ((char*)family.deprecatedString().ascii(), CHARSET_UNICODE,
+    /* picasso has no per-character fallback on this platform and the stock
+     * Latin families carry no CJK glyphs, so Chinese text used to render as
+     * missing-glyph boxes. Substitute a family that covers both scripts. */
+    static const char* latinOnly[] = {
+        "arial", "helvetica", "verdana", "tahoma", "segoe ui", "calibri",
+        "times new roman", "georgia", "garamond", "courier new", "consolas",
+        "sans-serif", "serif", "monospace", "cursive", "fantasy", 0
+    };
+
+    const char* requested = (const char*)family.deprecatedString().ascii();
+    const char* effective = requested;
+
+    for (int i = 0; latinOnly[i]; ++i) {
+        if (requested && !strcasecmp(requested, latinOnly[i])) {
+            effective = "Microsoft YaHei";
+            break;
+        }
+    }
+
+    ps_font* font = ps_font_create ((char*)effective, CHARSET_UNICODE,
                                 fontDescription.computedPixelSize(), blod, italic);
 
     return new FontPlatformData(font, fontDescription.computedPixelSize());

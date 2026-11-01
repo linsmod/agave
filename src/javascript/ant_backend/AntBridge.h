@@ -81,6 +81,13 @@ AGB_API AntbValue* antb_make_string(AntbEngine* engine, const char* utf8);
 /* Creates a JS number. */
 AGB_API AntbValue* antb_make_number(AntbEngine* engine, double v);
 
+/* Creates an empty array; antb_array_push appends to it. */
+AGB_API AntbValue* antb_make_array(AntbEngine* engine);
+AGB_API void antb_array_push(AntbEngine* engine, AntbValue* array, const AntbValue* value);
+
+/* Deletes `name` from obj (used by removeAttribute style APIs). */
+AGB_API void antb_delete_prop(AntbEngine* engine, AntbValue* obj, const char* name);
+
 /* obj.name = value */
 AGB_API void antb_set_prop(AntbEngine* engine, AntbValue* obj, const char* name, const AntbValue* value);
 

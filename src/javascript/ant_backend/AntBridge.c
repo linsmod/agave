@@ -225,6 +225,35 @@ AntbValue* antb_make_number(AntbEngine* engine, double v)
     return alloc_value(engine->js, js_mknum(v));
 }
 
+AntbValue* antb_make_array(AntbEngine* engine)
+{
+    AntbValue* out;
+
+    if (!engine || !engine->js)
+        return NULL;
+
+    out = alloc_value(engine->js, js_mkarr(engine->js));
+    return out;
+}
+
+void antb_array_push(AntbEngine* engine, AntbValue* array, const AntbValue* value)
+{
+    if (!engine || !array || !value)
+        return;
+    js_arr_push(engine->js, array->v, value->v);
+}
+
+void antb_delete_prop(AntbEngine* engine, AntbValue* obj, const char* name)
+{
+    ant_value_t key;
+
+    if (!engine || !obj || !name)
+        return;
+
+    key = js_mkstr(engine->js, name, strlen(name));
+    js_setprop(engine->js, obj->v, key, js_mkundef());
+}
+
 void antb_set_prop(AntbEngine* engine, AntbValue* obj, const char* name, const AntbValue* value)
 {
     if (!engine || !obj || !name || !value)

@@ -16,6 +16,11 @@
 #include "Node.h"
 #include "PlatformString.h"
 #include "Event.h"
+#include "KURL.h"
+#include "Text.h"
+#include "HTMLInputElement.h"
+#include "HTMLNames.h"
+#include "HTMLTextAreaElement.h"
 
 #include <stdio.h>
 #include <string>
@@ -23,34 +28,122 @@
 
 namespace {
 
+#define AGB_TAG_NODE 0x4E4F4431u   /* 'NOD1' */
+
 AntbEngine* g_engine = NULL;
 WebCore::Document* g_document = NULL;
 bool g_documentBound = false;
 
 /* DOM binding (defined further down) */
 AntbClass* g_nodeClass = NULL;
+AntbValue* g_locationObj = NULL;
+AntbValue* g_docObj = NULL;   /* the JS document object (rooted) */
 int nodeGetAttribute(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeAddEventListener(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int docGetElementById(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeDispatchEvent(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int locationGetter(AntbEngine*, AntbValue*, const char*, AntbValue*, void*);
+AntbValue* wrapNode(AntbEngine*, WebCore::Node*);
+int docCreateElement(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int docCreateTextNode(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeAppendChild(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeRemoveChild(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeInsertBefore(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeSetAttribute(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeRemoveAttribute(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 
 /* document.title */
 int titleGetter(AntbEngine* engine, AntbValue*, const char* name, AntbValue* out, void*)
 {
     /* The exotic getter is called for every property of the document object, so
      * unknown names must fall through instead of returning the title. */
-    if (!name || strcmp(name, "title") != 0)
-        return 0;
-    if (!g_document)
+    if (!name || !g_document)
         return 0;
 
-    {
+    if (!strcmp(name, "title")) {
         WebCore::String title = g_document->title();
         AntbValue* v = antb_make_string(engine, title.utf8().data());
         if (!v)
             return 0;
         antb_value_assign(out, v);
         antb_value_release(v);
+        return 1;
+    }
+
+    if (!strcmp(name, "body")) {
+        if (!g_document->body())
+            return 1;
+        {
+            AntbValue* v = wrapNode(engine, g_document->body());
+            if (v) { antb_value_assign(out, v); antb_value_release(v); }
+        }
+        return 1;
+    }
+
+    if (!strcmp(name, "documentElement")) {
+        if (!g_document->documentElement())
+            return 1;
+        {
+            AntbValue* v = wrapNode(engine, g_document->documentElement());
+            if (v) { antb_value_assign(out, v); antb_value_release(v); }
+        }
+        return 1;
+    }
+
+    if (!strcmp(name, "location")) {
+        if (!g_locationObj) {
+            AntbValue* obj = antb_make_object(engine);
+            if (!obj)
+                return 0;
+            antb_define_property_rw(engine, obj, "href", locationGetter, NULL, NULL);
+            g_locationObj = antb_retain(obj);   /* keep it alive across GC */
+            antb_value_release(obj);
+        }
+        antb_value_assign(out, g_locationObj);
+        return 1;
+    }
+
+    return 0;
+}
+
+/* document.location.<field> */
+int locationGetter(AntbEngine* engine, AntbValue*, const char* name, AntbValue* out, void*)
+{
+    WebCore::KURL url;
+
+    if (!g_document || !name)
+        return 0;
+
+    url = WebCore::KURL(g_document->URL());
+
+    {
+        WebCore::String value;
+        WebCore::DeprecatedString deprecated = url.url();
+
+        if (!strcmp(name, "href"))
+            value = WebCore::String(deprecated);
+        else if (!strcmp(name, "protocol"))
+            value = url.protocol();
+        else if (!strcmp(name, "host"))
+            value = url.host();
+        else if (!strcmp(name, "hostname"))
+            value = url.host();
+        else if (!strcmp(name, "pathname"))
+            value = url.path();
+        else if (!strcmp(name, "search"))
+            value = url.query();
+        else if (!strcmp(name, "hash"))
+            value = url.ref();
+        else
+            return 0;
+
+        {
+            AntbValue* v = antb_make_string(engine, value.utf8().data());
+            if (!v)
+                return 0;
+            antb_value_assign(out, v);
+            antb_value_release(v);
+        }
     }
     return 1;
 }
@@ -136,8 +229,11 @@ void bindDocument(void* document)
     if (!g_engine || !g_document)
         return;
 
-    if (g_documentBound)
+    if (g_documentBound) {
+        if (g_docObj)
+            antb_set_native(g_docObj, g_document, AGB_TAG_NODE);
         return;
+    }
 
     {
         AntbValue* global   = antb_global(g_engine);
@@ -159,14 +255,28 @@ void bindDocument(void* document)
                 antb_class_add_method(g_engine, g_nodeClass, "getAttribute", nodeGetAttribute, NULL);
                 antb_class_add_method(g_engine, g_nodeClass, "addEventListener", nodeAddEventListener, NULL);
                 antb_class_add_method(g_engine, g_nodeClass, "dispatchEvent", nodeDispatchEvent, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "appendChild", nodeAppendChild, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "removeChild", nodeRemoveChild, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "insertBefore", nodeInsertBefore, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "setAttribute", nodeSetAttribute, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "removeAttribute", nodeRemoveAttribute, NULL);
             }
         }
 
         antb_define_method(g_engine, docObj, "getElementById", docGetElementById, NULL);
+        antb_define_method(g_engine, docObj, "createElement", docCreateElement, NULL);
+        antb_define_method(g_engine, docObj, "createTextNode", docCreateTextNode, NULL);
+        antb_define_method(g_engine, docObj, "addEventListener", nodeAddEventListener, NULL);
+        antb_define_method(g_engine, docObj, "dispatchEvent", nodeDispatchEvent, NULL);
+
+        /* Document is a Node: let the node APIs work directly on it. */
+        antb_set_native(docObj, g_document, AGB_TAG_NODE);
 
         antb_set_prop(g_engine, window, "document", docObj);
         antb_set_prop(g_engine, global, "window", window);
         antb_set_prop(g_engine, global, "document", docObj);
+
+        g_docObj = antb_retain(docObj);
 
         antb_value_release(docObj);
         antb_value_release(window);
@@ -182,7 +292,7 @@ void bindDocument(void* document)
 /* DOM element binding (task 3)                                              */
 /* ------------------------------------------------------------------------- */
 
-#define AGB_TAG_NODE 0x4E4F4431u   /* 'NOD1' */
+
 
 namespace {
 
@@ -215,6 +325,69 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
         v = antb_make_string(engine, s.utf8().data());
     } else if (!strcmp(name, "nodeType")) {
         v = antb_make_number(engine, (double)n->nodeType());
+    } else if (!strcmp(name, "parentNode")) {
+        if (n->parentNode()) {
+            v = wrapNode(engine, n->parentNode());
+        } else {
+            return 1;   /* null */
+        }
+    } else if (!strcmp(name, "firstChild")) {
+        if (n->firstChild()) {
+            v = wrapNode(engine, n->firstChild());
+        } else {
+            return 1;
+        }
+    } else if (!strcmp(name, "lastChild")) {
+        if (n->lastChild()) {
+            v = wrapNode(engine, n->lastChild());
+        } else {
+            return 1;
+        }
+    } else if (!strcmp(name, "nextSibling")) {
+        if (n->nextSibling()) {
+            v = wrapNode(engine, n->nextSibling());
+        } else {
+            return 1;
+        }
+    } else if (!strcmp(name, "childNodes")) {
+        {
+            AntbValue* arr = antb_make_array(engine);
+            WebCore::Node* c = n->firstChild();
+            for (; c; c = c->nextSibling()) {
+                AntbValue* w = wrapNode(engine, c);
+                if (w) {
+                    antb_array_push(engine, arr, w);
+                    antb_value_release(w);
+                }
+            }
+            antb_value_assign(out, arr);
+            antb_value_release(arr);
+        }
+        return 1;
+    } else if (!strcmp(name, "value")) {
+        if (n->isElementNode()) {
+            WebCore::Element* element = static_cast<WebCore::Element*>(n);
+            if (element->hasTagName(WebCore::HTMLNames::inputTag)) {
+                WebCore::String s = static_cast<WebCore::HTMLInputElement*>(element)->value();
+                v = antb_make_string(engine, s.utf8().data());
+            } else if (element->hasTagName(WebCore::HTMLNames::textareaTag)) {
+                WebCore::String s = static_cast<WebCore::HTMLTextAreaElement*>(element)->value();
+                v = antb_make_string(engine, s.utf8().data());
+            } else {
+                return 0;
+            }
+        } else {
+            return 0;
+        }
+    } else if (!strcmp(name, "id") || !strcmp(name, "className") || !strcmp(name, "href")) {
+        if (!n->isElementNode())
+            return 0;
+        {
+            WebCore::String attrName = strcmp(name, "className") == 0
+                ? WebCore::String("class") : WebCore::String(name);
+            WebCore::String s = static_cast<WebCore::Element*>(n)->getAttribute(attrName);
+            v = antb_make_string(engine, s.utf8().data());
+        }
     } else {
         return 0;
     }
@@ -243,6 +416,35 @@ int nodeSetter(AntbEngine* engine, AntbValue* self, const char* name, const Antb
         {
             WebCore::ExceptionCode ec = 0;
             n->setTextContent(WebCore::String::fromUTF8(text), ec);
+        }
+        antb_free(text);
+        return 1;
+    }
+
+    if (!strcmp(name, "value") && n->isElementNode()) {
+        char* text = antb_to_utf8(value);
+        WebCore::Element* element = static_cast<WebCore::Element*>(n);
+        if (!text)
+            return 0;
+        if (element->hasTagName(WebCore::HTMLNames::inputTag))
+            static_cast<WebCore::HTMLInputElement*>(element)->setValue(WebCore::String::fromUTF8(text));
+        else if (element->hasTagName(WebCore::HTMLNames::textareaTag))
+            static_cast<WebCore::HTMLTextAreaElement*>(element)->setValue(WebCore::String::fromUTF8(text));
+        antb_free(text);
+        return 1;
+    }
+
+    if ((!strcmp(name, "id") || !strcmp(name, "className") || !strcmp(name, "href"))
+            && n->isElementNode()) {
+        char* text = antb_to_utf8(value);
+        if (!text)
+            return 0;
+        {
+            WebCore::ExceptionCode ec = 0;
+            WebCore::String attrName = strcmp(name, "className") == 0
+                ? WebCore::String("class") : WebCore::String(name);
+            static_cast<WebCore::Element*>(n)->setAttribute(attrName,
+                WebCore::String::fromUTF8(text), ec);
         }
         antb_free(text);
         return 1;
@@ -340,6 +542,184 @@ int nodeDispatchEvent(AntbEngine* engine, AntbValue* self, AntbValue** args, int
     }
 
     antb_free(type);
+    return 1;
+}
+
+int docCreateElement(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
+                     AntbValue* out, void*)
+{
+    char* tag;
+    WebCore::ExceptionCode ec = 0;
+    RefPtr<WebCore::Element> element;
+
+    if (!g_document || argc < 1)
+        return 1;
+
+    tag = antb_to_utf8(args[0]);
+    if (!tag)
+        return 1;
+
+    element = g_document->createElement(WebCore::String::fromUTF8(tag), ec);
+    antb_free(tag);
+
+    if (!element || ec)
+        return 1;
+
+    /* The wrapper outlives the RefPtr: keep the node alive for the JS handle.
+     * The reference is never released (bounded by the document lifetime). */
+    element->ref();
+
+    {
+        AntbValue* v = wrapNode(engine, element.get());
+        if (v) {
+            antb_value_assign(out, v);
+            antb_value_release(v);
+        }
+    }
+    return 1;
+}
+
+int docCreateTextNode(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
+                      AntbValue* out, void*)
+{
+    char* text;
+    RefPtr<WebCore::Text> node;
+
+    if (!g_document || argc < 1)
+        return 1;
+
+    text = antb_to_utf8(args[0]);
+    if (!text)
+        return 1;
+
+    node = g_document->createTextNode(WebCore::String::fromUTF8(text));
+    antb_free(text);
+
+    if (!node)
+        return 1;
+
+    node->ref();
+
+    {
+        AntbValue* v = wrapNode(engine, node.get());
+        if (v) {
+            antb_value_assign(out, v);
+            antb_value_release(v);
+        }
+    }
+    return 1;
+}
+
+int nodeAppendChild(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                    AntbValue* out, void*)
+{
+    WebCore::Node* parent = nodeOf(self);
+    WebCore::Node* child  = (argc > 0) ? nodeOf(args[0]) : 0;
+    WebCore::ExceptionCode ec = 0;
+
+    if (!parent || !child)
+        return 1;
+
+    parent->appendChild(child, ec);
+    if (ec)
+        return 1;
+
+    {
+        AntbValue* v = wrapNode(engine, child);
+        if (v) {
+            antb_value_assign(out, v);
+            antb_value_release(v);
+        }
+    }
+    return 1;
+}
+
+int nodeRemoveChild(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                    AntbValue* out, void*)
+{
+    WebCore::Node* parent = nodeOf(self);
+    WebCore::Node* child  = (argc > 0) ? nodeOf(args[0]) : 0;
+    WebCore::ExceptionCode ec = 0;
+
+    (void)engine; (void)out;
+
+    if (!parent || !child)
+        return 1;
+
+    child->ref();                 /* removal may drop the last reference */
+    parent->removeChild(child, ec);
+    child->deref();
+    return 1;
+}
+
+int nodeInsertBefore(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                     AntbValue* out, void*)
+{
+    WebCore::Node* parent = nodeOf(self);
+    WebCore::Node* child  = (argc > 0) ? nodeOf(args[0]) : 0;
+    WebCore::Node* before = (argc > 1) ? nodeOf(args[1]) : 0;
+    WebCore::ExceptionCode ec = 0;
+
+    if (!parent || !child)
+        return 1;
+
+    parent->insertBefore(child, before, ec);
+
+    {
+        AntbValue* v = wrapNode(engine, child);
+        if (v) {
+            antb_value_assign(out, v);
+            antb_value_release(v);
+        }
+    }
+    return 1;
+}
+
+int nodeSetAttribute(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                     AntbValue* out, void*)
+{
+    WebCore::Node* n = nodeOf(self);
+    char* name;
+    char* value = 0;
+    WebCore::ExceptionCode ec = 0;
+
+    (void)engine; (void)out;
+
+    if (!n || !n->isElementNode() || argc < 1)
+        return 1;
+
+    name = antb_to_utf8(args[0]);
+    if (argc > 1)
+        value = antb_to_utf8(args[1]);
+
+    if (name) {
+        static_cast<WebCore::Element*>(n)->setAttribute(
+            WebCore::String::fromUTF8(name),
+            WebCore::String::fromUTF8(value ? value : ""), ec);
+    }
+
+    antb_free(name);
+    antb_free(value);
+    return 1;
+}
+
+int nodeRemoveAttribute(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                        AntbValue* out, void*)
+{
+    WebCore::Node* n = nodeOf(self);
+    char* name;
+    WebCore::ExceptionCode ec = 0;
+
+    (void)engine; (void)out;
+
+    if (!n || !n->isElementNode() || argc < 1)
+        return 1;
+
+    name = antb_to_utf8(args[0]);
+    if (name) {
+        static_cast<WebCore::Element*>(n)->removeAttribute(WebCore::String::fromUTF8(name), ec);
+        antb_free(name);
+    }
     return 1;
 }
 
