@@ -3,3 +3,19 @@ proj
 vcproj
 debug
 *.pyc
+
+# Zig / MinGW build trees
+build-zig/
+build-zig-native/
+build-zig-curl/
+build-*.log
+
+# antbridge.dll is ~44 MB; rebuild it with 3rdparty/ant/README.md
+3rdparty/ant/bin/*.dll
+
+# local test data that ships with the checkout
+authinfo.dat
+config.ini
+ext_config.ini
+favorites.dat
+history.dat
