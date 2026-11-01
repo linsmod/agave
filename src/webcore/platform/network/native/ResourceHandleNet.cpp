@@ -196,6 +196,10 @@ void ResourceHandleInternal::onError(const Net::Error& error)
 
 ResourceHandle::~ResourceHandle()
 {
+    /* The loader may destroy a handle while its request is still in flight; the
+     * session must stop calling back into it. */
+    if (ResourceHandleManager* manager = ResourceHandleManager::sharedInstance())
+        manager->cancel(this);
 }
 
 bool ResourceHandle::start()

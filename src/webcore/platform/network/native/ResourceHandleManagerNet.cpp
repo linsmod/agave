@@ -76,7 +76,6 @@ void ResourceHandleManager::add(ResourceHandle* job)
         }
     }
 
-    m_handles.append(job);
     if (!m_downloadTimer.isActive())
         m_downloadTimer.startRepeating(0.01);
 }
@@ -93,12 +92,6 @@ void ResourceHandleManager::cancel(ResourceHandle* job)
     if (m_session && d->m_requestId)
         m_session->cancel(d->m_requestId);
 
-    for (size_t i = 0; i < m_handles.size(); ++i) {
-        if (m_handles[i] == job) {
-            m_handles.remove(i);
-            break;
-        }
-    }
 }
 
 void ResourceHandleManager::startSyncJob(ResourceHandle* job)
@@ -117,11 +110,9 @@ void ResourceHandleManager::releaseAllResourceJobs()
     ResourceHandleManager* manager = sharedInstance();
     manager->m_downloadTimer.stop();
 
-    Vector<ResourceHandle*> jobs = manager->m_handles;
-    manager->m_handles.clear();
-
-    for (size_t i = 0; i < jobs.size(); ++i)
-        jobs[i]->cancel();
+    /* every live handle cancels itself; force the session to drop what is left */
+    if (manager->m_session)
+        manager->m_session->shutdown();
 }
 
 void ResourceHandleManager::pump()
@@ -134,16 +125,9 @@ void ResourceHandleManager::downloadTimerCallback(Timer<ResourceHandleManager>*)
 {
     pump();
 
-    /* drop finished handles */
-    for (size_t i = 0; i < m_handles.size();) {
-        ResourceHandleInternal* d = m_handles[i]->getInternal();
-        if (!d || d->m_finished || d->m_cancelled)
-            m_handles.remove(i);
-        else
-            ++i;
-    }
-
-    if (m_handles.isEmpty())
+    /* Nothing to prune: handles deregister themselves through cancel() (also
+     * from their destructor), so the manager never touches a stale pointer. */
+    if (!m_session || m_session->pending() == 0)
         m_downloadTimer.stop();
 }
 

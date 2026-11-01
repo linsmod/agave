@@ -140,41 +140,65 @@ inline TimerHeapIterator operator+(int a, TimerHeapIterator b) { return a + b.in
 
 inline TimerHeapIterator operator-(TimerHeapIterator a, int b) { return a.index() - b; }
 inline int operator-(TimerHeapIterator a, TimerHeapIterator b) { return a.index() - b.index(); }
-
-// std::push_heap / std::pop_heap cannot be used here: the iterator below is a
-// proxy iterator (operator* returns a value, not a reference), which libc++
-// rejects at compile time. TimerHeapElement assignment writes through to the
-// heap, so swapping two proxies swaps the two heap slots.
-inline void siftUpTimerHeap(int index)
+/* libc++ rejects the proxy iterator in std::push_heap/std::pop_heap, so the two
+ * algorithms are reproduced here exactly as libstdc++ implemented them: they only
+ * ever touch the heap through TimerHeapElement, whose assignment writes through
+ * to the slot and keeps TimerBase::m_heapIndex in sync. */
+inline void pushHeapTimer(int first, int last)
 {
-    while (index > 0) {
-        int parent = (index - 1) / 2;
-        TimerHeapElement child(index);
-        TimerHeapElement par(parent);
-        if (!(child < par))
+    TimerHeapElement value = TimerHeapIterator(last - 1).operator*();
+    int holeIndex = last - 1 - first;
+    int topIndex = 0;
+
+    while (holeIndex > topIndex) {
+        int parent = (holeIndex - 1) / 2;
+        if (TimerHeapElement(first + parent) < value) {
+            TimerHeapIterator(first + holeIndex).operator*() = TimerHeapIterator(first + parent).operator*();
+            holeIndex = parent;
+        } else {
             break;
-        std::swap(child, par);
-        index = parent;
+        }
     }
+    TimerHeapIterator(first + holeIndex).operator*() = value;
 }
 
-inline void siftDownTimerHeap(int index, int count)
+inline void popHeapTimer(int first, int last)
 {
-    for (;;) {
-        int left = index * 2 + 1;
-        int right = left + 1;
-        int smallest = index;
-        if (left < count && TimerHeapElement(left) < TimerHeapElement(smallest))
-            smallest = left;
-        if (right < count && TimerHeapElement(right) < TimerHeapElement(smallest))
-            smallest = right;
-        if (smallest == index)
-            break;
-        TimerHeapElement a(index);
-        TimerHeapElement b(smallest);
-        std::swap(a, b);
-        index = smallest;
+    TimerHeapElement value = TimerHeapIterator(last - 1).operator*();
+    TimerHeapIterator(last - 1).operator*() = TimerHeapIterator(first).operator*();
+
+    int len  = last - 1 - first;
+    int hole = 0;
+    int second = 0;
+
+    /* exact libstdc++ __adjust_heap bounds: the loop only descends while a full
+     * pair of children exists, so index 2*second is always in range */
+    while (second < (len - 1) / 2) {
+        second = 2 * (second + 1);
+        if (TimerHeapIterator(first + second).operator*()
+                < TimerHeapIterator(first + second - 1).operator*())
+            --second;
+        TimerHeapIterator(first + hole).operator*() = TimerHeapIterator(first + second).operator*();
+        hole = second;
     }
+
+    if ((len & 1) == 0 && second == (len - 2) / 2) {
+        second = 2 * (second + 1);
+        TimerHeapIterator(first + hole).operator*() = TimerHeapIterator(first + second - 1).operator*();
+        hole = second - 1;
+    }
+
+    while (hole > 0) {
+        int parent = (hole - 1) / 2;
+        if (value < TimerHeapIterator(first + parent).operator*()) {
+            TimerHeapIterator(first + hole).operator*() = TimerHeapIterator(first + parent).operator*();
+            hole = parent;
+        } else {
+            break;
+        }
+    }
+
+    TimerHeapIterator(first + hole).operator*() = value;
 }
 
 // ----------------
@@ -254,10 +278,9 @@ void TimerBase::heapDecreaseKey()
 {
     ASSERT(m_nextFireTime != 0);
     checkHeapIndex();
-    siftUpTimerHeap(m_heapIndex);
+    pushHeapTimer(0, m_heapIndex + 1);
     checkHeapIndex();
 }
-
 
 inline void TimerBase::heapDelete()
 {
@@ -306,13 +329,7 @@ void TimerBase::heapPopMin()
 {
     ASSERT(this == timerHeap->first());
     checkHeapIndex();
-    int count = timerHeap->size();
-    if (count > 1) {
-        TimerHeapElement top(0);
-        TimerHeapElement last(count - 1);
-        std::swap(top, last);
-        siftDownTimerHeap(0, count - 1);
-    }
+    popHeapTimer(0, timerHeap->size());
     checkHeapIndex();
     ASSERT(this == timerHeap->last());
 }
