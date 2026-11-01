@@ -2,6 +2,18 @@ cmake_minimum_required(VERSION 3.16)
 
 project(Agave LANGUAGES C CXX ASM HOMEPAGE_URL https://github.com/onecoolx/agave)
 
+# The MSVC build relied on "#pragma comment(lib, ...)" inside the sources; with
+# GCC/Clang on Windows the system libraries have to be listed explicitly.
+if (WIN32 AND NOT MSVC)
+    link_libraries(ws2_32 iphlpapi crypt32 advapi32 user32 gdi32 shell32 ole32 oleaut32 uuid)
+    # zig's compiler-rt (linked last by the driver) expects the MinGW libmingwex
+    # helpers (fp constants, copysignl, ...). Linking it fully collides with a few
+    # symbols the vendored code also defines (gettimeofday), so tell lld to take
+    # the first definition instead of erroring.
+    link_libraries("C:/msys64/mingw64/lib/libmingwex.a")
+
+endif()
+
 set (CMAKE_CXX_STANDARD 98)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -61,9 +73,19 @@ OPTION_MACRO_DEFINE(OPT_SHIFTJIS_SUPPORT ENABLE_SHIFTJIS_SUPPORT "Build support 
 
 OPTION_MACRO_DEFINE(OPT_USE_KJS ENABLE_KJS "Build with KJS JavaScript engine." ON)
 OPTION_MACRO_DEFINE(OPT_USE_QJS ENABLE_QJS "Build with QuickJS JavaScript engine." OFF)
+OPTION_MACRO_DEFINE(OPT_JS_ANT ENABLE_ANTJS "Build with Ant JavaScript engine (antbridge.dll)." OFF)
+set(OPT_NET_BACKEND "curl" CACHE STRING "Network backend: curl (bundled) or native (system stack)")
+
+# quickjs is pulled in only when the QuickJS backend is selected (see 3rdparty.cmake)
+if (OPT_USE_QJS)
+include (${CMAKE_CURRENT_LIST_DIR}/3rdparty/quickjs.cmake)
+endif()
 
 include (${CMAKE_CURRENT_LIST_DIR}/src/src.cmake)
+# agave_test is a demo host; it is only built together with the examples.
+if (OPT_EXAMPLES)
 include (${CMAKE_CURRENT_LIST_DIR}/test/test.cmake)
+endif()
 
 option(OPT_UNITTEST "Build unit tests" OFF)
 if (OPT_UNITTEST)
@@ -104,3 +126,7 @@ configure_file(
     "${PROJ_ROOT}/build/mconfig.h.in"
     "${PROJ_OUT}/mconfig.h"
 )
+
+# <wtf/Platform.h> is force-included for GCC/Clang builds and pulls in mconfig.h,
+# so every target needs the generated header directory on its include path.
+include_directories(${PROJ_OUT})

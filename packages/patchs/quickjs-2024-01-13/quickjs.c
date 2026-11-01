@@ -1,4 +1,4 @@
-﻿/*
+/*
  * QuickJS Javascript Engine
  * 
  * Copyright (c) 2017-2021 Fabrice Bellard
@@ -74,7 +74,9 @@
 
 /* define to include Atomics.* operations which depend on the OS
    threads */
-#if !defined(EMSCRIPTEN) && !defined(_MSC_VER)
+/* NB: on Windows the pthread based implementation is unavailable for every
+   toolchain (MinGW/Zig as well as MSVC), so key this off the platform. */
+#if !defined(EMSCRIPTEN) && !defined(_MSC_VER) && !defined(_WIN32)
 #define CONFIG_ATOMICS
 #endif
 

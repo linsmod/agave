@@ -1,4 +1,4 @@
-﻿// -*- mode: c++; c-basic-offset: 4 -*-
+// -*- mode: c++; c-basic-offset: 4 -*-
 /*
  *  This file is part of the KDE libraries
  *  Copyright (C) 2003, 2004, 2005, 2006 Apple Computer, Inc.
@@ -276,7 +276,7 @@ static void* getStackBase(void* previousFrame)
     // scan all of memory starting from this frame, and return the last writeable page found
     register char* currentPage = (char*)((uintptr_t)thisFrame & ~(pageSize - 1));
     if (isGrowingDownward) {
-        while (currentPage > 0) {
+        while (currentPage != 0) {
             // check for underflow
             if (currentPage >= (char*)pageSize)
                 currentPage -= pageSize;

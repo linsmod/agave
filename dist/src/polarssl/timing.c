@@ -33,6 +33,11 @@
 #include <time.h>
 #include <windows.h>
 #include <winbase.h>
+#if defined(__MINGW32__)
+/* MinGW already provides gettimeofday() (declared here); defining our own below
+   would collide with libmingwex. */
+#include <sys/time.h>
+#endif
 
 struct _hr_time
 {
@@ -144,7 +149,7 @@ unsigned long hardclock( void )
 
 #else
 
-#if defined(_WIN32)
+#if defined(_WIN32) && !defined(__MINGW32__)
 void gettimeofday(struct timeval *tv, struct timezone *tz)
 {
     time_t clock;

@@ -72,7 +72,56 @@ endif()
 
 set(LIB_NAME agave)
 
+# ant_backend/AntBridge.c belongs to antbridge.dll, not to the engine itself.
+list(REMOVE_ITEM SOURCES ${PROJ_ROOT}/src/javascript/ant_backend/AntBridge.c)
+# AntRuntime.cpp is only built when the Ant runtime is enabled.
+if (NOT OPT_JS_ANT)
+    list(REMOVE_ITEM SOURCES ${PROJ_ROOT}/src/javascript/ant_backend/AntRuntime.cpp)
+endif()
+# Select exactly one network backend implementation.
+if (OPT_NET_BACKEND STREQUAL "native")
+    list(REMOVE_ITEM SOURCES
+        ${PROJ_ROOT}/src/webcore/platform/network/curl/ResourceHandleCurl.cpp
+        ${PROJ_ROOT}/src/webcore/platform/network/curl/ResourceHandleManagerCurl.cpp)
+else()
+    list(REMOVE_ITEM SOURCES
+        ${PROJ_ROOT}/src/webcore/platform/network/native/ResourceHandleNet.cpp
+        ${PROJ_ROOT}/src/webcore/platform/network/native/ResourceHandleManagerNet.cpp
+        ${PROJ_ROOT}/src/webcore/platform/network/native/NetworkTypes.cpp
+        ${PROJ_ROOT}/src/webcore/platform/network/native/win32/WinHttpSession.cpp)
+endif()
+
 add_library(${LIB_NAME} ${SOURCES})
+
+# Ant engine runtime (task 1-2): the JS engine itself lives in antbridge.dll,
+# see 3rdparty/ant. Enabled with -DOPT_JS_ANT=ON.
+if (OPT_JS_ANT)
+    target_sources(${LIB_NAME} PRIVATE ${PROJ_ROOT}/src/javascript/ant_backend/AntRuntime.cpp)
+    target_include_directories(${LIB_NAME} PRIVATE
+        ${PROJ_ROOT}/src/javascript/ant_backend
+        ${PROJ_ROOT}/3rdparty/ant/include)
+    target_compile_definitions(${LIB_NAME} PRIVATE AGB_USE_DLL)
+    target_link_libraries(${LIB_NAME} PRIVATE ${PROJ_ROOT}/3rdparty/ant/lib/antbridge.dll.a)
+    add_custom_command(TARGET ${LIB_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${PROJ_ROOT}/3rdparty/ant/bin/antbridge.dll
+            $<TARGET_FILE_DIR:${LIB_NAME}>/antbridge.dll)
+endif()
+
+# Native network backend (task 3-1): system stack (WinHTTP/SChannel) instead of
+# the bundled curl + PolarSSL. -DOPT_NET_BACKEND=native
+if (OPT_NET_BACKEND STREQUAL "native")
+
+    target_sources(${LIB_NAME} PRIVATE
+        ${PROJ_ROOT}/src/webcore/platform/network/native/NetworkTypes.cpp
+        ${PROJ_ROOT}/src/webcore/platform/network/native/win32/WinHttpSession.cpp
+        ${PROJ_ROOT}/src/webcore/platform/network/native/ResourceHandleManagerNet.cpp
+        ${PROJ_ROOT}/src/webcore/platform/network/native/ResourceHandleNet.cpp)
+    target_include_directories(${LIB_NAME} PRIVATE
+        ${PROJ_ROOT}/src/webcore/platform/network/native)
+    target_compile_definitions(${LIB_NAME} PRIVATE OPT_NET_BACKEND_NATIVE)
+    target_link_libraries(${LIB_NAME} PRIVATE winhttp)
+endif()
 
 set(HEADERS ${PROJ_ROOT}/include
             ${PROJ_ROOT}/src
@@ -140,10 +189,12 @@ target_link_libraries(${LIB_NAME} PRIVATE ${LIB_DEPS})
 
 target_compile_definitions(${LIB_NAME} PRIVATE CURL_STATICLIB)
 
-if (MSVC)
-    target_compile_definitions(${LIB_NAME} PRIVATE _EXPORT_)
-    target_link_libraries(${LIB_NAME} PRIVATE picasso2_sw)
-endif()
+# _EXPORT_ selects __declspec(dllexport) in include/macross.h; it must be defined
+# whenever *building* the library (not only for MSVC).
+target_compile_definitions(${LIB_NAME} PRIVATE _EXPORT_)
+
+# picasso is the graphics backend on every platform, not just MSVC
+target_link_libraries(${LIB_NAME} PRIVATE picasso2_sw)
 
 set_target_properties(${LIB_NAME} PROPERTIES VERSION ${VERSION_INFO} SOVERSION 1)
 

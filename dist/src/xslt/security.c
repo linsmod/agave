@@ -11,6 +11,10 @@
 
 #include <string.h>
 
+#if defined(_WIN32)
+#include <direct.h>
+#endif
+
 #ifdef HAVE_SYS_TYPES_H
 #include <sys/types.h>
 #endif
@@ -321,7 +325,11 @@ xsltCheckWritePath(xsltSecurityPrefsPtr sec,
 	    }
 	    ret = xsltCheckWritePath(sec, ctxt, directory);
 	    if (ret == 1)
+#if defined(_WIN32)
+		ret = _mkdir(directory);
+#else
 		ret = mkdir(directory, 0755);
+#endif
 	}
 	xmlFree(directory);
 	if (ret < 0)

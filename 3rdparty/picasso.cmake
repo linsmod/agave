@@ -22,8 +22,12 @@ ExternalProject_Add(
     "${PROJ_ROOT}/packages/patchs/${PICASSO_NAME}-${PICASSO_VERSION}/src.cmake" "${PROJ_OUT}/${PICASSO_NAME}/src/${PICASSO_NAME}/src/src.cmake"
   && ${CMAKE_COMMAND} -E copy
     "${PROJ_ROOT}/packages/patchs/${PICASSO_NAME}-${PICASSO_VERSION}/defines.cmake" "${PROJ_OUT}/${PICASSO_NAME}/src/${PICASSO_NAME}/build/defines.cmake"
+  && ${CMAKE_COMMAND} -E copy
+    "${PROJ_ROOT}/packages/patchs/${PICASSO_NAME}-${PICASSO_VERSION}/configs.cmake" "${PROJ_OUT}/${PICASSO_NAME}/src/${PICASSO_NAME}/build/configs.cmake"
   BUILD_IN_SOURCE
   CMAKE_ARGS -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
+   "-DCMAKE_C_FLAGS=-fno-sanitize=alignment -fno-sanitize=undefined"
+   "-DCMAKE_CXX_FLAGS=-fno-sanitize=alignment -fno-sanitize=undefined"
    -DOPT_EXTENSIONS=OFF 
    -DOPT_DEMOS=OFF 
    -DOPT_TESTS=OFF 

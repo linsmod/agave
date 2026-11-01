@@ -6,6 +6,7 @@
 #cmakedefine ENABLE_KJS @ENABLE_KJS@
 
 #cmakedefine ENABLE_QJS @ENABLE_QJS@
+#cmakedefine ENABLE_ANTJS @ENABLE_ANTJS@
 
 #cmakedefine ENABLE_XPATH @ENABLE_XPATH@
 

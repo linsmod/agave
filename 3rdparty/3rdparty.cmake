@@ -14,4 +14,7 @@ include (${CMAKE_CURRENT_LIST_DIR}/xslt.cmake)
 endif()
 
 include (${CMAKE_CURRENT_LIST_DIR}/picasso.cmake)
-include (${CMAKE_CURRENT_LIST_DIR}/quickjs.cmake)
+
+# quickjs is only needed by the OPT_USE_QJS backend. The option is declared in
+# CMakeLists.txt *after* this file is included, so the include happens there.
+# include (${CMAKE_CURRENT_LIST_DIR}/quickjs.cmake)

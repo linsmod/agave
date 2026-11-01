@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Copyright 2005 Frerich Raabe <raabe@kde.org>
  * Copyright (C) 2006 Apple Computer, Inc.
  *
@@ -53,6 +53,9 @@ namespace WebCore {
             
             Value(unsigned value) : m_type(NumberValue), m_number(value) {}
             Value(unsigned long value) : m_type(NumberValue), m_number(value) {}
+            // 64-bit size_t needs its own overload, otherwise unsigned long long is
+            // ambiguous between the unsigned long and double constructors.
+            Value(unsigned long long value) : m_type(NumberValue), m_number(static_cast<double>(value)) {}
             Value(double value) : m_type(NumberValue), m_number(value) {}
 
             Value(const char* value) : m_type(StringValue), m_data(new ValueData(value)) {}

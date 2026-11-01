@@ -141,6 +141,42 @@ inline TimerHeapIterator operator+(int a, TimerHeapIterator b) { return a + b.in
 inline TimerHeapIterator operator-(TimerHeapIterator a, int b) { return a.index() - b; }
 inline int operator-(TimerHeapIterator a, TimerHeapIterator b) { return a.index() - b.index(); }
 
+// std::push_heap / std::pop_heap cannot be used here: the iterator below is a
+// proxy iterator (operator* returns a value, not a reference), which libc++
+// rejects at compile time. TimerHeapElement assignment writes through to the
+// heap, so swapping two proxies swaps the two heap slots.
+inline void siftUpTimerHeap(int index)
+{
+    while (index > 0) {
+        int parent = (index - 1) / 2;
+        TimerHeapElement child(index);
+        TimerHeapElement par(parent);
+        if (!(child < par))
+            break;
+        std::swap(child, par);
+        index = parent;
+    }
+}
+
+inline void siftDownTimerHeap(int index, int count)
+{
+    for (;;) {
+        int left = index * 2 + 1;
+        int right = left + 1;
+        int smallest = index;
+        if (left < count && TimerHeapElement(left) < TimerHeapElement(smallest))
+            smallest = left;
+        if (right < count && TimerHeapElement(right) < TimerHeapElement(smallest))
+            smallest = right;
+        if (smallest == index)
+            break;
+        TimerHeapElement a(index);
+        TimerHeapElement b(smallest);
+        std::swap(a, b);
+        index = smallest;
+    }
+}
+
 // ----------------
 
 void updateSharedTimer()
@@ -218,9 +254,10 @@ void TimerBase::heapDecreaseKey()
 {
     ASSERT(m_nextFireTime != 0);
     checkHeapIndex();
-    push_heap(TimerHeapIterator(0), TimerHeapIterator(m_heapIndex + 1));
+    siftUpTimerHeap(m_heapIndex);
     checkHeapIndex();
 }
+
 
 inline void TimerBase::heapDelete()
 {
@@ -269,7 +306,13 @@ void TimerBase::heapPopMin()
 {
     ASSERT(this == timerHeap->first());
     checkHeapIndex();
-    pop_heap(TimerHeapIterator(0), TimerHeapIterator(timerHeap->size()));
+    int count = timerHeap->size();
+    if (count > 1) {
+        TimerHeapElement top(0);
+        TimerHeapElement last(count - 1);
+        std::swap(top, last);
+        siftDownTimerHeap(0, count - 1);
+    }
     checkHeapIndex();
     ASSERT(this == timerHeap->last());
 }

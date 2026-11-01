@@ -31,6 +31,10 @@
 #if ENABLE(FILESYSTEM) && PLATFORM(WIN32)
 #include <windows.h>
 
+#ifndef max
+static inline int max(int a, int b) { return a > b ? a : b; }
+#endif
+
 #include "FileSystem.h"
 
 #include "CString.h"

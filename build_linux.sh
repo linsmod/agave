@@ -1,18 +1,12 @@
 #!/bin/sh
+set -e
 
-if [ ! -d "./proj" ]; then
-    mkdir proj
-fi
-
-cd proj
-
-build_type="-DCMAKE_BUILD_TYPE=Debug"
+src="$(cd "$(dirname "$0")" && pwd)"
 
 if [ "$1" = "release" ]; then
-    build_type="-DCMAKE_BUILD_TYPE=MinSizeRel"
+    cmake -S "$src" -B "$src/proj" -DCMAKE_BUILD_TYPE=MinSizeRel
+    cmake --build "$src/proj" -j"$(nproc)"
+else
+    cmake -S "$src" -B "$src/debug" -DCMAKE_BUILD_TYPE=Debug -DOPT_EXAMPLES=ON
+    cmake --build "$src/debug" -j"$(nproc)"
 fi
-
-cmake ${build_type} ..
-
-echo "Please change dir to \"proj\" and type \"make\""
-echo "...\n"		
