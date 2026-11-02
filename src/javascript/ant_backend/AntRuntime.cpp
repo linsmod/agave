@@ -7,6 +7,13 @@
 #include "AntRuntime.h"
 
 #include <stdlib.h>
+#include <stdio.h>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
+#define AGB_PATH_CHARS 260
 #include <string.h>
 
 #include "AntBridge.h"
@@ -354,6 +361,134 @@ struct CookieEntry {
     bool        secure;
 };
 static std::vector<CookieEntry>* g_cookies = NULL;
+static std::string        g_cookieFile;
+
+/* Persisted cookies live in <data dir>/cookies.txt, one record per line:
+ *   domain <TAB> path <TAB> secure <TAB> name <TAB> value
+ * The data dir is %APPDATA%\Agave when writable, otherwise the exe folder. */
+static const char* dataDir(void)
+{
+    static char directory[AGB_PATH_CHARS];
+    static int  ready = 0;
+
+    if (ready)
+        return directory;
+
+    ready = 1;
+    directory[0] = 0;
+
+    {
+        const char* appdata = getenv("APPDATA");
+
+        if (appdata && appdata[0]) {
+            _snprintf(directory, sizeof(directory), "%s\\Agave", appdata);
+            directory[sizeof(directory) - 1] = 0;
+
+            if (CreateDirectoryA(directory, NULL) ||
+                GetFileAttributesA(directory) != INVALID_FILE_ATTRIBUTES)
+                return directory;
+        }
+    }
+
+    {
+        char module[AGB_PATH_CHARS];
+
+        if (GetModuleFileNameA(NULL, module, sizeof(module))) {
+            char* slash = strrchr(module, '\\');
+
+            if (slash)
+                *(slash + 1) = 0;
+
+            _snprintf(directory, sizeof(directory), "%sAgaveData", module);
+            directory[sizeof(directory) - 1] = 0;
+            CreateDirectoryA(directory, NULL);
+        }
+    }
+
+    return directory;
+}
+static std::vector<CookieEntry>& cookieJar();
+
+static void saveCookies()
+{
+    FILE* file;
+    std::vector<CookieEntry>& jar = cookieJar();
+
+    if (g_cookieFile.empty())
+        return;
+
+    file = fopen(g_cookieFile.c_str(), "wb");
+
+    if (!file)
+        return;
+
+    for (size_t i = 0; i < jar.size(); ++i) {
+        const CookieEntry& entry = jar[i];
+
+        if (entry.name.find_first_of("\t\r\n") != std::string::npos ||
+            entry.value.find_first_of("\t\r\n") != std::string::npos)
+            continue;
+
+        fprintf(file, "%s\t%s\t%d\t%s\t%s\n",
+                entry.domain.c_str(), entry.path.c_str(),
+                entry.secure ? 1 : 0,
+                entry.name.c_str(), entry.value.c_str());
+    }
+
+    fclose(file);
+}
+
+static void loadCookies()
+{
+    FILE* file;
+    char line[4096];
+
+    if (g_cookieFile.empty())
+        return;
+
+    file = fopen(g_cookieFile.c_str(), "rb");
+
+    if (!file)
+        return;
+
+    while (fgets(line, sizeof(line), file)) {
+        std::vector<std::string> fields;
+        std::string text(line);
+        size_t start = 0;
+
+        while (start <= text.size() && fields.size() < 5) {
+            size_t tab = text.find('\t', start);
+
+            fields.push_back(text.substr(start, tab == std::string::npos ? std::string::npos : tab - start));
+
+            if (tab == std::string::npos)
+                break;
+
+            start = tab + 1;
+        }
+
+        if (fields.size() < 5)
+            continue;
+
+        while (!fields[4].empty() &&
+               (fields[4][fields[4].size() - 1] == '\n' || fields[4][fields[4].size() - 1] == '\r'))
+            fields[4].erase(fields[4].size() - 1);
+
+        if (fields[3].empty())
+            continue;
+
+        CookieEntry entry;
+        entry.domain = fields[0];
+        entry.path = fields[1];
+        entry.secure = fields[2] == "1";
+        entry.name = fields[3];
+        entry.value = fields[4];
+        cookieJar().push_back(entry);
+    }
+
+    fclose(file);
+}
+
 static std::vector<CookieEntry>& cookieJar()
 {
     if (!g_cookies)
@@ -458,6 +593,7 @@ static void setCookieForCurrentDocument(const std::string& text)
     }
     if (!expired)
         jar.push_back(entry);
+    saveCookies();
 }
 /* document.title */
 int titleGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue* out, void*)
@@ -849,11 +985,31 @@ void dropListenersForOldDocument();
 
 namespace AntRuntime {
 
+static void initCookieStorage()
+{
+    if (!g_cookieFile.empty())
+        return;
+
+    {
+        const char* directory = dataDir();
+
+        if (directory && directory[0]) {
+            g_cookieFile = std::string(directory) + "\\cookies.txt";
+            loadCookies();
+            return;
+        }
+    }
+
+    g_cookieFile = "cookies.txt";
+    loadCookies();
+}
+
 bool start()
 {
     if (g_engine)
         return true;
 
+    initCookieStorage();
     /* Ant needs the address of a stack variable from the calling thread. */
     volatile char stack_anchor = 0;
     g_engine = antb_engine_create((const void*)&stack_anchor);
