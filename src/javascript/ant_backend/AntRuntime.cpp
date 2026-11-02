@@ -3483,13 +3483,37 @@ int nodeRemoveEventListener(AntbEngine* engine, AntbValue* self, AntbValue** arg
     return 1;
 }
 
+/* The DOM passes an Event object: use its `type`. Older page code sometimes
+ * passes a plain string, which is still accepted. */
+static char* eventTypeOf(AntbEngine* engine, AntbValue* arg)
+{
+    if (!arg)
+        return NULL;
+
+    {
+        AntbValue* t = antb_get_prop(engine, arg, "type");
+
+        if (t) {
+            char* text = (antb_is_string(t) || antb_is_number(t)) ? antb_to_utf8(t) : NULL;
+            antb_value_release(t);
+
+            if (text && text[0])
+                return text;
+            antb_free(text);
+        }
+    }
+
+    return antb_to_utf8(arg);
+}
+
 int nodeDispatchEvent(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
                       AntbValue* out, void*)
 {
     WebCore::Node* n = nodeOf(self);
-    char* type = (argc > 0) ? antb_to_utf8(args[0]) : NULL;
+    char* type = (argc > 0) ? eventTypeOf(engine, args[0]) : NULL;
+    std::vector<AntbValue*> snapshot;
 
-    (void)engine; (void)out;
+    (void)out;
 
     if (!n || !type) {
         antb_free(type);
@@ -3500,22 +3524,21 @@ int nodeDispatchEvent(AntbEngine* engine, AntbValue* self, AntbValue** args, int
         fprintf(stderr, "[evt] JS dispatchEvent(%s) on node=%p\n", type, (void*)n);
 
     if (g_listeners) {
-        AntbValue* evt = antb_make_object(engine);
-        AntbValue* t   = antb_make_string(engine, type);
-
-        if (evt && t)
-            antb_set_prop(engine, evt, "type", t);
-
         for (size_t i = 0; i < g_listeners->size(); ++i) {
             Listener& l = (*g_listeners)[i];
-            if (l.node == n && l.type == type) {
-                AntbValue* argv[1];
-                argv[0] = evt;
-                antb_call(engine, l.fn, self, argv, evt ? 1 : 0, NULL);
-            }
+
+            if (l.node == n && l.type == type && l.fn)
+                snapshot.push_back(antb_retain(l.fn));
         }
-        antb_value_release(t);
-        antb_value_release(evt);
+    }
+
+    /* Dispatch the snapshot, and hand the caller's own Event object through. */
+    for (size_t i = 0; i < snapshot.size(); ++i) {
+        AntbValue* argv[1];
+
+        argv[0] = (argc > 0) ? args[0] : NULL;
+        antb_call(engine, snapshot[i], self, argv, argv[0] ? 1 : 0, NULL);
+        antb_value_release(snapshot[i]);
     }
 
     antb_free(type);
@@ -4856,10 +4879,7 @@ namespace AntRuntime {
 void dispatchWindowEvent(const char* type)
 {
     AntbValue* self;
-
-    if (getenv("AGB_EVT_DEBUG"))
-        fprintf(stderr, "[evt] ENTER dispatch %s (doc=%p listeners=%d)\n", type ? type : "(null)",
-                (void*)g_document, g_listeners ? (int)g_listeners->size() : -1);
+    std::vector<AntbValue*> snapshot;
 
     if (!g_engine || !g_document || !type || !g_listeners)
         return;
@@ -4868,37 +4888,44 @@ void dispatchWindowEvent(const char* type)
     if (!self)
         return;
 
+    /* Snapshot the listeners first: a callback may add or remove listeners
+     * while we dispatch, and walking the live vector would then skip entries
+     * (erase shifts them) or run newly added ones inside the same dispatch.
+     * Every fn is retained, so a removal during dispatch cannot free it. */
+    for (size_t i = 0; i < g_listeners->size(); ++i) {
+        Listener& l = (*g_listeners)[i];
+
+        if (l.node == g_document && l.type == type && l.fn)
+            snapshot.push_back(antb_retain(l.fn));
+    }
+
     {
         AntbValue* evt = antb_make_object(g_engine);
+
         if (evt) {
             AntbValue* t = antb_make_string(g_engine, type);
+
             if (t) {
                 antb_set_prop(g_engine, evt, "type", t);
                 antb_value_release(t);
             }
         }
 
-        {
-            int dispatched = 0;
+        for (size_t i = 0; i < snapshot.size(); ++i) {
+            AntbValue* args[1];
 
-            for (size_t i = 0; i < g_listeners->size(); ++i) {
-                Listener& l = (*g_listeners)[i];
-                if (l.node != g_document || l.type != type)
-                    continue;
-                {
-                    AntbValue* args[1];
-                    args[0] = evt;
-                    ++dispatched;
-                    antb_call(g_engine, l.fn, self, args, evt ? 1 : 0, NULL);
-                }
-            }
-
-            if (getenv("AGB_EVT_DEBUG"))
-                fprintf(stderr, "[evt] dispatch %s -> %d listener(s)\n", type, dispatched);
+            args[0] = evt;
+            antb_call(g_engine, snapshot[i], self, args, evt ? 1 : 0, NULL);
         }
+
+        if (getenv("AGB_EVT_DEBUG"))
+            fprintf(stderr, "[evt] dispatch %s -> %d listener(s)\n", type, (int)snapshot.size());
 
         antb_value_release(evt);
     }
+
+    for (size_t i = 0; i < snapshot.size(); ++i)
+        antb_value_release(snapshot[i]);
 
     antb_value_release(self);
 }
@@ -5079,6 +5106,7 @@ void setDialogHook(DialogHook hook)
 }
 
 } /* namespace AntRuntime */
+
 
 
 
