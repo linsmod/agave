@@ -27,6 +27,8 @@
 #include "RenderObject.h"
 #include "Node.h"
 #include "CSSComputedStyleDeclaration.h"
+#include "CSSMutableStyleDeclaration.h"
+#include "StyledElement.h"
 #include "PlatformString.h"
 #include "Event.h"
 #include "MouseEvent.h"
@@ -1713,6 +1715,15 @@ static const char kPrelude[] =
 "  }"
 "  if (!g.requestIdleCallback) { g.requestIdleCallback = function (cb) { return 1; }; g.cancelIdleCallback = function () {}; }"
 "  if (!g.createImageBitmap) g.createImageBitmap = function () { return null; };"
+"  if (!g.__agbStyleApi) {"
+"    g.__agbStyleApi = {"
+"      setProperty: function (name, value, priority) { this[String(name)] = value; },"
+"      getPropertyValue: function (name) { var v = this[String(name)]; return v === undefined || v === null ? '' : String(v); },"
+"      removeProperty: function (name) { var old = this[String(name)]; this[String(name)] = ''; return old === undefined ? '' : old; },"
+"      item: function (i) { return ''; },"
+"      length: 0"
+"    };"
+"  }"
 "  if (!g.CSS) g.CSS = {};"
 "  if (!g.CSS.supports) {"
 "    g.CSS.supports = function (a, b) {"
@@ -2299,6 +2310,155 @@ WebCore::Node* nodeOf(AntbValue* self)
     return self ? (WebCore::Node*)antb_get_native(self, AGB_TAG_NODE) : 0;
 }
 
+/* ------------------------------------------------------------------------- */
+/* Inline style object                                                        */
+/*                                                                            */
+/* The bridge installs ONE getter/setter pair per object that dispatches on the */
+/* property name (the same scheme nodeGetter/nodeSetter use), so the whole      */
+/* CSSStyleDeclaration is a single dispatcher rather than one entry per         */
+/* property.                                                                    */
+/* ------------------------------------------------------------------------- */
+
+static AntbValue* makeStringResult(AntbEngine* engine, AntbValue* out, const char* text);
+
+/* "backgroundColor" -> "background-color", "WebkitBoxShadow" -> "-webkit-box-shadow" */
+static std::string cssNameFromCamel(const char* name)
+{
+    std::string out;
+
+    if (!name)
+        return out;
+
+    for (const char* p = name; *p; ++p) {
+        if (*p >= 'A' && *p <= 'Z') {
+            out += '-';
+            out += (char)(*p - 'A' + 'a');
+        } else {
+            out += *p;
+        }
+    }
+
+    if (out == "css-float")
+        out = "float";
+
+    return out;
+}
+
+/* The element a style object belongs to (stored as __agbElement). */
+static WebCore::StyledElement* styledElementOf(AntbValue* self)
+{
+    AntbValue* owner;
+    WebCore::Node* node;
+
+    if (!self)
+        return NULL;
+
+    owner = antb_get_prop(g_engine, self, "__agbElement");
+
+    if (!owner)
+        return NULL;
+
+    node = nodeOf(owner);
+    antb_value_release(owner);
+
+    if (!node || !node->isStyledElement())
+        return NULL;
+
+    return static_cast<WebCore::StyledElement*>(node);
+}
+
+static std::string stylePropertyText(WebCore::StyledElement* element, const char* name)
+{
+    WebCore::String value;
+
+    if (!element || !name)
+        return std::string();
+
+    value = element->style()->getPropertyValue(WebCore::String(cssNameFromCamel(name).c_str()));
+    return std::string(value.utf8().data());
+}
+
+/* Dispatcher for every property read on a style object. */
+static int styleGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue* out, void*)
+{
+    WebCore::StyledElement* element = styledElementOf(self);
+
+    if (!name) {
+        makeStringResult(engine, out, "");
+        return 1;
+    }
+
+    if (!strcmp(name, "cssText")) {
+        WebCore::String text = element ? element->style()->cssText() : WebCore::String();
+
+        makeStringResult(engine, out, text.utf8().data());
+        return 1;
+    }
+
+    /* setProperty / getPropertyValue / removeProperty come from the prelude
+     * helper object, so they behave like prototype methods. */
+    if (!strcmp(name, "setProperty") || !strcmp(name, "getPropertyValue")
+            || !strcmp(name, "removeProperty") || !strcmp(name, "item")
+            || !strcmp(name, "length")) {
+        AntbValue* global = antb_global(engine);
+        AntbValue* api = global ? antb_get_prop(engine, global, "__agbStyleApi") : NULL;
+        AntbValue* member = api ? antb_get_prop(engine, api, name) : NULL;
+
+        if (member && !antb_is_number(member)) {
+            antb_value_assign(out, member);
+            antb_value_release(member);
+            antb_value_release(api);
+            antb_value_release(global);
+            return 1;
+        }
+
+        antb_value_release(member);
+        antb_value_release(api);
+        antb_value_release(global);
+
+        makeStringResult(engine, out, "");
+        return 1;
+    }
+
+    makeStringResult(engine, out, stylePropertyText(element, name).c_str());
+    return 1;
+}
+
+/* Dispatcher for every property write on a style object. */
+static int styleSetter(AntbEngine* engine, AntbValue* self, const char* name, const AntbValue* value, void*)
+{
+    WebCore::StyledElement* element = styledElementOf(self);
+    WebCore::ExceptionCode ec = 0;
+    char* text;
+
+    (void)engine;
+
+    if (!element || !name)
+        return 1;
+
+    text = antb_to_utf8(const_cast<AntbValue*>(value));
+
+    if (getenv("AGB_STYLE_DEBUG"))
+        fprintf(stderr, "[style] set %s = '%s'\n", name, text ? text : "(null)");
+
+    if (!strcmp(name, "cssText")) {
+        element->style()->setCssText(WebCore::String::fromUTF8(text ? text : ""), ec);
+    } else {
+        std::string property = cssNameFromCamel(name);
+
+        if (!text || !text[0])
+            element->style()->removeProperty(WebCore::String(property.c_str()), ec);
+        else
+            element->style()->setProperty(WebCore::String(property.c_str()),
+                                          WebCore::String::fromUTF8(text),
+                                          WebCore::String(""), ec);
+    }
+
+    antb_free(text);
+    element->setChanged();
+    return 1;
+}
+
 /* Any attribute name yields an object: jQuery reads .expando off
  * div.attributes[name] and would otherwise throw on undefined. */
 int attrsGetter(AntbEngine* engine, AntbValue*, const char* name, AntbValue* out, void*)
@@ -2499,6 +2659,11 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
             AntbValue* style = antb_make_object(engine);
             if (!style)
                 return 0;
+
+            /* Back reference plus the single dispatcher; see styleGetter(). */
+            antb_set_prop(engine, style, "__agbElement", self);
+            antb_define_property_rw(engine, style, "style", styleGetter, styleSetter, NULL);
+
             antb_set_prop(engine, self, "__agbStyle", style);
             antb_value_assign(out, style);
             antb_value_release(style);
