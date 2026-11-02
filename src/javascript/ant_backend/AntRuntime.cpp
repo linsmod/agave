@@ -2780,6 +2780,7 @@ struct Listener {
     WebCore::Node* node;
     std::string    type;
     AntbValue*     fn;      /* rooted */
+    bool           once;    /* remove after the first dispatch */
 };
 
 /* Per-state listener list (see RuntimeState::listeners). */
@@ -3438,6 +3439,18 @@ int nodeAddEventListener(AntbEngine* engine, AntbValue* self, AntbValue** args, 
         /* Only functions are callable later: pages happily pass null or objects
          * as the listener, and dispatching those crashed the process. */
         l.fn = antb_is_function(args[1]) ? antb_retain(args[1]) : NULL;
+
+        /* options.once: remove the listener after its first dispatch. The third
+         * argument is either a boolean (capture, ignored here) or an object. */
+        l.once = false;
+        if (argc > 2 && args[2]) {
+            AntbValue* once = antb_get_prop(engine, args[2], "once");
+
+            if (once) {
+                l.once = antb_to_boolean(once) != 0;
+                antb_value_release(once);
+            }
+        }
         if (l.fn) {
             g_listeners->push_back(l);
             if (getenv("AGB_EVT_DEBUG"))
@@ -3541,6 +3554,25 @@ int nodeDispatchEvent(AntbEngine* engine, AntbValue* self, AntbValue** args, int
         antb_value_release(snapshot[i]);
     }
 
+    /* once: drop the listeners this dispatch just called. Identity is
+     * checked on the JS value, because the snapshot holds retained wrappers. */
+    for (size_t i = 0; g_listeners && i < g_listeners->size(); ) {
+        Listener& l = (*g_listeners)[i];
+        bool called = false;
+
+        if (l.once && l.node == n && l.type == type && l.fn) {
+            for (size_t k = 0; k < snapshot.size(); ++k) {
+                if (antb_value_same(l.fn, snapshot[k])) { called = true; break; }
+            }
+        }
+
+        if (called) {
+            antb_value_release(l.fn);
+            g_listeners->erase(g_listeners->begin() + i);
+        } else {
+            ++i;
+        }
+    }
     antb_free(type);
     return 1;
 }
@@ -4922,6 +4954,25 @@ void dispatchWindowEvent(const char* type)
             fprintf(stderr, "[evt] dispatch %s -> %d listener(s)\n", type, (int)snapshot.size());
 
         antb_value_release(evt);
+    }
+    /* once: drop the listeners this dispatch just called. Identity is
+     * checked on the JS value, because the snapshot holds retained wrappers. */
+    for (size_t i = 0; g_listeners && i < g_listeners->size(); ) {
+        Listener& l = (*g_listeners)[i];
+        bool called = false;
+
+        if (l.once && l.node == g_document && l.type == type && l.fn) {
+            for (size_t k = 0; k < snapshot.size(); ++k) {
+                if (antb_value_same(l.fn, snapshot[k])) { called = true; break; }
+            }
+        }
+
+        if (called) {
+            antb_value_release(l.fn);
+            g_listeners->erase(g_listeners->begin() + i);
+        } else {
+            ++i;
+        }
     }
 
     for (size_t i = 0; i < snapshot.size(); ++i)
