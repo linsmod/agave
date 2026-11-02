@@ -36,11 +36,12 @@
 #define ID_GO       1006
 #define ID_NEWTAB   1007
 #define ID_FIND     1008
+#define ID_MENU     1009
 
 /* UI -> engine */
 enum CommandType {
     CMD_NAVIGATE, CMD_BACK, CMD_FORWARD, CMD_RELOAD, CMD_STOP,
-    CMD_MOUSE, CMD_KEY, CMD_CHAR, CMD_RESIZE, CMD_NEW_TAB, CMD_FIND, CMD_CLOSE_TAB
+    CMD_MOUSE, CMD_KEY, CMD_CHAR, CMD_RESIZE, CMD_NEW_TAB, CMD_FIND, CMD_CLOSE_TAB, CMD_ZOOM
 };
 
 typedef struct {
@@ -86,7 +87,19 @@ static int                g_nextTabId = 1;
 static HWND               g_hwnd;
 static HWND               g_address;
 static HWND               g_find;
-static HWND               g_buttons[6];
+static HWND               g_buttons[7];
+
+#define AGW_MAX_BOOKMARKS 64
+#define AGW_MAX_HISTORY   200
+
+typedef struct { char url[1024]; char title[256]; } Bookmark;
+
+static Bookmark           g_bookmarks[AGW_MAX_BOOKMARKS];
+static int                g_bookmarkCount;
+static char               g_history[AGW_MAX_HISTORY][1100];
+static int                g_historyCount;
+static int                g_zoom = 100;
+static char               g_dataDir[MAX_PATH_CHARS];
 
 static int                g_tabOrder[MAX_TABS];
 static int                g_tabOrderCount;
@@ -117,6 +130,12 @@ static void resizeActiveTab(void);
 static void syncUiFromState(void);
 static void postCommand(const ShellCommand* command);
 static void notifyUi(void);
+static void addBookmarkCurrent(void);
+static void navigateTo(const char* text, int inNewTab);
+static void addBookmark(const char* url, const char* title);
+static void recordHistory(const char* url);
+static int loadSession(char urls[][MAX_PATH_CHARS], int max);
+static void saveSession(void);
 
 static void addTab(const char* url);
 static void resizeActiveTab(void);
@@ -485,8 +504,13 @@ static void engineCreateView(Tab* tab, const char* url)
     tab->view = macross_view_create(tab->bits, tab->width, tab->height,
                                     tab->width * 4, NULL);
 
-    if (tab->view && url && url[0])
-        macross_view_open_url(tab->view, url);
+    if (tab->view) {
+        if (g_zoom != 100)
+            macross_view_set_scale_factor(tab->view, g_zoom);
+
+        if (url && url[0])
+            macross_view_open_url(tab->view, url);
+    }
 }
 
 /* Creates the DIB the engine renders into. Always called on the engine thread,
@@ -563,6 +587,10 @@ static void engineDrainCommands(void)
         case CMD_STOP:
             if (g_activeTab < g_tabCount && g_tabs[g_activeTab].view)
                 macross_view_stop(g_tabs[g_activeTab].view);
+            break;
+        case CMD_ZOOM:
+            if (g_activeTab < g_tabCount && g_tabs[g_activeTab].view)
+                macross_view_set_scale_factor(g_tabs[g_activeTab].view, g_zoom);
             break;
         case CMD_FIND:
             if (g_activeTab < g_tabCount && g_tabs[g_activeTab].view && command.text[0])
@@ -724,7 +752,7 @@ static void layoutChildren(HWND hwnd, int width, int height)
     MoveWindow(g_buttons[3], x, 7, BUTTON_WIDTH, 24, TRUE); x += BUTTON_WIDTH + 6;
 
     {
-        int reserved = (BUTTON_WIDTH + 16) * 2 + 26;
+        int reserved = (BUTTON_WIDTH + 16) * 3 + 30;
         int editWidth = width - x - reserved;
 
         if (editWidth < 80)
@@ -735,6 +763,8 @@ static void layoutChildren(HWND hwnd, int width, int height)
         MoveWindow(g_buttons[4], x, 7, BUTTON_WIDTH + 16, 24, TRUE);
         x += BUTTON_WIDTH + 20;
         MoveWindow(g_buttons[5], x, 7, BUTTON_WIDTH + 16, 24, TRUE);
+        x += BUTTON_WIDTH + 20;
+        MoveWindow(g_buttons[6], x, 7, BUTTON_WIDTH + 16, 24, TRUE);
     }
 
     MoveWindow(g_find, 4, TOOLBAR_HEIGHT + 2, 260, 24, FALSE);
@@ -869,6 +899,12 @@ static void paintWindow(HWND hwnd)
                       tab->loading ? "Loading... " : "",
                       tab->status[0] ? tab->status : "",
                       (!tab->loading && !tab->status[0]) ? (tab->url[0] ? tab->url : "Ready") : "");
+            if (g_zoom != 100) {
+                char zoomText[32];
+
+                _snprintf(zoomText, sizeof(zoomText), "  [%d%%]", g_zoom);
+                strncat(text, zoomText, sizeof(text) - strlen(text) - 1);
+            }
         } else {
             strcpy(text, "Ready");
         }
@@ -889,6 +925,7 @@ static void syncUiFromState(void)
     char title[400];
     char url[MAX_PATH_CHARS];
     char tabTitle[300];
+    static char lastRecorded[MAX_TABS][MAX_PATH_CHARS];
 
     lockAcquire();
     active = g_activeTab;
@@ -902,6 +939,12 @@ static void syncUiFromState(void)
         tabTitle[0] = 0;
     }
     lockRelease();
+
+    if (active < g_tabCount && url[0] && strcmp(lastRecorded[active], url)) {
+        strncpy(lastRecorded[active], url, MAX_PATH_CHARS - 1);
+        lastRecorded[active][MAX_PATH_CHARS - 1] = 0;
+        recordHistory(url);
+    }
 
     if (GetFocus() != g_address)
         SetWindowTextA(g_address, url);
@@ -938,6 +981,102 @@ static void sendMouse(MC_MOUSE_EVENT_TYPE type, int x, int y, MC_MOUSE_BUTTON bu
     command.y = y;
     command.modifier = (int)currentModifiers();
     postCommand(&command);
+}
+
+/* Main menu: bookmarks, history, zoom. */
+static void showMainMenu(void)
+{
+    HMENU menu = CreatePopupMenu();
+    HMENU bookmarks = CreatePopupMenu();
+    HMENU history = CreatePopupMenu();
+    POINT point;
+    int choice;
+    int i;
+
+    for (i = 0; i < g_bookmarkCount && i < 20; ++i)
+        AppendMenuA(bookmarks, MF_STRING, 100 + i,
+                    g_bookmarks[i].title[0] ? g_bookmarks[i].title : g_bookmarks[i].url);
+
+    if (g_bookmarkCount == 0)
+        AppendMenuA(bookmarks, MF_STRING | MF_GRAYED, 0, "(empty)");
+
+    for (i = g_historyCount - 1; i >= 0 && i >= g_historyCount - 20; --i) {
+        char label[1200];
+
+        _snprintf(label, sizeof(label), "%s", g_history[i]);
+        label[sizeof(label) - 1] = 0;
+        AppendMenuA(history, MF_STRING, 200 + (g_historyCount - 1 - i), label);
+    }
+
+    if (g_historyCount == 0)
+        AppendMenuA(history, MF_STRING | MF_GRAYED, 0, "(empty)");
+
+    AppendMenuA(menu, MF_STRING, 1, "Add bookmark\tCtrl+D");
+    AppendMenuA(menu, MF_POPUP, (UINT_PTR)bookmarks, "Bookmarks");
+    AppendMenuA(menu, MF_POPUP, (UINT_PTR)history, "History");
+    AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuA(menu, MF_STRING, 2, "Zoom in\tCtrl+=");
+    AppendMenuA(menu, MF_STRING, 3, "Zoom out\tCtrl+-");
+    AppendMenuA(menu, MF_STRING, 4, "Reset zoom\tCtrl+0");
+    AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuA(menu, MF_STRING, 5, "New tab\tCtrl+T");
+    AppendMenuA(menu, MF_STRING, 6, "Find\tCtrl+F");
+    AppendMenuA(menu, MF_STRING, 7, "Reload\tF5");
+
+    GetCursorPos(&point);
+    choice = (int)TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN,
+                                 point.x, point.y, 0, g_hwnd, NULL);
+    DestroyMenu(menu);
+
+    if (choice >= 200) {
+        int index = g_historyCount - 1 - (choice - 200);
+
+        if (index >= 0 && index < g_historyCount)
+            navigateTo(g_history[index], 0);
+        return;
+    }
+
+    if (choice >= 100) {
+        int index = choice - 100;
+
+        if (index >= 0 && index < g_bookmarkCount)
+            navigateTo(g_bookmarks[index].url, 0);
+        return;
+    }
+
+    switch (choice) {
+    case 1: addBookmarkCurrent(); break;
+    case 2: g_zoom = g_zoom < 400 ? g_zoom + 25 : g_zoom; postSimple(CMD_ZOOM, g_activeTab); break;
+    case 3: g_zoom = g_zoom > 25 ? g_zoom - 25 : g_zoom; postSimple(CMD_ZOOM, g_activeTab); break;
+    case 4: g_zoom = 100; postSimple(CMD_ZOOM, g_activeTab); break;
+    case 5: navigateTo("about:blank", 1); break;
+    case 6: ShowWindow(g_find, SW_SHOW); SetFocus(g_find); break;
+    case 7: postSimple(CMD_RELOAD, g_activeTab); break;
+    default: break;
+    }
+}
+
+static void addBookmarkCurrent(void)
+{
+    char url[MAX_PATH_CHARS];
+    char title[256];
+
+    lockAcquire();
+    strncpy(url, g_tabs[g_activeTab].url, sizeof(url) - 1);
+    url[sizeof(url) - 1] = 0;
+    strncpy(title, g_tabs[g_activeTab].title, sizeof(title) - 1);
+    title[sizeof(title) - 1] = 0;
+    lockRelease();
+
+    addBookmark(url, title);
+
+    lockAcquire();
+    strncpy(g_tabs[g_activeTab].status, "Bookmark added",
+            sizeof(g_tabs[0].status) - 1);
+    g_tabs[g_activeTab].status[sizeof(g_tabs[0].status) - 1] = 0;
+    lockRelease();
+
+    notifyUi();
 }
 
 static void showContextMenu(int x, int y)
@@ -1162,6 +1301,25 @@ static LRESULT CALLBACK windowProc(HWND hwnd, UINT message, WPARAM wParam, LPARA
                 SendMessageA(g_address, EM_SETSEL, 0, -1);
                 return 0;
             }
+            if ((GetKeyState(VK_CONTROL) & 0x8000) && wParam == 'D') {
+                addBookmarkCurrent();
+                return 0;
+            }
+            if ((GetKeyState(VK_CONTROL) & 0x8000) && (wParam == VK_ADD || wParam == 0xBB)) {
+                g_zoom = g_zoom < 400 ? g_zoom + 25 : g_zoom;
+                postSimple(CMD_ZOOM, g_activeTab);
+                return 0;
+            }
+            if ((GetKeyState(VK_CONTROL) & 0x8000) && (wParam == VK_SUBTRACT || wParam == 0xBD)) {
+                g_zoom = g_zoom > 25 ? g_zoom - 25 : g_zoom;
+                postSimple(CMD_ZOOM, g_activeTab);
+                return 0;
+            }
+            if ((GetKeyState(VK_CONTROL) & 0x8000) && wParam == '0') {
+                g_zoom = 100;
+                postSimple(CMD_ZOOM, g_activeTab);
+                return 0;
+            }
             if ((GetKeyState(VK_CONTROL) & 0x8000) && wParam == 'T') {
                 navigateTo("about:blank", 1);
                 return 0;
@@ -1222,6 +1380,7 @@ static LRESULT CALLBACK windowProc(HWND hwnd, UINT message, WPARAM wParam, LPARA
         case ID_RELOAD:  postSimple(CMD_RELOAD, g_activeTab);  return 0;
         case ID_STOP:    postSimple(CMD_STOP, g_activeTab);    return 0;
         case ID_NEWTAB:  navigateTo("about:blank", 1);         return 0;
+        case ID_MENU:    showMainMenu();                        return 0;
         case ID_FIND:    ShowWindow(g_find, SW_SHOW); SetFocus(g_find); return 0;
         default: break;
         }
@@ -1229,6 +1388,7 @@ static LRESULT CALLBACK windowProc(HWND hwnd, UINT message, WPARAM wParam, LPARA
     }
 
     case WM_DESTROY:
+        saveSession();
         g_engineQuit = 1;
         PostQuitMessage(0);
         return 0;
@@ -1286,6 +1446,213 @@ static void addTab(const char* url)
 /* entry point                                                                */
 /* ------------------------------------------------------------------------- */
 
+/* ------------------------------------------------------------------------- */
+/* persistent state: bookmarks, history, session                              */
+/* ------------------------------------------------------------------------- */
+
+static void dataDirInit(void)
+{
+    const char* appdata = getenv("APPDATA");
+
+    if (appdata && appdata[0]) {
+        _snprintf(g_dataDir, sizeof(g_dataDir), "%s\\AgaveShell", appdata);
+        g_dataDir[sizeof(g_dataDir) - 1] = 0;
+
+        if (CreateDirectoryA(g_dataDir, NULL) ||
+            GetFileAttributesA(g_dataDir) != INVALID_FILE_ATTRIBUTES)
+            return;
+    }
+
+    /* Portable / restricted environments: keep the data next to the exe. */
+    {
+        char module[MAX_PATH];
+
+        if (GetModuleFileNameA(NULL, module, sizeof(module))) {
+            char* slash = strrchr(module, '\\');
+
+            if (slash)
+                *(slash + 1) = 0;
+
+            _snprintf(g_dataDir, sizeof(g_dataDir), "%sAgaveShellData", module);
+            g_dataDir[sizeof(g_dataDir) - 1] = 0;
+            CreateDirectoryA(g_dataDir, NULL);
+        }
+    }
+
+    if (getenv("AGAVE_SHELL_DEBUG"))
+        fprintf(stderr, "[shell] data dir=%s (created=%d)\n", g_dataDir,
+                GetFileAttributesA(g_dataDir) != INVALID_FILE_ATTRIBUTES);
+}
+
+static void statePath(char* out, size_t size, const char* name)
+{
+    _snprintf(out, size, "%s\\%s", g_dataDir, name);
+    out[size - 1] = 0;
+}
+
+static void loadBookmarks(void)
+{
+    char path[MAX_PATH_CHARS];
+    FILE* file;
+    char line[1400];
+
+    g_bookmarkCount = 0;
+    statePath(path, sizeof(path), "bookmarks.txt");
+    file = fopen(path, "rb");
+
+    if (!file)
+        return;
+
+    while (g_bookmarkCount < AGW_MAX_BOOKMARKS && fgets(line, sizeof(line), file)) {
+        char* tab = strchr(line, '\t');
+        size_t n;
+
+        if (!tab)
+            continue;
+
+        *tab = 0;
+
+        n = strlen(line);
+        while (n && (line[n - 1] == '\n' || line[n - 1] == '\r'))
+            line[--n] = 0;
+
+        strncpy(g_bookmarks[g_bookmarkCount].url, line,
+                sizeof(g_bookmarks[0].url) - 1);
+        strncpy(g_bookmarks[g_bookmarkCount].title, tab + 1,
+                sizeof(g_bookmarks[0].title) - 1);
+
+        {
+            char* tail = g_bookmarks[g_bookmarkCount].title;
+            size_t m = strlen(tail);
+
+            while (m && (tail[m - 1] == '\n' || tail[m - 1] == '\r'))
+                tail[--m] = 0;
+        }
+
+        ++g_bookmarkCount;
+    }
+
+    fclose(file);
+}
+
+static void saveBookmarks(void)
+{
+    char path[MAX_PATH_CHARS];
+    FILE* file;
+    int i;
+
+    statePath(path, sizeof(path), "bookmarks.txt");
+    file = fopen(path, "wb");
+
+    if (!file)
+        return;
+
+    for (i = 0; i < g_bookmarkCount; ++i)
+        fprintf(file, "%s\t%s\n", g_bookmarks[i].url,
+                g_bookmarks[i].title[0] ? g_bookmarks[i].title : g_bookmarks[i].url);
+
+    fclose(file);
+}
+
+static void addBookmark(const char* url, const char* title)
+{
+    int i;
+
+    if (!url || !url[0])
+        return;
+
+    for (i = 0; i < g_bookmarkCount; ++i) {
+        if (!strcmp(g_bookmarks[i].url, url))
+            return;   /* already there */
+    }
+
+    if (g_bookmarkCount >= AGW_MAX_BOOKMARKS)
+        return;
+
+    strncpy(g_bookmarks[g_bookmarkCount].url, url, sizeof(g_bookmarks[0].url) - 1);
+    strncpy(g_bookmarks[g_bookmarkCount].title, title ? title : "",
+            sizeof(g_bookmarks[0].title) - 1);
+    ++g_bookmarkCount;
+
+    saveBookmarks();
+}
+
+static void recordHistory(const char* url)
+{
+    char path[MAX_PATH_CHARS];
+    FILE* file;
+
+    if (!url || !url[0])
+        return;
+
+    if (g_historyCount > 0 && !strcmp(g_history[g_historyCount - 1], url))
+        return;
+
+    if (g_historyCount == AGW_MAX_HISTORY) {
+        memmove(&g_history[0][0], &g_history[1][0],
+                sizeof(g_history[0]) * (AGW_MAX_HISTORY - 1));
+        --g_historyCount;
+    }
+
+    strncpy(g_history[g_historyCount], url, sizeof(g_history[0]) - 1);
+    g_history[g_historyCount][sizeof(g_history[0]) - 1] = 0;
+    ++g_historyCount;
+
+    statePath(path, sizeof(path), "history.txt");
+    file = fopen(path, "ab");
+
+    if (file) {
+        fprintf(file, "%s\n", url);
+        fclose(file);
+    }
+}
+
+static void saveSession(void)
+{
+    char path[MAX_PATH_CHARS];
+    FILE* file;
+    int i;
+
+    statePath(path, sizeof(path), "session.txt");
+    file = fopen(path, "wb");
+
+    if (!file)
+        return;
+
+    for (i = 0; i < g_tabCount; ++i) {
+        if (!g_tabs[i].closed && g_tabs[i].url[0])
+            fprintf(file, "%s\n", g_tabs[i].url);
+    }
+
+    fclose(file);
+}
+
+static int loadSession(char urls[][MAX_PATH_CHARS], int max)
+{
+    char path[MAX_PATH_CHARS];
+    FILE* file;
+    int count = 0;
+
+    statePath(path, sizeof(path), "session.txt");
+    file = fopen(path, "rb");
+
+    if (!file)
+        return 0;
+
+    while (count < max && fgets(urls[count], MAX_PATH_CHARS, file)) {
+        size_t n = strlen(urls[count]);
+
+        while (n && (urls[count][n - 1] == '\n' || urls[count][n - 1] == '\r'))
+            urls[count][--n] = 0;
+
+        if (urls[count][0])
+            ++count;
+    }
+
+    fclose(file);
+    return count;
+}
+
 static void makeDownloadDir(void)
 {
     const char* home = getenv("USERPROFILE");
@@ -1323,6 +1690,8 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
 
     InitializeCriticalSection(&g_lock);
     makeDownloadDir();
+    dataDirInit();
+    loadBookmarks();
 
     memset(&wc, 0, sizeof(wc));
     wc.lpfnWndProc = windowProc;
@@ -1348,6 +1717,7 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
     g_buttons[3] = CreateWindowA("BUTTON", "X",  WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, g_hwnd, (HMENU)ID_STOP,    instance, NULL);
     g_buttons[4] = CreateWindowA("BUTTON", "Go", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 0, 0, 0, 0, g_hwnd, (HMENU)ID_GO,     instance, NULL);
     g_buttons[5] = CreateWindowA("BUTTON", "+",  WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, g_hwnd, (HMENU)ID_NEWTAB, instance, NULL);
+    g_buttons[6] = CreateWindowA("BUTTON", "=",  WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, g_hwnd, (HMENU)ID_MENU,   instance, NULL);
 
     g_address = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "",
                                 WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
@@ -1372,7 +1742,22 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
     callbacks.cb_write_file_data  = onWriteFile;
     macross_set_callback(&callbacks);
 
-    addTab(g_initialUrl);
+    {
+        static char sessionUrls[8][MAX_PATH_CHARS];
+        int restored = 0;
+
+        if (argc <= 1)
+            restored = loadSession(sessionUrls, 8);
+
+        if (restored > 0) {
+            int i;
+
+            for (i = 0; i < restored; ++i)
+                addTab(sessionUrls[i]);
+        } else {
+            addTab(g_initialUrl);
+        }
+    }
 
     if (getenv("AGB_SHELL_DEBUG")) {
         RECT frame;
