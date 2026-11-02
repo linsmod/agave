@@ -2535,9 +2535,18 @@ static void loadPolyfills(void)
 
 void bindDocument(void* document)
 {
+    WebCore::Document* previous = g_document;
+
     /* The Document object is replaced on every navigation, so always refresh
      * the pointer; only the JS shim objects are created once. */
     g_document = (WebCore::Document*)document;
+
+    /* Binding the document that is already installed is a no-op. A page with
+     * async ad scripts gets here 3-6 times for the same document, and the
+     * redundant passes make the VM run a closure body once per pass (css3test
+     * ran its whole suite several times over). */
+    if (g_documentBound && previous == (WebCore::Document*)document && g_docObj)
+        return;
     g_currentSlot = slotForDocument(g_document);
 
     if (getenv("AGB_EVT_DEBUG"))
@@ -5067,6 +5076,9 @@ void setDialogHook(DialogHook hook)
 }
 
 } /* namespace AntRuntime */
+
+
+
 
 
 
