@@ -38,6 +38,7 @@
 
 #include "CSSPrimitiveValue.h"
 #include "CSSValueList.h"
+#include "CSSGradientValue.h"
 #include "Color.h"
 #include "CSSCursorImageValue.h"
 #include "DataRef.h"
@@ -66,6 +67,7 @@ namespace WebCore {
 using std::max;
 
 class CSSStyleSelector;
+class CSSGradientValue;
 class CSSValueList;
 class CachedImage;
 class CachedResource;
@@ -1163,6 +1165,7 @@ protected:
     DataRef<StyleBoxData> box;
     DataRef<StyleVisualData> visual;
     DataRef<StyleBackgroundData> background;
+    RefPtr<CSSGradientValue> m_backgroundGradient;
     DataRef<StyleSurroundData> surround;
     DataRef<StyleRareNonInheritedData> rareNonInheritedData;
 
@@ -1571,6 +1574,11 @@ public:
     void resetOutline() { SET_VAR(background, m_outline, OutlineValue()) }
     
     void setBackgroundColor(const Color& v)    { SET_VAR(background, m_color, v) }
+
+    /* linear-gradient() is not part of this engine's CSS model; the shim keeps
+     * the parsed value on the style and RenderBox paints it as a background. */
+    CSSGradientValue* backgroundGradient() const { return m_backgroundGradient.get(); }
+    void setBackgroundGradient(PassRefPtr<CSSGradientValue> value) { m_backgroundGradient = value; }
 
     void setBorderImage(const BorderImage& b)   { SET_VAR(surround, border.image, b) }
 

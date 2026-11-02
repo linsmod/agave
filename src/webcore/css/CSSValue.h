@@ -45,6 +45,7 @@ public:
     void setCssText(const String&, ExceptionCode&) { } // FIXME: Not implemented.
 
     virtual bool isValue() { return true; }
+    virtual bool isGradientValue() const { return false; }
     virtual bool isFontValue() { return false; }
     virtual bool isImplicitInitialValue() const { return false; }
 };

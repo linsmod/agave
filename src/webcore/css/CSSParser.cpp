@@ -29,6 +29,9 @@
 #include "CSSCursorImageValue.h"
 #include "CSSHelper.h"
 #include "CSSImageValue.h"
+#include "CSSGradientValue.h"
+#include <stdio.h>
+#include <stdlib.h>
 #include "CSSFontFaceRule.h"
 #include "CSSFontFaceSrcValue.h"
 #include "CSSImportRule.h"
@@ -1821,6 +1824,122 @@ CSSValue* CSSParser::parseBackgroundColor()
     return parseColor();
 }
 
+/* Parses linear-gradient()/repeating-linear-gradient(); returns 0 when the
+ * syntax is not understood (caller then paints nothing). */
+CSSValue* CSSParser::parseGradientFunction(Value* functionValue)
+{
+    if (getenv("AGB_CSS_DEBUG")) fprintf(stderr, "[grad] enter fname=%s args=%d\n", domString(functionValue->function->name).utf8().data(), functionValue->function->args ? (int)functionValue->function->args->size() : -1);
+    ValueList* args = functionValue->function->args;
+    CSSGradientValue* gradient;
+    String fname;
+    if (!args || !args->size())
+        return 0;
+    gradient = new CSSGradientValue();
+    fname = domString(functionValue->function->name).lower();
+    gradient->setRepeating(fname.startsWith(String("repeating-")));
+    for (unsigned i = 0; i < args->size(); ) {
+        Value* v = args->valueAt(i);
+        if (!v)
+            break;
+        /* direction: "<angle>" or "to <side-or-corner>" (only before the stops) */
+        if (!gradient->stops().size() && v->unit == CSSPrimitiveValue::CSS_DEG) {
+            gradient->setAngle((float)v->fValue);
+            ++i;
+            continue;
+        }
+        if (!gradient->stops().size() && v->unit == CSSPrimitiveValue::CSS_IDENT
+                && domString(v->string).lower() == "to") {
+            bool horizontal = false, vertical = false, toRight = false, toBottom = false;
+            ++i;
+            while (i < args->size()) {
+                Value* d = args->valueAt(i);
+                String dir;
+                if (!d || d->unit != CSSPrimitiveValue::CSS_IDENT)
+                    break;
+                dir = domString(d->string).lower();
+                if (dir == "left") { horizontal = true; toRight = false; }
+                else if (dir == "right") { horizontal = true; toRight = true; }
+                else if (dir == "top") { vertical = true; toBottom = false; }
+                else if (dir == "bottom") { vertical = true; toBottom = true; }
+                else break;
+                ++i;
+            }
+            if (horizontal && vertical)
+                gradient->setAngle(toRight ? (toBottom ? 135.0f : 45.0f) : (toBottom ? 225.0f : 315.0f));
+            else if (horizontal)
+                gradient->setAngle(toRight ? 90.0f : 270.0f);
+            else if (vertical)
+                gradient->setAngle(toBottom ? 180.0f : 0.0f);
+            continue;
+        }
+        /* colour stop, optionally followed by a percentage */
+        if (v->unit == Value::Operator && v->iValue == ',') {
+            ++i;
+            continue;
+        }
+
+        {
+            RGBA32 rgba = 0;
+            if (!parseColorFromValue(v, rgba, false))
+                return 0;
+            {
+                CSSGradientValue::Stop stop;
+                stop.offset = -1.0f;
+                stop.color = Color(rgba);
+                ++i;
+                if (i < args->size()) {
+                    Value* p = args->valueAt(i);
+                    if (p && p->unit == CSSPrimitiveValue::CSS_PERCENTAGE) {
+                        stop.offset = (float)(p->fValue / 100.0);
+                        ++i;
+                    }
+                }
+                gradient->addStop(stop);
+            }
+        }
+    }
+    if (gradient->stops().size() < 2) {
+        delete gradient;
+        return 0;
+    }
+    /* Distribute the stops that had no explicit position, keeping order. */
+    {
+        Vector<CSSGradientValue::Stop>& stops = gradient->mutableStops();
+        unsigned count = stops.size();
+        float last = 0.0f;
+        for (unsigned i = 0; i < count; ++i) {
+            if (stops[i].offset >= 0.0f) {
+                last = stops[i].offset;
+                continue;
+            }
+            /* count of consecutive unspecified stops after this one */
+            {
+                unsigned j = i;
+                unsigned unknown = 0;
+                while (j < count && stops[j].offset < 0.0f) {
+                    ++unknown;
+                    ++j;
+                }
+                {
+                    float target = (j < count) ? stops[j].offset : 1.0f;
+                    float step = unknown ? (target - last) / (unknown + 1) : 0.0f;
+                    for (unsigned k = i; k < j; ++k)
+                        stops[k].offset = last + step * (k - i + 1);
+                    last = stops[j - 1].offset;
+                    i = j - 1;
+                }
+            }
+        }
+        for (unsigned i = 0; i < count; ++i) {
+            if (stops[i].offset < 0.0f)
+                stops[i].offset = 0.0f;
+            if (stops[i].offset > 1.0f)
+                stops[i].offset = 1.0f;
+        }
+    }
+    if (getenv("AGB_CSS_DEBUG")) fprintf(stderr, "[grad] ok stops=%d angle=%.1f\n", (int)gradient->stops().size(), gradient->angle());
+    return gradient;
+}
 bool CSSParser::parseBackgroundImage(CSSValue*& value)
 {
     Value* val = valueList->current();
@@ -1841,14 +1960,13 @@ bool CSSParser::parseBackgroundImage(CSSValue*& value)
         return true;
     }
 
-    /* Gradients are not implemented by this engine. Accept the function and
-     * paint nothing, so the rest of the declaration (background-color, repeat,
-     * position) still applies instead of the whole shorthand being dropped. */
     if (val->unit == Value::QFunction && val->function) {
         String fname = domString(val->function->name).lower();
 
         if (fname.endsWith(String("gradient("))) {
-            value = new CSSImageValue();
+            value = parseGradientFunction(val);
+            if (!value)
+                value = new CSSImageValue();   /* unsupported syntax: paint nothing */
             return true;
         }
     }

@@ -31,6 +31,7 @@
 #include "CSSFontFaceSource.h"
 #include "CSSFontFaceRule.h"
 #include "CSSImageValue.h"
+#include "CSSGradientValue.h"
 #include "CSSImportRule.h"
 #include "CSSMediaRule.h"
 #include "CSSProperty.h"
@@ -2586,6 +2587,10 @@ void CSSStyleSelector::applyProperty(int id, CSSValue *value)
     
 // uri || inherit
     case CSS_PROP_BACKGROUND_IMAGE:
+        if (value && value->isGradientValue()) {
+            style->setBackgroundGradient(static_cast<CSSGradientValue*>(value));
+            return;
+        }
         HANDLE_BACKGROUND_VALUE(backgroundImage, BackgroundImage, value)
         return;
     case CSS_PROP_LIST_STYLE_IMAGE:

@@ -137,6 +137,7 @@ namespace WebCore {
 
         CSSValue* parseBackgroundColor();
         bool parseBackgroundImage(CSSValue*&);
+    CSSValue* parseGradientFunction(Value* functionValue);
         CSSValue* parseBackgroundPositionXY(bool& xFound, bool& yFound);
         void parseBackgroundPosition(CSSValue*&, CSSValue*&);
         CSSValue* parseBackgroundSize();
