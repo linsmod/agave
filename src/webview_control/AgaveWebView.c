@@ -46,6 +46,13 @@ struct AgaveWebView {
     HBITMAP            bitmap;
     HDC                memdc;
     HGDIOBJ            oldBitmap;
+    /* Complete-frame copy the UI thread blits from. The engine writes `bits`
+     * from its own thread; painting straight out of that buffer tore the image
+     * while scrolling, so each finished frame is copied here under the lock. */
+    MC_BYTE*           mirrorBits;
+    HBITMAP            mirrorBitmap;
+    HDC                mirrorDc;
+    HGDIOBJ            mirrorOldBitmap;
     int                width;
     int                height;
     int                wantWidth;
@@ -63,6 +70,8 @@ struct AgaveWebView {
     int                lastRecordedProgress;
     int                backCount;
     int                forwardCount;
+    unsigned long      lastMirrorMs;   /* last InvalidateRect mirrored to the window */
+    int                navigatePending; /* a CMD_NAVIGATE is queued for this view */
 
     char               downloadDir[MAX_PATH];
     char               userAgent[256];
@@ -497,6 +506,17 @@ static void agwDestroySurface(AgaveWebView* item)
         item->bitmap = NULL;
     }
     item->bits = NULL;
+
+    if (item->mirrorDc) {
+        SelectObject(item->mirrorDc, item->mirrorOldBitmap);
+        DeleteDC(item->mirrorDc);
+        item->mirrorDc = NULL;
+    }
+    if (item->mirrorBitmap) {
+        DeleteObject(item->mirrorBitmap);
+        item->mirrorBitmap = NULL;
+    }
+    item->mirrorBits = NULL;
 }
 
 static int agwCreateSurface(AgaveWebView* item, int width, int height)
@@ -522,11 +542,19 @@ static int agwCreateSurface(AgaveWebView* item, int width, int height)
         item->memdc = CreateCompatibleDC(hdc);
         item->oldBitmap = SelectObject(item->memdc, item->bitmap);
     }
+
+    /* Second buffer: the one the window paints from. */
+    item->mirrorBitmap = CreateDIBSection(hdc, &info, DIB_RGB_COLORS, (void**)&item->mirrorBits, NULL, 0);
+
+    if (item->mirrorBitmap) {
+        item->mirrorDc = CreateCompatibleDC(hdc);
+        item->mirrorOldBitmap = SelectObject(item->mirrorDc, item->mirrorBitmap);
+    }
     ReleaseDC(item->hwnd, hdc);
 
     item->width = width;
     item->height = height;
-    return item->bits != NULL;
+    return item->bits != NULL && item->mirrorBits != NULL;
 }
 
 static void agwEnsureSurface(AgaveWebView* item, int width, int height)
@@ -551,7 +579,9 @@ static void agwEnsureSurface(AgaveWebView* item, int width, int height)
             if (item->zoom != 100)
                 macross_view_set_scale_factor(item->view, item->zoom);
 
-            if (item->url[0])
+            /* A queued CMD_NAVIGATE will load the URL; doing it here as well made
+             * every first navigation fetch the page twice. */
+            if (item->url[0] && !item->navigatePending)
                 macross_view_open_url(item->view, item->url);
         }
     }
@@ -592,6 +622,8 @@ static void agwDrainCommands(void)
 
         switch (command.type) {
         case AGW_CMD_NAVIGATE:
+            item->navigatePending = 0;
+
             if (item->view) {
                 macross_view_open_url(item->view, command.text);
             } else {
@@ -752,6 +784,22 @@ static DWORD WINAPI agwEngineThread(LPVOID param)
                 if (!item->destroyed)
                     macross_view_update(item->view, NULL);
 
+                /* Copy the finished frame into the mirror buffer the window
+                 * paints from. Doing this under the lock keeps the UI thread
+                 * from blitting a half-written frame (that tore while
+                 * scrolling); the copy is ~1ms, the engine paints outside it. */
+                if (item->mirrorBits && item->bits && item->width > 0 && item->height > 0) {
+                    size_t bytes = (size_t)item->width * (size_t)item->height * 4u;
+
+                    agwLock();
+                    memcpy(item->mirrorBits, item->bits, bytes);
+                    item->lastMirrorMs = GetTickCount();
+                    agwUnlock();
+
+                    if (item->hwnd && IsWindowVisible(item->hwnd))
+                        InvalidateRect(item->hwnd, NULL, FALSE);
+                }
+
                 g_lastActive = item;
                 active = 1;
 
@@ -796,8 +844,8 @@ static void agwPaint(AgaveWebView* item, HDC hdc)
         return;
 
     agwLock();
-    if (item->memdc && item->bits) {
-        BitBlt(hdc, 0, 0, item->width, item->height, item->memdc, 0, 0, SRCCOPY);
+    if (item->mirrorDc && item->mirrorBits) {
+        BitBlt(hdc, 0, 0, item->width, item->height, item->mirrorDc, 0, 0, SRCCOPY);
     } else {
         RECT fill;
 
@@ -1222,6 +1270,7 @@ void agave_webview_navigate(AgaveWebView* item, const char* url)
     agwLock();
     strncpy(item->url, url, sizeof(item->url) - 1);
     item->url[sizeof(item->url) - 1] = 0;
+    item->navigatePending = 1;
     agwUnlock();
 
     agwPost(AGW_CMD_NAVIGATE, item, url, 0, 0, 0, 0);
