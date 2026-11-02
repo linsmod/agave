@@ -61,6 +61,12 @@ int nodeReplaceChild(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void
 int nodeHasAttribute(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeContains(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeCompareDocumentPosition(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeRemove(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+static int nodeClassList(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+static int classListAdd(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+static int classListRemove(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+static int classListContains(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+static int classListToggle(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeGetElementsByClassName(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeQuerySelectorAll(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeQuerySelector(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
@@ -92,6 +98,22 @@ int titleGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue
             return 0;
         antb_value_assign(out, v);
         antb_value_release(v);
+        return 1;
+    }
+
+    if (!strcmp(name, "classList")) {
+        return nodeClassList(engine, self, NULL, 0, out, NULL);
+    }
+
+    if (!strcmp(name, "head")) {
+        RefPtr<WebCore::NodeList> heads = g_document->getElementsByTagName("head");
+        WebCore::Node* headNode = (heads && heads->length()) ? heads->item(0) : 0;
+        if (!headNode)
+            return 1;
+        {
+            AntbValue* v = wrapNode(engine, headNode);
+            if (v) { antb_value_assign(out, v); antb_value_release(v); }
+        }
         return 1;
     }
 
@@ -388,6 +410,11 @@ static const char kPrelude[] =
 "    g.navigator.cookieEnabled = true;"
 "    if (!g.navigator.appCodeName) g.navigator.appCodeName = 'Mozilla';"
 "    if (!g.navigator.appName) g.navigator.appName = 'Netscape';"
+"    if (!g.navigator.mimeTypes) g.navigator.mimeTypes = [];"
+"    if (!g.navigator.plugins) g.navigator.plugins = [];"
+"    if (!g.navigator.languages) g.navigator.languages = ['zh-CN', 'zh'];"
+"    if (!g.navigator.hardwareConcurrency) g.navigator.hardwareConcurrency = 4;"
+"    if (!g.navigator.maxTouchPoints) g.navigator.maxTouchPoints = 0;"
 "  }"
 "  {"
 "    var _lsData = {};"
@@ -403,6 +430,12 @@ static const char kPrelude[] =
 "  if (!g.requestIdleCallback) { g.requestIdleCallback = function (cb) { return 1; }; g.cancelIdleCallback = function () {}; }"
 "  if (!g.createImageBitmap) g.createImageBitmap = function () { return null; };"
 "  if (!g.getComputedStyle) g.getComputedStyle = function (el) { return (el && el.style) ? el.style : {}; };"
+"  {"
+"    var _ctors = ['Document','HTMLDocument','Element','HTMLElement','HTMLDivElement','Node','NodeList','HTMLCollection','Event','CustomEvent','MouseEvent','KeyboardEvent','DocumentFragment','Text','Comment','Attr','DOMParser','XMLSerializer','MutationObserver','Storage','Location','Navigator','Screen','History','Window','Performance','CSSStyleDeclaration'];"
+"    for (var _ci = 0; _ci < _ctors.length; _ci++) {"
+"      if (typeof g[_ctors[_ci]] === 'undefined') g[_ctors[_ci]] = function () { return null; };"
+"    }"
+"  }"
 "  if (typeof g.XMLHttpRequest === 'undefined') {"
 "    var XHR = function XMLHttpRequest() {"
 "      this.readyState = 0; this.status = 0; this.responseText = ''; this.response = '';"
@@ -512,6 +545,7 @@ void bindDocument(void* document)
                 antb_class_add_method(g_engine, g_nodeClass, "focus", nodeFocus, NULL);
                 antb_class_add_method(g_engine, g_nodeClass, "blur", nodeBlur, NULL);
                 antb_class_add_method(g_engine, g_nodeClass, "removeAttribute", nodeRemoveAttribute, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "remove", nodeRemove, NULL);
             }
         }
 
@@ -711,6 +745,38 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
             antb_value_release(arr);
         }
         return 1;
+    } else if (!strcmp(name, "children")) {
+        /* Element-only children, as an array (some libraries only read length). */
+        AntbValue* arr = antb_make_array(engine);
+        if (!arr)
+            return 0;
+        for (WebCore::Node* c = n->firstChild(); c; c = c->nextSibling()) {
+            if (!c->isElementNode())
+                continue;
+            {
+                AntbValue* w = wrapNode(engine, c);
+                if (w) {
+                    antb_array_push(engine, arr, w);
+                    antb_value_release(w);
+                }
+            }
+        }
+        antb_value_assign(out, arr);
+        antb_value_release(arr);
+        return 1;
+    } else if (!strcmp(name, "childElementCount")) {
+        unsigned count = 0;
+        for (WebCore::Node* c = n->firstChild(); c; c = c->nextSibling())
+            if (c->isElementNode())
+                ++count;
+        {
+            AntbValue* v = antb_make_number(engine, (double)count);
+            if (!v)
+                return 0;
+            antb_value_assign(out, v);
+            antb_value_release(v);
+        }
+        return 1;
     } else if (!strcmp(name, "value")) {
         if (n->isElementNode()) {
             WebCore::Element* element = static_cast<WebCore::Element*>(n);
@@ -785,6 +851,8 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
             antb_value_release(style);
         }
         return 1;
+    } else if (!strcmp(name, "classList")) {
+        return nodeClassList(engine, self, NULL, 0, out, NULL);
     } else if (!strcmp(name, "id") || !strcmp(name, "className") || !strcmp(name, "href")) {
         if (!n->isElementNode())
             return 0;
@@ -1372,17 +1440,28 @@ int nodeQuerySelectorAll(AntbEngine* engine, AntbValue* self, AntbValue** args, 
     antb_value_release(arr);
     return 1;
 }
+/* Returns the first match: callers expect an element, not a list. */
 int nodeQuerySelector(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
                       AntbValue* out, void*)
 {
-    AntbValue* all = NULL;
+    AntbValue* holder;
 
-    (void)self; (void)args; (void)argc;
+    if (argc < 1)
+        return 1;
 
-    if (!nodeQuerySelectorAll(engine, self, args, argc, out, NULL))
+    holder = antb_make_array(engine);
+    if (!holder)
         return 0;
 
-    (void)all;
+    if (nodeQuerySelectorAll(engine, self, args, argc, holder, NULL)) {
+        AntbValue* first = antb_array_get(holder, 0);
+        if (first) {
+            antb_value_assign(out, first);
+            antb_value_release(first);
+        }
+    }
+
+    antb_value_release(holder);
     return 1;
 }
 
@@ -1484,6 +1563,197 @@ int nodeCompareDocumentPosition(AntbEngine* engine, AntbValue*, AntbValue**, int
         return 0;
     antb_value_assign(out, v);
     antb_value_release(v);
+    return 1;
+}
+
+/* element.remove(): detach from the parent, like the DOM spec method. */
+int nodeRemove(AntbEngine*, AntbValue* self, AntbValue**, int, AntbValue*, void*)
+{
+    WebCore::Node* n = nodeOf(self);
+
+    if (n && n->parentNode()) {
+        WebCore::ExceptionCode ec = 0;
+        WebCore::Node* parent = n->parentNode();
+
+        n->ref();                 /* removal may drop the last reference */
+        parent->removeChild(n, ec);
+        n->deref();
+    }
+
+    return 1;
+}
+
+/* classList: backed directly by the class attribute. The Element pointer is
+ * handed to the callbacks as userdata and kept alive by a ref. */
+static WebCore::String readClassTokens(WebCore::Element* el)
+{
+    return el->getAttribute(WebCore::String("class"));
+}
+
+static void writeClassTokens(WebCore::Element* el, const WebCore::String& tokens)
+{
+    WebCore::ExceptionCode ec = 0;
+    el->setAttribute(WebCore::String("class"), tokens, ec);
+}
+
+static bool tokenListContains(const WebCore::String& tokens, const WebCore::String& token)
+{
+    unsigned start = 0;
+
+    for (unsigned i = 0; i <= tokens.length(); ++i) {
+        if (i == tokens.length() || tokens[i] == ' ') {
+            if (i > start && tokens.substring(start, i - start) == token)
+                return true;
+            start = i + 1;
+        }
+    }
+    return false;
+}
+
+static int classListAdd(AntbEngine*, AntbValue*, AntbValue** args, int argc, AntbValue*, void* user)
+{
+    WebCore::Element* el = static_cast<WebCore::Element*>(user);
+    char* token;
+
+    if (!el || argc < 1)
+        return 1;
+
+    token = antb_to_utf8(args[0]);
+    if (!token)
+        return 1;
+
+    {
+        WebCore::String name = WebCore::String::fromUTF8(token);
+        WebCore::String tokens = readClassTokens(el);
+        if (!name.isEmpty() && !tokenListContains(tokens, name))
+            writeClassTokens(el, tokens.isEmpty() ? name : tokens + " " + name);
+    }
+
+    antb_free(token);
+    return 1;
+}
+
+static int classListRemove(AntbEngine*, AntbValue*, AntbValue** args, int argc, AntbValue*, void* user)
+{
+    WebCore::Element* el = static_cast<WebCore::Element*>(user);
+    char* token;
+
+    if (!el || argc < 1)
+        return 1;
+
+    token = antb_to_utf8(args[0]);
+    if (!token)
+        return 1;
+
+    {
+        WebCore::String name = WebCore::String::fromUTF8(token);
+        WebCore::String tokens = readClassTokens(el);
+        WebCore::String rebuilt;
+        unsigned start = 0;
+
+        for (unsigned i = 0; i <= tokens.length(); ++i) {
+            if (i == tokens.length() || tokens[i] == ' ') {
+                if (i > start) {
+                    WebCore::String part = tokens.substring(start, i - start);
+                    if (part != name)
+                        rebuilt = rebuilt.isEmpty() ? part : rebuilt + " " + part;
+                }
+                start = i + 1;
+            }
+        }
+
+        writeClassTokens(el, rebuilt);
+    }
+
+    antb_free(token);
+    return 1;
+}
+
+static int classListContains(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
+                             AntbValue* out, void* user)
+{
+    WebCore::Element* el = static_cast<WebCore::Element*>(user);
+    char* token;
+    bool found = false;
+
+    if (!el || argc < 1)
+        return 1;
+
+    token = antb_to_utf8(args[0]);
+    if (!token)
+        return 1;
+
+    found = tokenListContains(readClassTokens(el), WebCore::String::fromUTF8(token));
+    antb_free(token);
+
+    {
+        AntbValue* v = antb_make_number(engine, found ? 1.0 : 0.0);
+        if (!v)
+            return 0;
+        antb_value_assign(out, v);
+        antb_value_release(v);
+    }
+    return 1;
+}
+
+static int classListToggle(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                           AntbValue* out, void* user)
+{
+    WebCore::Element* el = static_cast<WebCore::Element*>(user);
+    char* token;
+    bool contains = false;
+
+    if (!el || argc < 1)
+        return 1;
+
+    token = antb_to_utf8(args[0]);
+    if (!token)
+        return 1;
+
+    contains = tokenListContains(readClassTokens(el), WebCore::String::fromUTF8(token));
+    antb_free(token);
+
+    if (contains)
+        classListRemove(engine, self, args, argc, out, user);
+    else
+        classListAdd(engine, self, args, argc, out, user);
+
+    {
+        AntbValue* v = antb_make_number(engine, contains ? 0.0 : 1.0);
+        if (!v)
+            return 0;
+        antb_value_assign(out, v);
+        antb_value_release(v);
+    }
+    return 1;
+}
+
+static int nodeClassList(AntbEngine* engine, AntbValue* self, AntbValue**, int,
+                         AntbValue* out, void*)
+{
+    WebCore::Node* n = nodeOf(self);
+    AntbValue* obj;
+
+    if (!n || !n->isElementNode())
+        return 1;
+
+    {
+        WebCore::Element* el = static_cast<WebCore::Element*>(n);
+
+        el->ref();   /* lives as long as the classList object */
+        obj = antb_make_object(engine);
+        if (!obj) {
+            el->deref();
+            return 0;
+        }
+
+        antb_define_method(engine, obj, "add", classListAdd, el);
+        antb_define_method(engine, obj, "remove", classListRemove, el);
+        antb_define_method(engine, obj, "contains", classListContains, el);
+        antb_define_method(engine, obj, "toggle", classListToggle, el);
+        antb_value_assign(out, obj);
+        antb_value_release(obj);
+    }
     return 1;
 }
 

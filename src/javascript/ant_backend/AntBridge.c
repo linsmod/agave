@@ -262,6 +262,17 @@ AntbValue* antb_make_array(AntbEngine* engine)
     return out;
 }
 
+AntbValue* antb_array_get(AntbValue* array, int index)
+{
+    char key[16];
+
+    if (!array || !array->js)
+        return NULL;
+
+    snprintf(key, sizeof(key), "%d", index);
+    return alloc_value(array->js, js_get(array->js, array->v, key));
+}
+
 void antb_array_push(AntbEngine* engine, AntbValue* array, const AntbValue* value)
 {
     if (!engine || !array || !value)

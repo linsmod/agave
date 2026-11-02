@@ -91,6 +91,9 @@ AGB_API AntbValue* antb_make_number(AntbEngine* engine, double v);
 AGB_API AntbValue* antb_make_array(AntbEngine* engine);
 AGB_API void antb_array_push(AntbEngine* engine, AntbValue* array, const AntbValue* value);
 
+/* Element access for arrays created by antb_make_array. */
+AGB_API AntbValue* antb_array_get(AntbValue* array, int index);
+
 /* Deletes `name` from obj (used by removeAttribute style APIs). */
 AGB_API void antb_delete_prop(AntbEngine* engine, AntbValue* obj, const char* name);
 
