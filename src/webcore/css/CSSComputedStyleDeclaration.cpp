@@ -552,6 +552,15 @@ PassRefPtr<CSSValue> CSSComputedStyleDeclaration::getPropertyCSSValue(int proper
                 return new CSSPrimitiveValue(style->backgroundImage()->url(), CSSPrimitiveValue::CSS_URI);
             return new CSSPrimitiveValue(CSS_VAL_NONE);
         case CSS_PROP__WEBKIT_BACKGROUND_SIZE: {
+            /* cover/contain are stored as the sentinel lengths -1/-2 (see
+             * CSSParser::parseBackgroundSize); report them back as keywords. */
+            if (style->backgroundSize().width.isFixed() &&
+                (style->backgroundSize().width.value() == -1 || style->backgroundSize().width.value() == -2)) {
+                const char* keyword = style->backgroundSize().width.value() == -1 ? "cover" : "contain";
+
+                return new CSSPrimitiveValue(String(keyword), CSSPrimitiveValue::CSS_IDENT);
+            }
+
             RefPtr<CSSValueList> list = new CSSValueList(true);
             list->append(valueForLength(style->backgroundSize().width));
             list->append(valueForLength(style->backgroundSize().height));
