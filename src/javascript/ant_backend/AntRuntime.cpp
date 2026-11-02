@@ -1238,6 +1238,7 @@ void bindDocument(void* document)
     /* The Document object is replaced on every navigation, so always refresh
      * the pointer; only the JS shim objects are created once. */
     g_document = (WebCore::Document*)document;
+    g_currentSlot = slotForDocument(g_document);
 
     if (!g_engine || !g_document)
         return;
