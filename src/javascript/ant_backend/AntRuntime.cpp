@@ -147,6 +147,13 @@ int nodeQuerySelectorAll(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, 
 int nodeQuerySelector(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalFrameSlot(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalOpenWindow(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int globalStorageGet(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int globalStorageHas(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int globalStorageSet(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int globalStorageDel(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int globalStorageClear(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int globalStorageKey(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int globalStorageCount(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalActivateSlot(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int imageConstructor(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 /* ------------------------------------------------------------------------- */
@@ -362,6 +369,8 @@ struct CookieEntry {
 };
 static std::vector<CookieEntry>* g_cookies = NULL;
 static std::string        g_cookieFile;
+static std::string        g_storageFile;
+static std::vector<std::pair<std::string, std::string> >* g_storage = NULL;
 
 /* Persisted cookies live in <data dir>/cookies.txt, one record per line:
  *   domain <TAB> path <TAB> secure <TAB> name <TAB> value
@@ -408,6 +417,159 @@ static const char* dataDir(void)
     return directory;
 }
 static std::vector<CookieEntry>& cookieJar();
+
+/* ------------------------------------------------------------------------- */
+/* localStorage                                                              */
+/* ------------------------------------------------------------------------- */
+
+/* Keys are "origin|name"; values may contain tabs/newlines, so they are
+ * percent-escaped on the way to disk. The whole file is rewritten on change. */
+static std::vector<std::pair<std::string, std::string> >& storage()
+{
+    if (!g_storage)
+        g_storage = new std::vector<std::pair<std::string, std::string> >();
+
+    return *g_storage;
+}
+
+static std::string escapeStorage(const std::string& text)
+{
+    std::string out;
+
+    for (size_t i = 0; i < text.size(); ++i) {
+        unsigned char c = (unsigned char)text[i];
+
+        if (c == '%' || c == '\t' || c == '\r' || c == '\n') {
+            char buffer[8];
+
+            sprintf(buffer, "%%%02X", (unsigned)c);
+            out += buffer;
+        } else {
+            out += (char)c;
+        }
+    }
+
+    return out;
+}
+
+static std::string unescapeStorage(const std::string& text)
+{
+    std::string out;
+
+    for (size_t i = 0; i < text.size(); ++i) {
+        if (text[i] == '%' && i + 2 < text.size()) {
+            char hex[3];
+
+            hex[0] = text[i + 1];
+            hex[1] = text[i + 2];
+            hex[2] = 0;
+            out += (char)strtol(hex, NULL, 16);
+            i += 2;
+        } else {
+            out += text[i];
+        }
+    }
+
+    return out;
+}
+
+static void saveStorage()
+{
+    FILE* file;
+
+    if (g_storageFile.empty())
+        return;
+
+    file = fopen(g_storageFile.c_str(), "wb");
+
+    if (!file)
+        return;
+
+    {
+        std::vector<std::pair<std::string, std::string> >& entries = storage();
+
+        for (size_t i = 0; i < entries.size(); ++i) {
+            fprintf(file, "%s\t%s\n",
+                    escapeStorage(entries[i].first).c_str(),
+                    escapeStorage(entries[i].second).c_str());
+        }
+    }
+
+    fclose(file);
+}
+
+static void loadStorage()
+{
+    FILE* file;
+    char line[16384];
+
+    if (g_storageFile.empty())
+        return;
+
+    file = fopen(g_storageFile.c_str(), "rb");
+
+    if (!file)
+        return;
+
+    while (fgets(line, sizeof(line), file)) {
+        std::string text(line);
+        size_t tab = text.find('\t');
+
+        if (tab == std::string::npos)
+            continue;
+
+        while (!text.empty() && (text[text.size() - 1] == '\n' || text[text.size() - 1] == '\r'))
+            text.erase(text.size() - 1);
+
+        storage().push_back(std::make_pair(unescapeStorage(text.substr(0, tab)),
+                                           unescapeStorage(text.substr(tab + 1))));
+    }
+
+    fclose(file);
+}
+
+static const char* storageGet(const std::string& key, std::string& out)
+{
+    std::vector<std::pair<std::string, std::string> >& entries = storage();
+
+    for (size_t i = 0; i < entries.size(); ++i) {
+        if (entries[i].first == key) {
+            out = entries[i].second;
+            return out.c_str();
+        }
+    }
+
+    return NULL;
+}
+
+static void storageSet(const std::string& key, const std::string& value)
+{
+    std::vector<std::pair<std::string, std::string> >& entries = storage();
+
+    for (size_t i = 0; i < entries.size(); ++i) {
+        if (entries[i].first == key) {
+            entries[i].second = value;
+            saveStorage();
+            return;
+        }
+    }
+
+    entries.push_back(std::make_pair(key, value));
+    saveStorage();
+}
+
+static void storageDel(const std::string& key)
+{
+    std::vector<std::pair<std::string, std::string> >& entries = storage();
+
+    for (size_t i = 0; i < entries.size(); ++i) {
+        if (entries[i].first == key) {
+            entries.erase(entries.begin() + i);
+            saveStorage();
+            return;
+        }
+    }
+}
 
 static void saveCookies()
 {
@@ -995,13 +1157,17 @@ static void initCookieStorage()
 
         if (directory && directory[0]) {
             g_cookieFile = std::string(directory) + "\\cookies.txt";
+            g_storageFile = std::string(directory) + "\\localstorage.txt";
             loadCookies();
+            loadStorage();
             return;
         }
     }
 
     g_cookieFile = "cookies.txt";
+    g_storageFile = "localstorage.txt";
     loadCookies();
+    loadStorage();
 }
 
 bool start()
@@ -1149,15 +1315,25 @@ static const char kPrelude[] =
 "    if (!g.navigator.maxTouchPoints) g.navigator.maxTouchPoints = 0;"
 "  }"
 "  {"
-"    var _lsData = {};"
+"    var _origin = g.location && g.location.origin ? g.location.origin : '';"
+"    if (!_origin) { _origin = (g.location && g.location.protocol ? g.location.protocol : '') + '//' + (g.location && g.location.host ? g.location.host : ''); }"
 "    g.localStorage = {"
-"      getItem: function (k) { return Object.prototype.hasOwnProperty.call(_lsData, k) ? _lsData[k] : null; },"
-"      setItem: function (k, v) { _lsData[k] = String(v); },"
-"      removeItem: function (k) { delete _lsData[k]; },"
-"      clear: function () { _lsData = {}; },"
-"      key: function (i) { var ks = Object.keys(_lsData); return i < ks.length ? ks[i] : null; }"
+"      getItem: function (k) { var key = _origin + '|' + String(k); return __agbStorageHas(key) ? String(__agbStorageGet(key)) : null; },"
+"      setItem: function (k, v) { __agbStorageSet(_origin + '|' + String(k), String(v)); },"
+"      removeItem: function (k) { __agbStorageDel(_origin + '|' + String(k)); },"
+"      clear: function () { __agbStorageClear(_origin); },"
+"      key: function (i) { var v = __agbStorageKey(_origin, i); return v === undefined ? null : v; },"
+"      get length() { var n = __agbStorageCount(_origin); return n > 0 ? n : 0; }"
 "    };"
-"    g.sessionStorage = g.localStorage;"
+"    var _ssData = {};"
+"    g.sessionStorage = {"
+"      getItem: function (k) { return Object.prototype.hasOwnProperty.call(_ssData, k) ? _ssData[k] : null; },"
+"      setItem: function (k, v) { _ssData[k] = String(v); },"
+"      removeItem: function (k) { delete _ssData[k]; },"
+"      clear: function () { _ssData = {}; },"
+"      key: function (i) { var ks = Object.keys(_ssData); return i < ks.length ? ks[i] : null; },"
+"      get length() { return Object.keys(_ssData).length; }"
+"    };"
 "  }"
 "  if (!g.requestIdleCallback) { g.requestIdleCallback = function (cb) { return 1; }; g.cancelIdleCallback = function () {}; }"
 "  if (!g.createImageBitmap) g.createImageBitmap = function () { return null; };"
@@ -1507,6 +1683,13 @@ void bindDocument(void* document)
         antb_define_method(g_engine, global, "__agbFrameSlot", globalFrameSlot, NULL);
         antb_define_method(g_engine, global, "__agbActivateSlot", globalActivateSlot, NULL);
         antb_define_method(g_engine, global, "__agbOpenWindow", globalOpenWindow, NULL);
+        antb_define_method(g_engine, global, "__agbStorageGet", globalStorageGet, NULL);
+        antb_define_method(g_engine, global, "__agbStorageHas", globalStorageHas, NULL);
+        antb_define_method(g_engine, global, "__agbStorageSet", globalStorageSet, NULL);
+        antb_define_method(g_engine, global, "__agbStorageDel", globalStorageDel, NULL);
+        antb_define_method(g_engine, global, "__agbStorageClear", globalStorageClear, NULL);
+        antb_define_method(g_engine, global, "__agbStorageKey", globalStorageKey, NULL);
+        antb_define_method(g_engine, global, "__agbStorageCount", globalStorageCount, NULL);
 
         /* history: SPA routers and "go back" links use it. */
         {
@@ -2730,6 +2913,157 @@ static WebCore::String tokensWithout(const WebCore::String& tokens, const WebCor
 /* JS-visible context switching, used by the timer wrapper in the prelude and by
  * async XHR delivery. */
 static AntRuntime::OpenWindowHook g_openWindowHook = NULL;
+
+static AntbValue* makeStringResult(AntbEngine* engine, AntbValue* out, const char* text)
+{
+    AntbValue* v = antb_make_string(engine, text ? text : "");
+
+    if (!v)
+        return NULL;
+
+    antb_value_assign(out, v);
+    antb_value_release(v);
+    return v;
+}
+
+static AntbValue* makeNumberResult(AntbEngine* engine, AntbValue* out, double number)
+{
+    AntbValue* v = antb_make_number(engine, number);
+
+    if (!v)
+        return NULL;
+
+    antb_value_assign(out, v);
+    antb_value_release(v);
+    return v;
+}
+
+int globalStorageGet(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
+                     AntbValue* out, void*)
+{
+    char* key = (argc > 0) ? antb_to_utf8(args[0]) : NULL;
+    std::string value;
+
+    if (key) {
+        storageGet(key, value);
+        antb_free(key);
+    }
+
+    return makeStringResult(engine, out, value.c_str()) ? 1 : 0;
+}
+
+int globalStorageHas(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
+                     AntbValue* out, void*)
+{
+    char* key = (argc > 0) ? antb_to_utf8(args[0]) : NULL;
+    std::string value;
+    bool found = false;
+
+    if (key) {
+        found = storageGet(key, value) != NULL;
+        antb_free(key);
+    }
+
+    return makeNumberResult(engine, out, found ? 1.0 : 0.0) ? 1 : 0;
+}
+
+int globalStorageSet(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
+                     AntbValue* out, void*)
+{
+    char* key = (argc > 0) ? antb_to_utf8(args[0]) : NULL;
+    char* value = (argc > 1) ? antb_to_utf8(args[1]) : NULL;
+
+    if (key)
+        storageSet(key, value ? value : "");
+
+    antb_free(key);
+    antb_free(value);
+
+    return makeNumberResult(engine, out, 1.0) ? 1 : 0;
+}
+
+int globalStorageDel(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
+                     AntbValue* out, void*)
+{
+    char* key = (argc > 0) ? antb_to_utf8(args[0]) : NULL;
+
+    if (key)
+        storageDel(key);
+
+    antb_free(key);
+
+    return makeNumberResult(engine, out, 1.0) ? 1 : 0;
+}
+
+int globalStorageClear(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
+                       AntbValue* out, void*)
+{
+    char* origin = (argc > 0) ? antb_to_utf8(args[0]) : NULL;
+    std::string prefix = origin ? std::string(origin) + "|" : std::string();
+    std::vector<std::pair<std::string, std::string> >& entries = storage();
+    size_t i = 0;
+
+    while (i < entries.size()) {
+        if (!prefix.empty() && entries[i].first.compare(0, prefix.size(), prefix) == 0)
+            entries.erase(entries.begin() + i);
+        else
+            ++i;
+    }
+
+    saveStorage();
+    antb_free(origin);
+
+    return makeNumberResult(engine, out, 1.0) ? 1 : 0;
+}
+
+int globalStorageKey(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
+                     AntbValue* out, void*)
+{
+    char* origin = (argc > 0) ? antb_to_utf8(args[0]) : NULL;
+    int index = (argc > 1) ? (int)antb_to_number(args[1]) : -1;
+    std::string prefix = origin ? std::string(origin) + "|" : std::string();
+    std::vector<std::pair<std::string, std::string> >& entries = storage();
+    int seen = 0;
+    const char* found = NULL;
+    std::string name;
+
+    for (size_t i = 0; i < entries.size() && index >= 0; ++i) {
+        if (prefix.empty() || entries[i].first.compare(0, prefix.size(), prefix) != 0)
+            continue;
+
+        if (seen == index) {
+            name = entries[i].first.substr(prefix.size());
+            found = name.c_str();
+            break;
+        }
+
+        ++seen;
+    }
+
+    antb_free(origin);
+
+    if (!found)
+        return makeStringResult(engine, out, "") ? 1 : 0;
+
+    return makeStringResult(engine, out, found) ? 1 : 0;
+}
+
+int globalStorageCount(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
+                       AntbValue* out, void*)
+{
+    char* origin = (argc > 0) ? antb_to_utf8(args[0]) : NULL;
+    std::string prefix = origin ? std::string(origin) + "|" : std::string();
+    std::vector<std::pair<std::string, std::string> >& entries = storage();
+    int count = 0;
+
+    for (size_t i = 0; i < entries.size(); ++i) {
+        if (prefix.empty() || entries[i].first.compare(0, prefix.size(), prefix) == 0)
+            ++count;
+    }
+
+    antb_free(origin);
+    return makeNumberResult(engine, out, (double)count) ? 1 : 0;
+}
 
 int globalOpenWindow(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
                      AntbValue* out, void*)
