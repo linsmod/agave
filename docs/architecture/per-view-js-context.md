@@ -48,6 +48,24 @@ agb_context_activate(js);   /* 由 AntRuntime 实现：g_current = stateFor(js)�
 
 一次性覆盖全部 150+ 个 native 回调，不用逐个改签名。
 
+### 重要：antbridge.dll 必须手工重建
+
+`src/javascript/ant_backend/AntBridge.c` 是**源码副本**，仓库里的
+`3rdparty/ant/bin/antbridge.dll` 是预先构建好的二进制，
+agave 的 CMake 只负责把它拷到输出目录。
+
+所以对 `AntBridge.c` 的任何修改（包括本文提到的 trampoline 扩容）
+**不会**自动生效，必须：
+
+1. 把 `src/javascript/ant_backend/AntBridge.c` 同步到
+   `H:\ant-v16\bridge\AntBridge.c`；
+2. 重新编译并链接（配方见 handover 第 2 节的宿主链接配方，
+   把 `-o app.exe` 换成 `-shared -o antbridge.dll`，并加
+   `-DAGB_BUILD_DLL`）；
+3. 把新 `antbridge.dll` / `antbridge.dll.a` 拷回
+   `3rdparty/ant/{bin,lib}` 和 `build-zig-native\`、`host\nativerun\`；
+4. `cmake --build build-zig-native` 重新链接 libagave。
+
 ### 需要改的点
 
 1. **桥**：`AGB_TRAMPOLINE_COUNT` 从 256 提到 **1024**（已完成）。
