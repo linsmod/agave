@@ -157,6 +157,28 @@ int getPropertyID(const char* tagStr, int len)
         }
     }
 
+    /* The property table only carries the -webkit- spellings of the
+     * background-size/clip/origin trio, so standard pages that use the
+     * unprefixed names lost these declarations entirely. */
+    if (len > 0 && tagStr[0] == 'b') {
+        static const struct {
+            const char* name;
+            const char* webkit;
+        } aliases[] = {
+            { "background-size",   "-webkit-background-size" },
+            { "background-clip",   "-webkit-background-clip" },
+            { "background-origin", "-webkit-background-origin" }
+        };
+
+        for (size_t i = 0; i < sizeof(aliases) / sizeof(aliases[0]); ++i) {
+            if (strlen(aliases[i].name) == (size_t)len && !strncmp(tagStr, aliases[i].name, (size_t)len)) {
+                tagStr = aliases[i].webkit;
+                len = (int)strlen(aliases[i].webkit);
+                break;
+            }
+        }
+    }
+
     const struct props* propsPtr = findProp(tagStr, (size_t)len);
     if (!propsPtr)
         return 0;
