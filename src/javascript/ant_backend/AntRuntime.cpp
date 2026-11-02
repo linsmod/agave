@@ -3412,8 +3412,11 @@ int nodeAddEventListener(AntbEngine* engine, AntbValue* self, AntbValue** args, 
         /* Only functions are callable later: pages happily pass null or objects
          * as the listener, and dispatching those crashed the process. */
         l.fn = antb_is_function(args[1]) ? antb_retain(args[1]) : NULL;
-        if (l.fn)
+        if (l.fn) {
             g_listeners->push_back(l);
+            if (getenv("AGB_EVT_DEBUG"))
+                fprintf(stderr, "[evt] add %s node=%p listeners=%d\n", type, (void*)n, (int)g_listeners->size());
+        }
     }
 
     antb_free(type);
@@ -4842,15 +4845,23 @@ void dispatchWindowEvent(const char* type)
             }
         }
 
-        for (size_t i = 0; i < g_listeners->size(); ++i) {
-            Listener& l = (*g_listeners)[i];
-            if (l.node != g_document || l.type != type)
-                continue;
-            {
-                AntbValue* args[1];
-                args[0] = evt;
-                antb_call(g_engine, l.fn, self, args, evt ? 1 : 0, NULL);
+        {
+            int dispatched = 0;
+
+            for (size_t i = 0; i < g_listeners->size(); ++i) {
+                Listener& l = (*g_listeners)[i];
+                if (l.node != g_document || l.type != type)
+                    continue;
+                {
+                    AntbValue* args[1];
+                    args[0] = evt;
+                    ++dispatched;
+                    antb_call(g_engine, l.fn, self, args, evt ? 1 : 0, NULL);
+                }
             }
+
+            if (getenv("AGB_EVT_DEBUG"))
+                fprintf(stderr, "[evt] dispatch %s -> %d listener(s)\n", type, dispatched);
         }
 
         antb_value_release(evt);
@@ -5035,5 +5046,7 @@ void setDialogHook(DialogHook hook)
 }
 
 } /* namespace AntRuntime */
+
+
 
 
