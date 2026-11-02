@@ -272,6 +272,41 @@ static int loadSession(char urls[][MAX_PATH_CHARS], int max)
 /* layout                                                                    */
 /* ------------------------------------------------------------------------- */
 
+/* The engine speaks UTF-8; Win32 controls and GDI speak UTF-16. Everything that
+ * shows page-provided text goes through these helpers (the tab used to print
+ * UTF-8 bytes with DrawTextA -> mojibake). */
+static void utf8ToWide(const char* source, wchar_t* target, int count)
+{
+    if (count <= 0)
+        return;
+
+    if (!source) {
+        target[0] = 0;
+        return;
+    }
+
+    if (!MultiByteToWideChar(CP_UTF8, 0, source, -1, target, count))
+        target[0] = 0;
+
+    target[count - 1] = 0;
+}
+
+static void wideToUtf8(const wchar_t* source, char* target, int count)
+{
+    if (count <= 0)
+        return;
+
+    if (!source) {
+        target[0] = 0;
+        return;
+    }
+
+    if (!WideCharToMultiByte(CP_UTF8, 0, source, -1, target, count, NULL, NULL))
+        target[0] = 0;
+
+    target[count - 1] = 0;
+}
+
 static int nextFreeTab(void)
 {
     int i;
@@ -395,7 +430,10 @@ static void setActiveTab(int index)
     applyZoomToActive();
 
     if (g_tabs[index].view) {
-        SetWindowTextA(g_address, g_tabs[index].url);
+        wchar_t wideAddress[MAX_PATH_CHARS];
+
+        utf8ToWide(g_tabs[index].url, wideAddress, MAX_PATH_CHARS);
+        SetWindowTextW(g_address, wideAddress);
         agave_webview_set_focus(g_tabs[index].view);
     }
 
@@ -448,8 +486,12 @@ static void onTitle(AgaveWebView* view, const char* title, void* user)
     strncpy(tab->title, title ? title : "", sizeof(tab->title) - 1);
     tab->title[sizeof(tab->title) - 1] = 0;
 
-    if (tab == &g_tabs[g_activeTab])
-        SetWindowTextA(g_hwnd, tab->title[0] ? tab->title : "BrowserShell - Agave");
+    if (tab == &g_tabs[g_activeTab]) {
+        wchar_t wide[256];
+
+        utf8ToWide(tab->title[0] ? tab->title : "BrowserShell - Agave", wide, 256);
+        SetWindowTextW(g_hwnd, wide);
+    }
 
     InvalidateRect(g_hwnd, NULL, FALSE);
 }
@@ -467,8 +509,12 @@ static void onUrl(AgaveWebView* view, const char* url, void* user)
     tab->url[MAX_PATH_CHARS - 1] = 0;
 
     if (tab == &g_tabs[g_activeTab]) {
-        if (GetFocus() != g_address)
-            SetWindowTextA(g_address, tab->url);
+        if (GetFocus() != g_address) {
+            wchar_t wideUrl[MAX_PATH_CHARS];
+
+            utf8ToWide(tab->url, wideUrl, MAX_PATH_CHARS);
+            SetWindowTextW(g_address, wideUrl);
+        }
 
         recordHistory(tab->url);
     }
@@ -750,7 +796,14 @@ static void navigateActive(const char* text, int newTab)
 
     strncpy(g_tabs[g_activeTab].url, url, MAX_PATH_CHARS - 1);
     recordHistory(url);
-    SetWindowTextA(g_address, url);
+
+    {
+        wchar_t wideUrl[MAX_PATH_CHARS];
+
+        utf8ToWide(url, wideUrl, MAX_PATH_CHARS);
+        SetWindowTextW(g_address, wideUrl);
+    }
+
     agave_webview_navigate(g_tabs[g_activeTab].view, url);
 }
 
@@ -903,11 +956,17 @@ static void paintTabs(HDC hdc, int width)
         SetRect(&box, x + 6, 2, x + 146, TAB_HEIGHT - 2);
         _snprintf(label, sizeof(label), "%s", g_tabs[i].title[0] ? g_tabs[i].title : "New tab");
         label[sizeof(label) - 1] = 0;
-        DrawTextA(hdc, label, -1, &box,
-                  DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_END_ELLIPSIS);
+
+        {
+            wchar_t wideLabel[128];
+
+            utf8ToWide(label, wideLabel, 128);
+            DrawTextW(hdc, wideLabel, -1, &box,
+                      DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_END_ELLIPSIS);
+        }
 
         SetRect(&box, x + 148, 2, x + 168, TAB_HEIGHT - 2);
-        DrawTextA(hdc, "x", -1, &box, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
+        DrawTextW(hdc, L"x", -1, &box, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
 
         x += TAB_W;
     }
@@ -927,8 +986,14 @@ static void paintStatus(HDC hdc, int width, int height)
     bar.left = 8;
     bar.right = width - 8;
     SetBkMode(hdc, TRANSPARENT);
-    DrawTextA(hdc, g_status, -1, &bar,
-              DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_END_ELLIPSIS);
+
+    {
+        wchar_t wide[1024];
+
+        utf8ToWide(g_status, wide, 1024);
+        DrawTextW(hdc, wide, -1, &bar,
+                  DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_END_ELLIPSIS);
+    }
 
     SelectObject(hdc, old);
 }

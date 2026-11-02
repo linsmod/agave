@@ -53,6 +53,7 @@ struct AgaveWebView {
     int                zoom;
     int                pendingResize;
     volatile int       destroyed;
+    int                refs;
 
     char               url[2048];
     char               title[512];
@@ -114,6 +115,39 @@ static AgaveWebView* agwByView(MaCrossView* view)
     return NULL;
 }
 
+
+/* Frees the control once the engine thread is done with it. destroy() may be
+ * called while the engine is inside macross_view_update on this item. */
+static void agwDestroySurface(AgaveWebView* item);
+
+static void agwFreeItem(AgaveWebView* item)
+{
+    agwDestroySurface(item);
+
+    if (item->hwnd) {
+        SetWindowLongPtrA(item->hwnd, GWLP_USERDATA, 0);
+        DestroyWindow(item->hwnd);
+        item->hwnd = NULL;
+    }
+
+    free(item);
+}
+
+static void agwRelease(AgaveWebView* item)
+{
+    int shouldFree = 0;
+
+    if (!item)
+        return;
+
+    agwLock();
+    if (--item->refs <= 0 && item->destroyed)
+        shouldFree = 1;
+    agwUnlock();
+
+    if (shouldFree)
+        agwFreeItem(item);
+}
 
 static void agwPost(int type, AgaveWebView* view, const char* text,
                     int x, int y, int a, int b)
@@ -693,18 +727,37 @@ static DWORD WINAPI agwEngineThread(LPVOID param)
 
         macross_event_dispatch();
 
-        agwLock();
-        for (i = 0; i < g_viewCount; ++i) {
-            AgaveWebView* item = g_views[i];
+        /* Snapshot the live views under the lock, then update them *without* it:
+         * a slow paint (heavy page) used to block the host's UI thread, which
+         * takes the same lock whenever it posts a command. */
+        {
+            AgaveWebView* batch[AGW_MAX_VIEWS];
+            int count = 0;
 
-            if (!item || !item->view || item->destroyed)
-                continue;
+            agwLock();
+            for (i = 0; i < g_viewCount; ++i) {
+                AgaveWebView* item = g_views[i];
 
-            macross_view_update(item->view, NULL);
-            g_lastActive = item;
-            active = 1;
+                if (!item || !item->view || item->destroyed)
+                    continue;
+
+                item->refs++;
+                batch[count++] = item;
+            }
+            agwUnlock();
+
+            for (i = 0; i < count; ++i) {
+                AgaveWebView* item = batch[i];
+
+                if (!item->destroyed)
+                    macross_view_update(item->view, NULL);
+
+                g_lastActive = item;
+                active = 1;
+
+                agwRelease(item);
+            }
         }
-        agwUnlock();
 
         Sleep(active ? 6 : 12);
     }
@@ -1082,13 +1135,14 @@ AgaveWebView* agave_webview_create(void* parent, int x, int y, int width, int he
 void agave_webview_destroy(AgaveWebView* item)
 {
     int index;
+    int shouldFree = 0;
 
     if (!item)
         return;
 
+    agwLock();
     item->destroyed = 1;
 
-    agwLock();
     index = agwIndexOf(item);
     if (index >= 0) {
         if (item->view) {
@@ -1098,14 +1152,21 @@ void agave_webview_destroy(AgaveWebView* item)
         agwDestroySurface(item);
         g_views[index] = g_views[--g_viewCount];
     }
+
+    /* The engine thread may still be inside macross_view_update() on this
+     * item; it frees the control when it drops its reference. */
+    if (item->refs <= 0)
+        shouldFree = 1;
     agwUnlock();
 
     if (item->hwnd) {
         SetWindowLongPtrA(item->hwnd, GWLP_USERDATA, 0);
         DestroyWindow(item->hwnd);
+        item->hwnd = NULL;
     }
 
-    free(item);
+    if (shouldFree)
+        agwFreeItem(item);
 }
 
 AgaveWebView* agave_webview_create_popup(AgaveWebView* from, const char* url)
