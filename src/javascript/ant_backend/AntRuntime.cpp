@@ -224,6 +224,7 @@ int globalHttpRequest(AntbEngine* engine, AntbValue*, AntbValue** args, int argc
 }
 
 int globalHttpGet(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int globalClassOp(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalHttpRequest(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeSetter(AntbEngine*, AntbValue*, const char*, const AntbValue*, void*);
 int docCreateElement(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
@@ -587,6 +588,54 @@ static const char kPrelude[] =
 "  if (!g.getComputedStyle) g.getComputedStyle = function (el) { return (el && el.style) ? el.style : {}; };"
 "  {"
 "    var _ctors = ['Document','HTMLDocument','Element','HTMLElement','HTMLDivElement','Node','NodeList','HTMLCollection','Event','CustomEvent','MouseEvent','KeyboardEvent','DocumentFragment','Text','Comment','Attr','DOMParser','XMLSerializer','MutationObserver','Storage','Location','Navigator','Screen','History','Window','Performance','CSSStyleDeclaration'];"
+"  g.__agbSafe = function (fn, label) {"
+"    return function () {"
+"      try { return fn.apply(this, arguments); }"
+"      catch (e) {"
+"        var msg = (g.__agbDescribe ? g.__agbDescribe(e) : String(e));"
+"        if (g.console && g.console.error) g.console.error('uncaught' + (label ? ' (' + label + ')' : '') + ': ' + msg);"
+"      }"
+"    };"
+"  };"
+"  if (typeof g.setTimeout === 'function' && !g.__agbTimersWrapped) {"
+"    g.__agbTimersWrapped = true;"
+"    var _st = g.setTimeout, _si = g.setInterval;"
+"    g.setTimeout = function (fn, delay) {"
+"      if (typeof fn !== 'function') return _st.apply(g, arguments);"
+"      var rest = Array.prototype.slice.call(arguments, 2);"
+"      return _st.apply(g, [g.__agbSafe(fn, 'timeout'), delay].concat(rest));"
+"    };"
+"    if (typeof _si === 'function') {"
+"      g.setInterval = function (fn, delay) {"
+"        if (typeof fn !== 'function') return _si.apply(g, arguments);"
+"        var rest = Array.prototype.slice.call(arguments, 2);"
+"        return _si.apply(g, [g.__agbSafe(fn, 'interval'), delay].concat(rest));"
+"      };"
+"    }"
+"  }"
+"  if (!g.performance) { g.performance = {}; }"
+"  if (!g.performance.timing) {"
+"    g.performance.timing = { navigationStart: 0, fetchStart: 0, domainLookupStart: 0, domainLookupEnd: 0,"
+"      connectStart: 0, connectEnd: 0, requestStart: 0, responseStart: 0, responseEnd: 0,"
+"      domLoading: 0, domInteractive: 0, domContentLoadedEventStart: 0, domContentLoadedEventEnd: 0,"
+"      domComplete: 0, loadEventStart: 0, loadEventEnd: 0 };"
+"  }"
+"  if (!g.performance.now) { g.performance.now = function () { return (new Date()).getTime(); }; }"
+"  if (!g.performance.getEntriesByType) { g.performance.getEntriesByType = function () { return []; }; }"
+"  g.__agbMakeClassList = function (el) {"
+"    return {"
+"      add: function (t) { __agbClassOp(el, 'add', t); },"
+"      remove: function (t) { __agbClassOp(el, 'remove', t); },"
+"      contains: function (t) { return !!__agbClassOp(el, 'contains', t); },"
+"      toggle: function (t) { return !!__agbClassOp(el, 'toggle', t); }"
+"    };"
+"  };"
+"  g.window = g; g.self = g; g.top = g; g.parent = g; g.frames = g;"
+"  if (!g.frameElement) g.frameElement = null;"
+"  if (typeof g.requestAnimationFrame === 'undefined') {"
+"    g.requestAnimationFrame = function (cb) { return setTimeout(function () { cb((new Date()).getTime()); }, 16); };"
+"    g.cancelAnimationFrame = function (id) { clearTimeout(id); };"
+"  }"
 "    for (var _ci = 0; _ci < _ctors.length; _ci++) {"
 "      if (typeof g[_ctors[_ci]] === 'undefined') g[_ctors[_ci]] = function () { return null; };"
 "    }"
@@ -667,7 +716,21 @@ static const char kPrelude[] =
 
 void pumpAsyncRequests(void)
 {
+    /* Deliver finished requests first (JS callbacks), then let the engine run
+     * its own timers/microtasks - both happen on the frame loop, never inside
+     * the network pump. */
     collectXhrJobs();
+
+    if (g_engine) {
+        antb_pump(g_engine);
+
+        /* Timer callbacks are outside evaluate(), so report and clear anything
+         * they threw instead of leaving it pending in the engine. */
+        if (char* pending = antb_take_pending_error(g_engine)) {
+            fprintf(stderr, "[antjs] (timer) %s\n", pending);
+            free(pending);
+        }
+    }
 }
 
 void setFilename(const char* name)
@@ -764,6 +827,7 @@ void bindDocument(void* document)
         antb_set_prop(g_engine, window, "document", docObj);
         antb_define_method(g_engine, global, "__agbHttpGet", globalHttpGet, NULL);
         antb_define_method(g_engine, global, "__agbHttpRequest", globalHttpRequest, NULL);
+        antb_define_method(g_engine, global, "__agbClassOp", globalClassOp, NULL);
 
         /* Web pages read bare globals like `location` and `navigator`. */
         {
@@ -1765,8 +1829,10 @@ int nodeRemove(AntbEngine*, AntbValue* self, AntbValue**, int, AntbValue*, void*
     return 1;
 }
 
-/* classList: backed directly by the class attribute. The Element pointer is
- * handed to the callbacks as userdata and kept alive by a ref. */
+/* classList is implemented in JS (see the prelude): one C entry point keeps the
+ * bridge's fixed method table from filling up with per-element methods. */
+/* classList is implemented in JS (see the prelude): a single C entry point keeps
+ * the bridge's fixed method table from filling up with per-element methods. */
 static WebCore::String readClassTokens(WebCore::Element* el)
 {
     return el->getAttribute(WebCore::String("class"));
@@ -1792,6 +1858,73 @@ static bool tokenListContains(const WebCore::String& tokens, const WebCore::Stri
     return false;
 }
 
+
+static WebCore::String tokensWithout(const WebCore::String& tokens, const WebCore::String& name)
+{
+    WebCore::String rebuilt;
+    unsigned start = 0;
+    for (unsigned i = 0; i <= tokens.length(); ++i) {
+        if (i == tokens.length() || tokens[i] == ' ') {
+            if (i > start) {
+                WebCore::String part = tokens.substring(start, i - start);
+                if (part != name)
+                    rebuilt = rebuilt.isEmpty() ? part : rebuilt + " " + part;
+            }
+            start = i + 1;
+        }
+    }
+    return rebuilt;
+}
+int globalClassOp(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
+                  AntbValue* out, void*)
+{
+    WebCore::Node* n = (argc > 0) ? nodeOf(args[0]) : 0;
+    char* op;
+    char* token;
+    if (!n || !n->isElementNode() || argc < 3)
+        return 1;
+    op = antb_to_utf8(args[1]);
+    token = antb_to_utf8(args[2]);
+    if (!op || !token) {
+        if (op) antb_free(op);
+        if (token) antb_free(token);
+        return 1;
+    }
+    {
+        WebCore::Element* el = static_cast<WebCore::Element*>(n);
+        WebCore::String name = WebCore::String::fromUTF8(token);
+        WebCore::String tokens = el->getAttribute(WebCore::String("class"));
+        bool contains = tokenListContains(tokens, name);
+        if (!strcmp(op, "add")) {
+            if (!contains && !name.isEmpty())
+                writeClassTokens(el, tokens.isEmpty() ? name : tokens + " " + name);
+            contains = true;
+        } else if (!strcmp(op, "remove")) {
+            writeClassTokens(el, tokensWithout(tokens, name));
+            contains = false;
+        } else if (!strcmp(op, "toggle")) {
+            if (contains) {
+                writeClassTokens(el, tokensWithout(tokens, name));
+                contains = false;
+            } else if (!name.isEmpty()) {
+                writeClassTokens(el, tokens.isEmpty() ? name : tokens + " " + name);
+                contains = true;
+            }
+        }
+        if (!strcmp(op, "contains") || !strcmp(op, "toggle")) {
+            AntbValue* v = antb_make_number(engine, contains ? 1.0 : 0.0);
+            if (v) {
+                antb_value_assign(out, v);
+                antb_value_release(v);
+            }
+        }
+    }
+    antb_free(op);
+    antb_free(token);
+    return 1;
+}
+/* classList: backed directly by the class attribute. The Element pointer is
+ * handed to the callbacks as userdata and kept alive by a ref. */
 static int classListAdd(AntbEngine*, AntbValue*, AntbValue** args, int argc, AntbValue*, void* user)
 {
     WebCore::Element* el = static_cast<WebCore::Element*>(user);
@@ -1910,32 +2043,39 @@ static int classListToggle(AntbEngine* engine, AntbValue* self, AntbValue** args
     return 1;
 }
 
+/* Returns the per-element classList object built by the JS prelude: no bridge
+ * method slots are consumed per element. */
 static int nodeClassList(AntbEngine* engine, AntbValue* self, AntbValue**, int,
                          AntbValue* out, void*)
 {
     WebCore::Node* n = nodeOf(self);
-    AntbValue* obj;
-
+    AntbValue* global;
+    AntbValue* factory;
+    AntbValue* wrapped;
+    AntbValue* args[1];
+    AntbValue* result;
     if (!n || !n->isElementNode())
         return 1;
-
-    {
-        WebCore::Element* el = static_cast<WebCore::Element*>(n);
-
-        el->ref();   /* lives as long as the classList object */
-        obj = antb_make_object(engine);
-        if (!obj) {
-            el->deref();
-            return 0;
-        }
-
-        antb_define_method(engine, obj, "add", classListAdd, el);
-        antb_define_method(engine, obj, "remove", classListRemove, el);
-        antb_define_method(engine, obj, "contains", classListContains, el);
-        antb_define_method(engine, obj, "toggle", classListToggle, el);
-        antb_value_assign(out, obj);
-        antb_value_release(obj);
+    global = antb_global(engine);
+    if (!global)
+        return 1;
+    factory = antb_get_prop(engine, global, "__agbMakeClassList");
+    antb_value_release(global);
+    if (!factory)
+        return 1;
+    wrapped = wrapNode(engine, n);
+    if (!wrapped) {
+        antb_value_release(factory);
+        return 1;
     }
+    args[0] = wrapped;
+    result = antb_call(engine, factory, NULL, args, 1, NULL);
+    if (result) {
+        antb_value_assign(out, result);
+        antb_value_release(result);
+    }
+    antb_value_release(wrapped);
+    antb_value_release(factory);
     return 1;
 }
 

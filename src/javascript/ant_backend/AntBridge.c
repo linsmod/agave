@@ -12,6 +12,7 @@
 #include "ant.h"
 #include "internal.h"
 #include "cfunc.h"     /* js_mkfun_dyn */
+#include "reactor.h"   /* ant_uv_run, js_poll_events */
 #include "runtime.h"
 #include "bootstrap.h"
 #include "ptr.h"        /* js_set_native / js_get_native (static inline) */
@@ -348,6 +349,41 @@ static agb_method_entry g_methods[AGB_TRAMPOLINE_COUNT];
 /* Diagnostics: name of the last bridged callback entered, so errors raised from
  * native code (which have no VM frame) can still be attributed. */
 static const char* g_last_call = "";
+
+/* Returns a malloc'd description of a pending exception and clears it, or NULL
+ * when the engine is clean. Timer callbacks run outside evaluation, so their
+ * exceptions would otherwise stay pending and poison later calls. */
+char* antb_take_pending_error(AntbEngine* engine)
+{
+    ant_t* js;
+    char* out;
+
+    if (!engine || !(js = engine->js))
+        return NULL;
+
+    if (!Ant_Exception_Pending(js))
+        return NULL;
+
+    copy_cstr(engine, "uncaught", Ant_Exception_Current(js));
+    Ant_Exception_Clear(js);
+
+    out = (char*)malloc(strlen(engine->err) + 1);
+    if (out)
+        strcpy(out, engine->err);
+    return out;
+}
+
+void antb_pump(AntbEngine* engine)
+{
+    ant_t* js;
+
+    if (!engine || !(js = engine->js))
+        return;
+
+    if (js->loop)
+        ant_uv_run(js->loop, UV_RUN_NOWAIT);
+    js_poll_events(js);
+}
 
 AGB_API const char* antb_last_call(void)
 {

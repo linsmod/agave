@@ -99,15 +99,16 @@ MC_STATUS macross_view_update(MaCrossView* view, const MC_RECT* rc)
 	if (!view)
 		return MC_STATUS_FAILED;
 
-	/* Async XHR / script callbacks are delivered from the frame loop: the
-	 * network pump runs outside JS, so this is the safe point to hand results
-	 * back to the page. */
-	AntRuntime::pumpAsyncRequests();
-
 	if (rc) {
 		view->view->setDirtyRect(rc->x, rc->y, rc->w, rc->h);
 	}
 	view->view->paintView();
+
+	/* Async XHR results and JS timers are delivered after painting: the page may
+	 * detach nodes, which must not happen while the paint traversal holds
+	 * render object pointers. */
+	AntRuntime::pumpAsyncRequests();
+
 	return MC_STATUS_SUCCESS;
 }
 

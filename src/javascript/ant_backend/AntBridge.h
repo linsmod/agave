@@ -62,6 +62,13 @@ AGB_API AntbValue* antb_eval(AntbEngine* engine, const char* src, int len, char*
 /* Name used in stack traces for the next evaluations (usually the script URL). */
 AGB_API void antb_set_filename(AntbEngine* engine, const char* name);
 
+/* Runs one non-blocking pass of the engine event loop: timers, immediates and
+ * microtasks. Call once per frame. */
+AGB_API void antb_pump(AntbEngine* engine);
+
+/* Pending-exception report from timer/immediate callbacks (NULL when clean). */
+AGB_API char* antb_take_pending_error(AntbEngine* engine);
+
 /* Name of the most recent bridged callback entered (diagnostics only). */
 AGB_API const char* antb_last_call(void);
 
