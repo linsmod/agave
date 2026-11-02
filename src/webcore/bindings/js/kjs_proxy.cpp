@@ -88,6 +88,39 @@ JSValue* KJSProxy::evaluate(const String& filename, int baseLine, const String& 
         if (!AntRuntime::evaluate(code.data(), code.length(), &out, &err)) {
             CString where = filename.isNull() ? String("(inline)").utf8() : filename.utf8();
             fprintf(stderr, "[antjs] %s: %s\n", where.data(), err ? err : "(no message)");
+
+            /* Point at the failing line of this script so the missing API is
+             * visible without guessing. The engine reports "page.js:LINE:COL". */
+            {
+                int line = 0, column = 0;
+                const char* pos = err ? strstr(err, "page.js:") : 0;
+                if (pos && sscanf(pos + 8, "%d:%d", &line, &column) == 2 && line > 0) {
+                    int current = 1;
+                    unsigned start = 0, end = 0;
+                    bool found = false;
+                    const ::UChar* chars = str.characters();
+                    unsigned length = str.length();
+
+                    for (unsigned i = 0; i < length; ++i) {
+                        if (chars[i] != '\n')
+                            continue;
+                        if (current == line) { end = i; found = true; break; }
+                        ++current;
+                        start = i + 1;
+                    }
+                    if (!found && current == line) {
+                        end = length;
+                        found = true;
+                    }
+                    if (!found)
+                        start = end = 0;
+                    if (end > start) {
+                        String snippet(str.characters() + start, min(end - start, 400u));
+                        CString text = snippet.utf8();
+                        fprintf(stderr, "[antjs]   line %d col %d: %s\n", line, column, text.data());
+                    }
+                }
+            }
         }
 
         free(out);

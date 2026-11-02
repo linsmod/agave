@@ -113,6 +113,44 @@ int titleGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue
         return 1;
     }
 
+    if (!strcmp(name, "cookie")) {
+        AntbValue* v = antb_make_string(engine, "");
+        if (!v)
+            return 0;
+        antb_value_assign(out, v);
+        antb_value_release(v);
+        return 1;
+    }
+
+    if (!strcmp(name, "readyState")) {
+        AntbValue* v = antb_make_string(engine, "complete");
+        if (!v)
+            return 0;
+        antb_value_assign(out, v);
+        antb_value_release(v);
+        return 1;
+    }
+
+    if (!strcmp(name, "URL") || !strcmp(name, "documentURI")) {
+        WebCore::String url = g_document->URL();
+        AntbValue* v = antb_make_string(engine, url.utf8().data());
+        if (!v)
+            return 0;
+        antb_value_assign(out, v);
+        antb_value_release(v);
+        return 1;
+    }
+
+    if (!strcmp(name, "referrer") || !strcmp(name, "domain") || !strcmp(name, "characterSet")
+            || !strcmp(name, "charset") || !strcmp(name, "compatMode")) {
+        AntbValue* v = antb_make_string(engine, strcmp(name, "compatMode") == 0 ? "CSS1Compat" : "");
+        if (!v)
+            return 0;
+        antb_value_assign(out, v);
+        antb_value_release(v);
+        return 1;
+    }
+
     if (!strcmp(name, "location")) {
         if (!g_locationObj) {
             AntbValue* obj = antb_make_object(engine);
@@ -366,6 +404,21 @@ void bindDocument(void* document)
         antb_define_method(g_engine, docObj, "createDocumentFragment", docCreateDocumentFragment, NULL);
         antb_define_method(g_engine, docObj, "addEventListener", nodeAddEventListener, NULL);
         antb_define_method(g_engine, docObj, "dispatchEvent", nodeDispatchEvent, NULL);
+        /* The document is a plain object (not a Node wrapper), so the node
+         * methods have to be installed on it explicitly. */
+        antb_define_method(g_engine, docObj, "getElementsByTagName", nodeGetElementsByTagName, NULL);
+        antb_define_method(g_engine, docObj, "getElementsByClassName", nodeGetElementsByClassName, NULL);
+        antb_define_method(g_engine, docObj, "querySelector", nodeQuerySelector, NULL);
+        antb_define_method(g_engine, docObj, "querySelectorAll", nodeQuerySelectorAll, NULL);
+        antb_define_method(g_engine, docObj, "appendChild", nodeAppendChild, NULL);
+        antb_define_method(g_engine, docObj, "removeChild", nodeRemoveChild, NULL);
+        antb_define_method(g_engine, docObj, "insertBefore", nodeInsertBefore, NULL);
+        antb_define_method(g_engine, docObj, "replaceChild", nodeReplaceChild, NULL);
+        antb_define_method(g_engine, docObj, "getAttribute", nodeGetAttribute, NULL);
+        antb_define_method(g_engine, docObj, "setAttribute", nodeSetAttribute, NULL);
+        antb_define_method(g_engine, docObj, "hasAttribute", nodeHasAttribute, NULL);
+        antb_define_method(g_engine, docObj, "cloneNode", nodeCloneNode, NULL);
+        antb_define_method(g_engine, docObj, "contains", nodeContains, NULL);
 
         /* Document is a Node: let the node APIs work directly on it. */
         antb_set_native(docObj, g_document, AGB_TAG_NODE);
@@ -1068,7 +1121,48 @@ int nodeGetElementsByClassName(AntbEngine* engine, AntbValue* self, AntbValue** 
     return 1;
 }
 
-/* Supports the simple selectors scripts actually use: #id, .class, tag. */
+/* Selector support: descendant selectors made of #id, .class and tag parts
+ * ("#s-top-bar .s-top-tabs", "div.foo", "a"). Anything fancier yields an
+ * empty list, which is what most callers already handle. */
+static void matchSimpleSelector(WebCore::Node* root, const WebCore::String& part,
+                                Vector<WebCore::Node*>& matches)
+{
+    if (part.isEmpty())
+        return;
+
+    if (part[0] == '#') {
+        WebCore::String id = part.substring(1);
+        WebCore::Element* element = root->document() ? root->document()->getElementById(WebCore::AtomicString(id)) : 0;
+        if (element && (element == root || element->isDescendantOf(root)))
+            matches.append(element);
+        return;
+    }
+
+    if (part[0] == '.') {
+        WebCore::String wanted = part.substring(1);
+        for (WebCore::Node* n = root->firstChild(); n; n = n->traverseNextNode(root)) {
+            if (!n->isElementNode())
+                continue;
+            {
+                WebCore::String cls = static_cast<WebCore::Element*>(n)->getAttribute(WebCore::String("class"));
+                if (cls.contains(wanted, false))
+                    matches.append(n);
+            }
+        }
+        return;
+    }
+
+    {
+        RefPtr<WebCore::NodeList> list = root->getElementsByTagName(part);
+        if (list) {
+            unsigned count = list->length();
+            for (unsigned i = 0; i < count; ++i)
+                if (WebCore::Node* child = list->item(i))
+                    matches.append(child);
+        }
+    }
+}
+
 int nodeQuerySelectorAll(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
                          AntbValue* out, void*)
 {
@@ -1089,28 +1183,37 @@ int nodeQuerySelectorAll(AntbEngine* engine, AntbValue* self, AntbValue** args, 
         return 1;
     }
 
-    if (selector[0] == '#') {
-        WebCore::Element* element = root->document() ? root->document()->getElementById(WebCore::AtomicString(selector + 1)) : 0;
-        if (element)
-            pushWrappedNode(engine, arr, element);
-    } else if (selector[0] == '.') {
-        WebCore::String wanted = WebCore::String::fromUTF8(selector + 1);
-        for (WebCore::Node* n = root->firstChild(); n; n = n->traverseNextNode(root)) {
-            if (!n->isElementNode())
-                continue;
-            {
-                WebCore::String cls = static_cast<WebCore::Element*>(n)->getAttribute(WebCore::String("class"));
-                if (cls.contains(wanted, false))
-                    pushWrappedNode(engine, arr, n);
+    {
+        WebCore::String text = WebCore::String::fromUTF8(selector);
+        Vector<WebCore::String> parts;
+        unsigned partStart = 0;
+
+        for (unsigned i = 0; i <= text.length(); ++i) {
+            if (i == text.length() || text[i] == ' ') {
+                if (i > partStart)
+                    parts.append(text.substring(partStart, i - partStart));
+                partStart = i + 1;
             }
         }
-    } else {
-        RefPtr<WebCore::NodeList> list = root->getElementsByTagName(WebCore::String::fromUTF8(selector));
-        if (list) {
-            unsigned count = list->length();
-            for (unsigned i = 0; i < count; ++i)
-                if (WebCore::Node* child = list->item(i))
-                    pushWrappedNode(engine, arr, child);
+
+        if (parts.size() == 1) {
+            Vector<WebCore::Node*> matches;
+            matchSimpleSelector(root, parts[0], matches);
+            for (unsigned i = 0; i < matches.size(); ++i)
+                pushWrappedNode(engine, arr, matches[i]);
+        } else if (parts.size() > 1) {
+            Vector<WebCore::Node*> current;
+            matchSimpleSelector(root, parts[0], current);
+
+            for (unsigned p = 1; p < parts.size() && !current.isEmpty(); ++p) {
+                Vector<WebCore::Node*> next;
+                for (unsigned i = 0; i < current.size(); ++i)
+                    matchSimpleSelector(current[i], parts[p], next);
+                current = next;
+            }
+
+            for (unsigned i = 0; i < current.size(); ++i)
+                pushWrappedNode(engine, arr, current[i]);
         }
     }
 
@@ -1119,7 +1222,6 @@ int nodeQuerySelectorAll(AntbEngine* engine, AntbValue* self, AntbValue** args, 
     antb_value_release(arr);
     return 1;
 }
-
 int nodeQuerySelector(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
                       AntbValue* out, void*)
 {
