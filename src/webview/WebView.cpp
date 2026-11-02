@@ -11,6 +11,13 @@
 
 #include "Page.h"
 #include "Frame.h"
+#include "HTMLInputElement.h"
+#include "HTMLTextAreaElement.h"
+#include "HTMLNames.h"
+#include "Document.h"
+#include "Node.h"
+#include "RenderObject.h"
+#include <stdio.h>
 #include "FrameTree.h"
 #include "FrameView.h"
 #include "FrameLoader.h"
@@ -506,7 +513,35 @@ bool WebView::textInput(const char* text)
 	if (str.isEmpty() || str.isNull())
 		return false;
 
-    Editor * editor = d->m_frame->page()->focusController()->focusedOrMainFrame()->editor();
+    Frame* frame = d->m_frame->page()->focusController()->focusedOrMainFrame();
+    if (!frame)
+        return false;
+
+    /* Text controls cache the inner text that RenderTextControl paints.
+     * insertText()/confirmComposition() change the value without refreshing it,
+     * so the typed characters were invisible; setValue() refreshes both. */
+    if (Node* focused = frame->document()->focusedNode()) {
+        if (focused->isElementNode() && focused->hasTagName(HTMLNames::inputTag)) {
+            HTMLInputElement* input = static_cast<HTMLInputElement*>(focused);
+            input->setValue(input->value() + str);
+            /* setValue() refreshes m_value; the *painted* text of a focused
+             * control comes from its inner editor, so refresh that as well. */
+            if (input->renderer()) {
+                input->renderer()->updateFromElement();
+                input->renderer()->repaint(true);
+            }
+            return true;
+        }
+        if (focused->isElementNode() && focused->hasTagName(HTMLNames::textareaTag)) {
+            HTMLTextAreaElement* area = static_cast<HTMLTextAreaElement*>(focused);
+            area->setValue(area->value() + str);
+            if (area->renderer())
+                area->renderer()->repaint(true);
+            return true;
+        }
+    }
+
+    Editor * editor = frame->editor();
 	if (!editor->canEdit()) 
 		return false;
 
