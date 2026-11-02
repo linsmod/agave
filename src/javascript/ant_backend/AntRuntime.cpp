@@ -13,6 +13,7 @@
 
 #include "Document.h"
 #include "Element.h"
+#include "RenderObject.h"
 #include "Node.h"
 #include "PlatformString.h"
 #include "Event.h"
@@ -63,6 +64,7 @@ int nodeHasAttribute(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void
 int nodeContains(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeCompareDocumentPosition(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeRemove(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeGetBoundingClientRect(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 static int nodeClassList(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 static int classListAdd(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 static int classListRemove(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
@@ -258,6 +260,7 @@ int titleGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue
     if (!strcmp(name, "classList")) {
         return nodeClassList(engine, self, NULL, 0, out, NULL);
     }
+
 
     if (!strcmp(name, "head")) {
         RefPtr<WebCore::NodeList> heads = g_document->getElementsByTagName("head");
@@ -585,9 +588,37 @@ static const char kPrelude[] =
 "  }"
 "  if (!g.requestIdleCallback) { g.requestIdleCallback = function (cb) { return 1; }; g.cancelIdleCallback = function () {}; }"
 "  if (!g.createImageBitmap) g.createImageBitmap = function () { return null; };"
-"  if (!g.getComputedStyle) g.getComputedStyle = function (el) { return (el && el.style) ? el.style : {}; };"
+"  if (!g.getComputedStyle) {"
+"    g.getComputedStyle = function (el) {"
+"      var st = (el && el.style) ? el.style : {};"
+"      function camel(n) { return String(n).replace(/-([a-z])/g, function (m, c) { return c.toUpperCase(); }); }"
+"      return {"
+"        getPropertyValue: function (n) {"
+"          var v = st[camel(n)];"
+"          if (v === undefined || v === null || v === '') {"
+"            if (n === 'width') return el ? (el.offsetWidth + 'px') : '';"
+"            if (n === 'height') return el ? (el.offsetHeight + 'px') : '';"
+"            return '';"
+"          }"
+"          return String(v);"
+"        },"
+"        setProperty: function (n, v) { st[camel(n)] = v; },"
+"        removeProperty: function (n) { var c = camel(n); var old = st[c]; st[c] = ''; return old; },"
+"        get length() { var i = 0; for (var k in st) i++; return i; },"
+"        item: function (i) { var n = 0; for (var k in st) { if (n === i) return k; n++; } return ''; }"
+"      };"
+"    };"
+"  }"
 "  {"
 "    var _ctors = ['Document','HTMLDocument','Element','HTMLElement','HTMLDivElement','Node','NodeList','HTMLCollection','Event','CustomEvent','MouseEvent','KeyboardEvent','DocumentFragment','Text','Comment','Attr','DOMParser','XMLSerializer','MutationObserver','Storage','Location','Navigator','Screen','History','Window','Performance','CSSStyleDeclaration'];"
+"  if (typeof g.innerWidth === 'undefined') {"
+"    Object.defineProperty ? Object.defineProperty(g, 'innerWidth', { get: function () { return g.document && g.document.documentElement ? g.document.documentElement.clientWidth : 0; } }) : (g.innerWidth = 0);"
+"    Object.defineProperty ? Object.defineProperty(g, 'innerHeight', { get: function () { return g.document && g.document.documentElement ? g.document.documentElement.clientHeight : 0; } }) : (g.innerHeight = 0);"
+"    g.outerWidth = g.innerWidth; g.outerHeight = g.innerHeight;"
+"    g.pageXOffset = 0; g.pageYOffset = 0; g.scrollX = 0; g.scrollY = 0;"
+"    g.scrollTo = function (x, y) { if (g.document && g.document.documentElement) { g.document.documentElement.scrollLeft = x; g.document.documentElement.scrollTop = y; } };"
+"    g.scrollBy = function (x, y) { g.scrollTo((g.pageXOffset||0)+x, (g.pageYOffset||0)+y); };"
+"  }"
 "  g.__agbSafe = function (fn, label) {"
 "    return function () {"
 "      try { return fn.apply(this, arguments); }"
@@ -790,6 +821,7 @@ void bindDocument(void* document)
                 antb_class_add_method(g_engine, g_nodeClass, "blur", nodeBlur, NULL);
                 antb_class_add_method(g_engine, g_nodeClass, "removeAttribute", nodeRemoveAttribute, NULL);
                 antb_class_add_method(g_engine, g_nodeClass, "remove", nodeRemove, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "getBoundingClientRect", nodeGetBoundingClientRect, NULL);
             }
         }
 
@@ -1099,6 +1131,32 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
         return 1;
     } else if (!strcmp(name, "classList")) {
         return nodeClassList(engine, self, NULL, 0, out, NULL);
+    } else if (!strcmp(name, "offsetWidth") || !strcmp(name, "offsetHeight")
+            || !strcmp(name, "offsetTop") || !strcmp(name, "offsetLeft")
+            || !strcmp(name, "clientWidth") || !strcmp(name, "clientHeight")
+            || !strcmp(name, "clientTop") || !strcmp(name, "clientLeft")
+            || !strcmp(name, "scrollWidth") || !strcmp(name, "scrollHeight")
+            || !strcmp(name, "scrollTop") || !strcmp(name, "scrollLeft")) {
+        int measured = 0;
+
+        if (n->isElementNode()) {
+            WebCore::Element* el = static_cast<WebCore::Element*>(n);
+
+            if (!strcmp(name, "offsetWidth")) measured = el->offsetWidth();
+            else if (!strcmp(name, "offsetHeight")) measured = el->offsetHeight();
+            else if (!strcmp(name, "offsetTop")) measured = el->offsetTop();
+            else if (!strcmp(name, "offsetLeft")) measured = el->offsetLeft();
+            else if (!strcmp(name, "clientWidth")) measured = el->clientWidth();
+            else if (!strcmp(name, "clientHeight")) measured = el->clientHeight();
+            else if (!strcmp(name, "clientTop")) measured = el->clientTop();
+            else if (!strcmp(name, "clientLeft")) measured = el->clientLeft();
+            else if (!strcmp(name, "scrollWidth")) measured = el->scrollWidth();
+            else if (!strcmp(name, "scrollHeight")) measured = el->scrollHeight();
+            else if (!strcmp(name, "scrollTop")) measured = el->scrollTop();
+            else if (!strcmp(name, "scrollLeft")) measured = el->scrollLeft();
+        }
+
+        v = antb_make_number(engine, (double)measured);
     } else if (!strcmp(name, "id") || !strcmp(name, "className") || !strcmp(name, "href")) {
         if (!n->isElementNode())
             return 0;
@@ -1128,6 +1186,16 @@ int nodeSetter(AntbEngine* engine, AntbValue* self, const char* name, const Antb
 
     if (!n || !value)
         return 0;
+
+    if (!strcmp(name, "scrollTop") && n->isElementNode()) {
+        static_cast<WebCore::Element*>(n)->setScrollTop((int)antb_to_number(value));
+        return 1;
+    }
+
+    if (!strcmp(name, "scrollLeft") && n->isElementNode()) {
+        static_cast<WebCore::Element*>(n)->setScrollLeft((int)antb_to_number(value));
+        return 1;
+    }
 
     if (!strcmp(name, "textContent")) {
         char* text = antb_to_utf8(value);
@@ -1829,8 +1897,50 @@ int nodeRemove(AntbEngine*, AntbValue* self, AntbValue**, int, AntbValue*, void*
     return 1;
 }
 
+/* getBoundingClientRect(): absolute box from the render tree, in CSS pixels. */
+int nodeGetBoundingClientRect(AntbEngine* engine, AntbValue* self, AntbValue**, int,
+                             AntbValue* out, void*)
+{
+    WebCore::Node* n = nodeOf(self);
+    WebCore::IntRect rect(0, 0, 0, 0);
+
+    if (!n || !n->renderer())
+        return 1;   /* detached / display:none → zero rect */
+
+    rect = n->renderer()->absoluteBoundingBoxRect();
+
+    {
+        struct { const char* name; double value; } fields[] = {
+            { "left",   (double)rect.x() },
+            { "top",    (double)rect.y() },
+            { "width",  (double)rect.width() },
+            { "height", (double)rect.height() },
+            { "right",  (double)(rect.x() + rect.width()) },
+            { "bottom", (double)(rect.y() + rect.height()) },
+            { "x",      (double)rect.x() },
+            { "y",      (double)rect.y() },
+        };
+        AntbValue* obj = antb_make_object(engine);
+
+        if (!obj)
+            return 0;
+
+        for (unsigned i = 0; i < sizeof(fields) / sizeof(fields[0]); ++i) {
+            AntbValue* v = antb_make_number(engine, fields[i].value);
+            if (v) {
+                antb_set_prop(engine, obj, fields[i].name, v);
+                antb_value_release(v);
+            }
+        }
+
+        antb_value_assign(out, obj);
+        antb_value_release(obj);
+    }
+    return 1;
+}
 /* classList is implemented in JS (see the prelude): one C entry point keeps the
  * bridge's fixed method table from filling up with per-element methods. */
+/* getBoundingClientRect(): absolute box from the render tree, in CSS pixels. */
 /* classList is implemented in JS (see the prelude): a single C entry point keeps
  * the bridge's fixed method table from filling up with per-element methods. */
 static WebCore::String readClassTokens(WebCore::Element* el)
