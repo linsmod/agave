@@ -8,6 +8,7 @@ debug
 build-zig/
 build-zig-native/
 build-zig-curl/
+build-zig-noant/
 build-*.log
 bt.log
 
