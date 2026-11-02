@@ -24,6 +24,7 @@
 #include "NodeList.h"
 #include "DocumentFragment.h"
 #include "ResourceHandle.h"
+#include "ResourceHandleClient.h"
 #include "ResourceError.h"
 #include "ResourceRequest.h"
 #include "ResourceResponse.h"
@@ -71,7 +72,159 @@ int nodeGetElementsByClassName(AntbEngine*, AntbValue*, AntbValue**, int, AntbVa
 int nodeQuerySelectorAll(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeQuerySelector(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int imageConstructor(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+/* ------------------------------------------------------------------------- */
+/* Asynchronous requests (XHR with async = true)                              */
+/* ------------------------------------------------------------------------- */
+
+/* One in-flight request. The handle is ref'd by this object, so it stays alive
+ * until the job is collected; the JS callback is retained and released when the
+ * response has been delivered. */
+struct XhrJob : public WebCore::ResourceHandleClient {
+    XhrJob(AntbEngine* engine, AntbValue* callback)
+        : m_engine(engine)
+        , m_callback(antb_retain(callback))
+        , m_status(0)
+        , m_done(false)
+        , m_failed(false)
+    {
+    }
+
+    virtual ~XhrJob()
+    {
+        if (m_callback)
+            antb_value_release(m_callback);
+    }
+
+    void start(const char* url)
+    {
+        WebCore::KURL kurl((const char*)url);
+        WebCore::ResourceRequest request(kurl);
+
+        m_handle = WebCore::ResourceHandle::create(request, this, false, true, false);
+    }
+
+    virtual void didReceiveResponse(WebCore::ResourceHandle*, const WebCore::ResourceResponse& response)
+    {
+        m_status = response.httpStatusCode();
+    }
+
+    virtual void didReceiveData(WebCore::ResourceHandle*, const char* data, int length, int)
+    {
+        if (length > 0)
+            m_body.append(data, length);
+    }
+
+    virtual void didFinishLoading(WebCore::ResourceHandle*)
+    {
+        m_done = true;
+    }
+
+    virtual void didFail(WebCore::ResourceHandle*, const WebCore::ResourceError&)
+    {
+        m_done = true;
+        m_failed = true;
+    }
+
+    void deliver()
+    {
+        if (!m_callback || !m_engine)
+            return;
+
+        {
+            WebCore::String text(m_body.data(), m_body.size());
+            AntbValue* textValue = antb_make_string(m_engine, text.utf8().data());
+            AntbValue* statusValue = antb_make_number(m_engine, m_failed ? 0.0 : (double)m_status);
+            AntbValue* argArray[2];
+            AntbValue* result;
+
+            if (!textValue || !statusValue) {
+                if (textValue) antb_value_release(textValue);
+                if (statusValue) antb_value_release(statusValue);
+                return;
+            }
+
+            argArray[0] = statusValue;
+            argArray[1] = textValue;
+            result = antb_call(m_engine, m_callback, NULL, argArray, 2, NULL);
+            if (result)
+                antb_value_release(result);
+
+            antb_value_release(textValue);
+            antb_value_release(statusValue);
+        }
+
+        antb_value_release(m_callback);
+        m_callback = NULL;
+    }
+
+    bool done() const { return m_done; }
+
+    bool deliverAndMaybeFinish()
+    {
+        if (!m_done)
+            return false;
+
+        deliver();
+        return true;
+    }
+
+    AntbEngine*                     m_engine;
+    AntbValue*                      m_callback;
+    RefPtr<WebCore::ResourceHandle> m_handle;
+    Vector<char>                    m_body;
+    int                             m_status;
+    bool                            m_done;
+    bool                            m_failed;
+};
+
+static Vector<XhrJob*>& xhrJobs()
+{
+    static Vector<XhrJob*>* jobs = new Vector<XhrJob*>();
+    return *jobs;
+}
+
+/* Delivers finished responses and frees jobs. Called from the start of every
+ * evaluation: the network pump runs outside JS, so delivery has to be flushed
+ * somewhere that is known to be safe. */
+static void collectXhrJobs()
+{
+    Vector<XhrJob*>& jobs = xhrJobs();
+
+    for (unsigned i = 0; i < jobs.size(); ) {
+        if (jobs[i]->deliverAndMaybeFinish()) {
+            delete jobs[i];
+            jobs.remove(i);
+        } else {
+            ++i;
+        }
+    }
+}
+
+int globalHttpRequest(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
+                      AntbValue* out, void*)
+{
+    char* urlText;
+    XhrJob* job;
+
+    (void)out;
+
+    if (argc < 2)
+        return 1;
+
+    urlText = antb_to_utf8(args[0]);
+    if (!urlText)
+        return 1;
+
+    job = new XhrJob(engine, args[1]);
+    xhrJobs().append(job);
+    job->start(urlText);
+
+    antb_free(urlText);
+    return 1;
+}
+
 int globalHttpGet(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int globalHttpRequest(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeSetter(AntbEngine*, AntbValue*, const char*, const AntbValue*, void*);
 int docCreateElement(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeFocus(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
@@ -312,6 +465,8 @@ int evaluate(const char* src, size_t len, char** out, char** err)
     if (!g_engine || !src)
         return 0;
 
+    collectXhrJobs();
+
     /* Page scripts are wrapped in try/catch so engine-thrown errors come with a
      * stack: the engine's own TypeErrors carry no position information. `var`
      * inside a try block is still global, so top-level declarations keep their
@@ -438,28 +593,49 @@ static const char kPrelude[] =
 "  }"
 "  if (typeof g.XMLHttpRequest === 'undefined') {"
 "    var XHR = function XMLHttpRequest() {"
-"      this.readyState = 0; this.status = 0; this.responseText = ''; this.response = '';"
-"      this.onreadystatechange = null; this.onload = null; this.onerror = null;"
-"      this._url = null; this._method = 'GET';"
+"      this.readyState = 0; this.status = 0; this.statusText = ''; this.responseText = ''; this.response = '';"
+"      this.onreadystatechange = null; this.onload = null; this.onerror = null; this.onloadend = null; this.onabort = null;"
+"      this._url = null; this._method = 'GET'; this._async = true; this._headers = {};"
 "    };"
-"    XHR.prototype.open = function (method, url) { this._method = method; this._url = url; this.readyState = 1; this._fire(); };"
-"    XHR.prototype.setRequestHeader = function () {};"
+"    XHR.prototype.open = function (method, url, async) {"
+"      this._method = method || 'GET'; this._url = url; this._async = (async !== false);"
+"      this.readyState = 1; this._fire();"
+"    };"
+"    XHR.prototype.setRequestHeader = function (k, v) { this._headers[k] = v; };"
 "    XHR.prototype.getAllResponseHeaders = function () { return ''; };"
 "    XHR.prototype.getResponseHeader = function () { return null; };"
-"    XHR.prototype.abort = function () {};"
+"    XHR.prototype.abort = function () { this.readyState = 0; if (this.onabort) this.onabort.call(this, this); };"
 "    XHR.prototype.overrideMimeType = function () {};"
-"    XHR.prototype._fire = function () { if (this.onreadystatechange) this.onreadystatechange.call(this, this); };"
-"    XHR.prototype.send = function () {"
-"      var text = null;"
-"      try { text = __agbHttpGet(this._url); } catch (e) { text = null; }"
-"      if (text === undefined) text = null;"
-"      this.status = (text === null) ? 0 : 200;"
-"      this.responseText = (text === null) ? '' : text;"
+"    XHR.prototype.addEventListener = function (type, fn) { this['_ev_' + type] = fn; };"
+"    XHR.prototype.removeEventListener = function (type) { this['_ev_' + type] = null; };"
+"    XHR.prototype._fire = function (type) {"
+"      if (this.onreadystatechange) this.onreadystatechange.call(this, this);"
+"      if (type) {"
+"        var h = this['on' + type] || this['_ev_' + type];"
+"        if (h) h.call(this, this);"
+"      }"
+"    };"
+"    XHR.prototype._finish = function (status, text) {"
+"      this.status = status;"
+"      this.responseText = (text === undefined || text === null) ? '' : String(text);"
 "      this.response = this.responseText;"
 "      this.readyState = 4;"
 "      this._fire();"
-"      if (text === null) { if (this.onerror) this.onerror.call(this, this); }"
-"      else if (this.onload) this.onload.call(this, this);"
+"      if (!status) this._fire('error');"
+"      else this._fire('load');"
+"      this._fire('loadend');"
+"    };"
+"    XHR.prototype.send = function () {"
+"      var self = this;"
+"      if (!this._async) {"
+"        var text = null;"
+"        try { text = __agbHttpGet(this._url); } catch (e) { text = null; }"
+"        this._finish((text === undefined || text === null) ? 0 : 200, text);"
+"        return;"
+"      }"
+"      /* Async: the C side owns the request and delivers (status, body) on a"
+"       * later frame, so the UI keeps running. */"
+"      __agbHttpRequest(this._url, function (status, text) { self._finish(status, text); });"
 "    };"
 "    g.XMLHttpRequest = XHR;"
 "  }"
@@ -488,6 +664,11 @@ static const char kPrelude[] =
 "    }"
 "  }"
 "})(window);";
+
+void pumpAsyncRequests(void)
+{
+    collectXhrJobs();
+}
 
 void setFilename(const char* name)
 {
@@ -582,6 +763,7 @@ void bindDocument(void* document)
 
         antb_set_prop(g_engine, window, "document", docObj);
         antb_define_method(g_engine, global, "__agbHttpGet", globalHttpGet, NULL);
+        antb_define_method(g_engine, global, "__agbHttpRequest", globalHttpRequest, NULL);
 
         /* Web pages read bare globals like `location` and `navigator`. */
         {

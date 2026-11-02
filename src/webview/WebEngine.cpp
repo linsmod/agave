@@ -99,6 +99,11 @@ MC_STATUS macross_view_update(MaCrossView* view, const MC_RECT* rc)
 	if (!view)
 		return MC_STATUS_FAILED;
 
+	/* Async XHR / script callbacks are delivered from the frame loop: the
+	 * network pump runs outside JS, so this is the safe point to hand results
+	 * back to the page. */
+	AntRuntime::pumpAsyncRequests();
+
 	if (rc) {
 		view->view->setDirtyRect(rc->x, rc->y, rc->w, rc->h);
 	}

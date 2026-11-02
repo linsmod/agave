@@ -32,6 +32,9 @@ int evaluate(const char* src, size_t len, char** out, char** err);
  * pointer to a WebCore::Document. Safe to call on every script evaluation. */
 void bindDocument(void* document);
 
+/* Delivers completed async requests (XHR) to the page. Call from the frame loop. */
+void pumpAsyncRequests(void);
+
 /* Sets the name used in stack traces for subsequent evaluations. */
 void setFilename(const char* name);
 
