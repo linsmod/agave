@@ -29,7 +29,7 @@ enum {
     AGW_CMD_NAVIGATE, AGW_CMD_LOAD_HTML, AGW_CMD_BACK, AGW_CMD_FORWARD,
     AGW_CMD_RELOAD, AGW_CMD_STOP, AGW_CMD_EVAL, AGW_CMD_ZOOM,
     AGW_CMD_RESIZE, AGW_CMD_UA, AGW_CMD_DL_DIR, AGW_CMD_MOUSE, AGW_CMD_KEY,
-    AGW_CMD_CHAR, AGW_CMD_FOCUS, AGW_CMD_SEARCH
+    AGW_CMD_CHAR, AGW_CMD_FOCUS, AGW_CMD_SEARCH, AGW_CMD_CONTEXT
 };
 
 typedef struct {
@@ -175,11 +175,9 @@ static void agwOnPostMessage(const char* message)
 }
 
 /* alert()/confirm()/prompt(): dispatched to the host, with sane defaults. */
-static int agwOnDialog(int type, const char* message, const char* defaultValue,
-                       char* result, int resultSize)
+static int agwDispatchDialog(AgaveWebView* item, int type, const char* message,
+                             const char* defaultValue, char* result, int resultSize)
 {
-    AgaveWebView* item = g_lastActive;
-
     if (result && resultSize > 0)
         result[0] = 0;
 
@@ -191,6 +189,55 @@ static int agwOnDialog(int type, const char* message, const char* defaultValue,
                                          result, resultSize, item->user);
 
     return type == 2 ? 0 : 1;
+}
+
+static int agwOnDialog(int type, const char* message, const char* defaultValue,
+                       char* result, int resultSize)
+{
+    return agwDispatchDialog(g_lastActive, type, message, defaultValue, result, resultSize);
+}
+
+/* Native (engine-side) alert/confirm/prompt come through a different callback
+ * set than the shim's; both end up in the host's on_dialog. */
+static void agwOnAlertBox(MaCrossView* view, const char* message)
+{
+    agwDispatchDialog(agwByView(view), 0, message, "", NULL, 0);
+}
+
+static MC_BOOL agwOnConfirmBox(MaCrossView* view, const char* text)
+{
+    return agwDispatchDialog(agwByView(view), 1, text, "", NULL, 0) ? TRUE : FALSE;
+}
+
+static char* agwOnPromptBox(MaCrossView* view, const char* message, const char* defaultValue)
+{
+    static char buffer[1024];
+
+    buffer[0] = 0;
+    agwDispatchDialog(agwByView(view), 2, message, defaultValue, buffer, sizeof(buffer));
+    return buffer;
+}
+
+static void agwOnContextMenu(MaCrossView* view, const MC_CONTEXT_MENU_DATA* menu)
+{
+    AgaveWebView* item = agwByView(view);
+
+    if (getenv("AGW_CTX_DEBUG"))
+        fprintf(stderr, "[ctx] fired view=%p item=%p\n", (void*)view, (void*)item);
+
+    if (!item)
+        item = g_lastActive;
+
+    if (!item || !item->callbacks.on_context_menu)
+        return;
+
+    item->callbacks.on_context_menu(item,
+                                    menu ? menu->location.x : 0,
+                                    menu ? menu->location.y : 0,
+                                    menu && menu->link_url ? menu->link_url : "",
+                                    menu && menu->image_url ? menu->image_url : "",
+                                    menu && menu->text ? menu->text : "",
+                                    item->user);
 }
 
 static void agwOnUpdateNow(MaCrossView* view)
@@ -599,6 +646,18 @@ static void agwDrainCommands(void)
                                          command.b ? TRUE : FALSE, TRUE);
             break;
 
+        case AGW_CMD_CONTEXT:
+            if (item->view) {
+                MC_CONTEXT_EVENT event;
+
+                memset(&event, 0, sizeof(event));
+                event.point.x = command.x;
+                event.point.y = command.y;
+                event.modifier = (unsigned int)command.a;
+                macross_context_menu_event(item->view, &event);
+            }
+            break;
+
         default:
             break;
         }
@@ -763,6 +822,11 @@ static LRESULT CALLBACK agwProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
             SetFocus(hwnd);
 
         agwPost(AGW_CMD_MOUSE, item, NULL, x, y, type, button);
+
+        /* The engine only builds a context menu through its own event entry. */
+        if (message == WM_RBUTTONUP)
+            agwPost(AGW_CMD_CONTEXT, item, NULL, x, y, 0, 0);
+
         return 0;
     }
 
@@ -943,6 +1007,10 @@ static void agwInstallCallbacks(void)
     info.cb_set_status       = agwOnStatus;
     info.cb_loading_progress = agwOnProgress;
     info.cb_history_status   = agwOnHistoryStatus;
+    info.cb_alert_box        = agwOnAlertBox;
+    info.cb_confirm_box      = agwOnConfirmBox;
+    info.cb_prompt_box       = agwOnPromptBox;
+    info.cb_context_menu     = agwOnContextMenu;
     info.cb_error            = agwOnError;
     info.cb_set_cursor       = agwOnCursor;
     info.cb_write_file_data  = agwOnWriteFile;

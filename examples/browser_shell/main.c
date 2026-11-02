@@ -586,6 +586,79 @@ static void onDownload(AgaveWebView* view, const char* url, const char* path, vo
     InvalidateRect(g_hwnd, NULL, FALSE);
 }
 
+/* Right click: the control reports the hit-test; the shell owns the menu. */
+static void navigateActive(const char* text, int newTab);
+static void addBookmarkCurrent(void);
+
+static void onContextMenu(AgaveWebView* view, int x, int y,
+                          const char* linkUrl, const char* imageUrl,
+                          const char* text, void* user)
+{
+    HMENU menu = CreatePopupMenu();
+    POINT point;
+    Tab* tab = (Tab*)user;
+    int choice;
+
+    (void)view;
+    (void)text;
+
+    point.x = x;
+    point.y = y;
+    ClientToScreen(g_hwnd, &point);
+
+    AppendMenuA(menu, MF_STRING, 1, "Back");
+    AppendMenuA(menu, MF_STRING, 2, "Forward");
+    AppendMenuA(menu, MF_STRING, 3, "Reload");
+    AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
+
+    if (linkUrl && linkUrl[0]) {
+        AppendMenuA(menu, MF_STRING, 4, "Open link in this tab");
+        AppendMenuA(menu, MF_STRING, 5, "Open link in new tab");
+        AppendMenuA(menu, MF_STRING, 6, "Copy link address");
+        AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
+    }
+
+    if (imageUrl && imageUrl[0])
+        AppendMenuA(menu, MF_STRING, 7, "Save image (not implemented)");
+
+    AppendMenuA(menu, MF_STRING, 8, "Bookmark this page");
+    AppendMenuA(menu, MF_STRING, 9, "View page source (eval)");
+
+    choice = (int)TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN,
+                                 point.x, point.y, 0, g_hwnd, NULL);
+    DestroyMenu(menu);
+
+    switch (choice) {
+    case 1: if (tab->used) agave_webview_back(tab->view); break;
+    case 2: if (tab->used) agave_webview_forward(tab->view); break;
+    case 3: if (tab->used) agave_webview_reload(tab->view); break;
+    case 4: if (linkUrl && linkUrl[0]) navigateActive(linkUrl, 0); break;
+    case 5: if (linkUrl && linkUrl[0]) navigateActive(linkUrl, 1); break;
+    case 6:
+        if (linkUrl && linkUrl[0]) {
+            if (OpenClipboard(g_hwnd)) {
+                HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, strlen(linkUrl) + 1);
+
+                if (memory) {
+                    void* target = GlobalLock(memory);
+
+                    if (target) {
+                        strcpy((char*)target, linkUrl);
+                        GlobalUnlock(memory);
+                        EmptyClipboard();
+                        SetClipboardData(CF_TEXT, memory);
+                    }
+                }
+                CloseClipboard();
+            }
+        }
+        break;
+    case 8: addBookmarkCurrent(); break;
+    case 9: if (tab->used) agave_webview_eval(tab->view, "document.documentElement.outerHTML.slice(0,2000)"); break;
+    default: break;
+    }
+}
+
 /* ------------------------------------------------------------------------- */
 /* navigation helpers                                                        */
 /* ------------------------------------------------------------------------- */
@@ -644,6 +717,7 @@ static void createTab(const char* url)
     callbacks.on_dialog = onDialog;
     callbacks.on_new_window = onNewWindow;
     callbacks.on_download = onDownload;
+    callbacks.on_context_menu = onContextMenu;
 
     tab->used = 1;
     tab->view = agave_webview_create(g_hwnd, 0, TAB_HEIGHT + TOOLBAR_H,

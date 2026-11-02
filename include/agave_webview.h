@@ -65,6 +65,11 @@ typedef struct AgaveWebViewCallback {
     int (*on_dialog)(AgaveWebView* view, int type, const char* message,
                      const char* default_value, char* result, int result_size,
                      void* user);
+    /* Right click: the host decides whether/where to show a menu. Any of the
+     * strings may be empty; `x`/`y` are in control coordinates. */
+    void (*on_context_menu)(AgaveWebView* view, int x, int y,
+                            const char* link_url, const char* image_url,
+                            const char* text, void* user);
 } AgaveWebViewCallback;
 
 /* Creates the control as a child of `parent`. Returns NULL on failure. */
