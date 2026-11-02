@@ -158,6 +158,25 @@ String TextCodecPlatform::decode(const char* bytes, size_t length, bool flush)
         memset(buffer, 0 , BufferSize);
         source = reinterpret_cast<const unsigned char*>(bytes) + offset;
         size_t tlen = ((length - offset) > (BufferSize>>2)) ? (BufferSize>>2) : (length - offset);
+
+        /* Do not cut a multi-byte character in half at the chunk boundary: the
+         * second half would arrive in the next call and the first half is
+         * decoded as garbage (this corrupted a minified script and made the JS
+         * lexer report a bogus SyntaxError). Ask the codec whether the trailing
+         * sequence is complete and back off if it is not. */
+        if (offset + tlen < length && tlen > 1) {
+            int back;
+
+            for (back = 1; back <= 4 && (size_t)back < tlen; ++back) {
+                size_t tail = tlen - back;
+
+                if (UTextCharLen(m_codec->getImpl(), source + tail, (int)back) <= 0) {
+                    tlen = tail;
+                    break;
+                }
+            }
+        }
+
         len = UTextDecode(m_codec->getImpl(), (unsigned short*)buffer, BufferSize>>1, source, tlen, &blen);
         if (len < 0)
             break;

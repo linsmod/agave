@@ -81,6 +81,7 @@ AGB_API char* antb_to_utf8(const AntbValue* value);
 
 AGB_API int antb_is_number(const AntbValue* value);
 AGB_API int antb_is_string(const AntbValue* value);
+AGB_API int antb_is_function(const AntbValue* value);
 
 AGB_API void antb_value_release(AntbValue* value);
 

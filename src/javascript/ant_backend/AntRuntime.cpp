@@ -1321,6 +1321,18 @@ void bindDocument(void* document)
 
     if (g_engine && antb_eval(g_engine, kPrelude, (int)strlen(kPrelude), NULL))
         ; /* bootstrap shims are best effort */
+    /* Ant's Web Worker constructor crashes on anything but a usable script URL
+     * (it strdups a NULL) and workers need an environment we do not provide.
+     * Hiding the constructors makes pages take their non-worker path instead
+     * of killing the process. */
+    if (g_engine) {
+        static const char kHideWorkers[] =
+            "try{window.Worker=undefined}catch(e){}"
+            "try{window.SharedWorker=undefined}catch(e){}"
+            "try{window.ServiceWorker=undefined}catch(e){}";
+
+        antb_eval(g_engine, kHideWorkers, (int)strlen(kHideWorkers), NULL);
+    }
 
     g_documentBound = true;
 }
@@ -1795,7 +1807,9 @@ int nodeAddEventListener(AntbEngine* engine, AntbValue* self, AntbValue** args, 
         Listener l;
         l.node = n;
         l.type = type;
-        l.fn   = antb_retain(args[1]);
+        /* Only functions are callable later: pages happily pass null or objects
+         * as the listener, and dispatching those crashed the process. */
+        l.fn = antb_is_function(args[1]) ? antb_retain(args[1]) : NULL;
         if (l.fn)
             g_listeners->push_back(l);
     }

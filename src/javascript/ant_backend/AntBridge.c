@@ -161,6 +161,11 @@ double antb_to_number(const AntbValue* value)
     return js_getnum(value->v);
 }
 
+int antb_is_function(const AntbValue* value)
+{
+    return value && value->js && vtype(value->v) == kTypeFunction;
+}
+
 int antb_is_string(const AntbValue* value)
 {
     return value && value->js && vtype(value->v) == kTypeString;
@@ -354,6 +359,7 @@ static agb_method_entry g_methods[AGB_TRAMPOLINE_COUNT];
 /* Diagnostics: name of the last bridged callback entered, so errors raised from
  * native code (which have no VM frame) can still be attributed. */
 static const char* g_last_call = "";
+static int g_trace_calls = -1;
 
 /* Returns a malloc'd description of a pending exception and clears it, or NULL
  * when the engine is clean. Timer callbacks run outside evaluation, so their
@@ -554,7 +560,9 @@ static ant_value_t agb_dispatch(int slot, ant_t* js, ant_value_t* args, int narg
     if (slot < 0 || slot >= g_method_count)
         return js_mkundef();
     e = &g_methods[slot];
+    if (g_trace_calls < 0) g_trace_calls = getenv("AGB_JS_TRACE") ? 1 : 0;
     g_last_call = e->name;
+    if (g_trace_calls) fprintf(stderr, "[call] %s nargs=%d\n", e->name, nargs);
     if (e->js != js) {
         return js_mkundef();
     }

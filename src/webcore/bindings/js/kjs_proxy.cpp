@@ -69,6 +69,52 @@ KJSProxy::~KJSProxy()
     }
 }
 
+#if ENABLE(ANTJS)
+/* WebKit's String::utf8() mangles some multi-byte sequences in very large
+ * strings (a lead byte dropped, continuations masked with 0x7F), which corrupts
+ * minified scripts. Encode straight from the UTF-16 buffer instead. */
+static CString utf8ForScript(const String& text)
+{
+    const ::UChar* chars = text.characters();
+    unsigned length = text.length();
+    Vector<char> out;
+    unsigned i;
+
+    out.reserveCapacity(length + length / 2 + 8);
+
+    for (i = 0; i < length; ++i) {
+        unsigned c = chars[i];
+
+        if (c >= 0xD800 && c <= 0xDBFF && i + 1 < length) {
+            unsigned low = chars[i + 1];
+
+            if (low >= 0xDC00 && low <= 0xDFFF) {
+                unsigned cp = 0x10000 + ((c - 0xD800) << 10) + (low - 0xDC00);
+                out.append((char)(0xF0 | (cp >> 18)));
+                out.append((char)(0x80 | ((cp >> 12) & 0x3F)));
+                out.append((char)(0x80 | ((cp >> 6) & 0x3F)));
+                out.append((char)(0x80 | (cp & 0x3F)));
+                ++i;
+                continue;
+            }
+        }
+
+        if (c < 0x80) {
+            out.append((char)c);
+        } else if (c < 0x800) {
+            out.append((char)(0xC0 | (c >> 6)));
+            out.append((char)(0x80 | (c & 0x3F)));
+        } else {
+            out.append((char)(0xE0 | (c >> 12)));
+            out.append((char)(0x80 | ((c >> 6) & 0x3F)));
+            out.append((char)(0x80 | (c & 0x3F)));
+        }
+    }
+
+    out.append('\0');
+    return CString(out.data(), (unsigned)(out.size() - 1));
+}
+#endif
 JSValue* KJSProxy::evaluate(const String& filename, int baseLine, const String& str) 
 {
     // evaluate code. Returns the JS return value or 0
@@ -78,13 +124,20 @@ JSValue* KJSProxy::evaluate(const String& filename, int baseLine, const String& 
     /* Task 2: page scripts run on the Ant engine. The DOM surface is provided by
      * the AntRuntime shim (document.title for now; elements come in task 3). */
     if (AntRuntime::isRunning() && m_frame) {
-        CString code = str.utf8();
+        CString code = utf8ForScript(str);
         char* out = 0;
         char* err = 0;
 
         m_frame->keepAlive();
         AntRuntime::bindDocument(m_frame->document());
         AntRuntime::setFilename(filename.isNull() ? "agave://inline" : filename.utf8().data());
+
+
+        if (getenv("AGB_JS_DEBUG")) {
+            fprintf(stderr, "[jsdbg] %s bytes=%u\n",
+                    filename.isNull() ? "(inline)" : filename.utf8().data(),
+                    (unsigned)code.length());
+        }
 
         if (!AntRuntime::evaluate(code.data(), code.length(), &out, &err)) {
             CString where = filename.isNull() ? String("(inline)").utf8() : filename.utf8();
