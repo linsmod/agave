@@ -195,3 +195,39 @@
 
     if (!g.CSS.escape) g.CSS.escape = function (s) { return String(s); };
 }());
+
+/* Ant's URLSearchParams is a branded native class, and `class X extends
+ * URLSearchParams` loses the subclass' own methods with it (the VM does not
+ * install them when the base is a native constructor). Real browsers allow it
+ * and libraries rely on it - browserscore.dev's URLParams does - so wrap the
+ * native object in a plain JS constructor that delegates. */
+(function () {
+    var g = typeof window !== 'undefined' ? window : this;
+    var Native = g.URLSearchParams;
+
+    if (!Native || g.__agbURLSearchParamsWrapper)
+        return;
+
+    g.__agbURLSearchParamsWrapper = true;
+
+    function URLSearchParams(init) {
+        this.__agbNativeParams = (init === undefined) ? new Native() : new Native(init);
+    }
+
+    URLSearchParams.prototype.append = function (k, v) { this.__agbNativeParams.append(k, v); };
+    URLSearchParams.prototype['delete'] = function (k) { this.__agbNativeParams['delete'](k); };
+    URLSearchParams.prototype.get = function (k) { return this.__agbNativeParams.get(k); };
+    URLSearchParams.prototype.getAll = function (k) { return this.__agbNativeParams.getAll(k); };
+    URLSearchParams.prototype.has = function (k) { return this.__agbNativeParams.has(k); };
+    URLSearchParams.prototype.set = function (k, v) { this.__agbNativeParams.set(k, v); };
+    URLSearchParams.prototype.sort = function () { this.__agbNativeParams.sort(); };
+    URLSearchParams.prototype.toString = function () { return String(this.__agbNativeParams); };
+    URLSearchParams.prototype.keys = function () { return this.__agbNativeParams.keys(); };
+    URLSearchParams.prototype.values = function () { return this.__agbNativeParams.values(); };
+    URLSearchParams.prototype.entries = function () { return this.__agbNativeParams.entries(); };
+    URLSearchParams.prototype.forEach = function (fn, thisArg) {
+        this.__agbNativeParams.forEach(function (value, key) { fn.call(thisArg, value, key, this); });
+    };
+
+    g.URLSearchParams = URLSearchParams;
+}());
