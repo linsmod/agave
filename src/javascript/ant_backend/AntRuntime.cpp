@@ -55,6 +55,10 @@ int docCreateDocumentFragment(AntbEngine*, AntbValue*, AntbValue**, int, AntbVal
 int nodeReplaceChild(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeHasAttribute(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeContains(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeGetElementsByClassName(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeQuerySelectorAll(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeQuerySelector(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int imageConstructor(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeSetter(AntbEngine*, AntbValue*, const char*, const AntbValue*, void*);
 int docCreateElement(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeFocus(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
@@ -239,6 +243,39 @@ int evaluate(const char* src, size_t len, char** out, char** err)
     return 1;
 }
 
+/* Small JS-side shims, evaluated once per document: constructors and module
+ * helpers are much easier to express in JS than through the C bridge. */
+static const char kPrelude[] =
+"(function(g){"
+"  if (typeof g.Image === 'undefined' && g.document) {"
+"    g.Image = function Image() { return g.document.createElement('img'); };"
+"  }"
+"  if (typeof g.define === 'undefined') {"
+"    var mods = {};"
+"    var def = function define(name, deps, factory) {"
+"      if (typeof name !== 'string') { factory = deps; deps = name; name = null; }"
+"      if (!(deps && typeof deps.length === 'number')) { factory = deps; deps = []; }"
+"      var args = [], i;"
+"      for (i = 0; i < deps.length; i++) args.push(mods[deps[i]] || {});"
+"      var exports = {};"
+"      var r = (typeof factory === 'function') ? factory.apply(exports, args) : exports;"
+"      var mod = (r === undefined) ? exports : r;"
+"      if (name) mods[name] = mod;"
+"      return mod;"
+"    };"
+"    def.amd = {};"
+"    g.define = def;"
+"    if (typeof g.require === 'undefined') {"
+"      g.require = function require(deps, cb) {"
+"        if (typeof deps === 'string') return mods[deps] || {};"
+"        var args = [], i;"
+"        if (deps) for (i = 0; i < deps.length; i++) args.push(mods[deps[i]] || {});"
+"        if (cb) cb.apply(null, args);"
+"      };"
+"    }"
+"  }"
+"})(window);";
+
 void bindDocument(void* document)
 {
     /* The Document object is replaced on every navigation, so always refresh
@@ -282,6 +319,9 @@ void bindDocument(void* document)
                 antb_class_add_method(g_engine, g_nodeClass, "replaceChild", nodeReplaceChild, NULL);
                 antb_class_add_method(g_engine, g_nodeClass, "hasAttribute", nodeHasAttribute, NULL);
                 antb_class_add_method(g_engine, g_nodeClass, "contains", nodeContains, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "getElementsByClassName", nodeGetElementsByClassName, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "querySelectorAll", nodeQuerySelectorAll, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "querySelector", nodeQuerySelector, NULL);
                 antb_class_add_method(g_engine, g_nodeClass, "focus", nodeFocus, NULL);
                 antb_class_add_method(g_engine, g_nodeClass, "blur", nodeBlur, NULL);
                 antb_class_add_method(g_engine, g_nodeClass, "removeAttribute", nodeRemoveAttribute, NULL);
@@ -305,6 +345,7 @@ void bindDocument(void* document)
         antb_define_method(g_engine, window, "dispatchEvent", nodeDispatchEvent, NULL);
 
         antb_set_prop(g_engine, window, "document", docObj);
+        antb_define_method(g_engine, global, "Image", imageConstructor, NULL);
         antb_set_prop(g_engine, global, "window", window);
         antb_set_prop(g_engine, global, "document", docObj);
 
@@ -313,6 +354,9 @@ void bindDocument(void* document)
         antb_value_release(docObj);
         antb_value_release(global);
     }
+
+    if (g_engine && antb_eval(g_engine, kPrelude, (int)strlen(kPrelude), NULL))
+        ; /* bootstrap shims are best effort */
 
     g_documentBound = true;
 }
@@ -939,6 +983,147 @@ int nodeContains(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc
             antb_value_release(v);
         }
     }
+    return 1;
+}
+
+static void pushWrappedNode(AntbEngine* engine, AntbValue* array, WebCore::Node* node)
+{
+    AntbValue* wrapped = wrapNode(engine, node);
+    if (wrapped) {
+        antb_array_push(engine, array, wrapped);
+        antb_value_release(wrapped);
+    }
+}
+
+/* Elements whose class attribute contains `name` (simple token match). */
+int nodeGetElementsByClassName(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                               AntbValue* out, void*)
+{
+    WebCore::Node* root = nodeOf(self);
+    char* name;
+    AntbValue* arr;
+
+    if (!root || argc < 1)
+        return 1;
+
+    name = antb_to_utf8(args[0]);
+    if (!name)
+        return 1;
+
+    arr = antb_make_array(engine);
+    if (!arr) {
+        antb_free(name);
+        return 1;
+    }
+
+    {
+        WebCore::String wanted = WebCore::String::fromUTF8(name);
+        for (WebCore::Node* n = root->firstChild(); n; n = n->traverseNextNode(root)) {
+            if (!n->isElementNode())
+                continue;
+            {
+                WebCore::String cls = static_cast<WebCore::Element*>(n)->getAttribute(WebCore::String("class"));
+                if (cls.contains(wanted, false))
+                    pushWrappedNode(engine, arr, n);
+            }
+        }
+    }
+
+    antb_free(name);
+    antb_value_assign(out, arr);
+    antb_value_release(arr);
+    return 1;
+}
+
+/* Supports the simple selectors scripts actually use: #id, .class, tag. */
+int nodeQuerySelectorAll(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                         AntbValue* out, void*)
+{
+    WebCore::Node* root = nodeOf(self);
+    char* selector;
+    AntbValue* arr;
+
+    if (!root || argc < 1)
+        return 1;
+
+    selector = antb_to_utf8(args[0]);
+    if (!selector)
+        return 1;
+
+    arr = antb_make_array(engine);
+    if (!arr) {
+        antb_free(selector);
+        return 1;
+    }
+
+    if (selector[0] == '#') {
+        WebCore::Element* element = root->document() ? root->document()->getElementById(WebCore::AtomicString(selector + 1)) : 0;
+        if (element)
+            pushWrappedNode(engine, arr, element);
+    } else if (selector[0] == '.') {
+        WebCore::String wanted = WebCore::String::fromUTF8(selector + 1);
+        for (WebCore::Node* n = root->firstChild(); n; n = n->traverseNextNode(root)) {
+            if (!n->isElementNode())
+                continue;
+            {
+                WebCore::String cls = static_cast<WebCore::Element*>(n)->getAttribute(WebCore::String("class"));
+                if (cls.contains(wanted, false))
+                    pushWrappedNode(engine, arr, n);
+            }
+        }
+    } else {
+        RefPtr<WebCore::NodeList> list = root->getElementsByTagName(WebCore::String::fromUTF8(selector));
+        if (list) {
+            unsigned count = list->length();
+            for (unsigned i = 0; i < count; ++i)
+                if (WebCore::Node* child = list->item(i))
+                    pushWrappedNode(engine, arr, child);
+        }
+    }
+
+    antb_free(selector);
+    antb_value_assign(out, arr);
+    antb_value_release(arr);
+    return 1;
+}
+
+int nodeQuerySelector(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                      AntbValue* out, void*)
+{
+    AntbValue* all = NULL;
+
+    (void)self; (void)args; (void)argc;
+
+    if (!nodeQuerySelectorAll(engine, self, args, argc, out, NULL))
+        return 0;
+
+    (void)all;
+    return 1;
+}
+
+/* new Image() → an <img> element */
+int imageConstructor(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
+                     AntbValue* out, void*)
+{
+    WebCore::ExceptionCode ec = 0;
+    RefPtr<WebCore::Element> img;
+
+    if (!g_document)
+        return 1;
+
+    img = g_document->createElement(WebCore::String("img"), ec);
+    if (!img || ec)
+        return 1;
+
+    img->ref();
+    {
+        AntbValue* wrapped = wrapNode(engine, img.get());
+        if (wrapped) {
+            antb_value_assign(out, wrapped);
+            antb_value_release(wrapped);
+        }
+    }
+    (void)args; (void)argc;
     return 1;
 }
 
