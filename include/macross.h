@@ -507,6 +507,19 @@ typedef void (*MC_POST_MESSAGE_HOOK)(const char* utf8_message);
 MACROSS_API void macross_set_post_message_hook(MC_POST_MESSAGE_HOOK hook);
 
 /**
+ * \brief alert() / confirm() / prompt() hook.
+ *
+ * type: 0 = alert, 1 = confirm, 2 = prompt.
+ * For alert the return value is ignored. For confirm return non-zero for OK.
+ * For prompt write the answer into result (UTF-8) and return non-zero; an empty
+ * result is reported to the page as null.
+ */
+typedef int (*MC_DIALOG_HOOK)(int type, const char* utf8_message,
+                              const char* utf8_default_value,
+                              char* result, int result_size);
+MACROSS_API void macross_set_dialog_hook(MC_DIALOG_HOOK hook);
+
+/**
  * \fn MC_STATUS macross_view_get_scale_factor(MaCrossView* view, int* precent)
  * 
  * \param view  	Pointer to an existing webview object.

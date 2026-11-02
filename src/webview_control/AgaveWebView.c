@@ -172,6 +172,25 @@ static void agwOnPostMessage(const char* message)
         item->callbacks.on_message(item, message ? message : "", item->user);
 }
 
+/* alert()/confirm()/prompt(): dispatched to the host, with sane defaults. */
+static int agwOnDialog(int type, const char* message, const char* defaultValue,
+                       char* result, int resultSize)
+{
+    AgaveWebView* item = g_lastActive;
+
+    if (result && resultSize > 0)
+        result[0] = 0;
+
+    if (!item)
+        return type == 2 ? 0 : 1;
+
+    if (item->callbacks.on_dialog)
+        return item->callbacks.on_dialog(item, type, message, defaultValue,
+                                         result, resultSize, item->user);
+
+    return type == 2 ? 0 : 1;
+}
+
 static void agwOnUpdateNow(MaCrossView* view)
 {
     AgaveWebView* item = agwByView(view);
@@ -927,6 +946,7 @@ AgaveWebView* agave_webview_create(void* parent, int x, int y, int width, int he
 
     macross_set_open_window_hook(agave_control_open_window);
     macross_set_post_message_hook(agwOnPostMessage);
+    macross_set_dialog_hook(agwOnDialog);
     agwInstallCallbacks();
     agwEnsureEngine();
 

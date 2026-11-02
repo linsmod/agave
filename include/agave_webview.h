@@ -60,6 +60,11 @@ typedef struct AgaveWebViewCallback {
     void (*on_download)(AgaveWebView* view, const char* url, const char* path, void* user);
     /* The page called window.agavePostMessage(text). */
     void (*on_message)(AgaveWebView* view, const char* message, void* user);
+    /* alert()/confirm()/prompt(). type is 0/1/2. Return non-zero to accept
+     * (confirm OK / prompt accepted); for prompt fill `result` with the answer. */
+    int (*on_dialog)(AgaveWebView* view, int type, const char* message,
+                     const char* default_value, char* result, int result_size,
+                     void* user);
 } AgaveWebViewCallback;
 
 /* Creates the control as a child of `parent`. Returns NULL on failure. */

@@ -21,6 +21,11 @@ void setOpenWindowHook(OpenWindowHook hook);
 typedef void (*PostMessageHook)(const char* message);
 void setPostMessageHook(PostMessageHook hook);
 
+/* alert()/confirm()/prompt(): type 0/1/2, see macross_set_dialog_hook. */
+typedef int (*DialogHook)(int type, const char* message, const char* defaultValue,
+                          char* result, int resultSize);
+void setDialogHook(DialogHook hook);
+
 /* Creates the JS engine. Safe to call more than once; returns false on failure. */
 bool start();
 

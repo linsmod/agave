@@ -99,6 +99,23 @@ static void onMessage(AgaveWebView* view, const char* message, void* user)
     InvalidateRect(g_hwnd, NULL, FALSE);
 }
 
+/* alert/confirm/prompt: record what the page asked and answer it. */
+static int onDialog(AgaveWebView* view, int type, const char* message,
+                    const char* defaultValue, char* result, int resultSize, void* user)
+{
+    (void)view;
+    (void)user;
+    (void)defaultValue;
+
+    _snprintf(g_status, sizeof(g_status), "dialog(%d): %s", type, message ? message : "");
+    InvalidateRect(g_hwnd, NULL, FALSE);
+
+    if (type == 2 && result && resultSize > 0)
+        _snprintf(result, resultSize, "answer-from-host");
+
+    return 1;
+}
+
 static void onError(AgaveWebView* view, int code, const char* url, void* user)
 {
     (void)view;
@@ -219,6 +236,7 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
     callbacks.on_progress = onProgress;
     callbacks.on_error = onError;
     callbacks.on_message = onMessage;
+    callbacks.on_dialog = onDialog;
     callbacks.on_new_window = onNewWindow;
 
     g_left = agave_webview_create(g_hwnd, 8, 40, 560, 660, &callbacks, NULL);

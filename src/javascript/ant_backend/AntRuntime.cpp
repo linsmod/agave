@@ -148,6 +148,7 @@ int nodeQuerySelector(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, voi
 int globalFrameSlot(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalOpenWindow(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalPostMessage(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int globalDialog(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalStorageGet(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalStorageHas(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalStorageSet(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
@@ -1401,6 +1402,9 @@ static const char kPrelude[] =
 "  g.agavePostMessage = function (message) {"
 "    try { __agbPostMessage(message == null ? '' : String(message)); } catch (e) {}"
 "  };"
+"  g.alert = function (message) { try { __agbDialog(0, message == null ? '' : String(message), ''); } catch (e) {} };"
+"  g.confirm = function (message) { try { return !!__agbDialog(1, message == null ? '' : String(message), ''); } catch (e) { return false; } };"
+"  g.prompt = function (message, fallback) { try { var r = __agbDialog(2, message == null ? '' : String(message), fallback == null ? '' : String(fallback)); return r === '' || r === null || r === undefined ? null : String(r); } catch (e) { return null; } };"
 "  if (typeof g.setTimeout === 'function' && !g.__agbTimersWrapped) {"
 "    g.__agbTimersWrapped = true;"
 "    var _st = g.setTimeout, _si = g.setInterval;"
@@ -1688,6 +1692,7 @@ void bindDocument(void* document)
         antb_define_method(g_engine, global, "__agbActivateSlot", globalActivateSlot, NULL);
         antb_define_method(g_engine, global, "__agbOpenWindow", globalOpenWindow, NULL);
         antb_define_method(g_engine, global, "__agbPostMessage", globalPostMessage, NULL);
+        antb_define_method(g_engine, global, "__agbDialog", globalDialog, NULL);
         antb_define_method(g_engine, global, "__agbStorageGet", globalStorageGet, NULL);
         antb_define_method(g_engine, global, "__agbStorageHas", globalStorageHas, NULL);
         antb_define_method(g_engine, global, "__agbStorageSet", globalStorageSet, NULL);
@@ -2919,6 +2924,51 @@ static WebCore::String tokensWithout(const WebCore::String& tokens, const WebCor
  * async XHR delivery. */
 static AntRuntime::OpenWindowHook g_openWindowHook = NULL;
 static AntRuntime::PostMessageHook g_postMessageHook = NULL;
+static AntRuntime::DialogHook g_dialogHook = NULL;
+
+static AntbValue* makeStringResult(AntbEngine* engine, AntbValue* out, const char* text);
+static AntbValue* makeNumberResult(AntbEngine* engine, AntbValue* out, double number);
+
+int globalDialog(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
+                 AntbValue* out, void*)
+{
+    int type = (argc > 0) ? (int)antb_to_number(args[0]) : 0;
+    char* message = (argc > 1) ? antb_to_utf8(args[1]) : NULL;
+    char* defaultValue = (argc > 2) ? antb_to_utf8(args[2]) : NULL;
+    char result[1024];
+    int accepted = 1;
+
+    result[0] = 0;
+
+    if (g_dialogHook)
+        accepted = g_dialogHook(type, message ? message : "",
+                                defaultValue ? defaultValue : "",
+                                result, sizeof(result));
+    else if (type == 1)
+        accepted = 1;       /* headless confirm: let the page continue */
+    else if (type == 2)
+        accepted = 0;       /* headless prompt: cancel */
+
+    antb_free(message);
+    antb_free(defaultValue);
+
+    if (type == 2) {
+        if (!accepted) {
+            AntbValue* v = antb_make_string(engine, "");
+
+            if (!v)
+                return 0;
+
+            antb_value_assign(out, v);
+            antb_value_release(v);
+            return 1;
+        }
+
+        return makeStringResult(engine, out, result) ? 1 : 0;
+    }
+
+    return makeNumberResult(engine, out, accepted ? 1.0 : 0.0) ? 1 : 0;
+}
 
 int globalPostMessage(AntbEngine*, AntbValue*, AntbValue** args, int argc,
                       AntbValue* out, void*)
@@ -3716,6 +3766,11 @@ void setOpenWindowHook(OpenWindowHook hook)
 void setPostMessageHook(PostMessageHook hook)
 {
     g_postMessageHook = hook;
+}
+
+void setDialogHook(DialogHook hook)
+{
+    g_dialogHook = hook;
 }
 
 } /* namespace AntRuntime */
