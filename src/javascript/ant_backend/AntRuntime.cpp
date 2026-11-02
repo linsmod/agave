@@ -23,6 +23,10 @@
 #include "HTMLElement.h"
 #include "NodeList.h"
 #include "DocumentFragment.h"
+#include "ResourceHandle.h"
+#include "ResourceError.h"
+#include "ResourceRequest.h"
+#include "ResourceResponse.h"
 #include "HTMLTextAreaElement.h"
 
 #include <stdio.h>
@@ -59,6 +63,7 @@ int nodeGetElementsByClassName(AntbEngine*, AntbValue*, AntbValue**, int, AntbVa
 int nodeQuerySelectorAll(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeQuerySelector(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int imageConstructor(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int globalHttpGet(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeSetter(AntbEngine*, AntbValue*, const char*, const AntbValue*, void*);
 int docCreateElement(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeFocus(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
@@ -250,6 +255,33 @@ static const char kPrelude[] =
 "  if (typeof g.Image === 'undefined' && g.document) {"
 "    g.Image = function Image() { return g.document.createElement('img'); };"
 "  }"
+"  if (typeof g.XMLHttpRequest === 'undefined') {"
+"    var XHR = function XMLHttpRequest() {"
+"      this.readyState = 0; this.status = 0; this.responseText = ''; this.response = '';"
+"      this.onreadystatechange = null; this.onload = null; this.onerror = null;"
+"      this._url = null; this._method = 'GET';"
+"    };"
+"    XHR.prototype.open = function (method, url) { this._method = method; this._url = url; this.readyState = 1; this._fire(); };"
+"    XHR.prototype.setRequestHeader = function () {};"
+"    XHR.prototype.getAllResponseHeaders = function () { return ''; };"
+"    XHR.prototype.getResponseHeader = function () { return null; };"
+"    XHR.prototype.abort = function () {};"
+"    XHR.prototype.overrideMimeType = function () {};"
+"    XHR.prototype._fire = function () { if (this.onreadystatechange) this.onreadystatechange.call(this, this); };"
+"    XHR.prototype.send = function () {"
+"      var text = null;"
+"      try { text = __agbHttpGet(this._url); } catch (e) { text = null; }"
+"      if (text === undefined) text = null;"
+"      this.status = (text === null) ? 0 : 200;"
+"      this.responseText = (text === null) ? '' : text;"
+"      this.response = this.responseText;"
+"      this.readyState = 4;"
+"      this._fire();"
+"      if (text === null) { if (this.onerror) this.onerror.call(this, this); }"
+"      else if (this.onload) this.onload.call(this, this);"
+"    };"
+"    g.XMLHttpRequest = XHR;"
+"  }"
 "  if (typeof g.define === 'undefined') {"
 "    var mods = {};"
 "    var def = function define(name, deps, factory) {"
@@ -346,6 +378,7 @@ void bindDocument(void* document)
 
         antb_set_prop(g_engine, window, "document", docObj);
         antb_define_method(g_engine, global, "Image", imageConstructor, NULL);
+        antb_define_method(g_engine, global, "__agbHttpGet", globalHttpGet, NULL);
         antb_set_prop(g_engine, global, "window", window);
         antb_set_prop(g_engine, global, "document", docObj);
 
@@ -1124,6 +1157,44 @@ int imageConstructor(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
         }
     }
     (void)args; (void)argc;
+    return 1;
+}
+
+/* Synchronous GET used by the XMLHttpRequest shim in the prelude. */
+int globalHttpGet(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
+                  AntbValue* out, void*)
+{
+    char* urlText;
+
+    if (argc < 1)
+        return 1;
+
+    urlText = antb_to_utf8(args[0]);
+    if (!urlText)
+        return 1;
+
+    {
+        WebCore::KURL url((const char*)urlText);
+        WebCore::ResourceRequest request(url);
+        WebCore::ResourceError error;
+        WebCore::ResourceResponse response;
+        Vector<char> data;
+
+        antb_free(urlText);
+
+        WebCore::ResourceHandle::loadResourceSynchronously(request, error, response, data);
+        if (!error.isNull())
+            return 1;   /* undefined → the shim reports status 0 */
+
+        {
+            WebCore::String body(data.data(), data.size());
+            AntbValue* v = antb_make_string(engine, body.utf8().data());
+            if (!v)
+                return 1;
+            antb_value_assign(out, v);
+            antb_value_release(v);
+        }
+    }
     return 1;
 }
 
