@@ -3551,7 +3551,6 @@ int nodeDispatchEvent(AntbEngine* engine, AntbValue* self, AntbValue** args, int
 
         argv[0] = (argc > 0) ? args[0] : NULL;
         antb_call(engine, snapshot[i], self, argv, argv[0] ? 1 : 0, NULL);
-        antb_value_release(snapshot[i]);
     }
 
     /* once: drop the listeners this dispatch just called. Identity is
@@ -3573,6 +3572,10 @@ int nodeDispatchEvent(AntbEngine* engine, AntbValue* self, AntbValue** args, int
             ++i;
         }
     }
+
+    for (size_t i = 0; i < snapshot.size(); ++i)
+        antb_value_release(snapshot[i]);
+
     antb_free(type);
     return 1;
 }
