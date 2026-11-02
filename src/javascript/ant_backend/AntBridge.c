@@ -1984,7 +1984,13 @@ AntbValue* antb_call(AntbEngine* engine, const AntbValue* fn, const AntbValue* s
 
     this_v = (self && self->js) ? self->v : js_glob(engine->js);
 
+    if (getenv("AGB_CALL_DEBUG"))
+        fprintf(stderr, "[call] enter fn=%p argc=%d\n", (void*)fn->v, argc);
+
     r = js_call_value(engine->js, fn->v, this_v, argv, argc);
+
+    if (getenv("AGB_CALL_DEBUG"))
+        fprintf(stderr, "[call] leave fn=%p\n", (void*)fn->v);
     if (is_err(r)) {
         copy_cstr(engine, "call failed", js_take_thrown(engine->js, r));
         if (err) {
@@ -2278,3 +2284,4 @@ void antb_class_install_properties(AntbEngine* engine, AntbClass* klass, AntbVal
     js_set_native(instance->v, entry, AGB_TAG_GETTER);
     js_set_getter(instance->v, agb_getter_trampoline);
 }
+
