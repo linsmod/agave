@@ -2540,6 +2540,9 @@ void bindDocument(void* document)
     g_document = (WebCore::Document*)document;
     g_currentSlot = slotForDocument(g_document);
 
+    if (getenv("AGB_EVT_DEBUG"))
+        fprintf(stderr, "[evt] bindDocument %p (bound=%d)\n", document, (int)g_documentBound);
+
     if (!g_engine || !g_document)
         return;
 
@@ -4828,6 +4831,10 @@ void dispatchWindowEvent(const char* type)
 {
     AntbValue* self;
 
+    if (getenv("AGB_EVT_DEBUG"))
+        fprintf(stderr, "[evt] ENTER dispatch %s (doc=%p listeners=%d)\n", type ? type : "(null)",
+                (void*)g_document, g_listeners ? (int)g_listeners->size() : -1);
+
     if (!g_engine || !g_document || !type || !g_listeners)
         return;
 
@@ -5046,6 +5053,8 @@ void setDialogHook(DialogHook hook)
 }
 
 } /* namespace AntRuntime */
+
+
 
 
 
