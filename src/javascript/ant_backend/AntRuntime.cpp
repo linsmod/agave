@@ -39,6 +39,7 @@
 #include "Page.h"
 #include "KURL.h"
 #include "Text.h"
+#include "Comment.h"
 #include "HTMLInputElement.h"
 #include "HTMLNames.h"
 #include "HTMLElement.h"
@@ -439,6 +440,7 @@ int docCreateElement(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void
 int nodeFocus(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeBlur(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int docCreateTextNode(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int docCreateComment(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeAppendChild(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeRemoveChild(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeInsertBefore(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
@@ -2636,6 +2638,7 @@ void bindDocument(void* document)
         antb_define_method(g_engine, docObj, "getElementById", docGetElementById, NULL);
         antb_define_method(g_engine, docObj, "createElement", docCreateElement, NULL);
         antb_define_method(g_engine, docObj, "createTextNode", docCreateTextNode, NULL);
+        antb_define_method(g_engine, docObj, "createComment", docCreateComment, NULL);
         antb_define_method(g_engine, docObj, "createDocumentFragment", docCreateDocumentFragment, NULL);
         /* document.implementation: jQuery and others feature-test
          * document.implementation.createHTMLDocument(). */
@@ -3653,6 +3656,40 @@ int docCreateTextNode(AntbEngine* engine, AntbValue* self, AntbValue** args, int
 
     {
         AntbValue* v = wrapNode(engine, node.get());
+        if (v) {
+            antb_value_assign(out, v);
+            antb_value_release(v);
+        }
+    }
+    return 1;
+}
+
+/* document.createComment(text): Vue renders every v-if placeholder with it, and
+ * pages use it for comment nodes they hand to insertBefore(). */
+int docCreateComment(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                      AntbValue* out, void*)
+{
+    char* text;
+    RefPtr<WebCore::Comment> node;
+
+    if (!documentOf(self) || argc < 1)
+        return 1;
+
+    text = antb_to_utf8(args[0]);
+    if (!text)
+        return 1;
+
+    node = documentOf(self)->createComment(WebCore::String::fromUTF8(text));
+    antb_free(text);
+
+    if (!node)
+        return 1;
+
+    node->ref();
+
+    {
+        AntbValue* v = wrapNode(engine, node.get());
+
         if (v) {
             antb_value_assign(out, v);
             antb_value_release(v);
@@ -5185,6 +5222,7 @@ void setDialogHook(DialogHook hook)
 }
 
 } /* namespace AntRuntime */
+
 
 
 
