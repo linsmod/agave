@@ -1610,7 +1610,10 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
         }
 
         v = antb_make_number(engine, (double)measured);
-    } else if (!strcmp(name, "id") || !strcmp(name, "className") || !strcmp(name, "href")) {
+    } else if (!strcmp(name, "id") || !strcmp(name, "className") || !strcmp(name, "href")
+               || !strcmp(name, "src") || !strcmp(name, "srcset") || !strcmp(name, "alt")
+               || !strcmp(name, "placeholder") || !strcmp(name, "poster")
+               || !strcmp(name, "title") || !strcmp(name, "name") || !strcmp(name, "type")) {
         if (!n->isElementNode())
             return 0;
         {
