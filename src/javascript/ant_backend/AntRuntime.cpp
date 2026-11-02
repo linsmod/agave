@@ -1837,9 +1837,25 @@ static bool looksLikeModule(const char* src, size_t len)
 /* Set once the document has been parsed: ES modules run only after that. */
 static bool g_documentParsed = false;
 
+/* Nesting depth of script evaluation: if it is > 1 while the load event is
+ * dispatched, the VM is re-entering and that is worth knowing. */
+static int g_evalDepth = 0;
+
 int evaluate(const char* src, size_t len, char** out, char** err)
 {
     AntbValue* value;
+    struct DepthGuard {
+        int* depth;
+        explicit DepthGuard(int* d) : depth(d) { ++*d; }
+        ~DepthGuard() {
+            if (getenv("AGB_EVT_DEBUG"))
+                fprintf(stderr, "[evt] evaluate leave depth=%d\n", *depth);
+            --*depth;
+        }
+    } guard(&g_evalDepth);
+
+    if (getenv("AGB_EVT_DEBUG"))
+        fprintf(stderr, "[evt] evaluate enter depth=%d len=%d\n", g_evalDepth, (int)len);
 
     if (out)
         *out = NULL;
@@ -4954,7 +4970,8 @@ void dispatchWindowEvent(const char* type)
         }
 
         if (getenv("AGB_EVT_DEBUG"))
-            fprintf(stderr, "[evt] dispatch %s -> %d listener(s)\n", type, (int)snapshot.size());
+            fprintf(stderr, "[evt] dispatch %s -> %d listener(s) (eval depth %d)\n",
+                    type, (int)snapshot.size(), g_evalDepth);
 
         antb_value_release(evt);
     }
@@ -5115,12 +5132,20 @@ void dispatchEvent(void* nodePtr, void* eventPtr)
     {
         std::string type = event->type().domString().utf8().data();
         AntbValue* evt = makeEventObject(type, node, event);
+
+        if (getenv("AGB_EVT_DEBUG") && (type == "load" || type == "DOMContentLoaded"))
+            fprintf(stderr, "[evt] WebCore event %s on node=%p\n", type.c_str(), (void*)node);
         bool stopped = false;
         bool stoppedImmediate = false;
         if (!evt)
             return;
-        /* Bubble: target → ancestors → document. */
-        for (WebCore::Node* current = node; current && !stopped; current = current->parentNode()) {
+        /* Bubble only when the event says so. load does not bubble: without
+         * this check every <script>/<img> load bubbled up to the document and
+         * ran the page's window load handler once per async script. */
+        bool bubbles = event->bubbles();
+
+        for (WebCore::Node* current = node; current && !stopped;
+             current = bubbles ? current->parentNode() : 0) {
             AntbValue* wrapper = wrapNode(g_engine, current);
             if (wrapper) {
                 runListenersFor(current, type, evt, wrapper, stopped, stoppedImmediate);
