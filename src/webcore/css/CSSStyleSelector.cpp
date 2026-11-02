@@ -4626,6 +4626,17 @@ void CSSStyleSelector::mapBackgroundImage(BackgroundLayer* layer, CSSValue* valu
     }
     
     if (!value->isPrimitiveValue()) return;
+
+    /* A gradient is a valid background-image, but it is not a CSSImageValue and
+     * must not be cast to one: doing so used to corrupt the layer and made the
+     * whole background (including its colour) disappear. Store it separately
+     * and leave the image slot empty. */
+    if (value->isGradientValue()) {
+        style->setBackgroundGradient(static_cast<CSSGradientValue*>(value));
+        layer->setBackgroundImage(RenderStyle::initialBackgroundImage());
+        return;
+    }
+
     CSSPrimitiveValue* primitiveValue = static_cast<CSSPrimitiveValue*>(value);
     layer->setBackgroundImage(static_cast<CSSImageValue*>(primitiveValue)->image(element->document()->docLoader()));
 }
