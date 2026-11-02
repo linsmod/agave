@@ -1260,6 +1260,8 @@ public:
 
     bool hasBackground() const { if (backgroundColor().isValid() && backgroundColor().alpha() > 0)
                                     return true;
+                                 if (m_backgroundGradient)
+                                    return true;
                                  return background->m_background.hasImage(); }
     bool hasFixedBackgroundImage() const { return background->m_background.hasFixedImage(); }
     bool hasAppearance() const { return appearance() != NoAppearance; }

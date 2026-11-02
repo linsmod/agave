@@ -32,6 +32,8 @@
 #include "CSSFontFaceRule.h"
 #include "CSSImageValue.h"
 #include "CSSGradientValue.h"
+#include <stdio.h>
+#include <stdlib.h>
 #include "CSSImportRule.h"
 #include "CSSMediaRule.h"
 #include "CSSProperty.h"
@@ -2587,6 +2589,9 @@ void CSSStyleSelector::applyProperty(int id, CSSValue *value)
     
 // uri || inherit
     case CSS_PROP_BACKGROUND_IMAGE:
+        if (getenv("AGB_CSS_DEBUG")) fprintf(stderr, "[sel] bg-image type=%u isGrad=%d isList=%d\n",
+                value ? value->cssValueType() : 0, value ? (value->isGradientValue() ? 1 : 0) : -1,
+                (value && value->isValueList()) ? 1 : 0);
         if (value && value->isGradientValue()) {
             style->setBackgroundGradient(static_cast<CSSGradientValue*>(value));
             return;
@@ -4625,17 +4630,18 @@ void CSSStyleSelector::mapBackgroundImage(BackgroundLayer* layer, CSSValue* valu
         return;
     }
     
-    if (!value->isPrimitiveValue()) return;
-
     /* A gradient is a valid background-image, but it is not a CSSImageValue and
-     * must not be cast to one: doing so used to corrupt the layer and made the
-     * whole background (including its colour) disappear. Store it separately
-     * and leave the image slot empty. */
+     * must not be cast to one (that corrupted the layer and made the whole
+     * background, colour included, disappear). Check it before the primitive
+     * test: gradients are CSS_CUSTOM values, so a primitive-only guard would
+     * drop them from the `background` shorthand as well. */
     if (value->isGradientValue()) {
         style->setBackgroundGradient(static_cast<CSSGradientValue*>(value));
         layer->setBackgroundImage(RenderStyle::initialBackgroundImage());
         return;
     }
+
+    if (!value->isPrimitiveValue()) return;
 
     CSSPrimitiveValue* primitiveValue = static_cast<CSSPrimitiveValue*>(value);
     layer->setBackgroundImage(static_cast<CSSImageValue*>(primitiveValue)->image(element->document()->docLoader()));

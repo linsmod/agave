@@ -678,20 +678,31 @@ void RenderBox::paintBackgroundExtended(GraphicsContext* context, const Color& c
         if (bgColor.isValid() && bgColor.alpha() > 0)
             context->fillRect(rect, bgColor);
 
-        /* linear-gradient() background: painted over the color, under the image. */
+        /* Gradients: over the background color, under the image. */
         if (style()->backgroundGradient()) {
             const CSSGradientValue* gradient = style()->backgroundGradient();
             const Vector<CSSGradientValue::Stop>& stops = gradient->stops();
 
             if (stops.size() >= 2) {
-                float angle = gradient->angle() * 3.14159265f / 180.0f;
-                float dx = sinf(angle);
-                float dy = -cosf(angle);
-                float halfLength = fabsf(dx) * rect.width() / 2.0f + fabsf(dy) * rect.height() / 2.0f;
-                FloatPoint center(rect.x() + rect.width() / 2.0f, rect.y() + rect.height() / 2.0f);
-                FloatPoint start(center.x() - dx * halfLength, center.y() - dy * halfLength);
-                FloatPoint end(center.x() + dx * halfLength, center.y() + dy * halfLength);
-                RefPtr<CanvasGradient> canvasGradient = new CanvasGradient(start, end);
+                RefPtr<CanvasGradient> canvasGradient;
+
+                if (gradient->isRadial()) {
+                    FloatPoint center(rect.x() + rect.width() * gradient->centerX(),
+                                      rect.y() + rect.height() * gradient->centerY());
+                    float rx = max(center.x() - rect.x(), rect.x() + rect.width() - center.x());
+                    float ry = max(center.y() - rect.y(), rect.y() + rect.height() - center.y());
+
+                    canvasGradient = new CanvasGradient(center, 0.0f, center, sqrtf(rx * rx + ry * ry));
+                } else {
+                    float angle = gradient->angle() * 3.14159265f / 180.0f;
+                    float dx = sinf(angle);
+                    float dy = -cosf(angle);
+                    float halfLength = fabsf(dx) * rect.width() / 2.0f + fabsf(dy) * rect.height() / 2.0f;
+                    FloatPoint center(rect.x() + rect.width() / 2.0f, rect.y() + rect.height() / 2.0f);
+
+                    canvasGradient = new CanvasGradient(FloatPoint(center.x() - dx * halfLength, center.y() - dy * halfLength),
+                                                        FloatPoint(center.x() + dx * halfLength, center.y() + dy * halfLength));
+                }
 
                 for (unsigned i = 0; i < stops.size(); ++i)
                     canvasGradient->addColorStop(stops[i].offset, stops[i].color.name());

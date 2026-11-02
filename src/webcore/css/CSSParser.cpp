@@ -1824,120 +1824,228 @@ CSSValue* CSSParser::parseBackgroundColor()
     return parseColor();
 }
 
-/* Parses linear-gradient()/repeating-linear-gradient(); returns 0 when the
- * syntax is not understood (caller then paints nothing). */
+/* Parses linear-gradient()/repeating-linear-gradient()/radial-gradient().
+ *
+ * The argument list is snapshotted into a vector and parsed by index: the
+ * previous version walked the shared ValueList cursor, so a mis-parse left the
+ * shorthand parser in a bad state and CSS dropped the whole `background`
+ * declaration. Unknown prefixes are now skipped instead of failing the value. */
 CSSValue* CSSParser::parseGradientFunction(Value* functionValue)
 {
-    if (getenv("AGB_CSS_DEBUG")) fprintf(stderr, "[grad] enter fname=%s args=%d\n", domString(functionValue->function->name).utf8().data(), functionValue->function->args ? (int)functionValue->function->args->size() : -1);
-    ValueList* args = functionValue->function->args;
+    ValueList* args;
+    Vector<Value*> tokens;
     CSSGradientValue* gradient;
     String fname;
-    if (!args || !args->size())
+    bool radial;
+    unsigned i = 0;
+    float centerX = 0.5f, centerY = 0.5f;
+
+    if (!functionValue || !functionValue->function)
         return 0;
-    gradient = new CSSGradientValue();
+
+    args = functionValue->function->args;
+    if (!args)
+        return 0;
+
+    for (unsigned k = 0; k < args->size(); ++k) {
+        Value* token = args->valueAt(k);
+        if (token)
+            tokens.append(token);
+    }
+
+    if (!tokens.size())
+        return 0;
+
     fname = domString(functionValue->function->name).lower();
+    radial = fname.startsWith(String("radial"));
+
+    gradient = new CSSGradientValue();
+    if (radial)
+        gradient->setType(CSSGradientValue::Radial);
     gradient->setRepeating(fname.startsWith(String("repeating-")));
-    for (unsigned i = 0; i < args->size(); ) {
-        Value* v = args->valueAt(i);
-        if (!v)
+
+    /* ---- prefix: angle / "to <sides>" for linear, shape/size/"at" for radial */
+    while (i < tokens.size()) {
+        Value* token = tokens[i];
+
+        if (token->unit == Value::Operator && token->iValue == ',') {
+            ++i;
+            continue;
+        }
+
+        if (!radial && token->unit == CSSPrimitiveValue::CSS_DEG) {
+            gradient->setAngle((float)token->fValue);
+            ++i;
+            continue;
+        }
+
+        if (token->unit != CSSPrimitiveValue::CSS_IDENT)
             break;
-        /* direction: "<angle>" or "to <side-or-corner>" (only before the stops) */
-        if (!gradient->stops().size() && v->unit == CSSPrimitiveValue::CSS_DEG) {
-            gradient->setAngle((float)v->fValue);
-            ++i;
-            continue;
-        }
-        if (!gradient->stops().size() && v->unit == CSSPrimitiveValue::CSS_IDENT
-                && domString(v->string).lower() == "to") {
-            bool horizontal = false, vertical = false, toRight = false, toBottom = false;
-            ++i;
-            while (i < args->size()) {
-                Value* d = args->valueAt(i);
-                String dir;
-                if (!d || d->unit != CSSPrimitiveValue::CSS_IDENT)
-                    break;
-                dir = domString(d->string).lower();
-                if (dir == "left") { horizontal = true; toRight = false; }
-                else if (dir == "right") { horizontal = true; toRight = true; }
-                else if (dir == "top") { vertical = true; toBottom = false; }
-                else if (dir == "bottom") { vertical = true; toBottom = true; }
-                else break;
+
+        {
+            String word = domString(token->string).lower();
+
+            if (!radial && word == "to") {
+                bool horizontal = false, vertical = false, toRight = false, toBottom = false;
+
                 ++i;
+                while (i < tokens.size()) {
+                    Value* side = tokens[i];
+                    String dir;
+
+                    if (side->unit != CSSPrimitiveValue::CSS_IDENT)
+                        break;
+
+                    dir = domString(side->string).lower();
+                    if (dir == "left") { horizontal = true; toRight = false; }
+                    else if (dir == "right") { horizontal = true; toRight = true; }
+                    else if (dir == "top") { vertical = true; toBottom = false; }
+                    else if (dir == "bottom") { vertical = true; toBottom = true; }
+                    else break;
+                    ++i;
+                }
+
+                if (horizontal && vertical)
+                    gradient->setAngle(toRight ? (toBottom ? 135.0f : 45.0f) : (toBottom ? 225.0f : 315.0f));
+                else if (horizontal)
+                    gradient->setAngle(toRight ? 90.0f : 270.0f);
+                else if (vertical)
+                    gradient->setAngle(toBottom ? 180.0f : 0.0f);
+                continue;
             }
-            if (horizontal && vertical)
-                gradient->setAngle(toRight ? (toBottom ? 135.0f : 45.0f) : (toBottom ? 225.0f : 315.0f));
-            else if (horizontal)
-                gradient->setAngle(toRight ? 90.0f : 270.0f);
-            else if (vertical)
-                gradient->setAngle(toBottom ? 180.0f : 0.0f);
+
+            if (radial && word == "at") {
+                ++i;
+
+                if (i < tokens.size()) {
+                    Value* c = tokens[i];
+
+                    if (c->unit == CSSPrimitiveValue::CSS_IDENT) {
+                        String cxw = domString(c->string).lower();
+
+                        if (cxw == "left") centerX = 0.0f;
+                        else if (cxw == "right") centerX = 1.0f;
+                        else if (cxw == "center") centerX = 0.5f;
+                        ++i;
+                    } else if (c->unit == CSSPrimitiveValue::CSS_PERCENTAGE) {
+                        centerX = (float)(c->fValue / 100.0);
+                        ++i;
+                    }
+                }
+
+                if (i < tokens.size()) {
+                    Value* c = tokens[i];
+
+                    if (c->unit == CSSPrimitiveValue::CSS_IDENT) {
+                        String cyw = domString(c->string).lower();
+
+                        if (cyw == "top") centerY = 0.0f;
+                        else if (cyw == "bottom") centerY = 1.0f;
+                        else if (cyw == "center") centerY = 0.5f;
+                        ++i;
+                    } else if (c->unit == CSSPrimitiveValue::CSS_PERCENTAGE) {
+                        centerY = (float)(c->fValue / 100.0);
+                        ++i;
+                    }
+                }
+                continue;
+            }
+
+            if (radial && (word == "circle" || word == "ellipse" || word == "closest-side"
+                           || word == "farthest-side" || word == "closest-corner"
+                           || word == "farthest-corner" || word == "contain" || word == "cover")) {
+                ++i;
+                continue;
+            }
+        }
+
+        break;   /* a colour stop starts here */
+    }
+
+    gradient->setCenter(centerX, centerY);
+
+    /* ---- colour stops: <colour> [<percentage>] */
+    while (i < tokens.size()) {
+        Value* token = tokens[i];
+        RGBA32 rgba = 0;
+
+        if (token->unit == Value::Operator && token->iValue == ',') {
+            ++i;
             continue;
         }
-        /* colour stop, optionally followed by a percentage */
-        if (v->unit == Value::Operator && v->iValue == ',') {
+
+        if (!parseColorFromValue(token, rgba, false)) {
+            /* Skip what we do not understand rather than dropping the value. */
             ++i;
             continue;
         }
 
         {
-            RGBA32 rgba = 0;
-            if (!parseColorFromValue(v, rgba, false))
-                return 0;
-            {
-                CSSGradientValue::Stop stop;
-                stop.offset = -1.0f;
-                stop.color = Color(rgba);
+            CSSGradientValue::Stop stop;
+            stop.offset = -1.0f;
+            stop.color = Color(rgba);
+            ++i;
+
+            if (i < tokens.size() && tokens[i]->unit == CSSPrimitiveValue::CSS_PERCENTAGE) {
+                stop.offset = (float)(tokens[i]->fValue / 100.0);
                 ++i;
-                if (i < args->size()) {
-                    Value* p = args->valueAt(i);
-                    if (p && p->unit == CSSPrimitiveValue::CSS_PERCENTAGE) {
-                        stop.offset = (float)(p->fValue / 100.0);
-                        ++i;
-                    }
-                }
-                gradient->addStop(stop);
             }
+
+            gradient->addStop(stop);
         }
     }
+
     if (gradient->stops().size() < 2) {
         delete gradient;
         return 0;
     }
+
     /* Distribute the stops that had no explicit position, keeping order. */
     {
         Vector<CSSGradientValue::Stop>& stops = gradient->mutableStops();
         unsigned count = stops.size();
         float last = 0.0f;
-        for (unsigned i = 0; i < count; ++i) {
-            if (stops[i].offset >= 0.0f) {
-                last = stops[i].offset;
+
+        for (unsigned s = 0; s < count; ++s) {
+            if (stops[s].offset >= 0.0f) {
+                last = stops[s].offset;
                 continue;
             }
-            /* count of consecutive unspecified stops after this one */
+
             {
-                unsigned j = i;
+                unsigned j = s;
                 unsigned unknown = 0;
+
                 while (j < count && stops[j].offset < 0.0f) {
                     ++unknown;
                     ++j;
                 }
+
                 {
                     float target = (j < count) ? stops[j].offset : 1.0f;
                     float step = unknown ? (target - last) / (unknown + 1) : 0.0f;
-                    for (unsigned k = i; k < j; ++k)
-                        stops[k].offset = last + step * (k - i + 1);
+
+                    for (unsigned k = s; k < j; ++k)
+                        stops[k].offset = last + step * (k - s + 1);
                     last = stops[j - 1].offset;
-                    i = j - 1;
+                    s = j - 1;
                 }
             }
         }
-        for (unsigned i = 0; i < count; ++i) {
-            if (stops[i].offset < 0.0f)
-                stops[i].offset = 0.0f;
-            if (stops[i].offset > 1.0f)
-                stops[i].offset = 1.0f;
+
+        for (unsigned s = 0; s < count; ++s) {
+            if (stops[s].offset < 0.0f)
+                stops[s].offset = 0.0f;
+            if (stops[s].offset > 1.0f)
+                stops[s].offset = 1.0f;
         }
     }
-    if (getenv("AGB_CSS_DEBUG")) fprintf(stderr, "[grad] ok stops=%d angle=%.1f\n", (int)gradient->stops().size(), gradient->angle());
+
+    if (getenv("AGB_CSS_DEBUG"))
+        fprintf(stderr, "[grad] ok radial=%d stops=%d angle=%.1f center=%.2f,%.2f\n",
+                radial ? 1 : 0, (int)gradient->stops().size(),
+                gradient->angle(), centerX, centerY);
+
     return gradient;
 }
 bool CSSParser::parseBackgroundImage(CSSValue*& value)

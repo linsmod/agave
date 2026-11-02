@@ -21,9 +21,20 @@ public:
         Color  color;
     };
 
+    enum GradientType { Linear, Radial };
+
+    void setType(GradientType type) { m_type = type; }
+    bool isRadial() const { return m_type == Radial; }
+    void setCenter(float x, float y) { m_centerX = x; m_centerY = y; }
+    float centerX() const { return m_centerX; }
+    float centerY() const { return m_centerY; }
+
     CSSGradientValue()
         : m_angle(180.0f)     /* CSS angles: 0 = to top, 90 = to right, 180 = to bottom */
         , m_repeating(false)
+        , m_type(Linear)
+        , m_centerX(0.5f)
+        , m_centerY(0.5f)
     {
     }
 
@@ -41,8 +52,11 @@ public:
     virtual String cssText() const;
 
 private:
+    GradientType m_type;
     float m_angle;
     bool  m_repeating;
+    float m_centerX;
+    float m_centerY;
     Vector<Stop> m_stops;
 };
 
