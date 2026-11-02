@@ -1260,6 +1260,111 @@ int titleSetter(AntbEngine* engine, AntbValue* self, const char* name, const Ant
 void dropListenersForOldDocument();
 } /* namespace */
 
+/* -------------------------------------------------------------------------
+ * Crash forensics
+ * -------------------------------------------------------------------------
+ * Heap corruption (0xC0000374) gives no JS stack and no useful message. Keep
+ * the last few bridge operations in a fixed-size ring - no allocation, so it
+ * survives a damaged heap - and dump it from an unhandled-exception filter.
+ * Only compiled in when AGB_TRACE is defined at build time? No: it costs a
+ * snprintf per DOM access, so it is behind the AGB_TRACE_CRASH env var.
+ */
+#define AGB_TRACE_SLOTS 256
+static char g_trace[AGB_TRACE_SLOTS][112];
+static volatile LONG g_tracePos = 0;
+static int  g_traceOn = -1;
+
+static int traceEnabled(void)
+{
+    if (g_traceOn < 0)
+        g_traceOn = getenv("AGB_TRACE_CRASH") ? 1 : 0;
+
+    return g_traceOn;
+}
+
+#if defined(_MSC_VER)
+#define AGB_HAVE_TRACE 1
+#else
+#define AGB_HAVE_TRACE 1
+#endif
+
+static void dumpTrace(const char* why)
+{
+    void* frames[24];
+    unsigned short count;
+    LONG pos = g_tracePos;
+    int i;
+
+    count = RtlCaptureStackBackTrace(0, 24, frames, NULL);
+
+    fprintf(stderr, "\n=== TRACE STOP: %s ===\n", why);
+
+    for (i = 0; i < (int)count; ++i)
+        fprintf(stderr, "  #%02d %p\n", i, frames[i]);
+
+    fprintf(stderr, "--- last %d bridge operations ---\n", AGB_TRACE_SLOTS / 2);
+
+    for (i = AGB_TRACE_SLOTS / 2; i > 0; --i) {
+        LONG at = pos - i;
+
+        if (at < 0)
+            continue;
+
+        fprintf(stderr, "  [op] %s\n", g_trace[at % AGB_TRACE_SLOTS]);
+    }
+
+    fflush(stderr);
+}
+
+static void traceOp(const char* fmt, ...)
+{
+    char buf[112];
+    LONG slot;
+    va_list ap;
+
+    if (!traceEnabled())
+        return;
+
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    buf[sizeof(buf) - 1] = 0;
+
+    slot = InterlockedIncrement(&g_tracePos) - 1;
+    memcpy(g_trace[slot % AGB_TRACE_SLOTS], buf, sizeof(buf));
+
+    /* 0xC0000374 is a fail-fast and never reaches the exception filter, so
+     * validate the heap ourselves every few operations and stop right there,
+     * with the ring buffer still holding what led to it. */
+    if ((slot & 31) == 0 && !HeapValidate(GetProcessHeap(), 0, NULL)) {
+        dumpTrace("HeapValidate failed - heap already corrupted");
+        ExitProcess(3);
+    }
+}
+
+static LONG WINAPI agbCrashFilter(EXCEPTION_POINTERS* info)
+{
+    char why[128];
+
+    snprintf(why, sizeof(why), "unhandled exception 0x%08lX at %p",
+             (unsigned long)(info && info->ExceptionRecord ? info->ExceptionRecord->ExceptionCode : 0),
+             (void*)(info && info->ExceptionRecord ? info->ExceptionRecord->ExceptionAddress : 0));
+    dumpTrace(why);
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+
+static void installCrashFilter(void)
+{
+    static int installed = 0;
+
+    if (installed || !traceEnabled())
+        return;
+
+    installed = 1;
+    SetUnhandledExceptionFilter(agbCrashFilter);
+    fprintf(stderr, "[trace] crash filter installed\n");
+}
+
 namespace AntRuntime {
 
 static void initCookieStorage()
@@ -2985,6 +3090,7 @@ static int styleGetter(AntbEngine* engine, AntbValue* self, const char* name, An
 /* Dispatcher for every property write on a style object. */
 static int styleSetter(AntbEngine* engine, AntbValue* self, const char* name, const AntbValue* value, void*)
 {
+    traceOp("style %s", name ? name : "?");
     WebCore::StyledElement* element = styledElementOf(self);
     WebCore::ExceptionCode ec = 0;
     char* text;
@@ -3036,6 +3142,8 @@ int attrsGetter(AntbEngine* engine, AntbValue*, const char* name, AntbValue* out
 
 int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue* out, void*)
 {
+    installCrashFilter();
+    /* getters are too hot to trace */
     WebCore::Node* n = nodeOf(self);
     AntbValue* v = NULL;
 
@@ -3281,6 +3389,8 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
 
 int nodeSetter(AntbEngine* engine, AntbValue* self, const char* name, const AntbValue* value, void*)
 {
+    installCrashFilter();
+    traceOp("set %s", name ? name : "?");
     WebCore::Node* n = nodeOf(self);
 
     (void)engine;
@@ -5222,6 +5332,7 @@ void setDialogHook(DialogHook hook)
 }
 
 } /* namespace AntRuntime */
+
 
 
 
