@@ -84,6 +84,7 @@ JSValue* KJSProxy::evaluate(const String& filename, int baseLine, const String& 
 
         m_frame->keepAlive();
         AntRuntime::bindDocument(m_frame->document());
+        AntRuntime::setFilename(filename.isNull() ? "agave://inline" : filename.utf8().data());
 
         if (!AntRuntime::evaluate(code.data(), code.length(), &out, &err)) {
             CString where = filename.isNull() ? String("(inline)").utf8() : filename.utf8();
@@ -119,6 +120,12 @@ JSValue* KJSProxy::evaluate(const String& filename, int baseLine, const String& 
                         CString text = snippet.utf8();
                         fprintf(stderr, "[antjs]   line %d col %d: %s\n", line, column, text.data());
                     }
+                } else if (str.length()) {
+                    /* No position in the stack: show the head of the script so it
+                     * can still be matched against the page source. */
+                    String head(str.characters(), min(str.length(), 300u));
+                    CString text = head.utf8();
+                    fprintf(stderr, "[antjs]   script head: %s\n", text.data());
                 }
             }
         }

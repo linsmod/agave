@@ -293,6 +293,16 @@ static const char kPrelude[] =
 "  if (typeof g.Image === 'undefined' && g.document) {"
 "    g.Image = function Image() { return g.document.createElement('img'); };"
 "  }"
+"  if (g.navigator) {"
+"    if (!g.navigator.platform) g.navigator.platform = 'Win32';"
+"    if (!g.navigator.language) g.navigator.language = 'zh-CN';"
+"    if (!g.navigator.appVersion) g.navigator.appVersion = g.navigator.userAgent || '';"
+"    if (!g.navigator.vendor) g.navigator.vendor = '';"
+"    g.navigator.onLine = true;"
+"    g.navigator.cookieEnabled = true;"
+"    if (!g.navigator.appCodeName) g.navigator.appCodeName = 'Mozilla';"
+"    if (!g.navigator.appName) g.navigator.appName = 'Netscape';"
+"  }"
 "  if (typeof g.XMLHttpRequest === 'undefined') {"
 "    var XHR = function XMLHttpRequest() {"
 "      this.readyState = 0; this.status = 0; this.responseText = ''; this.response = '';"
@@ -345,6 +355,12 @@ static const char kPrelude[] =
 "    }"
 "  }"
 "})(window);";
+
+void setFilename(const char* name)
+{
+    if (g_engine && name)
+        antb_set_filename(g_engine, name);
+}
 
 void bindDocument(void* document)
 {

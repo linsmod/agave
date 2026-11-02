@@ -59,6 +59,9 @@ AGB_API void antb_engine_destroy(AntbEngine* engine);
  * malloc'd UTF-8 message there (release with antb_free). */
 AGB_API AntbValue* antb_eval(AntbEngine* engine, const char* src, int len, char** err);
 
+/* Name used in stack traces for the next evaluations (usually the script URL). */
+AGB_API void antb_set_filename(AntbEngine* engine, const char* name);
+
 /* ---- value inspection --------------------------------------------------- */
 
 AGB_API double antb_to_number(const AntbValue* value);

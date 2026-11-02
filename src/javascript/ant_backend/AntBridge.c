@@ -113,6 +113,12 @@ void antb_engine_destroy(AntbEngine* engine)
     free(engine);
 }
 
+void antb_set_filename(AntbEngine* engine, const char* name)
+{
+    if (engine && engine->js && name)
+        js_set_filename(engine->js, name);
+}
+
 AntbValue* antb_eval(AntbEngine* engine, const char* src, int len, char** err)
 {
     ant_value_t v;
