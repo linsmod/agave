@@ -10,6 +10,7 @@
 #include <string.h>
 
 #include "AntBridge.h"
+#include "../platform/network/native/NetLog.h"
 
 #include "Document.h"
 #include "DOMImplementation.h"
@@ -111,6 +112,8 @@ struct XhrJob : public WebCore::ResourceHandleClient {
         , m_status(0)
         , m_done(false)
         , m_failed(false)
+        , m_startMs(0)
+        , m_doneMs(0)
     {
     }
 
@@ -122,6 +125,10 @@ struct XhrJob : public WebCore::ResourceHandleClient {
 
     void start(const char* url)
     {
+        m_startMs = Net::logElapsedMs();
+        if (Net::logEnabled())
+            Net::logLine("xhr.begin   %s", url);
+
         WebCore::KURL kurl((const char*)url);
         WebCore::ResourceRequest request(kurl);
         std::string cookies = cookieHeaderForCurrentDocument();
@@ -154,17 +161,24 @@ struct XhrJob : public WebCore::ResourceHandleClient {
 
     virtual void didFinishLoading(WebCore::ResourceHandle*)
     {
+        m_doneMs = Net::logElapsedMs();
         m_done = true;
     }
 
     virtual void didFail(WebCore::ResourceHandle*, const WebCore::ResourceError&)
     {
+        m_doneMs = Net::logElapsedMs();
         m_done = true;
         m_failed = true;
     }
 
     void deliver()
     {
+        if (Net::logEnabled())
+            Net::logLine("xhr.deliver lag=%.1fms total=%.1fms status=%d bytes=%u",
+                         m_doneMs > 0 ? Net::logElapsedMs() - m_doneMs : -1.0,
+                         m_startMs > 0 ? Net::logElapsedMs() - m_startMs : -1.0,
+                         m_status, (unsigned)m_body.size());
         if (!m_callback || !m_engine)
             return;
 
@@ -211,6 +225,8 @@ struct XhrJob : public WebCore::ResourceHandleClient {
     RefPtr<WebCore::ResourceHandle> m_handle;
     Vector<char>                    m_body;
     int                             m_status;
+    double                          m_startMs;
+    double                          m_doneMs;
     bool                            m_done;
     bool                            m_failed;
 };

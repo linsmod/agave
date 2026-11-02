@@ -8,6 +8,7 @@
 #include "FrameLoader.h"
 #include "CString.h"
 #include "FrameLoaderClientMC.h"
+#include "../webcore/platform/network/native/NetLog.h"
 
 #if ENABLE(ANTJS)
 #include "AntRuntime.h"
@@ -563,6 +564,7 @@ bool FrameLoaderClientMC::dispatchDidLoadResourceFromMemoryCache(DocumentLoader*
 
 void FrameLoaderClientMC::dispatchDidHandleOnloadEvents()
 {
+    Net::logEvent("page.onload-events", "");
     notImplemented();
 }
 
@@ -598,16 +600,19 @@ void FrameLoaderClientMC::dispatchDidReceiveIcon()
 
 void FrameLoaderClientMC::dispatchDidStartProvisionalLoad()
 {
+    Net::logEvent("page.start", "");
     notImplemented();
 }
 
 void FrameLoaderClientMC::dispatchDidCommitLoad()
 {
+    Net::logEvent("page.commit", "");
     notImplemented();
 }
 
 void FrameLoaderClientMC::dispatchDidFinishDocumentLoad()
 {
+    Net::logEvent("page.domready", "");
 #if ENABLE(ANTJS)
     /* jQuery-style ready queues hang off DOMContentLoaded. */
     AntRuntime::dispatchWindowEvent("DOMContentLoaded");
@@ -616,6 +621,7 @@ void FrameLoaderClientMC::dispatchDidFinishDocumentLoad()
 
 void FrameLoaderClientMC::dispatchDidFinishLoad()
 {
+    Net::logEvent("page.load", "url=%s", m_frame && m_frame->document() ? m_frame->document()->URL().utf8().data() : "");
 #if ENABLE(ANTJS)
     AntRuntime::dispatchWindowEvent("load");
 #endif
@@ -826,6 +832,7 @@ void FrameLoaderClientMC::windowObjectCleared() const
 
 void FrameLoaderClientMC::dispatchDidFirstLayout()
 {
+    Net::logEvent("page.firstlayout", "");
     notImplemented();
 }
 }

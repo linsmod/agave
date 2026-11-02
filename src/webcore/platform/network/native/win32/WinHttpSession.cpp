@@ -18,6 +18,18 @@
 
 #include "../NetworkSession.h"
 #include "../NetworkTypes.h"
+#include "../NetLog.h"
+
+/* Millisecond-resolution clock used by the net log entries. */
+static long long nowTicksForLog()
+{
+    LARGE_INTEGER counter;
+
+    if (QueryPerformanceCounter(&counter))
+        return (long long)counter.QuadPart;
+
+    return (long long)GetTickCount64();
+}
 
 namespace Net {
 
@@ -105,8 +117,14 @@ struct Job {
     HANDLE           thread;
     WinHttpSession*  owner;
     volatile LONG    cancelled;
+    double              startMs;
+    unsigned long long  bytes;
+    double              responseMs;
+    double              netDoneMs;
+    double              deliverMs;
 
-    Job() : id(0), client(NULL), thread(NULL), owner(NULL), cancelled(0) {}
+    Job() : id(0), client(NULL), thread(NULL), owner(NULL), cancelled(0),
+            startMs(0), bytes(0), responseMs(0), netDoneMs(0), deliverMs(0) {}
 };
 
 class WinHttpSession : public Session {
@@ -160,6 +178,9 @@ long long WinHttpSession::start(const Request& request, Client* client)
     job->request = request;
     job->client  = client;
     job->owner   = this;
+    job->startMs = Net::logElapsedMs();
+    if (Net::logEnabled())
+        Net::logLine("net.begin   %s %s timeout=%dms", request.method.empty() ? "GET" : request.method.c_str(), request.url.c_str(), request.timeoutMs);
 
     EnterCriticalSection(&m_lock);
     m_jobs.push_back(job);
@@ -210,12 +231,14 @@ void WinHttpSession::pump()
     for (size_t i = 0; i < events.size(); ++i) {
         Event*  ev = events[i];
         Client* client = NULL;
+        Job*    deliveryJob = NULL;
         long long id = ev->id;
 
         EnterCriticalSection(&m_lock);
         for (size_t j = 0; j < m_jobs.size(); ++j) {
             if (m_jobs[j]->id == id) {
                 client = m_jobs[j]->client;
+                deliveryJob = m_jobs[j];
                 break;
             }
         }
@@ -228,6 +251,16 @@ void WinHttpSession::pump()
             case Event::KindComplete: client->onComplete(); break;
             case Event::KindError:    client->onError(ev->error); break;
             }
+
+        if (deliveryJob) {
+            deliveryJob->deliverMs = Net::logElapsedMs();
+            if (ev->kind == Event::KindComplete || ev->kind == Event::KindError)
+                Net::logLine("net.deliver lag=%.1fms total=%.1fms kind=%s %s",
+                             deliveryJob->netDoneMs > 0 ? deliveryJob->deliverMs - deliveryJob->netDoneMs : -1.0,
+                             deliveryJob->deliverMs - deliveryJob->startMs,
+                             ev->kind == Event::KindComplete ? "complete" : "error",
+                             deliveryJob->request.url.c_str());
+        }
         }
 
         /* The callback above may have torn the session down (page navigation,
@@ -467,6 +500,9 @@ void WinHttpSession::run(Job* job)
                 }
             }
         }
+        job->responseMs = Net::logElapsedMs();
+        Net::logLine("net.response %d %s ttfb=%.1fms", (int)statusCode, job->request.url.c_str(),
+                     job->responseMs - job->startMs);
 
         if (getenv("AGB_NET_DEBUG")) {
             fprintf(stderr, "[net] %s status=%d headers:", job->request.url.c_str(), (int)statusCode);
@@ -500,6 +536,7 @@ void WinHttpSession::run(Job* job)
             ev->kind = Event::KindData;
             ev->id = job->id;
             ev->data.assign(buf, read);
+            job->bytes += read;
             post(ev);
         }
     }
@@ -512,11 +549,19 @@ cleanup:
     if (session) WinHttpCloseHandle(session);
 
     if (ok) {
+        job->netDoneMs = Net::logElapsedMs();
+        Net::logLine("net.done    dur=%.1fms ttfb=%.1fms bytes=%llu %s",
+                     Net::logElapsedMs() - job->startMs,
+                     job->responseMs > 0 ? job->responseMs - job->startMs : -1.0,
+                     job->bytes, job->request.url.c_str());
         Event* ev = new Event();
         ev->kind = Event::KindComplete;
         ev->id = job->id;
         post(ev);
     } else if (InterlockedCompareExchange(&job->cancelled, 0, 0) == 0) {
+        Net::logLine("net.error   err=%lu dur=%.1fms %s", (unsigned long)err,
+                     Net::logElapsedMs() - job->startMs,
+                     job->request.url.c_str());
         Event* ev = new Event();
         ev->kind = Event::KindError;
         ev->id = job->id;
