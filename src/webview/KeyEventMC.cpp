@@ -80,9 +80,21 @@ static String singleCharacterString(unsigned int keyCode)
     return String(&c, 1); 
 }
 
+/* The embedding API passes a virtual key code; for letters the produced
+ * character depends on Shift (KEY_A .. KEY_Z are 0x41 .. 0x5A). */
+static unsigned int characterForKeyCode(unsigned int keyCode, unsigned flags)
+{
+    bool shift = (flags & 4) != 0;
+
+    if (!shift && keyCode >= 'A' && keyCode <= 'Z')
+        return keyCode - 'A' + 'a';
+
+    return keyCode;
+}
+
 PlatformKeyboardEvent::PlatformKeyboardEvent(bool isDown, unsigned code, unsigned flags)
-    : m_text(singleCharacterString(code))
-    , m_unmodifiedText(singleCharacterString(code))
+    : m_text(singleCharacterString(characterForKeyCode(code, flags)))
+    , m_unmodifiedText(singleCharacterString(characterForKeyCode(code, flags)))
     , m_keyIdentifier(keyIdentifierForWindowsKeyCode(code))
     , m_isKeyUp(!isDown)
     , m_autoRepeat((flags & 16) ? true : false)

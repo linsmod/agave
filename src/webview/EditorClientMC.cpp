@@ -128,6 +128,18 @@ void EditorClientMC::handleKeypress(KeyboardEvent* event)
     Node* focus = frame->document()->focusedNode();
 
     if (start->isContentEditable()) {
+        /* Printable characters never mapped to a command, so nothing was ever
+         * inserted: turn them into text through the normal editing path. */
+        String typed = kevent->text();
+        if (typed.length() == 1 && !kevent->ctrlKey() && !kevent->altKey()) {
+            UChar c = typed[0];
+            if (c >= 0x20 && c != 0x7F) {
+                frame->editor()->insertText(typed, event);
+                event->setDefaultHandled();
+                return;
+            }
+        }
+
         String command(translate_key_event(kevent));
         if (command.isEmpty())
             return;
