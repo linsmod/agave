@@ -3496,6 +3496,9 @@ int nodeDispatchEvent(AntbEngine* engine, AntbValue* self, AntbValue** args, int
         return 0;
     }
 
+    if (getenv("AGB_EVT_DEBUG"))
+        fprintf(stderr, "[evt] JS dispatchEvent(%s) on node=%p\n", type, (void*)n);
+
     if (g_listeners) {
         AntbValue* evt = antb_make_object(engine);
         AntbValue* t   = antb_make_string(engine, type);
@@ -5076,6 +5079,12 @@ void setDialogHook(DialogHook hook)
 }
 
 } /* namespace AntRuntime */
+
+
+
+
+
+
 
 
 
