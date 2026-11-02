@@ -58,17 +58,89 @@ static void setCookieForCurrentDocument(const std::string& text);
 
 #define AGB_TAG_NODE 0x4E4F4431u   /* 'NOD1' */
 
-AntbEngine* g_engine = NULL;
-WebCore::Document* g_document = NULL;
+/* ------------------------------------------------------------------------- */
+/* Per-view runtime state                                                     */
+/* ------------------------------------------------------------------------- */
+/* Everything that used to be a process-wide global is now owned by one
+ * RuntimeState. Today there is a single state; the goal is one state (one Ant
+ * VM) per view, switched by contextActivate() at the bridge dispatch funnel.
+ *
+ * `g_*` below stay as macros over g_currentState so the rest of this file -
+ * 250+ references - keeps working unchanged. */
 
-/* A single Ant VM hosts every frame, and `document` is one JS object whose
- * native pointer we can swap. Frames/controls therefore get a slot each: async
- * callbacks (timers, XHR) capture their slot and reactivate it before running,
- * so they see the right document instead of whichever frame evaluated last. */
 #define AGB_MAX_DOCUMENT_SLOTS 16
-static WebCore::Document* g_docSlots[AGB_MAX_DOCUMENT_SLOTS];
-static int                g_docSlotCount;
-static int                g_currentSlot = -1;
+
+struct RuntimeState {
+    AntbEngine*        engine;
+    WebCore::Document* document;
+    AntbClass*         nodeClass;
+    AntbValue*         locationObj;
+    AntbValue*         docObj;          /* the JS document object (rooted) */
+    bool               documentBound;
+    void*              listeners;       /* std::vector<Listener>* (see below) */
+    WebCore::Document* docSlots[AGB_MAX_DOCUMENT_SLOTS];
+    int                docSlotCount;
+    int                currentSlot;
+};
+
+static std::vector<RuntimeState*>* g_states = NULL;
+/* Never NULL: the mirrors below are dereferenced by code that can run before a
+ * real state exists (isRunning(), teardown paths). */
+static RuntimeState  g_emptyState;
+static RuntimeState* g_currentState = &g_emptyState;
+
+static std::vector<RuntimeState*>& runtimeStates()
+{
+    if (!g_states)
+        g_states = new std::vector<RuntimeState*>();
+
+    return *g_states;
+}
+
+static RuntimeState* createRuntimeState(AntbEngine* engine)
+{
+    RuntimeState* state = new RuntimeState();
+
+    memset(state, 0, sizeof(RuntimeState));
+    state->engine = engine;
+    state->currentSlot = -1;
+
+    runtimeStates().push_back(state);
+
+    if (!g_currentState)
+        g_currentState = state;
+
+    return state;
+}
+
+static RuntimeState* stateForEngine(AntbEngine* engine)
+{
+    std::vector<RuntimeState*>& states = runtimeStates();
+
+    for (size_t i = 0; i < states.size(); ++i) {
+        if (states[i]->engine == engine)
+            return states[i];
+    }
+
+    return NULL;
+}
+
+static void activateState(RuntimeState* state)
+{
+    if (state)
+        g_currentState = state;
+}
+
+/* The mirrors. Keep these names: 250+ references across this file rely on them. */
+#define g_engine        (g_currentState->engine)
+#define g_document      (g_currentState->document)
+#define g_nodeClass     (g_currentState->nodeClass)
+#define g_locationObj   (g_currentState->locationObj)
+#define g_docObj        (g_currentState->docObj)
+#define g_documentBound (g_currentState->documentBound)
+#define g_docSlots      (g_currentState->docSlots)
+#define g_docSlotCount  (g_currentState->docSlotCount)
+#define g_currentSlot   (g_currentState->currentSlot)
 
 static int slotForDocument(WebCore::Document* document)
 {
@@ -89,12 +161,7 @@ static int slotForDocument(WebCore::Document* document)
     return g_docSlotCount++;
 }
 
-bool g_documentBound = false;
-
-/* DOM binding (defined further down) */
-AntbClass* g_nodeClass = NULL;
-AntbValue* g_locationObj = NULL;
-AntbValue* g_docObj = NULL;   /* the JS document object (rooted) */
+/* DOM binding (defined further down) - all mirrored from g_currentState. */
 
 static void activateSlot(int slot)
 {
@@ -1177,35 +1244,56 @@ static void initCookieStorage()
  * engines this becomes: g_current = stateFor(engine) and refresh the g_* mirror. */
 static void contextActivate(AntbEngine* engine)
 {
+    RuntimeState* state;
+
     if (!engine)
         return;
 
-    if (engine != g_engine)
-        g_engine = engine;
+    if (g_currentState && g_currentState->engine == engine)
+        return;
+
+    state = stateForEngine(engine);
+
+    if (state)
+        activateState(state);
 }
 
 bool start()
 {
+    AntbEngine* engine;
+
     if (g_engine)
         return true;
 
     initCookieStorage();
     /* Ant needs the address of a stack variable from the calling thread. */
     volatile char stack_anchor = 0;
-    g_engine = antb_engine_create((const void*)&stack_anchor);
+    engine = antb_engine_create((const void*)&stack_anchor);
 
-    if (g_engine)
-        antb_set_context_activate(contextActivate);
+    if (!engine)
+        return false;
 
-    return g_engine != NULL;
+    activateState(createRuntimeState(engine));
+    antb_set_context_activate(contextActivate);
+
+    return true;
 }
 
 void stop()
 {
-    if (g_engine) {
-        antb_engine_destroy(g_engine);
-        g_engine = NULL;
+    std::vector<RuntimeState*>& states = runtimeStates();
+
+    for (size_t i = 0; i < states.size(); ++i) {
+        RuntimeState* state = states[i];
+
+        if (state->engine)
+            antb_engine_destroy(state->engine);
+
+        delete state;
     }
+
+    states.clear();
+    g_currentState = &g_emptyState;
 }
 
 bool isRunning()
@@ -1809,7 +1897,13 @@ struct Listener {
     AntbValue*     fn;      /* rooted */
 };
 
-std::vector<Listener>* g_listeners = NULL;
+/* Per-state listener list (see RuntimeState::listeners). */
+static std::vector<Listener>*& listeners()
+{
+    return *(std::vector<Listener>**)&g_currentState->listeners;
+}
+
+#define g_listeners listeners()
 
 
 /* Navigation dropped the previous document: its listeners reference nodes and
