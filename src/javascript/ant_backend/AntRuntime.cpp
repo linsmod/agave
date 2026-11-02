@@ -53,12 +53,53 @@ static void setCookieForCurrentDocument(const std::string& text);
 
 AntbEngine* g_engine = NULL;
 WebCore::Document* g_document = NULL;
+
+/* A single Ant VM hosts every frame, and `document` is one JS object whose
+ * native pointer we can swap. Frames/controls therefore get a slot each: async
+ * callbacks (timers, XHR) capture their slot and reactivate it before running,
+ * so they see the right document instead of whichever frame evaluated last. */
+#define AGB_MAX_DOCUMENT_SLOTS 16
+static WebCore::Document* g_docSlots[AGB_MAX_DOCUMENT_SLOTS];
+static int                g_docSlotCount;
+static int                g_currentSlot = -1;
+
+static int slotForDocument(WebCore::Document* document)
+{
+    int i;
+
+    if (!document)
+        return -1;
+
+    for (i = 0; i < g_docSlotCount; ++i) {
+        if (g_docSlots[i] == document)
+            return i;
+    }
+
+    if (g_docSlotCount >= AGB_MAX_DOCUMENT_SLOTS)
+        return -1;
+
+    g_docSlots[g_docSlotCount] = document;
+    return g_docSlotCount++;
+}
+
 bool g_documentBound = false;
 
 /* DOM binding (defined further down) */
 AntbClass* g_nodeClass = NULL;
 AntbValue* g_locationObj = NULL;
 AntbValue* g_docObj = NULL;   /* the JS document object (rooted) */
+
+static void activateSlot(int slot)
+{
+    if (slot < 0 || slot >= g_docSlotCount || !g_docSlots[slot])
+        return;
+
+    g_currentSlot = slot;
+    g_document = g_docSlots[slot];
+
+    if (g_docObj)
+        antb_set_native(g_docObj, g_document, AGB_TAG_NODE);
+}
 int nodeGetAttribute(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeAddEventListener(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 WebCore::Document* documentOf(AntbValue* self);
@@ -97,6 +138,8 @@ static int classListToggle(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*
 int nodeGetElementsByClassName(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeQuerySelectorAll(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeQuerySelector(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int globalFrameSlot(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int globalActivateSlot(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int imageConstructor(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 /* ------------------------------------------------------------------------- */
 /* Asynchronous requests (XHR with async = true)                              */
@@ -114,6 +157,7 @@ struct XhrJob : public WebCore::ResourceHandleClient {
         , m_failed(false)
         , m_startMs(0)
         , m_doneMs(0)
+        , m_slot(g_currentSlot)
     {
     }
 
@@ -174,6 +218,11 @@ struct XhrJob : public WebCore::ResourceHandleClient {
 
     void deliver()
     {
+        int previousSlot = g_currentSlot;
+
+        if (m_slot >= 0)
+            activateSlot(m_slot);
+
         if (Net::logEnabled())
             Net::logLine("xhr.deliver lag=%.1fms total=%.1fms status=%d bytes=%u",
                          m_doneMs > 0 ? Net::logElapsedMs() - m_doneMs : -1.0,
@@ -205,8 +254,9 @@ struct XhrJob : public WebCore::ResourceHandleClient {
             antb_value_release(statusValue);
         }
 
-        antb_value_release(m_callback);
         m_callback = NULL;
+        if (previousSlot >= 0)
+            activateSlot(previousSlot);
     }
 
     bool done() const { return m_done; }
@@ -225,6 +275,7 @@ struct XhrJob : public WebCore::ResourceHandleClient {
     RefPtr<WebCore::ResourceHandle> m_handle;
     Vector<char>                    m_body;
     int                             m_status;
+    int                             m_slot;
     double                          m_startMs;
     double                          m_doneMs;
     bool                            m_done;
@@ -1275,6 +1326,8 @@ void bindDocument(void* document)
         antb_define_method(g_engine, global, "__agbHttpGet", globalHttpGet, NULL);
         antb_define_method(g_engine, global, "__agbHttpRequest", globalHttpRequest, NULL);
         antb_define_method(g_engine, global, "__agbClassOp", globalClassOp, NULL);
+        antb_define_method(g_engine, global, "__agbFrameSlot", globalFrameSlot, NULL);
+        antb_define_method(g_engine, global, "__agbActivateSlot", globalActivateSlot, NULL);
 
         /* history: SPA routers and "go back" links use it. */
         {
@@ -2495,6 +2548,44 @@ static WebCore::String tokensWithout(const WebCore::String& tokens, const WebCor
     }
     return rebuilt;
 }
+/* JS-visible context switching, used by the timer wrapper in the prelude and by
+ * async XHR delivery. */
+int globalFrameSlot(AntbEngine* engine, AntbValue*, AntbValue**, int, AntbValue* out, void*)
+{
+    AntbValue* v = antb_make_number(engine, (double)g_currentSlot);
+
+    if (!v)
+        return 0;
+
+    antb_value_assign(out, v);
+    antb_value_release(v);
+    return 1;
+}
+
+int globalActivateSlot(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
+                       AntbValue* out, void*)
+{
+    int previous = g_currentSlot;
+
+    if (argc > 0) {
+        int slot = (int)antb_to_number(args[0]);
+
+        if (slot >= 0 && slot < g_docSlotCount)
+            activateSlot(slot);
+    }
+
+    {
+        AntbValue* v = antb_make_number(engine, (double)previous);
+
+        if (!v)
+            return 0;
+
+        antb_value_assign(out, v);
+        antb_value_release(v);
+    }
+    return 1;
+}
+
 int globalClassOp(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
                   AntbValue* out, void*)
 {
