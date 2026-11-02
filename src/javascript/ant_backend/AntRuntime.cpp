@@ -113,6 +113,19 @@ int titleGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue
         return 1;
     }
 
+    if (!strcmp(name, "forms") || !strcmp(name, "images") || !strcmp(name, "links")
+            || !strcmp(name, "anchors") || !strcmp(name, "scripts") || !strcmp(name, "embeds")
+            || !strcmp(name, "plugins") || !strcmp(name, "applets")) {
+        /* Collections are exposed as empty arrays: scripts only read .length or
+         * iterate, and the real NodeLists are not wrapped yet. */
+        AntbValue* empty = antb_make_array(engine);
+        if (!empty)
+            return 0;
+        antb_value_assign(out, empty);
+        antb_value_release(empty);
+        return 1;
+    }
+
     if (!strcmp(name, "cookie")) {
         AntbValue* v = antb_make_string(engine, "");
         if (!v)
