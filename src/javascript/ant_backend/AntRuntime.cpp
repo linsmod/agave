@@ -17,6 +17,8 @@
 #include "Node.h"
 #include "PlatformString.h"
 #include "Event.h"
+#include "MouseEvent.h"
+#include "KeyboardEvent.h"
 #include "Frame.h"
 #include "FrameLoader.h"
 #include "Page.h"
@@ -781,6 +783,17 @@ static const char kPrelude[] =
 "  }"
 "  if (!g.performance.now) { g.performance.now = function () { return (new Date()).getTime(); }; }"
 "  if (!g.performance.getEntriesByType) { g.performance.getEntriesByType = function () { return []; }; }"
+"  g.__agbMakeEvent = function (type, target) {"
+"    return {"
+"      type: type, target: target, currentTarget: target,"
+"      bubbles: true, cancelable: true, eventPhase: 2, timeStamp: (new Date()).getTime(),"
+"      defaultPrevented: false, returnValue: true,"
+"      __prevented: false, __stopped: false, __stoppedImmediate: false,"
+"      preventDefault: function () { this.__prevented = true; this.defaultPrevented = true; this.returnValue = false; },"
+"      stopPropagation: function () { this.__stopped = true; },"
+"      stopImmediatePropagation: function () { this.__stopped = true; this.__stoppedImmediate = true; }"
+"    };"
+"  };"
 "  g.__agbMakeClassList = function (el) {"
 "    return {"
 "      add: function (t) { __agbClassOp(el, 'add', t); },"
@@ -2524,44 +2537,159 @@ void dispatchWindowEvent(const char* type)
     antb_value_release(self);
 }
 
+/* Builds the JS event object: the prelude adds the DOM methods (which only set
+ * flags), then we copy the native fields across. */
+static AntbValue* makeEventObject(const std::string& type, WebCore::Node* target, WebCore::Event* event)
+{
+    AntbValue* global;
+    AntbValue* factory;
+    AntbValue* wrappedTarget;
+    AntbValue* args[2];
+    AntbValue* evt = NULL;
+    global = antb_global(g_engine);
+    if (!global)
+        return NULL;
+    factory = antb_get_prop(g_engine, global, "__agbMakeEvent");
+    antb_value_release(global);
+    if (!factory)
+        return NULL;
+    wrappedTarget = wrapNode(g_engine, target);
+    args[0] = antb_make_string(g_engine, type.c_str());
+    args[1] = wrappedTarget;
+    if (args[0])
+        evt = antb_call(g_engine, factory, NULL, args, 2, NULL);
+    if (args[0])
+        antb_value_release(args[0]);
+    if (wrappedTarget)
+        antb_value_release(wrappedTarget);
+    antb_value_release(factory);
+    if (!evt)
+        return NULL;
+    if (event) {
+        struct { const char* name; double value; } nums[] = {
+            { "timeStamp", (double)event->timeStamp() },
+        };
+        unsigned i;
+        for (i = 0; i < sizeof(nums) / sizeof(nums[0]); ++i) {
+            AntbValue* v = antb_make_number(g_engine, nums[i].value);
+            if (v) { antb_set_prop(g_engine, evt, nums[i].name, v); antb_value_release(v); }
+        }
+        /* MouseEvent / KeyboardEvent details, when present. */
+        if (event->isMouseEvent()) {
+            WebCore::MouseEvent* mouse = static_cast<WebCore::MouseEvent*>(event);
+            struct { const char* name; double value; } mouseNums[] = {
+                { "clientX", (double)mouse->clientX() },
+                { "clientY", (double)mouse->clientY() },
+                { "screenX", (double)mouse->screenX() },
+                { "screenY", (double)mouse->screenY() },
+                { "pageX", (double)mouse->pageX() },
+                { "pageY", (double)mouse->pageY() },
+                { "button", (double)mouse->button() },
+                { "detail", (double)mouse->detail() },
+                { "which", (double)mouse->button() },
+            };
+            for (i = 0; i < sizeof(mouseNums) / sizeof(mouseNums[0]); ++i) {
+                AntbValue* v = antb_make_number(g_engine, mouseNums[i].value);
+                if (v) { antb_set_prop(g_engine, evt, mouseNums[i].name, v); antb_value_release(v); }
+            }
+            {
+                AntbValue* ctrl = antb_make_number(g_engine, mouse->ctrlKey() ? 1.0 : 0.0);
+                AntbValue* shift = antb_make_number(g_engine, mouse->shiftKey() ? 1.0 : 0.0);
+                AntbValue* alt = antb_make_number(g_engine, mouse->altKey() ? 1.0 : 0.0);
+                AntbValue* meta = antb_make_number(g_engine, mouse->metaKey() ? 1.0 : 0.0);
+                if (ctrl) { antb_set_prop(g_engine, evt, "ctrlKey", ctrl); antb_value_release(ctrl); }
+                if (shift) { antb_set_prop(g_engine, evt, "shiftKey", shift); antb_value_release(shift); }
+                if (alt) { antb_set_prop(g_engine, evt, "altKey", alt); antb_value_release(alt); }
+                if (meta) { antb_set_prop(g_engine, evt, "metaKey", meta); antb_value_release(meta); }
+            }
+        } else if (event->isKeyboardEvent()) {
+            WebCore::KeyboardEvent* key = static_cast<WebCore::KeyboardEvent*>(event);
+            struct { const char* name; double value; } keyNums[] = {
+                { "keyCode", (double)key->keyCode() },
+                { "which", (double)key->keyCode() },
+                { "charCode", (double)key->charCode() },
+            };
+            for (i = 0; i < sizeof(keyNums) / sizeof(keyNums[0]); ++i) {
+                AntbValue* v = antb_make_number(g_engine, keyNums[i].value);
+                if (v) { antb_set_prop(g_engine, evt, keyNums[i].name, v); antb_value_release(v); }
+            }
+        }
+    }
+    return evt;
+}
+/* Runs every listener registered for `node` / `type`. Returns the JS event
+ * object so the caller can inspect the preventDefault flag. */
+static void runListenersFor(WebCore::Node* node, const std::string& type, AntbValue* evt,
+                            AntbValue* currentTarget, bool& stopped, bool& stoppedImmediate)
+{
+    AntbValue* value = NULL;
+    if (!g_listeners)
+        return;
+    for (size_t i = 0; i < g_listeners->size(); ++i) {
+        Listener& l = (*g_listeners)[i];
+        if (l.node != node || l.type != type)
+            continue;
+        {
+            AntbValue* args[1];
+            args[0] = evt;
+            value = antb_call(g_engine, l.fn, currentTarget, args, evt ? 1 : 0, NULL);
+        }
+        if (!value) {
+            char* pending = antb_take_pending_error(g_engine);
+            if (pending) {
+                fprintf(stderr, "[antjs] (event %s) %s\n", type.c_str(), pending);
+                free(pending);
+            }
+        } else {
+            antb_value_release(value);
+        }
+        if (evt) {
+            AntbValue* flag = antb_get_prop(g_engine, evt, "__stoppedImmediate");
+            if (flag) {
+                stoppedImmediate = antb_to_boolean(flag);
+                antb_value_release(flag);
+            }
+            flag = antb_get_prop(g_engine, evt, "__stopped");
+            if (flag) {
+                stopped = antb_to_boolean(flag);
+                antb_value_release(flag);
+            }
+        }
+        if (stoppedImmediate)
+            return;
+    }
+}
 void dispatchEvent(void* nodePtr, void* eventPtr)
 {
     WebCore::Node*  node  = (WebCore::Node*)nodePtr;
     WebCore::Event* event = (WebCore::Event*)eventPtr;
-
     if (!g_engine || !node || !event || !g_listeners)
         return;
-
     {
         std::string type = event->type().domString().utf8().data();
-        AntbValue* self = wrapNode(g_engine, node);
-        AntbValue* evt  = NULL;
-
-        if (!self)
+        AntbValue* evt = makeEventObject(type, node, event);
+        bool stopped = false;
+        bool stoppedImmediate = false;
+        if (!evt)
             return;
-
-        /* the event object handed to JS */
-        evt = antb_make_object(g_engine);
-        if (evt) {
-            AntbValue* t = antb_make_string(g_engine, type.c_str());
-            antb_set_prop(g_engine, evt, "type", t);
-            antb_value_release(t);
-        }
-
-        for (size_t i = 0; i < g_listeners->size(); ++i) {
-            Listener& l = (*g_listeners)[i];
-            if (l.node != node || l.type != type)
-                continue;
-
-            {
-                AntbValue* args[1];
-                args[0] = evt;
-                antb_call(g_engine, l.fn, self, args, evt ? 1 : 0, NULL);
+        /* Bubble: target → ancestors → document. */
+        for (WebCore::Node* current = node; current && !stopped; current = current->parentNode()) {
+            AntbValue* wrapper = wrapNode(g_engine, current);
+            if (wrapper) {
+                runListenersFor(current, type, evt, wrapper, stopped, stoppedImmediate);
+                antb_value_release(wrapper);
             }
         }
-
+        /* preventDefault in JS must reach the engine, or links still navigate. */
+        {
+            AntbValue* prevented = antb_get_prop(g_engine, evt, "__prevented");
+            if (prevented) {
+                if (antb_to_boolean(prevented))
+                    event->preventDefault();
+                antb_value_release(prevented);
+            }
+        }
         antb_value_release(evt);
-        antb_value_release(self);
     }
 }
 
