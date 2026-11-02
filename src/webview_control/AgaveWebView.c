@@ -1,0 +1,994 @@
+/*
+ * AgaveWebView.c - embeddable WebView control.
+ *
+ * One child window per control, one shared engine thread per process:
+ *
+ *   host thread  : owns the HWNDs, forwards input into a command queue
+ *   engine thread: macross_initialize + every MaCrossView, drains the queue,
+ *                  runs event dispatch and paints into per-control buffers
+ *
+ * macross_* callbacks are process-global, so they are registered once and
+ * routed to the owning control by matching the MaCrossView pointer.
+ */
+
+#include <windows.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "macross.h"
+#include "agave_webview.h"
+
+#define AGW_CLASS_NAME "AgaveWebViewControl"
+#define AGW_MAX_VIEWS  32
+#define AGW_QUEUE_SIZE 256
+#define AGW_MSG_STATE  (WM_APP + 0x51)
+#define AGW_MSG_REPAINT (WM_APP + 0x52)
+
+enum {
+    AGW_CMD_NAVIGATE, AGW_CMD_LOAD_HTML, AGW_CMD_BACK, AGW_CMD_FORWARD,
+    AGW_CMD_RELOAD, AGW_CMD_STOP, AGW_CMD_EVAL, AGW_CMD_ZOOM,
+    AGW_CMD_RESIZE, AGW_CMD_UA, AGW_CMD_DL_DIR, AGW_CMD_MOUSE, AGW_CMD_KEY,
+    AGW_CMD_CHAR, AGW_CMD_FOCUS
+};
+
+typedef struct {
+    int  type;
+    int  index;
+    int  x, y, a, b;
+    char text[2048];
+} AgwCommand;
+
+struct AgaveWebView {
+    HWND               hwnd;
+    MaCrossView*       view;
+    MC_BYTE*           bits;
+    HBITMAP            bitmap;
+    HDC                memdc;
+    HGDIOBJ            oldBitmap;
+    int                width;
+    int                height;
+    int                wantWidth;
+    int                wantHeight;
+    int                zoom;
+    int                pendingResize;
+    volatile int       destroyed;
+
+    char               url[2048];
+    char               title[512];
+    char               status[512];
+    int                progress;
+    int                loading;
+    int                lastRecordedProgress;
+
+    char               downloadDir[MAX_PATH];
+    char               userAgent[256];
+
+    AgaveWebViewCallback callbacks;
+    void*              user;
+};
+
+static char             g_userAgent[256];
+
+static CRITICAL_SECTION g_lock;
+static int              g_lockReady;
+static AgaveWebView*    g_views[AGW_MAX_VIEWS];
+static int              g_viewCount;
+static AgwCommand       g_queue[AGW_QUEUE_SIZE];
+static int              g_queueHead;
+static int              g_queueTail;
+static volatile int     g_engineQuit;
+static HANDLE           g_engineThread;
+static volatile int     g_engineStarted;
+static int              g_classRegistered;
+
+/* ------------------------------------------------------------------------- */
+/* small helpers                                                              */
+/* ------------------------------------------------------------------------- */
+
+static void agwLock(void)   { if (g_lockReady) EnterCriticalSection(&g_lock); }
+static void agwUnlock(void) { if (g_lockReady) LeaveCriticalSection(&g_lock); }
+
+static int agwIndexOf(AgaveWebView* view)
+{
+    int i;
+
+    for (i = 0; i < g_viewCount; ++i) {
+        if (g_views[i] == view)
+            return i;
+    }
+    return -1;
+}
+
+static AgaveWebView* agwByView(MaCrossView* view)
+{
+    int i;
+
+    for (i = 0; i < g_viewCount; ++i) {
+        if (g_views[i]->view == view)
+            return g_views[i];
+    }
+    return NULL;
+}
+
+
+static void agwPost(int type, AgaveWebView* view, const char* text,
+                    int x, int y, int a, int b)
+{
+    AgwCommand command;
+
+    if (!g_lockReady)
+        return;
+
+    memset(&command, 0, sizeof(command));
+    command.type = type;
+    command.x = x;
+    command.y = y;
+    command.a = a;
+    command.b = b;
+
+    if (text) {
+        strncpy(command.text, text, sizeof(command.text) - 1);
+    }
+
+    agwLock();
+    command.index = agwIndexOf(view);
+    if (command.index >= 0 &&
+        ((g_queueTail + 1) % AGW_QUEUE_SIZE) != g_queueHead) {
+        g_queue[g_queueTail] = command;
+        g_queueTail = (g_queueTail + 1) % AGW_QUEUE_SIZE;
+    }
+    agwUnlock();
+
+    if (command.index >= 0 && view->hwnd)
+        PostMessageA(view->hwnd, AGW_MSG_STATE, 0, 0);
+}
+
+/* ------------------------------------------------------------------------- */
+/* engine callbacks (engine thread)                                           */
+/* ------------------------------------------------------------------------- */
+
+static void agwOnInvalidate(MaCrossView* view, const MC_RECT* rect)
+{
+    AgaveWebView* item = agwByView(view);
+
+    (void)rect;
+
+    if (item && item->hwnd)
+        PostMessageA(item->hwnd, AGW_MSG_REPAINT, 0, 0);
+}
+
+static void agwOnUpdateNow(MaCrossView* view)
+{
+    AgaveWebView* item = agwByView(view);
+
+    if (item && item->hwnd)
+        PostMessageA(item->hwnd, AGW_MSG_REPAINT, 0, 0);
+}
+
+static void agwOnTitle(MaCrossView* view, const char* title)
+{
+    AgaveWebView* item = agwByView(view);
+
+    if (!item)
+        return;
+
+    agwLock();
+    if (title) {
+        strncpy(item->title, title, sizeof(item->title) - 1);
+        item->title[sizeof(item->title) - 1] = 0;
+    }
+    agwUnlock();
+
+    if (item->callbacks.on_title)
+        item->callbacks.on_title(item, item->title, item->user);
+}
+
+static void agwOnLocation(MaCrossView* view, const char* url)
+{
+    AgaveWebView* item = agwByView(view);
+
+    if (!item || !url)
+        return;
+
+    agwLock();
+    strncpy(item->url, url, sizeof(item->url) - 1);
+    item->url[sizeof(item->url) - 1] = 0;
+    agwUnlock();
+
+    if (item->callbacks.on_url)
+        item->callbacks.on_url(item, item->url, item->user);
+
+    if (item->hwnd)
+        PostMessageA(item->hwnd, AGW_MSG_STATE, 0, 0);
+}
+
+static void agwOnStatus(MaCrossView* view, const char* text)
+{
+    AgaveWebView* item = agwByView(view);
+
+    if (!item)
+        return;
+
+    agwLock();
+    if (text) {
+        strncpy(item->status, text, sizeof(item->status) - 1);
+        item->status[sizeof(item->status) - 1] = 0;
+    }
+    agwUnlock();
+
+    if (item->callbacks.on_status)
+        item->callbacks.on_status(item, item->status, item->user);
+}
+
+static void agwOnProgress(MaCrossView* view, unsigned int percent, MC_BOOL finished)
+{
+    AgaveWebView* item = agwByView(view);
+    int notify = 0;
+
+    if (!item)
+        return;
+
+    agwLock();
+    item->progress = (int)percent;
+    item->loading = finished ? 0 : 1;
+
+    if (finished && item->lastRecordedProgress != 100) {
+        item->lastRecordedProgress = 100;
+        notify = 1;
+    } else if (!finished) {
+        item->lastRecordedProgress = (int)percent;
+    }
+    agwUnlock();
+
+    if (item->callbacks.on_progress)
+        item->callbacks.on_progress(item, (int)percent, finished ? 1 : 0, item->user);
+
+    if (notify && item->callbacks.on_url && item->url[0])
+        ; /* page finished: hosts usually refresh their address bar */
+
+    if (item->hwnd)
+        PostMessageA(item->hwnd, AGW_MSG_STATE, 0, 0);
+}
+
+static void agwOnError(int err, const char* failedUrl)
+{
+    int i;
+
+    for (i = 0; i < g_viewCount; ++i) {
+        AgaveWebView* item = g_views[i];
+
+        if (!item || !item->view)
+            continue;
+
+        agwLock();
+        item->loading = 0;
+        agwUnlock();
+
+        if (item->callbacks.on_error)
+            item->callbacks.on_error(item, err, failedUrl, item->user);
+    }
+}
+
+static void agwOnCursor(MC_CURSOR cursor)
+{
+    LPCSTR name = IDC_ARROW;
+
+    switch (cursor) {
+    case HAND_CURSOR:       name = IDC_HAND; break;
+    case IBEAM_CURSOR:      name = IDC_IBEAM; break;
+    case CROSS_CURSOR:      name = IDC_CROSS; break;
+    case WAIT_CURSOR:       name = IDC_WAIT; break;
+    case NORTHSOUTH_CURSOR: name = IDC_SIZENS; break;
+    case EASTWEST_CURSOR:   name = IDC_SIZEWE; break;
+    default: break;
+    }
+
+    SetCursor(LoadCursorA(NULL, name));
+}
+
+
+static MC_BOOL agwOnWriteFile(int id, const char* url, const void* data,
+                              unsigned long dataLen, unsigned long totalLen)
+{
+    static FILE* file = NULL;
+    static int   currentId = -1;
+    (void)totalLen;
+
+    if (currentId != id) {
+        char name[512];
+        char path[MAX_PATH];
+        const char* slash = url ? strrchr(url, '/') : NULL;
+        size_t i, n = 0;
+
+        if (file) {
+            fclose(file);
+            file = NULL;
+        }
+
+        currentId = id;
+        name[0] = 0;
+
+        if (slash && slash[1]) {
+            for (i = 0; slash[1 + i] && i < sizeof(name) - 1; ++i) {
+                char c = slash[1 + i];
+
+                if (c == '?' || c == '#' || c == '\\' || c == ':' ||
+                    c == '*' || c == '"' || c == '<' || c == '>' || c == '|')
+                    break;
+                name[n++] = c;
+            }
+        }
+        name[n] = 0;
+
+        if (!name[0])
+            strcpy(name, "download.bin");
+
+        {
+            const char* home = getenv("USERPROFILE");
+            const char* dir = home ? home : ".";
+
+            _snprintf(path, sizeof(path), "%s\\Downloads\\%s", dir, name);
+        }
+        path[sizeof(path) - 1] = 0;
+
+        file = fopen(path, "wb");
+
+        if (file) {
+            int i2;
+
+            for (i2 = 0; i2 < g_viewCount; ++i2) {
+                AgaveWebView* item = g_views[i2];
+
+                if (item && item->callbacks.on_download)
+                    item->callbacks.on_download(item, url, path, item->user);
+            }
+        }
+    }
+
+    if (file && data && dataLen)
+        fwrite(data, 1, dataLen, file);
+
+    return file ? TRUE : FALSE;
+}
+
+/* ------------------------------------------------------------------------- */
+/* buffers (engine thread only)                                               */
+/* ------------------------------------------------------------------------- */
+
+static void agwDestroySurface(AgaveWebView* item)
+{
+    if (item->memdc) {
+        SelectObject(item->memdc, item->oldBitmap);
+        DeleteDC(item->memdc);
+        item->memdc = NULL;
+    }
+    if (item->bitmap) {
+        DeleteObject(item->bitmap);
+        item->bitmap = NULL;
+    }
+    item->bits = NULL;
+}
+
+static int agwCreateSurface(AgaveWebView* item, int width, int height)
+{
+    BITMAPINFO info;
+    HDC hdc;
+
+    if (width < 1) width = 1;
+    if (height < 1) height = 1;
+
+    memset(&info, 0, sizeof(info));
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = width;
+    info.bmiHeader.biHeight = -height;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+
+    hdc = GetDC(item->hwnd);
+    item->bitmap = CreateDIBSection(hdc, &info, DIB_RGB_COLORS, (void**)&item->bits, NULL, 0);
+
+    if (item->bitmap) {
+        item->memdc = CreateCompatibleDC(hdc);
+        item->oldBitmap = SelectObject(item->memdc, item->bitmap);
+    }
+    ReleaseDC(item->hwnd, hdc);
+
+    item->width = width;
+    item->height = height;
+    return item->bits != NULL;
+}
+
+static void agwEnsureSurface(AgaveWebView* item, int width, int height)
+{
+    if (width < 1) width = 1;
+    if (height < 1) height = 1;
+
+    if (item->bits && item->width == width && item->height == height)
+        return;
+
+    agwDestroySurface(item);
+
+    if (!agwCreateSurface(item, width, height))
+        return;
+
+    if (item->view) {
+        macross_view_resize(item->view, item->bits, width, height, width * 4);
+    } else {
+        item->view = macross_view_create(item->bits, width, height, width * 4, item);
+
+        if (item->view) {
+            if (item->zoom != 100)
+                macross_view_set_scale_factor(item->view, item->zoom);
+
+            if (item->url[0])
+                macross_view_open_url(item->view, item->url);
+        }
+    }
+
+    if (item->hwnd)
+        InvalidateRect(item->hwnd, NULL, FALSE);
+}
+
+/* ------------------------------------------------------------------------- */
+/* engine thread                                                              */
+/* ------------------------------------------------------------------------- */
+
+static void agwDrainCommands(void)
+{
+    for (;;) {
+        AgwCommand command;
+        int have = 0;
+        AgaveWebView* item;
+
+        agwLock();
+        if (g_queueHead != g_queueTail) {
+            command = g_queue[g_queueHead];
+            g_queueHead = (g_queueHead + 1) % AGW_QUEUE_SIZE;
+            have = 1;
+        }
+        agwUnlock();
+
+        if (!have)
+            break;
+
+        if (command.index < 0 || command.index >= g_viewCount)
+            continue;
+
+        item = g_views[command.index];
+
+        if (!item || item->destroyed)
+            continue;
+
+        switch (command.type) {
+        case AGW_CMD_NAVIGATE:
+            if (item->view) {
+                macross_view_open_url(item->view, command.text);
+            } else {
+                strncpy(item->url, command.text, sizeof(item->url) - 1);
+                item->url[sizeof(item->url) - 1] = 0;
+                agwEnsureSurface(item, item->wantWidth, item->wantHeight);
+            }
+            break;
+
+        case AGW_CMD_LOAD_HTML:
+            if (item->view)
+                macross_view_load_html(item->view, command.text,
+                                       command.text[0] ? NULL : NULL);
+            break;
+
+        case AGW_CMD_BACK:    if (item->view) macross_view_backward(item->view); break;
+        case AGW_CMD_FORWARD: if (item->view) macross_view_forward(item->view);  break;
+        case AGW_CMD_RELOAD:  if (item->view) macross_view_reload(item->view);   break;
+        case AGW_CMD_STOP:    if (item->view) macross_view_stop(item->view);     break;
+
+        case AGW_CMD_EVAL:
+            if (item->view)
+                macross_view_eval_script(item->view, command.text);
+            break;
+
+        case AGW_CMD_ZOOM:
+            item->zoom = command.a > 0 ? command.a : 100;
+            if (item->view)
+                macross_view_set_scale_factor(item->view, item->zoom);
+            if (item->hwnd)
+                InvalidateRect(item->hwnd, NULL, FALSE);
+            break;
+
+        case AGW_CMD_RESIZE:
+            item->wantWidth = command.a;
+            item->wantHeight = command.b;
+            agwEnsureSurface(item, command.a, command.b);
+            break;
+
+        case AGW_CMD_UA:
+            if (command.text[0]) {
+                strncpy(g_userAgent, command.text, sizeof(g_userAgent) - 1);
+                g_userAgent[sizeof(g_userAgent) - 1] = 0;
+            }
+            break;
+
+        case AGW_CMD_MOUSE:
+            if (item->view) {
+                MC_MOUSE_EVENT event;
+
+                memset(&event, 0, sizeof(event));
+                event.type = (MC_MOUSE_EVENT_TYPE)command.a;
+                event.button = (MC_MOUSE_BUTTON)command.b;
+                event.point.x = command.x;
+                event.point.y = command.y;
+                macross_mouse_event(item->view, &event);
+            }
+            break;
+
+        case AGW_CMD_KEY:
+            if (item->view) {
+                MC_KEY_EVENT event;
+
+                memset(&event, 0, sizeof(event));
+                event.type = (MC_KEY_EVENT_TYPE)command.a;
+                event.key = (MC_VIRTUAL_KEY)command.x;
+                event.modifier = command.b;
+                macross_keyboard_event(item->view, &event);
+            }
+            break;
+
+        case AGW_CMD_CHAR:
+            if (item->view)
+                macross_view_input_text(item->view, command.text);
+            break;
+
+        case AGW_CMD_FOCUS:
+            if (item->view)
+                macross_view_set_focus(item->view);
+            break;
+
+        default:
+            break;
+        }
+    }
+}
+
+static DWORD WINAPI agwEngineThread(LPVOID param)
+{
+    (void)param;
+
+    if (macross_initialize(PIXEL_FORMAT_BGRA32, 1024, 768) != MC_STATUS_SUCCESS)
+        return 0;
+
+    for (;;) {
+        int i;
+        int active = 0;
+
+        if (g_engineQuit)
+            break;
+
+        agwDrainCommands();
+
+        macross_event_dispatch();
+
+        agwLock();
+        for (i = 0; i < g_viewCount; ++i) {
+            AgaveWebView* item = g_views[i];
+
+            if (!item || !item->view || item->destroyed)
+                continue;
+
+            macross_view_update(item->view, NULL);
+            active = 1;
+        }
+        agwUnlock();
+
+        Sleep(active ? 6 : 12);
+    }
+
+    agwLock();
+    for (; g_viewCount > 0; ) {
+        AgaveWebView* item = g_views[--g_viewCount];
+
+        if (item && item->view) {
+            macross_view_destroy(item->view);
+            item->view = NULL;
+        }
+    }
+    agwUnlock();
+
+    macross_shutdown();
+    return 0;
+}
+
+static void agwEnsureEngine(void)
+{
+    if (g_engineStarted)
+        return;
+
+    g_engineStarted = 1;
+    g_engineThread = CreateThread(NULL, 0, agwEngineThread, NULL, 0, NULL);
+}
+
+/* ------------------------------------------------------------------------- */
+/* window procedure                                                           */
+/* ------------------------------------------------------------------------- */
+
+static void agwPaint(AgaveWebView* item, HDC hdc)
+{
+    if (!item)
+        return;
+
+    agwLock();
+    if (item->memdc && item->bits) {
+        BitBlt(hdc, 0, 0, item->width, item->height, item->memdc, 0, 0, SRCCOPY);
+    } else {
+        RECT fill;
+
+        SetRect(&fill, 0, 0, item->width, item->height);
+        FillRect(hdc, &fill, (HBRUSH)GetStockObject(WHITE_BRUSH));
+    }
+    agwUnlock();
+}
+
+static LRESULT CALLBACK agwProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    AgaveWebView* item = (AgaveWebView*)GetWindowLongPtrA(hwnd, GWLP_USERDATA);
+
+    switch (message) {
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hwnd, &ps);
+
+        agwPaint(item, hdc);
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+
+    case WM_ERASEBKGND:
+        return 1;
+
+    case AGW_MSG_REPAINT:
+        InvalidateRect(hwnd, NULL, FALSE);
+        return 0;
+
+    case AGW_MSG_STATE:
+        return 0;
+
+    case WM_SIZE:
+        if (item) {
+            item->wantWidth = LOWORD(lParam);
+            item->wantHeight = HIWORD(lParam);
+            agwPost(AGW_CMD_RESIZE, item, NULL, 0, 0, item->wantWidth, item->wantHeight);
+        }
+        return 0;
+
+    case WM_SETFOCUS:
+        if (item)
+            agwPost(AGW_CMD_FOCUS, item, NULL, 0, 0, 0, 0);
+        return 0;
+
+    case WM_MOUSEMOVE:
+    case WM_LBUTTONDOWN:
+    case WM_LBUTTONUP:
+    case WM_RBUTTONDOWN:
+    case WM_RBUTTONUP:
+    case WM_MBUTTONDOWN:
+    case WM_MBUTTONUP: {
+        int type = EVT_MOUSE_MOVE;
+        int button = MOUSE_BTN_NONE;
+        int x = (short)LOWORD(lParam);
+        int y = (short)HIWORD(lParam);
+
+        if (!item)
+            return 0;
+
+        if (message == WM_LBUTTONDOWN || message == WM_MBUTTONDOWN || message == WM_RBUTTONDOWN)
+            type = EVT_MOUSE_DOWN;
+        else if (message == WM_LBUTTONUP || message == WM_MBUTTONUP || message == WM_RBUTTONUP)
+            type = EVT_MOUSE_UP;
+
+        if (message == WM_LBUTTONDOWN || message == WM_LBUTTONUP)
+            button = MOUSE_BTN_LEFT;
+        else if (message == WM_MBUTTONDOWN || message == WM_MBUTTONUP)
+            button = MOUSE_BTN_MIDDLE;
+        else if (message == WM_RBUTTONDOWN || message == WM_RBUTTONUP)
+            button = MOUSE_BTN_RIGHT;
+
+        if (message == WM_LBUTTONDOWN)
+            SetFocus(hwnd);
+
+        agwPost(AGW_CMD_MOUSE, item, NULL, x, y, type, button);
+        return 0;
+    }
+
+    case WM_MOUSEWHEEL: {
+        POINT point;
+        int delta = (short)HIWORD(wParam);
+
+        if (!item)
+            return 0;
+
+        point.x = (short)LOWORD(lParam);
+        point.y = (short)HIWORD(lParam);
+        ScreenToClient(hwnd, &point);
+
+        agwPost(AGW_CMD_MOUSE, item, NULL, point.x, point.y, EVT_MOUSE_WHEEL,
+                delta > 0 ? MOUSE_WHEEL_UP : MOUSE_WHEEL_DOWN);
+        return 0;
+    }
+
+    case WM_KEYDOWN:
+    case WM_KEYUP:
+        if (item)
+            agwPost(AGW_CMD_KEY, item, NULL, (int)wParam, 0,
+                    (message == WM_KEYDOWN) ? EVT_KEY_DOWN : EVT_KEY_UP, 0);
+        return 0;
+
+    case WM_CHAR: {
+        char utf8[8];
+        unsigned int code = (unsigned int)wParam;
+        int length = 0;
+
+        if (!item)
+            return 0;
+
+        if (code < 0x80) {
+            utf8[length++] = (char)code;
+        } else if (code < 0x800) {
+            utf8[length++] = (char)(0xC0 | (code >> 6));
+            utf8[length++] = (char)(0x80 | (code & 0x3F));
+        } else {
+            utf8[length++] = (char)(0xE0 | (code >> 12));
+            utf8[length++] = (char)(0x80 | ((code >> 6) & 0x3F));
+            utf8[length++] = (char)(0x80 | (code & 0x3F));
+        }
+        utf8[length] = 0;
+
+        agwPost(AGW_CMD_CHAR, item, utf8, 0, 0, 0, 0);
+        return 0;
+    }
+
+    default:
+        break;
+    }
+
+    return DefWindowProcA(hwnd, message, wParam, lParam);
+}
+
+/* ------------------------------------------------------------------------- */
+/* public API                                                                 */
+/* ------------------------------------------------------------------------- */
+
+static void agwRegisterClass(HINSTANCE instance)
+{
+    WNDCLASSA wc;
+
+    if (g_classRegistered)
+        return;
+
+    memset(&wc, 0, sizeof(wc));
+    wc.lpfnWndProc = agwProc;
+    wc.hInstance = instance;
+    wc.hCursor = LoadCursorA(NULL, IDC_ARROW);
+    wc.hbrBackground = (HBRUSH)GetStockObject(WHITE_BRUSH);
+    wc.lpszClassName = AGW_CLASS_NAME;
+
+    RegisterClassA(&wc);
+    g_classRegistered = 1;
+}
+
+static char* agwOnUserAgent(const char* url)
+{
+    static char buffer[256];
+
+    (void)url;
+
+    if (!g_userAgent[0])
+        return NULL;
+
+    strncpy(buffer, g_userAgent, sizeof(buffer) - 1);
+    buffer[sizeof(buffer) - 1] = 0;
+    return buffer;
+}
+
+static void agwInstallCallbacks(void)
+{
+    static int installed = 0;
+    MC_CALLBACK_INFO info;
+
+    if (installed)
+        return;
+    installed = 1;
+
+    memset(&info, 0, sizeof(info));
+    info.cb_invalidate_rect  = agwOnInvalidate;
+    info.cb_update_view_now  = agwOnUpdateNow;
+    info.cb_set_title        = agwOnTitle;
+    info.cb_set_location     = agwOnLocation;
+    info.cb_set_status       = agwOnStatus;
+    info.cb_loading_progress = agwOnProgress;
+    info.cb_error            = agwOnError;
+    info.cb_set_cursor       = agwOnCursor;
+    info.cb_write_file_data  = agwOnWriteFile;
+    info.cb_user_agent_custom = agwOnUserAgent;
+
+    macross_set_callback(&info);
+}
+
+AgaveWebView* agave_webview_create(void* parent, int x, int y, int width, int height,
+                                   const AgaveWebViewCallback* callbacks, void* user)
+{
+    AgaveWebView* item;
+
+    if (!parent)
+        return NULL;
+
+    if (!g_lockReady) {
+        InitializeCriticalSection(&g_lock);
+        g_lockReady = 1;
+    }
+
+    agwRegisterClass((HINSTANCE)GetWindowLongPtrA((HWND)parent, GWLP_HINSTANCE));
+    agwInstallCallbacks();
+    agwEnsureEngine();
+
+    item = (AgaveWebView*)calloc(1, sizeof(AgaveWebView));
+
+    if (!item)
+        return NULL;
+
+    item->zoom = 100;
+    item->wantWidth = width > 0 ? width : 1;
+    item->wantHeight = height > 0 ? height : 1;
+    item->user = user;
+
+    if (callbacks)
+        item->callbacks = *callbacks;
+
+    item->hwnd = CreateWindowExA(0, AGW_CLASS_NAME, "",
+                                 WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN,
+                                 x, y, width, height,
+                                 (HWND)parent, NULL,
+                                 (HINSTANCE)GetWindowLongPtrA((HWND)parent, GWLP_HINSTANCE),
+                                 NULL);
+
+    if (!item->hwnd) {
+        free(item);
+        return NULL;
+    }
+
+    SetWindowLongPtrA(item->hwnd, GWLP_USERDATA, (LONG_PTR)item);
+
+    agwLock();
+    if (g_viewCount < AGW_MAX_VIEWS)
+        g_views[g_viewCount++] = item;
+    agwUnlock();
+
+    /* The engine thread creates the surface on first resize. */
+    agwPost(AGW_CMD_RESIZE, item, NULL, 0, 0, width, height);
+
+    return item;
+}
+
+void agave_webview_destroy(AgaveWebView* item)
+{
+    int index;
+
+    if (!item)
+        return;
+
+    item->destroyed = 1;
+
+    agwLock();
+    index = agwIndexOf(item);
+    if (index >= 0) {
+        if (item->view) {
+            macross_view_destroy(item->view);
+            item->view = NULL;
+        }
+        agwDestroySurface(item);
+        g_views[index] = g_views[--g_viewCount];
+    }
+    agwUnlock();
+
+    if (item->hwnd) {
+        SetWindowLongPtrA(item->hwnd, GWLP_USERDATA, 0);
+        DestroyWindow(item->hwnd);
+    }
+
+    free(item);
+}
+
+void agave_webview_set_rect(AgaveWebView* item, int x, int y, int width, int height)
+{
+    if (!item || !item->hwnd)
+        return;
+
+    MoveWindow(item->hwnd, x, y, width > 0 ? width : 1, height > 0 ? height : 1, TRUE);
+}
+
+void* agave_webview_hwnd(AgaveWebView* item)
+{
+    return item ? item->hwnd : NULL;
+}
+
+void agave_webview_navigate(AgaveWebView* item, const char* url)
+{
+    if (!item || !url)
+        return;
+
+    agwLock();
+    strncpy(item->url, url, sizeof(item->url) - 1);
+    item->url[sizeof(item->url) - 1] = 0;
+    agwUnlock();
+
+    agwPost(AGW_CMD_NAVIGATE, item, url, 0, 0, 0, 0);
+}
+
+void agave_webview_load_html(AgaveWebView* item, const char* html, const char* baseUrl)
+{
+    if (!item || !html)
+        return;
+
+    (void)baseUrl;
+    agwPost(AGW_CMD_LOAD_HTML, item, html, 0, 0, 0, 0);
+}
+
+void agave_webview_back(AgaveWebView* item)    { agwPost(AGW_CMD_BACK, item, NULL, 0, 0, 0, 0); }
+void agave_webview_forward(AgaveWebView* item) { agwPost(AGW_CMD_FORWARD, item, NULL, 0, 0, 0, 0); }
+void agave_webview_reload(AgaveWebView* item)  { agwPost(AGW_CMD_RELOAD, item, NULL, 0, 0, 0, 0); }
+void agave_webview_stop(AgaveWebView* item)    { agwPost(AGW_CMD_STOP, item, NULL, 0, 0, 0, 0); }
+
+void agave_webview_eval(AgaveWebView* item, const char* script)
+{
+    if (item && script)
+        agwPost(AGW_CMD_EVAL, item, script, 0, 0, 0, 0);
+}
+
+void agave_webview_set_zoom(AgaveWebView* item, int percent)
+{
+    if (!item)
+        return;
+
+    agwPost(AGW_CMD_ZOOM, item, NULL, 0, 0, percent, 0);
+}
+
+int agave_webview_zoom(AgaveWebView* item)
+{
+    return item ? item->zoom : 100;
+}
+
+const char* agave_webview_url(AgaveWebView* item)
+{
+    return item ? item->url : "";
+}
+
+const char* agave_webview_title(AgaveWebView* item)
+{
+    return item ? item->title : "";
+}
+
+void agave_webview_set_focus(AgaveWebView* item)
+{
+    if (item && item->hwnd)
+        SetFocus(item->hwnd);
+}
+
+void agave_webview_set_user_agent(AgaveWebView* item, const char* userAgent)
+{
+    if (item && userAgent)
+        agwPost(AGW_CMD_UA, item, userAgent, 0, 0, 0, 0);
+}
+
+void agave_webview_set_download_dir(AgaveWebView* item, const char* directory)
+{
+    if (!item || !directory)
+        return;
+
+    strncpy(item->downloadDir, directory, sizeof(item->downloadDir) - 1);
+    item->downloadDir[sizeof(item->downloadDir) - 1] = 0;
+}
+
+void agave_webview_set_log(const char* path)
+{
+    if (path && path[0])
+        SetEnvironmentVariableA("AGB_NET_LOG", path);
+}

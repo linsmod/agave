@@ -1,0 +1,99 @@
+/*
+ * agave_webview.h - embeddable WebView control (C API)
+ *
+ * The control is a normal child window: create it with a parent HWND and a
+ * rectangle, and the host's own message loop drives it. Everything else -
+ * the engine thread, the render buffer, input translation - is internal.
+ *
+ *   AgaveWebView* view = agave_webview_create(hwnd, 0, 0, 800, 600, &cb, NULL);
+ *   agave_webview_navigate(view, "https://example.com");
+ *   ...
+ *   agave_webview_destroy(view);
+ *
+ * Link with agave_webview.lib + libagave.dll.a, copy libagave.dll and
+ * antbridge.dll next to the host executable.
+ *
+ * Callbacks are invoked on the control's engine thread. Do not call back into
+ * the control synchronously from them beyond the functions documented as
+ * thread safe (navigate/eval/set_zoom are queued and safe).
+ */
+
+#ifndef AGAVE_WEBVIEW_H
+#define AGAVE_WEBVIEW_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#if defined(_WIN32)
+#  define AGW_API __declspec(dllexport)
+#else
+#  define AGW_API
+#endif
+
+typedef struct AgaveWebView AgaveWebView;
+
+typedef struct AgaveWebViewCallback {
+    /* Page title changed (UTF-8). */
+    void (*on_title)(AgaveWebView* view, const char* title, void* user);
+    /* Main frame URL changed (UTF-8). */
+    void (*on_url)(AgaveWebView* view, const char* url, void* user);
+    /* Load progress, 0..100; finished is non-zero when the load completed. */
+    void (*on_progress)(AgaveWebView* view, int percent, int finished, void* user);
+    /* Status bar text (hovered link etc). */
+    void (*on_status)(AgaveWebView* view, const char* text, void* user);
+    /* Page asked to open a new window; the host usually opens a new tab. */
+    void (*on_new_window)(AgaveWebView* view, const char* url, void* user);
+    /* Navigation failed. */
+    void (*on_error)(AgaveWebView* view, int code, const char* url, void* user);
+    /* A download finished, path is the file written by the control. */
+    void (*on_download)(AgaveWebView* view, const char* url, const char* path, void* user);
+} AgaveWebViewCallback;
+
+/* Creates the control as a child of `parent`. Returns NULL on failure. */
+AGW_API AgaveWebView* agave_webview_create(void* parent, int x, int y, int width, int height,
+                                           const AgaveWebViewCallback* callbacks, void* user);
+
+/* Destroys the control (stops its engine work, frees the buffer). */
+AGW_API void agave_webview_destroy(AgaveWebView* view);
+
+/* Moves / resizes the control. */
+AGW_API void agave_webview_set_rect(AgaveWebView* view, int x, int y, int width, int height);
+
+/* The HWND of the control, for hosts that want to subclass or focus it. */
+AGW_API void* agave_webview_hwnd(AgaveWebView* view);
+
+/* Navigation (thread safe, queued). */
+AGW_API void agave_webview_navigate(AgaveWebView* view, const char* url);
+AGW_API void agave_webview_load_html(AgaveWebView* view, const char* html, const char* base_url);
+AGW_API void agave_webview_back(AgaveWebView* view);
+AGW_API void agave_webview_forward(AgaveWebView* view);
+AGW_API void agave_webview_reload(AgaveWebView* view);
+AGW_API void agave_webview_stop(AgaveWebView* view);
+
+/* Runs a script in the page (thread safe, queued). */
+AGW_API void agave_webview_eval(AgaveWebView* view, const char* script);
+
+/* Zoom: 100 is normal. */
+AGW_API void agave_webview_set_zoom(AgaveWebView* view, int percent);
+AGW_API int  agave_webview_zoom(AgaveWebView* view);
+
+/* Last known state (valid on any thread, copied under lock). */
+AGW_API const char* agave_webview_url(AgaveWebView* view);
+AGW_API const char* agave_webview_title(AgaveWebView* view);
+
+/* Focus handling, mostly for hosts with several controls. */
+AGW_API void agave_webview_set_focus(AgaveWebView* view);
+
+/* Per-control overrides (thread safe, queued). */
+AGW_API void agave_webview_set_user_agent(AgaveWebView* view, const char* user_agent);
+AGW_API void agave_webview_set_download_dir(AgaveWebView* view, const char* directory);
+
+/* Process-wide net log / debug switches (optional, call before create). */
+AGW_API void agave_webview_set_log(const char* path_or_null);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* AGAVE_WEBVIEW_H */

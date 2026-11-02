@@ -105,6 +105,18 @@ if (OPT_SHELL AND WIN32)
     target_link_libraries(agave_shell PRIVATE ${LIB_NAME} user32 gdi32 shell32 comdlg32)
 endif()
 
+# Embeddable WebView control: child HWND + engine thread, plus a demo host.
+if (OPT_SHELL AND WIN32)
+    add_library(agave_webview STATIC ${PROJ_ROOT}/src/webview_control/AgaveWebView.c)
+    target_include_directories(agave_webview PRIVATE ${PROJ_ROOT}/include ${PROJ_OUT})
+    target_link_libraries(agave_webview PRIVATE ${LIB_NAME} user32 gdi32)
+
+    add_executable(agave_embed WIN32 ${PROJ_ROOT}/examples/embed_demo/main.c)
+    target_include_directories(agave_embed PRIVATE ${PROJ_ROOT}/include ${PROJ_OUT})
+    target_link_libraries(agave_embed PRIVATE agave_webview ${LIB_NAME} user32 gdi32)
+endif()
+
+
 include(CheckIncludeFile)
 check_include_file(stdint.h HAVE_STDINT_H)
 check_include_file(stddef HAVE_STDDEF_H)
