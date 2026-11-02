@@ -167,7 +167,12 @@ int getPropertyID(const char* tagStr, int len)
         } aliases[] = {
             { "background-size",   "-webkit-background-size" },
             { "background-clip",   "-webkit-background-clip" },
-            { "background-origin", "-webkit-background-origin" }
+            { "background-origin", "-webkit-background-origin" },
+            { "border-radius", "-webkit-border-radius" },
+            { "border-top-left-radius", "-webkit-border-top-left-radius" },
+            { "border-top-right-radius", "-webkit-border-top-right-radius" },
+            { "border-bottom-left-radius", "-webkit-border-bottom-left-radius" },
+            { "border-bottom-right-radius", "-webkit-border-bottom-right-radius" }
         };
 
         for (size_t i = 0; i < sizeof(aliases) / sizeof(aliases[0]); ++i) {
