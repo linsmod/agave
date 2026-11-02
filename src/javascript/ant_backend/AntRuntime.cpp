@@ -25,6 +25,7 @@
 #include "Element.h"
 #include "RenderObject.h"
 #include "Node.h"
+#include "CSSComputedStyleDeclaration.h"
 #include "PlatformString.h"
 #include "Event.h"
 #include "MouseEvent.h"
@@ -234,6 +235,7 @@ int globalStorageDel(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void
 int globalStorageClear(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalStorageKey(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalStorageCount(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int globalComputedStyle(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalActivateSlot(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int imageConstructor(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 /* ------------------------------------------------------------------------- */
@@ -1542,15 +1544,27 @@ static const char kPrelude[] =
 "  if (!g.requestIdleCallback) { g.requestIdleCallback = function (cb) { return 1; }; g.cancelIdleCallback = function () {}; }"
 "  if (!g.createImageBitmap) g.createImageBitmap = function () { return null; };"
 "  if (!g.getComputedStyle) {"
+"    g.__computedCamel = ['backgroundColor','backgroundImage','backgroundRepeat','backgroundPosition',"
+"      'backgroundSize','backgroundAttachment','backgroundClip','backgroundOrigin','color','width',"
+"      'height','display','position','top','left','right','bottom','marginTop','marginLeft','marginRight',"
+"      'marginBottom','paddingTop','paddingLeft','paddingRight','paddingBottom','borderTopWidth',"
+"      'borderLeftWidth','borderTopColor','borderColor','fontSize','fontFamily','fontWeight','lineHeight',"
+"      'opacity','visibility','overflow','zIndex','textAlign','verticalAlign','float','clear','cursor',"
+"      'whiteSpace','textDecoration','borderRadius','boxShadow','transform'];"
 "    g.getComputedStyle = function (el) {"
 "      var st = (el && el.style) ? el.style : {};"
 "      function camel(n) { return String(n).replace(/-([a-z])/g, function (m, c) { return c.toUpperCase(); }); }"
-"      return {"
+"      function dash(n) { return String(n).replace(/[A-Z]/g, function (c) { return '-' + c.toLowerCase(); }); }"
+"      var api = {"
 "        getPropertyValue: function (n) {"
-"          var v = st[camel(n)];"
+"          var name = String(n);"
+"          var v = '';"
+"          try { v = __agbComputedStyle(el, name); } catch (e) { v = ''; }"
+"          if (v) return String(v);"
+"          v = st[camel(name)];"
 "          if (v === undefined || v === null || v === '') {"
-"            if (n === 'width') return el ? (el.offsetWidth + 'px') : '';"
-"            if (n === 'height') return el ? (el.offsetHeight + 'px') : '';"
+"            if (name === 'width') return el ? (el.offsetWidth + 'px') : '';"
+"            if (name === 'height') return el ? (el.offsetHeight + 'px') : '';"
 "            return '';"
 "          }"
 "          return String(v);"
@@ -1560,6 +1574,18 @@ static const char kPrelude[] =
 "        get length() { var i = 0; for (var k in st) i++; return i; },"
 "        item: function (i) { var n = 0; for (var k in st) { if (n === i) return k; n++; } return ''; }"
 "      };"
+"      for (var i = 0; i < g.__computedCamel.length; ++i) {"
+"        (function (name) {"
+"          var cssName = dash(name);"
+"          try {"
+"            Object.defineProperty ? Object.defineProperty(api, name, {"
+"              get: function () { return api.getPropertyValue(cssName); },"
+"              enumerable: true, configurable: true"
+"            }) : (api[name] = api.getPropertyValue(cssName));"
+"          } catch (e) { api[name] = ''; }"
+"        })(g.__computedCamel[i]);"
+"      }"
+"      return api;"
 "    };"
 "  }"
 "  {"
@@ -1902,6 +1928,7 @@ void bindDocument(void* document)
         antb_define_method(g_engine, global, "__agbStorageClear", globalStorageClear, NULL);
         antb_define_method(g_engine, global, "__agbStorageKey", globalStorageKey, NULL);
         antb_define_method(g_engine, global, "__agbStorageCount", globalStorageCount, NULL);
+        antb_define_method(g_engine, global, "__agbComputedStyle", globalComputedStyle, NULL);
 
         /* history: SPA routers and "go back" links use it. */
         {
@@ -3340,6 +3367,36 @@ int globalStorageCount(AntbEngine* engine, AntbValue*, AntbValue** args, int arg
 
     antb_free(origin);
     return makeNumberResult(engine, out, (double)count) ? 1 : 0;
+}
+
+
+/* getComputedStyle(el).getPropertyValue(name) -> computed value as a string.
+ * Goes through WebCore's CSSComputedStyleDeclaration, so every property the
+ * layout engine knows about comes back with a real value. */
+int globalComputedStyle(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
+                        AntbValue* out, void*)
+{
+    WebCore::Node* node = (argc > 0) ? nodeOf(args[0]) : NULL;
+    char* property = (argc > 1) ? antb_to_utf8(args[1]) : NULL;
+    std::string value;
+
+    if (node && node->document() && property && property[0]) {
+        RefPtr<WebCore::CSSComputedStyleDeclaration> declaration =
+            new WebCore::CSSComputedStyleDeclaration(node);
+
+        if (declaration) {
+            /* CSSComputedStyleDeclaration hides the name-based overload with its
+             * own getPropertyValue(int); call it through the base class. */
+            WebCore::CSSStyleDeclaration* base = declaration.get();
+            WebCore::String computed = base->getPropertyValue(WebCore::String(property));
+
+            if (!computed.isNull())
+                value = std::string(computed.utf8().data());
+        }
+    }
+
+    antb_free(property);
+    return makeStringResult(engine, out, value.c_str()) ? 1 : 0;
 }
 
 int globalOpenWindow(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
