@@ -4282,6 +4282,11 @@ int globalComputedStyle(AntbEngine* engine, AntbValue*, AntbValue** args, int ar
         beganUs = (unsigned long)GetTickCount();
 
     if (node && node->document() && property && property[0]) {
+        /* Style-sheet changes are applied lazily; a computed-style read is the
+         * one place that must observe them immediately (getComputedStyle() forces
+         * a style recalc in every real browser too). */
+        node->document()->updateStyleIfNeeded();
+
         RefPtr<WebCore::CSSComputedStyleDeclaration> declaration =
             new WebCore::CSSComputedStyleDeclaration(node);
 

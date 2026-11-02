@@ -331,6 +331,7 @@ Document::Document(DOMImplementation* impl, Frame* frame, bool isXHTML)
 
     m_styleSelector = new CSSStyleSelector(this, m_usersheet, m_styleSheets.get(), !inCompatMode());
     m_didCalculateStyleSelector = false;
+    m_pendingStyleSelectorUpdate = false;
     m_pendingStylesheets = 0;
     m_ignorePendingStylesheets = false;
     m_hasNodesWithPlaceholderStyle = false;
@@ -1103,6 +1104,8 @@ bail_out:
 
 void Document::updateRendering()
 {
+    updateStyleIfNeeded();
+
     if (hasChangedChild())
         recalcStyle(NoChange);
 }
@@ -1948,6 +1951,11 @@ PassRefPtr<Node> Document::cloneNode(bool /*deep*/)
 
 StyleSheetList* Document::styleSheets()
 {
+    /* The list is rebuilt together with the style selector, which is lazy now;
+     * a script reading document.styleSheets right after adding a <style> must
+     * still see it. */
+    updateStyleIfNeeded();
+
     return m_styleSheets.get();
 }
 
@@ -2009,8 +2017,12 @@ void Document::updateStyleSelector()
         printf("Beginning update of style selector at time %d.\n", elapsedTime());
 #endif
 
-    recalcStyleSelector();
-    recalcStyle(Force);
+    /* Do not rebuild the selector and recalc the whole document here. A page
+     * that writes a <style> element's text (or toggles a stylesheet) in a loop
+     * used to pay a full-tree recalculation plus a layout per write; css3test
+     * does this seven times per @-rule test. Mark the document dirty and let
+     * updateStyleIfNeeded() do it once, when style is actually observed. */
+    m_pendingStyleSelectorUpdate = true;
 
 #ifdef INSTRUMENT_LAYOUT_SCHEDULING
     if (!ownerElement())
@@ -2022,6 +2034,17 @@ void Document::updateStyleSelector()
         if (view())
             view()->scheduleRelayout();
     }
+}
+
+void Document::updateStyleIfNeeded()
+{
+    if (!m_pendingStyleSelectorUpdate)
+        return;
+
+    m_pendingStyleSelectorUpdate = false;
+
+    recalcStyleSelector();
+    recalcStyle(Force);
 }
 
 void Document::recalcStyleSelector()

@@ -296,6 +296,11 @@ public:
      */
     void updateStyleSelector();
 
+    /* Applies a deferred style-sheet change: rebuilds the selector and forces a
+     * document-wide style recalc. Called from every path that needs up-to-date
+     * style (rendering, layout, computed-style reads). */
+    void updateStyleIfNeeded();
+
     void recalcStyleSelector();
 
     bool usesDescendantRules() const { return m_usesDescendantRules; }
@@ -687,6 +692,11 @@ public:
 private:
     CSSStyleSelector* m_styleSelector;
     bool m_didCalculateStyleSelector;
+    /* A stylesheet was added/removed/changed and the document still has to
+     * rebuild its selector and recalc style; done lazily in
+     * updateStyleIfNeeded() so a burst of inline <style> writes costs one
+     * recalc instead of one full-document recalc + layout per write. */
+    bool m_pendingStyleSelectorUpdate;
 
     Frame* m_frame;
     DocLoader* m_docLoader;
