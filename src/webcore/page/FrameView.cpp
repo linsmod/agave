@@ -577,10 +577,10 @@ void FrameView::setMediaType(const String& mediaType)
 
 String FrameView::mediaType() const
 {
-    // See if we have an override type.
-    String overrideType = m_frame->loader()->client()->overrideMediaType();
-    if (!overrideType.isNull())
-        return overrideType;
+    /* This port has no client media-type override: overrideMediaType() always
+     * returns a null string, so the lookup below could only ever produce
+     * d->m_mediaType. It was still made once per element per style resolution
+     * (377 times on css3test.com), and each call printed a FIXME. */
     return d->m_mediaType;
 }
 

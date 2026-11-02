@@ -46,6 +46,10 @@
 #include "SystemTime.h"
 #include <wtf/ASCIICType.h>
 
+#if ENABLE(ANTJS)
+#include "../javascript/ant_backend/AntRuntime.h"
+#endif
+
 #include "HTMLEntityNames.c"
 
 #if ENABLE(KJS)
@@ -400,12 +404,28 @@ HTMLTokenizer::State HTMLTokenizer::scriptHandler(State state)
                 if (!m_doc->ownerElement())
                     printf("Requesting script at time %d\n", m_doc->elapsedTime());
 #endif
-                // The parser might have been stopped by for example a window.close call in an earlier script.
-                // If so, we don't want to load scripts.
-                if (!m_parserStopped && (cs = m_doc->docLoader()->requestScript(scriptSrc, scriptSrcCharset)))
-                    pendingScripts.enqueue(cs);
-                else
+                /* <script async> must not stop the parser. Hand the resource to
+                 * the element instead of the tokenizer: the element evaluates
+                 * itself when the body arrives, so parsing continues and a slow
+                 * third party script cannot block the page. */
+                bool asyncScript = scriptNode
+                    && static_cast<Element*>(scriptNode.get())->hasAttribute(AtomicString("async"));
+
+                if (getenv("AGB_SCRIPT_DEBUG"))
+                    fprintf(stderr, "[script] src=%s async=%d\n",
+                            scriptSrc.utf8().data(), asyncScript ? 1 : 0);
+
+                if (asyncScript && !m_parserStopped
+                        && (cs = m_doc->docLoader()->requestScript(scriptSrc, scriptSrcCharset))) {
+                    cs->ref(static_cast<HTMLScriptElement*>(scriptNode.get()));
                     scriptNode = 0;
+                    cs = 0;
+                } else if (!m_parserStopped
+                        && (cs = m_doc->docLoader()->requestScript(scriptSrc, scriptSrcCharset))) {
+                    pendingScripts.enqueue(cs);
+                } else {
+                    scriptNode = 0;
+                }
             } else
                 scriptNode = 0;
             scriptSrc = String();
@@ -523,6 +543,16 @@ HTMLTokenizer::State HTMLTokenizer::scriptExecution(const DeprecatedString& str,
 #endif
 
     m_state = state;
+
+    /* Module scripts are deferred until the document is parsed, but their import
+     * graph should start downloading now, the way other browsers do when they see
+     * the tag. Waiting for execution made a 154 module graph start only after
+     * DOMContentLoaded. */
+#if ENABLE(ANTJS)
+    if (AntRuntime::isRunning())
+        AntRuntime::prefetchModuleGraph(url.utf8().data(), str.utf8().data());
+#endif
+
     m_doc->frame()->loader()->executeScript(url, baseLine, str);
     state = m_state;
 

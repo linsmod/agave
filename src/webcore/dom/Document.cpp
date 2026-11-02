@@ -1010,6 +1010,16 @@ void Document::setDocumentChanged(bool b)
 
 void Document::recalcStyle(StyleChange change)
 {
+    /* Counting probe: a computed-style read should not trigger a document-wide
+     * recalc. If the count tracks the getComputedStyle count, it does. */
+    {
+        static int recalcCalls = 0;
+        static bool recalcDebug = getenv("AGB_CSS_DEBUG") != NULL;
+
+        if (recalcDebug && (++recalcCalls % 100) == 0)
+            fprintf(stderr, "[recalc] calls=%d change=%d\n", recalcCalls, (int)change);
+    }
+
     // we should not enter style recalc while painting
     if (frame() && frame()->isPainting()) {
         ASSERT(!frame()->isPainting());

@@ -21,3 +21,4 @@ config.ini
 ext_config.ini
 favorites.dat
 history.dat
+build-touch/

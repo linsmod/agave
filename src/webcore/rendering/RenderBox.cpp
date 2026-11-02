@@ -611,6 +611,12 @@ void RenderBox::calculateBackgroundImageGeometry(const BackgroundLayer* bgLayer,
     destRect.intersect(IntRect(tx, ty, w, h));
     phase = IntPoint(sx, sy);
     tileSize = IntSize(scaledImageWidth, scaledImageHeight);
+
+    if (getenv("AGB_BG_DEBUG") && !bgLayer->backgroundAttachment())
+        fprintf(stderr, "[bgfixed] box=(%d,%d %dx%d) vr=(%d,%d %dx%d) dest=(%d,%d %dx%d) phase=(%d,%d) tile=%dx%d\n",
+                tx, ty, w, h, cx, cy, pw, ph,
+                destRect.x(), destRect.y(), destRect.width(), destRect.height(),
+                phase.x(), phase.y(), tileSize.width(), tileSize.height());
 }
 
 void RenderBox::paintBackgroundExtended(GraphicsContext* context, const Color& c, const BackgroundLayer* bgLayer, int clipY, int clipH,

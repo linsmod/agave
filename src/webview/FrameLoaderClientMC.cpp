@@ -824,7 +824,8 @@ Widget* FrameLoaderClientMC::createJavaAppletWidget(const IntSize&, Element*, co
 
 String FrameLoaderClientMC::overrideMediaType() const
 {
-    notImplemented();
+    /* No override for this port; FrameView::mediaType() no longer even asks.
+     * Don't notImplemented() here - it used to log a FIXME per element. */
     return String();
 }
 

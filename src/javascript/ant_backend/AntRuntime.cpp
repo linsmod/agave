@@ -2050,42 +2050,64 @@ static const char kPrelude[] =
 "      'borderLeftWidth','borderTopColor','borderColor','fontSize','fontFamily','fontWeight','lineHeight',"
 "      'opacity','visibility','overflow','zIndex','textAlign','verticalAlign','float','clear','cursor',"
 "      'whiteSpace','textDecoration','borderRadius','boxShadow','transform'];"
-"    g.getComputedStyle = function (el) {"
-"      var st = (el && el.style) ? el.style : {};"
+"    /* Accessors live on one shared prototype: defining 40 properties per call"
+"     * made every getComputedStyle() cost ~0.57ms; css3test calls it thousands"
+"     * of times, which is what pinned a core. The raw bridge is ~0.003ms. */"
+"    g.__Computed = function (el) { this.__el = el; };"
+"    (function (proto) {"
 "      function camel(n) { return String(n).replace(/-([a-z])/g, function (m, c) { return c.toUpperCase(); }); }"
 "      function dash(n) { return String(n).replace(/[A-Z]/g, function (c) { return '-' + c.toLowerCase(); }); }"
-"      var api = {"
-"        getPropertyValue: function (n) {"
-"          var name = String(n);"
-"          var v = '';"
-"          try { v = __agbComputedStyle(el, name); } catch (e) { v = ''; }"
-"          if (v) return String(v);"
-"          v = st[camel(name)];"
-"          if (v === undefined || v === null || v === '') {"
-"            if (name === 'width') return el ? (el.offsetWidth + 'px') : '';"
-"            if (name === 'height') return el ? (el.offsetHeight + 'px') : '';"
-"            return '';"
-"          }"
-"          return String(v);"
-"        },"
-"        setProperty: function (n, v) { st[camel(n)] = v; },"
-"        removeProperty: function (n) { var c = camel(n); var old = st[c]; st[c] = ''; return old; },"
-"        get length() { var i = 0; for (var k in st) i++; return i; },"
-"        item: function (i) { var n = 0; for (var k in st) { if (n === i) return k; n++; } return ''; }"
+"      var camelCache = {};"
+"      function camelOf(n) { var c = camelCache[n]; if (c === undefined) { c = camel(n); camelCache[n] = c; } return c; }"
+"      proto.getPropertyValue = function (n) {"
+"        var el = this.__el;"
+"        var name = String(n);"
+"        var v = '';"
+"        try { v = __agbComputedStyle(el, name); } catch (e) { v = ''; }"
+"        if (v) return String(v);"
+"        var st = (el && el.style) ? el.style : null;"
+"        v = st ? st[camelOf(name)] : undefined;"
+"        if (v === undefined || v === null || v === '') {"
+"          if (name === 'width') return el ? (el.offsetWidth + 'px') : '';"
+"          if (name === 'height') return el ? (el.offsetHeight + 'px') : '';"
+"          return '';"
+"        }"
+"        return String(v);"
 "      };"
+"      proto.setProperty = function (n, v) { var el = this.__el; if (el && el.style) el.style[camelOf(n)] = v; };"
+"      proto.removeProperty = function (n) {"
+"        var el = this.__el;"
+"        if (!el || !el.style) return '';"
+"        var c = camelOf(n); var old = el.style[c]; el.style[c] = ''; return old;"
+"      };"
+"      proto.item = function (i) {"
+"        var el = this.__el; var n = 0;"
+"        if (!el || !el.style) return '';"
+"        for (var k in el.style) { if (n === i) return k; n++; }"
+"        return '';"
+"      };"
+"      if (Object.defineProperty) {"
+"        try {"
+"          Object.defineProperty(proto, 'length', { get: function () {"
+"            var el = this.__el; var i = 0;"
+"            if (el && el.style) { for (var k in el.style) i++; }"
+"            return i;"
+"          } });"
+"        } catch (e) {}"
+"      }"
 "      for (var i = 0; i < g.__computedCamel.length; ++i) {"
 "        (function (name) {"
 "          var cssName = dash(name);"
 "          try {"
-"            Object.defineProperty ? Object.defineProperty(api, name, {"
-"              get: function () { return api.getPropertyValue(cssName); },"
+"            Object.defineProperty ? Object.defineProperty(proto, name, {"
+"              get: function () { return this.getPropertyValue(cssName); },"
 "              enumerable: true, configurable: true"
-"            }) : (api[name] = api.getPropertyValue(cssName));"
-"          } catch (e) { api[name] = ''; }"
+"            }) : (proto[name] = '');"
+"          } catch (e) { proto[name] = ''; }"
 "        })(g.__computedCamel[i]);"
 "      }"
-"      return api;"
-"    };"
+"    })(g.__Computed.prototype);"
+"    g.getComputedStyle = function (el) { return new g.__Computed(el); };"
 "  }"
 "  {"
 "    var _ctors = ['Document','HTMLDocument','Element','HTMLElement','HTMLDivElement','Node','NodeList','HTMLCollection','Event','CustomEvent','MouseEvent','KeyboardEvent','DocumentFragment','Text','Comment','Attr','DOMParser','XMLSerializer','MutationObserver','Storage','Location','Navigator','Screen','History','Window','Performance','CSSStyleDeclaration'];"
@@ -2327,6 +2349,22 @@ static std::vector<DeferredModule>* g_deferredModules = NULL;
 
 int evaluateModule(const char* src, size_t len, const char* filename, char** out, char** err);
 
+/* Starts downloading the import graph of a module script as soon as its body is
+ * available, without waiting for the deferred execution. */
+void prefetchModuleGraph(const char* url, const char* source)
+{
+    if (!url || !source)
+        return;
+
+    /* Only module sources: scanning a classic script for `from './x'` matches
+     * arbitrary string literals and flooded the connection pool with bogus
+     * requests, starving the scripts the parser was waiting for. */
+    if (!looksLikeModule(source, strlen(source)))
+        return;
+
+    modulePrefetchImports(std::string(url), std::string(source));
+}
+
 void queueModule(const char* url, const char* source)
 {
     if (!g_deferredModules)
@@ -2337,6 +2375,11 @@ void queueModule(const char* url, const char* source)
     module.url = url ? url : "";
     module.source = source ? source : "";
     g_deferredModules->push_back(module);
+
+    /* Start downloading the import graph now, while the rest of the page is still
+     * loading, instead of waiting for the deferred flush; Chrome starts as soon
+     * as it sees the script tag. */
+    modulePrefetchImports(module.url, module.source);
 }
 
 void flushDeferredModules(void)

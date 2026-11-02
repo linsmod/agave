@@ -11,6 +11,17 @@
 #include <windows.h>
 #include <winhttp.h>
 
+/* HTTP/2 opt-in is not in every SDK the port builds against. */
+#ifndef WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL
+#define WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL 133
+#endif
+#ifndef WINHTTP_OPTION_HTTP_PROTOCOL_USED
+#define WINHTTP_OPTION_HTTP_PROTOCOL_USED 132
+#endif
+#ifndef WINHTTP_PROTOCOL_FLAG_HTTP2
+#define WINHTTP_PROTOCOL_FLAG_HTTP2 0x1
+#endif
+
 #include <string>
 #include <stdio.h>
 #include <stdlib.h>
@@ -205,6 +216,22 @@ static HINTERNET poolAcquire(const std::wstring& host, INTERNET_PORT port, int t
             if (errOut) *errOut = GetLastError();
             g_pool->erase(key);
             return NULL;
+        }
+    }
+
+    /* Chrome reaches the proxy over HTTP/2: one CONNECT tunnel carrying 154
+     * parallel streams. WinHTTP defaults to HTTP/1.1, where our 12-way module
+     * fetch means 12 freshly built tunnels per wave, and the proxy queues that
+     * burst (measured: twelve requests stalling 5.5-6.5s together). Opt in once
+     * per session; the setting is inherited by every request on it. */
+    {
+        DWORD proto = WINHTTP_PROTOCOL_FLAG_HTTP2;
+
+        if (!WinHttpSetOption(entry.session, WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL,
+                              &proto, sizeof(proto))) {
+            if (Net::logEnabled())
+                Net::logLine("net.proto   h2 opt-in failed err=%lu",
+                             (unsigned long)GetLastError());
         }
     }
 
@@ -612,6 +639,21 @@ void WinHttpSession::run(Job* job)
     if (!WinHttpReceiveResponse(request, NULL)) {
         err = GetLastError();
         goto cleanup;
+    }
+
+    /* Prove which protocol actually got negotiated: "we set the flag" is not
+     * the same as "the server and proxy agreed to h2". */
+    if (Net::logEnabled()) {
+        static DWORD loggedProto = 0;
+        DWORD used = 0;
+        DWORD usedLen = sizeof(used);
+
+        if (WinHttpQueryOption(request, WINHTTP_OPTION_HTTP_PROTOCOL_USED, &used, &usedLen)
+            && used != loggedProto) {
+            loggedProto = used;
+            Net::logLine("net.proto   used=%lu (%s)", (unsigned long)used,
+                         used == WINHTTP_PROTOCOL_FLAG_HTTP2 ? "h2" : "http/1.1");
+        }
     }
 
     {
