@@ -72,6 +72,11 @@ AGB_API char* antb_take_pending_error(AntbEngine* engine);
 /* Name of the most recent bridged callback entered (diagnostics only). */
 AGB_API const char* antb_last_call(void);
 
+/* Installs a hook that runs before every bridged native callback, receiving the
+ * engine that owns the method (used to switch per-view JS contexts). NULL
+ * removes it. */
+AGB_API void antb_set_context_activate(void (*fn)(AntbEngine* engine));
+
 /* ---- value inspection --------------------------------------------------- */
 
 AGB_API double antb_to_number(const AntbValue* value);

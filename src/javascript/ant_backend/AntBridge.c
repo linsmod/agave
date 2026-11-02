@@ -361,6 +361,15 @@ static agb_method_entry g_methods[AGB_TRAMPOLINE_COUNT];
 static const char* g_last_call = "";
 static int g_trace_calls = -1;
 
+/* Runs before every bridged native callback with the engine that owns the
+ * method; lets the host switch to that engine's JS context (per-view contexts). */
+static void (*g_context_activate)(AntbEngine* engine) = NULL;
+
+void antb_set_context_activate(void (*fn)(AntbEngine* engine))
+{
+    g_context_activate = fn;
+}
+
 /* Returns a malloc'd description of a pending exception and clears it, or NULL
  * when the engine is clean. Timer callbacks run outside evaluation, so their
  * exceptions would otherwise stay pending and poison later calls. */
@@ -1718,6 +1727,11 @@ static ant_value_t agb_dispatch(int slot, ant_t* js, ant_value_t* args, int narg
     if (e->js != js) {
         return js_mkundef();
     }
+
+    /* Single funnel for every JS -> C call: let the host switch to the runtime
+     * state that owns this engine (per-view JS contexts). */
+    if (g_context_activate && e->engine)
+        g_context_activate(e->engine);
 
     thiz = js_getthis(js);
     if (vtype(thiz) != kTypeUndefined && vtype(thiz) != kTypeNull) {

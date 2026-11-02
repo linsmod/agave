@@ -1172,6 +1172,18 @@ static void initCookieStorage()
     loadStorage();
 }
 
+/* Runs before every bridged native callback (see antb_set_context_activate).
+ * With a single engine there is nothing to switch; once views get their own
+ * engines this becomes: g_current = stateFor(engine) and refresh the g_* mirror. */
+static void contextActivate(AntbEngine* engine)
+{
+    if (!engine)
+        return;
+
+    if (engine != g_engine)
+        g_engine = engine;
+}
+
 bool start()
 {
     if (g_engine)
@@ -1181,6 +1193,9 @@ bool start()
     /* Ant needs the address of a stack variable from the calling thread. */
     volatile char stack_anchor = 0;
     g_engine = antb_engine_create((const void*)&stack_anchor);
+
+    if (g_engine)
+        antb_set_context_activate(contextActivate);
 
     return g_engine != NULL;
 }
