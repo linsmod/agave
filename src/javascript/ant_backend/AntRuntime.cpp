@@ -17,6 +17,9 @@
 #include "Node.h"
 #include "PlatformString.h"
 #include "Event.h"
+#include "Frame.h"
+#include "FrameLoader.h"
+#include "Page.h"
 #include "KURL.h"
 #include "Text.h"
 #include "HTMLInputElement.h"
@@ -53,6 +56,16 @@ WebCore::Document* documentOf(AntbValue* self);
 int docGetElementById(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeDispatchEvent(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int locationGetter(AntbEngine*, AntbValue*, const char*, AntbValue*, void*);
+int locationSetter(AntbEngine*, AntbValue*, const char*, const AntbValue*, void*);
+int locationAssign(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int locationReplace(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int locationReload(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int docWrite(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int docWriteln(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int historyBack(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int historyForward(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int historyGo(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int historyPushState(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 AntbValue* wrapNode(AntbEngine*, WebCore::Node*);
 int nodeGetter(AntbEngine*, AntbValue*, const char*, AntbValue*, void*);
 int attrsGetter(AntbEngine*, AntbValue*, const char*, AntbValue*, void*);
@@ -366,6 +379,121 @@ int titleGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue
 }
 
 /* document.location.<field> */
+/* Resolves `text` against the current document and navigates the frame. */
+static void navigateTo(const char* text)
+{
+    WebCore::Frame* frame;
+    if (!g_document || !text)
+        return;
+    frame = g_document->frame();
+    if (!frame)
+        return;
+    {
+        WebCore::KURL base(g_document->URL());
+        WebCore::KURL target(base, WebCore::DeprecatedString(text));
+        if (!target.isValid())
+            return;
+        frame->loader()->load(target, 0);
+    }
+}
+int locationSetter(AntbEngine*, AntbValue*, const char* name, const AntbValue* value, void*)
+{
+    char* text;
+    if (!name || strcmp(name, "href") != 0 || !value)
+        return 0;
+    text = antb_to_utf8(value);
+    if (!text)
+        return 0;
+    navigateTo(text);
+    antb_free(text);
+    return 1;
+}
+int locationAssign(AntbEngine*, AntbValue*, AntbValue** args, int argc, AntbValue*, void*)
+{
+    char* text;
+    if (argc < 1)
+        return 1;
+    text = antb_to_utf8(args[0]);
+    if (!text)
+        return 1;
+    navigateTo(text);
+    antb_free(text);
+    return 1;
+}
+int locationReplace(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                    AntbValue* out, void* user)
+{
+    return locationAssign(engine, self, args, argc, out, user);
+}
+int locationReload(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*)
+{
+    if (g_document && g_document->frame())
+        g_document->frame()->loader()->reload();
+    return 1;
+}
+/* document.write / writeln feed the parser, as the spec does. */
+int docWrite(AntbEngine*, AntbValue*, AntbValue** args, int argc, AntbValue*, void*)
+{
+    char* text;
+    if (!g_document || argc < 1)
+        return 1;
+    text = antb_to_utf8(args[0]);
+    if (!text)
+        return 1;
+    g_document->write(WebCore::String::fromUTF8(text));
+    antb_free(text);
+    return 1;
+}
+int docWriteln(AntbEngine*, AntbValue*, AntbValue** args, int argc, AntbValue*, void*)
+{
+    char* text;
+    if (!g_document || argc < 1)
+        return 1;
+    text = antb_to_utf8(args[0]);
+    if (!text)
+        return 1;
+    g_document->writeln(WebCore::String::fromUTF8(text));
+    antb_free(text);
+    return 1;
+}
+int historyBack(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*)
+{
+    if (g_document && g_document->frame() && g_document->frame()->page())
+        g_document->frame()->page()->goBack();
+    return 1;
+}
+int historyForward(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*)
+{
+    if (g_document && g_document->frame() && g_document->frame()->page())
+        g_document->frame()->page()->goForward();
+    return 1;
+}
+int historyGo(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+              AntbValue* out, void* user)
+{
+    double delta = (argc > 0) ? antb_to_number(args[0]) : -1;
+    if (delta < 0)
+        return historyBack(engine, self, args, argc, out, user);
+    if (delta > 0)
+        return historyForward(engine, self, args, argc, out, user);
+    return 1;
+}
+/* pushState only rewrites the document URL: enough for SPA routers that poll
+ * location and re-render, without a real history entry. */
+int historyPushState(AntbEngine*, AntbValue*, AntbValue** args, int argc, AntbValue*, void*)
+{
+    if (argc > 2 && g_document) {
+        char* urlText = antb_to_utf8(args[2]);
+        if (urlText) {
+            WebCore::KURL base(g_document->URL());
+            WebCore::KURL target(base, WebCore::DeprecatedString(urlText));
+            if (target.isValid())
+                g_document->setURL(target.url());
+            antb_free(urlText);
+        }
+    }
+    return 1;
+}
 int locationGetter(AntbEngine* engine, AntbValue*, const char* name, AntbValue* out, void*)
 {
     WebCore::KURL url;
@@ -829,6 +957,8 @@ void bindDocument(void* document)
         antb_define_method(g_engine, docObj, "createElement", docCreateElement, NULL);
         antb_define_method(g_engine, docObj, "createTextNode", docCreateTextNode, NULL);
         antb_define_method(g_engine, docObj, "createDocumentFragment", docCreateDocumentFragment, NULL);
+        antb_define_method(g_engine, docObj, "write", docWrite, NULL);
+        antb_define_method(g_engine, docObj, "writeln", docWriteln, NULL);
         antb_define_method(g_engine, docObj, "addEventListener", nodeAddEventListener, NULL);
         antb_define_method(g_engine, docObj, "dispatchEvent", nodeDispatchEvent, NULL);
         /* The document is a plain object (not a Node wrapper), so the node
@@ -861,11 +991,27 @@ void bindDocument(void* document)
         antb_define_method(g_engine, global, "__agbHttpRequest", globalHttpRequest, NULL);
         antb_define_method(g_engine, global, "__agbClassOp", globalClassOp, NULL);
 
+        /* history: SPA routers and "go back" links use it. */
+        {
+            AntbValue* hist = antb_make_object(g_engine);
+            if (hist) {
+                antb_define_method(g_engine, hist, "back", historyBack, NULL);
+                antb_define_method(g_engine, hist, "forward", historyForward, NULL);
+                antb_define_method(g_engine, hist, "go", historyGo, NULL);
+                antb_define_method(g_engine, hist, "pushState", historyPushState, NULL);
+                antb_define_method(g_engine, hist, "replaceState", historyPushState, NULL);
+                antb_set_prop(g_engine, global, "history", hist);
+                antb_value_release(hist);
+            }
+        }
         /* Web pages read bare globals like `location` and `navigator`. */
         {
             AntbValue* loc = antb_make_object(g_engine);
             if (loc) {
-                antb_define_property_rw(g_engine, loc, "href", locationGetter, NULL, NULL);
+                antb_define_property_rw(g_engine, loc, "href", locationGetter, locationSetter, NULL);
+                antb_define_method(g_engine, loc, "assign", locationAssign, NULL);
+                antb_define_method(g_engine, loc, "replace", locationReplace, NULL);
+                antb_define_method(g_engine, loc, "reload", locationReload, NULL);
                 antb_set_prop(g_engine, global, "location", loc);
                 antb_set_prop(g_engine, docObj, "defaultView", global);
                 antb_value_release(loc);
