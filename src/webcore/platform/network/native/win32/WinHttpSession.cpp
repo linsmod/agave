@@ -208,6 +208,15 @@ static HINTERNET poolAcquire(const std::wstring& host, INTERNET_PORT port, int t
         }
     }
 
+    /* Browsers fan a module graph out over ~150 connections; WinHTTP defaults to
+     * 6 per server, which serialized our 154 module fetches into ~6 seconds. */
+    {
+        DWORD maxConns = 64;
+
+        WinHttpSetOption(entry.session, WINHTTP_OPTION_MAX_CONNS_PER_SERVER,
+                         &maxConns, sizeof(maxConns));
+    }
+
     /* Resolve and connect get short budgets so a dead host fails fast, the way a
      * browser does; send/receive keep the caller's timeout for slow servers. */
     {

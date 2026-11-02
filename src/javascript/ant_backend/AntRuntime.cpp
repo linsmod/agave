@@ -1296,9 +1296,22 @@ static std::map<std::string, ModuleEntry*>* g_moduleCache = NULL;
 static Net::Session* g_moduleSession = NULL;
 static std::vector<std::string>* g_modulePending = NULL;
 static int g_moduleInFlight = 0;
-static const int kModuleFetchLimit = 6;
+static int moduleFetchLimit(void)
+{
+    static int cached = -1;
+
+    if (cached < 0) {
+        const char* env = getenv("AGB_MODULE_CONCURRENCY");
+        int requested = env ? atoi(env) : 12;
+
+        cached = (requested > 0 && requested <= 128) ? requested : 12;
+    }
+
+    return cached;
+}
 
 static void moduleStart(const std::string& url, bool force);
+static void modulePrefetchImports(const std::string& url, const std::string& body);
 
 /* Imports discovered while the fetch slots are full wait here; a finished
  * request immediately starts the next one, so the graph loads ~6 wide instead
@@ -1319,7 +1332,7 @@ static void moduleQueuePending(const std::string& url)
 static void moduleDrainPending(void)
 {
     while (g_modulePending && !g_modulePending->empty()
-            && g_moduleInFlight < kModuleFetchLimit) {
+            && g_moduleInFlight < moduleFetchLimit()) {
         std::string url = g_modulePending->front();
 
         g_modulePending->erase(g_modulePending->begin());
@@ -1458,7 +1471,7 @@ static void moduleStart(const std::string& url, bool force)
     if (entry->done || entry->id)
         return;
 
-    if (g_moduleInFlight >= kModuleFetchLimit) {
+    if (g_moduleInFlight >= moduleFetchLimit()) {
         if (!force)
             moduleQueuePending(url);
         if (!force)
