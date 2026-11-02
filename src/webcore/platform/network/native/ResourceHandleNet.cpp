@@ -81,7 +81,7 @@ void buildRequest(Net::Request& req, const ResourceRequest& request)
     req.method = toUtf8(request.httpMethod());
     if (req.method.empty())
         req.method = "GET";
-    req.timeoutMs = 30000;
+    req.timeoutMs = Net::netDefaultTimeoutMs();
 
     const HTTPHeaderMap& headers = request.httpHeaderFields();
     HTTPHeaderMap::const_iterator it = headers.begin();

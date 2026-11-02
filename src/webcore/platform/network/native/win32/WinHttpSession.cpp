@@ -295,7 +295,7 @@ void WinHttpSession::run(Job* job)
     HINTERNET session = NULL;
     HINTERNET connect = NULL;
     HINTERNET request = NULL;
-    int timeout = job->request.timeoutMs > 0 ? job->request.timeoutMs : 30000;
+    int timeout = job->request.timeoutMs > 0 ? job->request.timeoutMs : netDefaultTimeoutMs();
     std::wstring host;
     std::wstring path;
     bool secure = false;

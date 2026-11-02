@@ -57,7 +57,7 @@ void ResourceHandleManager::add(ResourceHandle* job)
         req.method = std::string(d->m_request.httpMethod().utf8().data());
         if (req.method.empty())
             req.method = "GET";
-        req.timeoutMs = 30000;
+        req.timeoutMs = Net::netDefaultTimeoutMs();
 
         const HTTPHeaderMap& headers = d->m_request.httpHeaderFields();
         HTTPHeaderMap::const_iterator it = headers.begin();

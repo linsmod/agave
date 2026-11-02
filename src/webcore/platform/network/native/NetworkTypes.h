@@ -17,15 +17,30 @@ namespace Net {
 
 typedef std::vector<std::pair<std::string, std::string> > HeaderList;
 
+/* Default network timeout. Overridable via AGB_NET_TIMEOUT_MS; tests use a small
+ * value so a dead endpoint fails fast instead of stalling the run. */
+inline int netDefaultTimeoutMs()
+{
+    static int cached = -1;
+    if (cached < 0) {
+        const char* env = getenv("AGB_NET_TIMEOUT_MS");
+        cached = env ? atoi(env) : 8000;
+        if (cached <= 0)
+            cached = 8000;
+    }
+    return cached;
+}
+
+
 struct Request {
     std::string url;
     std::string method;          /* "GET" when empty */
     HeaderList  headers;
     std::string body;
-    int         timeoutMs;       /* 0 => 30000 */
+    int         timeoutMs;       /* 0 => netDefaultTimeoutMs() */
     bool        followRedirects;
 
-    Request() : method("GET"), timeoutMs(30000), followRedirects(true) {}
+    Request() : method("GET"), timeoutMs(0), followRedirects(true) {}
 };
 
 struct Response {

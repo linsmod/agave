@@ -28,11 +28,13 @@ public:
 
     AffineTransform matrix;
     ps_context* context;
+    int transparencyDepth;
 };
 
 GraphicsContextPlatformPrivate::GraphicsContextPlatformPrivate()
     :  context(0)
 {
+    transparencyDepth = 0;
 }
 
 GraphicsContextPlatformPrivate::~GraphicsContextPlatformPrivate()
@@ -812,14 +814,35 @@ void GraphicsContext::addInnerRoundedRectClip(const IntRect& rect, int thickness
     notImplemented()
 }
 
+/* Group opacity: picasso has no offscreen layer here, so approximate by
+ * multiplying the paint alpha for the duration of the layer. Correct for a
+ * single child (the common fade/overlay case); overlapping children blend
+ * individually instead of as a group. */
 void GraphicsContext::beginTransparencyLayer(float opacity) 
 { 
-    notImplemented()
+    if (paintingDisabled())
+        return;
+
+    {
+        ps_context* gc = m_data->context;
+        float current;
+
+        save();
+        current = ps_set_alpha(gc, 1.0f);
+        ps_set_alpha(gc, current * opacity);
+        m_data->transparencyDepth++;
+    }
 }
 
 void GraphicsContext::endTransparencyLayer() 
 {
-    notImplemented()
+    if (paintingDisabled())
+        return;
+
+    if (m_data->transparencyDepth > 0) {
+        restore();
+        m_data->transparencyDepth--;
+    }
 }
 
 void GraphicsContext::setURLForRect(const KURL& link, const IntRect& destRect)

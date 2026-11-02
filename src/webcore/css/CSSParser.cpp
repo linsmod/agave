@@ -1823,17 +1823,36 @@ CSSValue* CSSParser::parseBackgroundColor()
 
 bool CSSParser::parseBackgroundImage(CSSValue*& value)
 {
-    if (valueList->current()->id == CSS_VAL_NONE) {
+    Value* val = valueList->current();
+
+    if (!val)
+        return false;
+
+    if (val->id == CSS_VAL_NONE) {
         value = new CSSImageValue();
         return true;
     }
-    if (valueList->current()->unit == CSSPrimitiveValue::CSS_URI) {
-        String uri = parseURL(domString(valueList->current()->string));
+
+    if (val->unit == CSSPrimitiveValue::CSS_URI) {
+        String uri = parseURL(domString(val->string));
         if (!uri.isEmpty())
             value = new CSSImageValue(String(KURL(styleElement->baseURL().deprecatedString(), uri.deprecatedString()).url()), 
-                                         styleElement);
+                                     styleElement);
         return true;
     }
+
+    /* Gradients are not implemented by this engine. Accept the function and
+     * paint nothing, so the rest of the declaration (background-color, repeat,
+     * position) still applies instead of the whole shorthand being dropped. */
+    if (val->unit == Value::QFunction && val->function) {
+        String fname = domString(val->function->name).lower();
+
+        if (fname.endsWith(String("gradient("))) {
+            value = new CSSImageValue();
+            return true;
+        }
+    }
+
     return false;
 }
 
