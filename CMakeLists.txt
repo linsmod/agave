@@ -94,7 +94,12 @@ include (${CMAKE_CURRENT_LIST_DIR}/unit_tests/unit_tests.cmake)
 endif()
 
 option(OPT_EXAMPLES "Build examples" OFF)
-if (OPT_EXAMPLES)
+
+# The touchweb example is the phone-style browser UI (examples/touchweb). It is
+# built on its own so a desktop-only build does not have to compile ~50 extra
+# sources plus sqlite and vgcl.
+option(OPT_TOUCHWEB "Build the touchweb mobile browser example" OFF)
+if (OPT_EXAMPLES OR OPT_TOUCHWEB)
 include (${CMAKE_CURRENT_LIST_DIR}/examples/examples.cmake)
 endif()
 

@@ -27,7 +27,8 @@
 # the script lists it and stops. Add -StopLockingProcesses to let it kill them.
 #
 # Targets built: libagave.dll / libagave_webview.dll / agave_shell.exe /
-# agave_embed.exe / agave_view_host.exe (headless test host).
+# agave_embed.exe / agave_view_host.exe (headless test host) / touchweb.exe
+# (phone-style browser UI, examples/touchweb; -NoTouchWeb skips it).
 #
 # Typical output:
 #   build ok   1320/1320 targets in 120.1s (0 errors, 915 warnings)
@@ -45,6 +46,7 @@ param(
     [string]$ZigPath = '',          # zig.exe; default: $env:AGB_ZIG, winget, PATH
     [string]$MinGWRoot = '',        # default: C:\msys64\mingw64
     [string]$Deploy = '',           # copy libagave*.dll / agave_*.exe here afterwards
+    [switch]$NoTouchWeb,            # skip the touchweb mobile example (built by default)
     [switch]$StopLockingProcesses,  # -Fresh: stop processes running from the build dir if they block the delete
     [string]$Log = '',              # default: <repo>\build-native.log
     [switch]$NoLog                  # do not write a log file, just stream
@@ -56,7 +58,8 @@ $root  = Split-Path -Parent $PSScriptRoot           # agave repo
 $build = if ([IO.Path]::IsPathRooted($BuildDir)) { $BuildDir } else { Join-Path $root $BuildDir }
 $log   = if ($Log) { $Log } else { Join-Path $root 'build-native.log' }
 
-$artifacts = @('libagave.dll', 'libagave_webview.dll', 'agave_shell.exe', 'agave_embed.exe', 'agave_view_host.exe')
+$artifacts = @('libagave.dll', 'libagave_webview.dll', 'agave_shell.exe', 'agave_embed.exe',
+               'agave_view_host.exe', 'touchweb.exe')
 
 function Fail([string]$message) {
     Write-Host "build failed: $message" -ForegroundColor Red
@@ -178,7 +181,19 @@ if ($Fresh -and (Test-Path $build)) {
     if (Test-Path $build) { Fail "cannot delete $build" }
 }
 
-$mustConfigure = $Fresh -or -not (Test-Path $cacheFile)
+# The touchweb example (phone-style browser UI) is part of "the project builds
+# everything"; -NoTouchWeb keeps a desktop-only build lean.
+$wantTouchWeb = -not $NoTouchWeb
+$haveTouchWeb = $false
+if (Test-Path $cacheFile) {
+    foreach ($line in Get-Content $cacheFile) {
+        if ($line -match '^OPT_TOUCHWEB:BOOL=(ON|OFF)') { $haveTouchWeb = ($Matches[1] -eq 'ON') }
+    }
+}
+
+# Reconfigure when the cache is missing or when the touchweb choice differs from
+# what the cache was configured with (option changes need a configure pass).
+$mustConfigure = $Fresh -or -not (Test-Path $cacheFile) -or ($haveTouchWeb -ne $wantTouchWeb)
 if ($mustConfigure) {
     $cmakeArgs = @(
         '-S', $root,
@@ -192,7 +207,8 @@ if ($mustConfigure) {
         "-DCMAKE_RANLIB=$env:RANLIB",
         '-DOPT_NET_BACKEND=native',
         '-DOPT_JS_ANT=ON',
-        '-DOPT_SHELL=ON'
+        '-DOPT_SHELL=ON',
+        ('-DOPT_TOUCHWEB=' + $(if ($wantTouchWeb) { 'ON' } else { 'OFF' }))
     )
     Write-Host ("cmake {0}" -f ($cmakeArgs -join ' '))
     & (Join-Path $mingwBin 'cmake.exe') @cmakeArgs
@@ -204,6 +220,19 @@ if ($mustConfigure) {
 # -------------------------------------------------------------------- build --
 
 Section 'build'
+
+# Programs started from the build dir keep libagave*.dll and the exes mapped, so
+# the relink that follows any engine change fails with "Permission denied".
+# Never terminate them (agave_shell may be someone's browser window) - just say
+# who is in the way before ninja does.
+$runningFromBuild = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
+    $_.Path -and $_.Path.StartsWith($build, [StringComparison]::OrdinalIgnoreCase)
+})
+if ($runningFromBuild.Count -gt 0) {
+    $who = ($runningFromBuild | ForEach-Object { "$($_.ProcessName) (pid $($_.Id))" }) -join ', '
+    Write-Host "note: running from the build dir: $who" -ForegroundColor Yellow
+    Write-Host "      the relink will fail while they are open; close them if ninja reports 'Permission denied'." -ForegroundColor Yellow
+}
 
 $buildArgs = @('--build', $build, '--parallel', "$Jobs")
 if ($Clean -or $Fresh) { $buildArgs += '--clean-first' }
@@ -234,6 +263,10 @@ if ($code -ne 0) {
     Write-Host '---- last 40 lines ----' -ForegroundColor Yellow
     $lines | Select-Object -Last 40 | ForEach-Object { Write-Host $_ }
     $errors = @($lines | Where-Object { $_ -match 'error:|error C[0-9]+|FAILED:' })
+    if ($lines -match 'Permission denied') {
+        Write-Host ''
+        Write-Host 'hint: an output file is locked by a running program - close the windows listed above and rerun.' -ForegroundColor Yellow
+    }
     Fail ("cmake --build exited with {0}; {1} error line(s)" -f $code, $errors.Count)
 }
 
