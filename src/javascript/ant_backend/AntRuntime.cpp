@@ -41,6 +41,9 @@
 #include <vector>
 
 namespace {
+static std::string cookieHeaderForCurrentDocument();
+static void setCookieForCurrentDocument(const std::string& text);
+
 
 #define AGB_TAG_NODE 0x4E4F4431u   /* 'NOD1' */
 
@@ -116,6 +119,12 @@ struct XhrJob : public WebCore::ResourceHandleClient {
     {
         WebCore::KURL kurl((const char*)url);
         WebCore::ResourceRequest request(kurl);
+        std::string cookies = cookieHeaderForCurrentDocument();
+
+        if (!cookies.empty())
+            request.addHTTPHeaderField(WebCore::String("Cookie"),
+                                       WebCore::String::fromUTF8(cookies.c_str()));
+
 
         m_handle = WebCore::ResourceHandle::create(request, this, false, true, false);
     }
@@ -123,6 +132,13 @@ struct XhrJob : public WebCore::ResourceHandleClient {
     virtual void didReceiveResponse(WebCore::ResourceHandle*, const WebCore::ResourceResponse& response)
     {
         m_status = response.httpStatusCode();
+
+        {
+            WebCore::String setCookie = response.httpHeaderField("Set-Cookie");
+
+            if (!setCookie.isEmpty())
+                setCookieForCurrentDocument(std::string(setCookie.utf8().data()));
+        }
     }
 
     virtual void didReceiveData(WebCore::ResourceHandle*, const char* data, int length, int)
@@ -254,6 +270,122 @@ int nodeInsertBefore(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void
 int nodeSetAttribute(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeRemoveAttribute(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 
+/* ------------------------------------------------------------------------- */
+/* Cookie jar                                                                 */
+/* ------------------------------------------------------------------------- */
+struct CookieEntry {
+    std::string name;
+    std::string value;
+    std::string domain;
+    std::string path;
+    bool        secure;
+};
+static std::vector<CookieEntry>* g_cookies = NULL;
+static std::vector<CookieEntry>& cookieJar()
+{
+    if (!g_cookies)
+        g_cookies = new std::vector<CookieEntry>();
+    return *g_cookies;
+}
+static std::string hostOfCurrentDocument()
+{
+    if (!g_document)
+        return std::string();
+    {
+        WebCore::KURL url(g_document->URL());
+        WebCore::String host = url.host();
+        return std::string(host.utf8().data());
+    }
+}
+static bool domainMatches(const std::string& cookieDomain, const std::string& host)
+{
+    if (cookieDomain.empty() || host.empty())
+        return true;
+    if (cookieDomain == host)
+        return true;
+    /* ".example.com" also matches "www.example.com" */
+    if (cookieDomain[0] == '.')
+        return host.size() > cookieDomain.size()
+            && host.compare(host.size() - cookieDomain.size(), cookieDomain.size(), cookieDomain) == 0;
+    return host.size() > cookieDomain.size()
+        && host[host.size() - cookieDomain.size() - 1] == '.'
+        && host.compare(host.size() - cookieDomain.size(), cookieDomain.size(), cookieDomain) == 0;
+}
+static std::string cookieHeaderForCurrentDocument()
+{
+    std::string out;
+    std::string host = hostOfCurrentDocument();
+    std::vector<CookieEntry>& jar = cookieJar();
+    for (size_t i = 0; i < jar.size(); ++i) {
+        if (!domainMatches(jar[i].domain, host))
+            continue;
+        if (jar[i].secure && g_document && !WebCore::KURL(g_document->URL()).protocol().startsWith("https"))
+            continue;
+        if (!out.empty())
+            out += "; ";
+        out += jar[i].name + "=" + jar[i].value;
+    }
+    return out;
+}
+static void setCookieForCurrentDocument(const std::string& text)
+{
+    std::string host = hostOfCurrentDocument();
+    CookieEntry entry;
+    std::string expires;
+    bool expired = false;
+    size_t pos = 0;
+    bool first = true;
+    entry.secure = false;
+    entry.domain = host;
+    while (pos <= text.size()) {
+        size_t end = text.find(';', pos);
+        std::string part = text.substr(pos, end == std::string::npos ? std::string::npos : end - pos);
+        size_t firstNonSpace = part.find_first_not_of(" ");
+        if (firstNonSpace == std::string::npos)
+            part.clear();
+        else
+            part = part.substr(firstNonSpace);
+        if (first) {
+            size_t eq = part.find('=');
+            if (eq != std::string::npos) {
+                entry.name = part.substr(0, eq);
+                entry.value = part.substr(eq + 1);
+            }
+            first = false;
+        } else {
+            std::string lower = part;
+            for (size_t i = 0; i < lower.size(); ++i)
+                lower[i] = (char)tolower((unsigned char)lower[i]);
+            if (lower.compare(0, 5, "path=") == 0) {
+                entry.path = part.substr(5);
+            } else if (lower.compare(0, 7, "domain=") == 0) {
+                entry.domain = part.substr(7);
+            } else if (lower.compare(0, 6, "secure") == 0) {
+                entry.secure = true;
+            } else if (lower.compare(0, 9, "max-age=0") == 0) {
+                expired = true;
+            } else if (lower.compare(0, 8, "expires=") == 0) {
+                expires = lower;
+                if (expires.find("1970") != std::string::npos || expires.find("jan 1970") != std::string::npos)
+                    expired = true;
+            }
+        }
+        if (end == std::string::npos)
+            break;
+        pos = end + 1;
+    }
+    if (entry.name.empty())
+        return;
+    std::vector<CookieEntry>& jar = cookieJar();
+    for (size_t i = 0; i < jar.size(); ++i) {
+        if (jar[i].name == entry.name && jar[i].domain == entry.domain) {
+            jar.erase(jar.begin() + i);
+            break;
+        }
+    }
+    if (!expired)
+        jar.push_back(entry);
+}
 /* document.title */
 int titleGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue* out, void*)
 {
@@ -323,7 +455,8 @@ int titleGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue
     }
 
     if (!strcmp(name, "cookie")) {
-        AntbValue* v = antb_make_string(engine, "");
+        std::string jar = cookieHeaderForCurrentDocument();
+        AntbValue* v = antb_make_string(engine, jar.c_str());
         if (!v)
             return 0;
         antb_value_assign(out, v);
@@ -554,6 +687,21 @@ int titleSetter(AntbEngine* engine, AntbValue* self, const char* name, const Ant
         }
         return 1;
     }
+    if (!strcmp(name, "cookie")) {
+        char* text;
+
+        if (!value)
+            return 0;
+
+        text = antb_to_utf8(value);
+        if (!text)
+            return 0;
+
+        setCookieForCurrentDocument(std::string(text));
+        antb_free(text);
+        return 1;
+    }
+
 
     return nodeSetter(engine, self, name, value, NULL);
 }
@@ -938,6 +1086,7 @@ void bindDocument(void* document)
         }
 
         antb_define_property_rw(g_engine, docObj, "title", titleGetter, titleSetter, NULL);
+        antb_define_property_rw(g_engine, docObj, "cookie", titleGetter, titleSetter, NULL);
 
         if (!g_nodeClass) {
             g_nodeClass = antb_class_create(g_engine, "Node");
