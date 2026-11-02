@@ -85,3 +85,36 @@ if ($Run) {
     Write-Host "run it with: $exe   (expect every case to print runs=1)"
 }
 
+# ---------------------------------------------------------------------------
+# Second program: the same test through agave's own bridge (antbridge.dll), i.e.
+# antb_engine_create + antb_eval + antb_pump + antb_set_native + antb_call.
+# ---------------------------------------------------------------------------
+$bridgeSrc = Join-Path $root 'tools\ant-replay\ant_replay_bridge.c'
+$bridgeLib = Join-Path $root '3rdparty\ant\lib\antbridge.dll.a'
+$bridgeDll = Join-Path $root '3rdparty\ant\lib\antbridge.dll'
+
+if ((Test-Path $bridgeSrc) -and (Test-Path $bridgeLib)) {
+    $bobj = Join-Path $OutDir 'ant_replay_bridge.obj'
+    $bexe = Join-Path $OutDir 'ant_replay_bridge.exe'
+
+    Write-Host "compile (bridge variant)..."
+
+    $bccArgs = @('cc', '-target', 'x86_64-windows-gnu', '-O1', '-std=gnu23')
+    foreach ($i in $includes) { $bccArgs += @('-I', $i) }
+    $bccArgs += @('-I', (Join-Path $root 'src\javascript\ant_backend'), '-c', $bridgeSrc, '-o', $bobj)
+    & $zig @bccArgs
+    if ($LASTEXITCODE -ne 0) { throw "bridge compile failed ($LASTEXITCODE)" }
+
+    $bldArgs = @('c++', '-target', 'x86_64-windows-gnu', '-o', $bexe, $bobj, $bridgeLib, '-L', $mingwLib)
+    $bldArgs += $systemLibs
+    & $zig @bldArgs
+    if ($LASTEXITCODE -ne 0) { throw "bridge link failed ($LASTEXITCODE)" }
+
+    Copy-Item $bridgeDll $OutDir -Force
+    Write-Host "built $bexe"
+    if ($Run) { & $bexe }
+} else {
+    Write-Host 'bridge variant skipped (antbridge.dll.a missing; run tools\build_antbridge.ps1)'
+}
+
+
