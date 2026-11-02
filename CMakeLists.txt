@@ -98,6 +98,13 @@ if (OPT_EXAMPLES)
 include (${CMAKE_CURRENT_LIST_DIR}/examples/examples.cmake)
 endif()
 
+option(OPT_SHELL "Build the Win32 browser shell" OFF)
+if (OPT_SHELL AND WIN32)
+    add_executable(agave_shell WIN32 ${PROJ_ROOT}/examples/browser_shell/main.c)
+    target_include_directories(agave_shell PRIVATE ${PROJ_ROOT}/include ${PROJ_OUT})
+    target_link_libraries(agave_shell PRIVATE ${LIB_NAME} user32 gdi32 shell32 comdlg32)
+endif()
+
 include(CheckIncludeFile)
 check_include_file(stdint.h HAVE_STDINT_H)
 check_include_file(stddef HAVE_STDDEF_H)
