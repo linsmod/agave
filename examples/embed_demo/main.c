@@ -227,9 +227,13 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
 
         strncpy(g_leftUrl, leftUrl, sizeof(g_leftUrl) - 1);
         SetWindowTextA(g_addrLeft, g_leftUrl);
-        SetWindowTextA(g_addrRight, "https://www.163.com");
-        agave_webview_navigate(g_left, g_leftUrl);
-        agave_webview_navigate(g_right, "https://www.163.com");
+        {
+            const char* rightUrl = (argc > 2) ? argv[2] : "https://www.163.com";
+
+            SetWindowTextA(g_addrRight, rightUrl);
+            agave_webview_navigate(g_left, g_leftUrl);
+            agave_webview_navigate(g_right, rightUrl);
+        }
     }
 
     ShowWindow(g_hwnd, SW_SHOW);
