@@ -4532,13 +4532,17 @@ void CSSStyleSelector::mapBackgroundClip(BackgroundLayer* layer, CSSValue* value
     CSSPrimitiveValue* primitiveValue = static_cast<CSSPrimitiveValue*>(value);
     switch (primitiveValue->getIdent()) {
         case CSS_VAL_BORDER:
+        case CSS_VAL_BORDER_BOX:
             layer->setBackgroundClip(BGBORDER);
             break;
         case CSS_VAL_PADDING:
             layer->setBackgroundClip(BGPADDING);
             break;
-        default: // CSS_VAL_CONTENT
+        case CSS_VAL_CONTENT:
+        case CSS_VAL_CONTENT_BOX:
             layer->setBackgroundClip(BGCONTENT);
+            break;
+        default:
             break;
     }
 }
@@ -4612,13 +4616,17 @@ void CSSStyleSelector::mapBackgroundOrigin(BackgroundLayer* layer, CSSValue* val
     CSSPrimitiveValue* primitiveValue = static_cast<CSSPrimitiveValue*>(value);
     switch (primitiveValue->getIdent()) {
         case CSS_VAL_BORDER:
+        case CSS_VAL_BORDER_BOX:
             layer->setBackgroundOrigin(BGBORDER);
             break;
         case CSS_VAL_PADDING:
             layer->setBackgroundOrigin(BGPADDING);
             break;
-        default: // CSS_VAL_CONTENT
+        case CSS_VAL_CONTENT:
+        case CSS_VAL_CONTENT_BOX:
             layer->setBackgroundOrigin(BGCONTENT);
+            break;
+        default:
             break;
     }
 }
@@ -4689,8 +4697,21 @@ void CSSStyleSelector::mapBackgroundSize(BackgroundLayer* layer, CSSValue* value
         
     CSSPrimitiveValue* primitiveValue = static_cast<CSSPrimitiveValue*>(value);
     Pair* pair = primitiveValue->getPairValue();
-    if (!pair)
+    if (!pair) {
+        /* "cover" (-1) / "contain" (-2) arrive as bare numbers (see
+         * CSSParser::parseBackgroundSize); keep them as negative fixed lengths
+         * so the painter can tell them apart from real sizes. */
+        if (primitiveValue->primitiveType() == CSSPrimitiveValue::CSS_NUMBER) {
+            double number = primitiveValue->getDoubleValue();
+
+            if (number == -1 || number == -2) {
+                b.width = Length((int)number, Fixed);
+                b.height = Length((int)number, Fixed);
+                layer->setBackgroundSize(b);
+            }
+        }
         return;
+    }
     
     CSSPrimitiveValue* first = static_cast<CSSPrimitiveValue*>(pair->first());
     CSSPrimitiveValue* second = static_cast<CSSPrimitiveValue*>(pair->second());

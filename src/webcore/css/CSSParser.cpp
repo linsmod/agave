@@ -2166,7 +2166,19 @@ CSSValue* CSSParser::parseBackgroundSize()
 {
     Value* value = valueList->current();
     CSSPrimitiveValue* parsedValue1;
-    
+
+    /* "cover" and "contain" have no keyword ids in this build; recognise them by
+     * text and encode them as the sentinel numbers -1 / -2 (a negative length is
+     * never a valid background-size, so it is unambiguous). */
+    if (value->id == 0 && value->unit == CSSPrimitiveValue::CSS_IDENT) {
+        String text = domString(value->string);
+
+        if (equalIgnoringCase(text, "cover"))
+            return new CSSPrimitiveValue(-1, CSSPrimitiveValue::CSS_NUMBER);
+        if (equalIgnoringCase(text, "contain"))
+            return new CSSPrimitiveValue(-2, CSSPrimitiveValue::CSS_NUMBER);
+    }
+
     if (value->id == CSS_VAL_AUTO)
         parsedValue1 = new CSSPrimitiveValue(0, CSSPrimitiveValue::CSS_UNKNOWN);
     else {
@@ -2236,6 +2248,15 @@ bool CSSParser::parseBackgroundProperty(int propId, int& propId1, int& propId2,
                 case CSS_PROP__WEBKIT_BACKGROUND_ORIGIN:
                     if (val->id == CSS_VAL_BORDER || val->id == CSS_VAL_PADDING || val->id == CSS_VAL_CONTENT) {
                         currValue = new CSSPrimitiveValue(val->id);
+                        valueList->next();
+                    } else if (val->id == CSS_VAL_BORDER_BOX || val->id == CSS_VAL_CONTENT_BOX) {
+                        /* Modern spellings; "padding-box" is not a keyword in this
+                         * build, so it is recognised by its text below. */
+                        currValue = new CSSPrimitiveValue(val->id);
+                        valueList->next();
+                    } else if (val->id == 0 && val->unit == CSSPrimitiveValue::CSS_IDENT &&
+                               equalIgnoringCase(domString(val->string), "padding-box")) {
+                        currValue = new CSSPrimitiveValue(CSS_VAL_PADDING);
                         valueList->next();
                     }
                     break;

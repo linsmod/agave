@@ -418,6 +418,29 @@ static void cacluateBackgroundSize(const BackgroundLayer* bgLayer, int& scaledWi
         Length bgWidth = bgLayer->backgroundSize().width;
         Length bgHeight = bgLayer->backgroundSize().height;
 
+        /* cover (-1) / contain (-2): sentinels produced by the CSS parser.
+         * scaledWidth/Height currently hold the painting area, i.e. the box the
+         * image has to cover or fit into. */
+        if (bgWidth.isFixed() && (bgWidth.value() == -1 || bgWidth.value() == -2)) {
+            int imageWidth = bg->imageSize(style->effectiveZoom()).width();
+            int imageHeight = bg->imageSize(style->effectiveZoom()).height();
+
+            if (imageWidth > 0 && imageHeight > 0 && scaledWidth > 0 && scaledHeight > 0) {
+                float scaleX = (float)scaledWidth / (float)imageWidth;
+                float scaleY = (float)scaledHeight / (float)imageHeight;
+                float scale = (bgWidth.value() == -1) ? (scaleX > scaleY ? scaleX : scaleY)
+                                                      : (scaleX < scaleY ? scaleX : scaleY);
+
+                scaledWidth = (int)(imageWidth * scale + 0.5f);
+                scaledHeight = (int)(imageHeight * scale + 0.5f);
+            } else {
+                scaledWidth = imageWidth;
+                scaledHeight = imageHeight;
+            }
+
+            return;
+        }
+
         if (bgWidth.isPercent())
             scaledWidth = bgWidth.calcValue(scaledWidth);
         else if (bgWidth.isFixed())
@@ -597,6 +620,11 @@ void RenderBox::paintBackgroundExtended(GraphicsContext* context, const Color& c
     int bRight = includeRightEdge ? borderRight() : 0;
     int pLeft = includeLeftEdge ? paddingLeft() : 0;
     int pRight = includeRightEdge ? paddingRight() : 0;
+
+    if (getenv("AGB_BG_DEBUG"))
+        fprintf(stderr, "[bg] clip=%d origin=%d sizeSet=%d w=%d h=%d bl=%d pl=%d tx=%d ty=%d\n",
+                (int)bgLayer->backgroundClip(), (int)bgLayer->backgroundOrigin(),
+                bgLayer->isBackgroundSizeSet() ? 1 : 0, w, h, bLeft, pLeft, tx, ty);
 
     bool clippedToBorderRadius = false;
     if (style()->hasBorderRadius() && (includeLeftEdge || includeRightEdge)) {
