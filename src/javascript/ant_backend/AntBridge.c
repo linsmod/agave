@@ -771,7 +771,7 @@ void antb_value_assign(AntbValue* out, const AntbValue* value)
 
 /* --- wrapper cache ------------------------------------------------------- */
 
-#define AGB_MAX_WRAPPERS 4096
+#define AGB_MAX_WRAPPERS 65536
 
 typedef struct {
     ant_t*      js;

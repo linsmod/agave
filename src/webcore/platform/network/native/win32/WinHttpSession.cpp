@@ -12,6 +12,8 @@
 #include <winhttp.h>
 
 #include <string>
+#include <stdio.h>
+#include <stdlib.h>
 #include <vector>
 
 #include "../NetworkSession.h"
@@ -341,6 +343,14 @@ void WinHttpSession::run(Job* job)
         request = WinHttpOpenRequest(connect, verb.c_str(), path.c_str(), NULL,
                                      WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
         if (!request) { err = GetLastError(); goto cleanup; }
+
+        /* Servers (baidu CDNs among them) answer with gzip; let WinHTTP
+         * decompress transparently, otherwise the script arrives as binary. */
+        {
+            DWORD decompression = WINHTTP_DECOMPRESSION_FLAG_ALL;
+            WinHttpSetOption(request, WINHTTP_OPTION_DECOMPRESSION,
+                             &decompression, sizeof(decompression));
+        }
     }
 
     {
@@ -396,6 +406,14 @@ void WinHttpSession::run(Job* job)
                                  ev->response.headers);
                 }
             }
+        }
+
+        if (getenv("AGB_NET_DEBUG")) {
+            fprintf(stderr, "[net] %s status=%d headers:", job->request.url.c_str(), (int)statusCode);
+            for (size_t hi = 0; hi < ev->response.headers.size(); ++hi)
+                fprintf(stderr, " %s=%s;", ev->response.headers[hi].first.c_str(),
+                        ev->response.headers[hi].second.c_str());
+            fprintf(stderr, "\n");
         }
 
         post(ev);

@@ -39,6 +39,7 @@
 #include <stdio.h>
 #include <string>
 #include <vector>
+#include <set>
 
 namespace {
 static std::string cookieHeaderForCurrentDocument();
@@ -1323,10 +1324,19 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
             return 1;
         }
     } else if (!strcmp(name, "ownerDocument")) {
-        /* Not exposed: handing out a Document wrapper (shared or re-wrapped)
-         * crashes the engine on baidu's jQuery path, and callers tolerate
-         * undefined here (they guard with `context.ownerDocument && ...`). */
-        return 1;
+
+        /* Hand out the shared document object: it already carries the
+         * document-level methods, and re-wrapping the same Document would
+         * create a second wrapper for one native node. */
+        if (n->ownerDocument() && n->ownerDocument() == g_document && g_docObj) {
+            antb_value_assign(out, g_docObj);
+            return 1;
+        }
+        if (n->ownerDocument()) {
+            v = wrapNode(engine, n->ownerDocument());
+        } else {
+            return 1;
+        }
     } else if (!strcmp(name, "nodeValue")) {
         if (n->isTextNode() || n->isCommentNode())
             v = antb_make_string(engine, n->nodeValue().utf8().data());
@@ -2618,6 +2628,19 @@ AntbValue* wrapNode(AntbEngine* engine, WebCore::Node* node)
 
     if (!engine || !node || !g_nodeClass)
         return NULL;
+
+    /* The wrapper cache is keyed by the raw node pointer, so a node that gets
+     * destroyed and a new one allocated at the same address would share a
+     * wrapper (use-after-free). Keep every wrapped node alive instead: bounded
+     * by the document lifetime, and test pages survive hundreds of wraps. */
+    {
+        static std::set<WebCore::Node*>* pinned = new std::set<WebCore::Node*>();
+
+        if (pinned->find(node) == pinned->end()) {
+            node->ref();
+            pinned->insert(node);
+        }
+    }
 
     v = antb_wrap_native_as(engine, g_nodeClass, node, AGB_TAG_NODE);
     if (!v)
