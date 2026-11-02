@@ -132,10 +132,12 @@ private:
     std::vector<Event*>   m_events;
     long long             m_nextId;
     int                   m_pending;
+    int                   m_pumping;
+    bool                  m_shutdownPending;
 };
 
 WinHttpSession::WinHttpSession()
-    : m_nextId(0), m_pending(0)
+    : m_nextId(0), m_pending(0), m_pumping(0), m_shutdownPending(false)
 {
     InitializeCriticalSection(&m_lock);
 }
@@ -177,8 +179,14 @@ void WinHttpSession::cancel(long long id)
 {
     EnterCriticalSection(&m_lock);
     for (size_t i = 0; i < m_jobs.size(); ++i) {
-        if (m_jobs[i]->id == id)
+        if (m_jobs[i]->id == id) {
             InterlockedExchange(&m_jobs[i]->cancelled, 1);
+
+            /* The caller is ResourceHandle's destructor: the Client it passed in
+             * dies with it. Drop the pointer so a later event for this job does
+             * not call into freed memory (crashed with a 0xbaadf00d vtable). */
+            m_jobs[i]->client = NULL;
+        }
     }
     LeaveCriticalSection(&m_lock);
 }
@@ -196,18 +204,18 @@ void WinHttpSession::pump()
 
     EnterCriticalSection(&m_lock);
     events.swap(m_events);
+    m_pumping++;
     LeaveCriticalSection(&m_lock);
 
     for (size_t i = 0; i < events.size(); ++i) {
         Event*  ev = events[i];
         Client* client = NULL;
-        Job*    job = NULL;
+        long long id = ev->id;
 
         EnterCriticalSection(&m_lock);
         for (size_t j = 0; j < m_jobs.size(); ++j) {
-            if (m_jobs[j]->id == ev->id) {
-                job    = m_jobs[j];
-                client = job->client;
+            if (m_jobs[j]->id == id) {
+                client = m_jobs[j]->client;
                 break;
             }
         }
@@ -222,11 +230,53 @@ void WinHttpSession::pump()
             }
         }
 
-        if (job && (ev->kind == Event::KindComplete || ev->kind == Event::KindError))
-            finish(job);
+        /* The callback above may have torn the session down (page navigation,
+         * document teardown), so never dereference a Job captured earlier:
+         * look it up again and let finish() do the removal under the lock. */
+        if (ev->kind == Event::KindComplete || ev->kind == Event::KindError) {
+            Job* job = NULL;
+
+            EnterCriticalSection(&m_lock);
+            for (size_t j = 0; j < m_jobs.size(); ++j) {
+                if (m_jobs[j]->id == id) {
+                    job = m_jobs[j];
+                    break;
+                }
+            }
+            LeaveCriticalSection(&m_lock);
+
+            if (job)
+                finish(job);
+        }
 
         delete ev;
     }
+
+    EnterCriticalSection(&m_lock);
+    m_pumping--;
+
+    if (m_pumping == 0 && m_shutdownPending) {
+        m_shutdownPending = false;
+
+        for (size_t i = 0; i < m_jobs.size(); ++i) {
+            Job* job = m_jobs[i];
+
+            if (job->thread) {
+                WaitForSingleObject(job->thread, INFINITE);
+                CloseHandle(job->thread);
+                job->thread = NULL;
+            }
+            delete job;
+        }
+        m_jobs.clear();
+
+        for (size_t i = 0; i < m_events.size(); ++i) {
+            delete m_events[i];
+        }
+        m_events.clear();
+        m_pending = 0;
+    }
+    LeaveCriticalSection(&m_lock);
 }
 
 void WinHttpSession::finish(Job* job)
@@ -256,6 +306,16 @@ void WinHttpSession::finish(Job* job)
 
 void WinHttpSession::shutdown()
 {
+    {
+        EnterCriticalSection(&m_lock);
+        bool pumping = m_pumping > 0;
+        if (pumping)
+            m_shutdownPending = true;
+        LeaveCriticalSection(&m_lock);
+        if (pumping)
+            return;   /* pump() finishes the teardown when it unwinds */
+    }
+
     std::vector<Job*> jobs;
 
     EnterCriticalSection(&m_lock);

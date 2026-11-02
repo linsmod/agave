@@ -643,15 +643,32 @@ int locationGetter(AntbEngine* engine, AntbValue*, const char* name, AntbValue* 
         WebCore::String value;
         WebCore::DeprecatedString deprecated = url.url();
 
+        /* CSSOM semantics: protocol keeps its colon, host keeps the port and
+         * hostname does not. Pages compare these strings literally (163.com
+         * redirects forever when `protocol` comes back without the colon). */
         if (!strcmp(name, "href"))
             value = WebCore::String(deprecated);
-        else if (!strcmp(name, "protocol"))
+        else if (!strcmp(name, "protocol")) {
             value = url.protocol();
-        else if (!strcmp(name, "host"))
+            if (!value.endsWith(WebCore::String(":")))
+                value = value + WebCore::String(":");
+        } else if (!strcmp(name, "host")) {
             value = url.host();
-        else if (!strcmp(name, "hostname"))
+            if (url.port()) {
+                value = value + WebCore::String(":") + WebCore::String::number(url.port());
+            }
+        } else if (!strcmp(name, "hostname"))
             value = url.host();
-        else if (!strcmp(name, "pathname"))
+        else if (!strcmp(name, "port")) {
+            value = url.port() ? WebCore::String::number(url.port()) : WebCore::String();
+        } else if (!strcmp(name, "origin")) {
+            WebCore::String protocol = url.protocol();
+            if (!protocol.endsWith(WebCore::String(":")))
+                protocol = protocol + WebCore::String(":");
+            value = protocol + WebCore::String("//") + url.host();
+            if (url.port())
+                value = value + WebCore::String(":") + WebCore::String::number(url.port());
+        } else if (!strcmp(name, "pathname"))
             value = url.path();
         else if (!strcmp(name, "search"))
             value = url.query();

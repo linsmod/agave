@@ -619,7 +619,13 @@ void FrameLoaderClientMC::dispatchDidFinishLoad()
 #if ENABLE(ANTJS)
     AntRuntime::dispatchWindowEvent("load");
 #endif
-    notImplemented();
+
+    /* Report progress 100 / finished: hosts use this to stop their frame loop,
+     * and without it `progress` stayed at -1 forever. Call the callback directly
+     * because postProgressFinishedNotification() is guarded by isLoadingMainFrame(),
+     * which is already false by the time the load has finished. */
+    if (cb_loading_progress && m_frame && m_frame->view())
+        cb_loading_progress(m_frame->view()->containingView(), 100, TRUE);
 }
 
 
