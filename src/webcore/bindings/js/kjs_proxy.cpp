@@ -85,8 +85,10 @@ JSValue* KJSProxy::evaluate(const String& filename, int baseLine, const String& 
         m_frame->keepAlive();
         AntRuntime::bindDocument(m_frame->document());
 
-        if (!AntRuntime::evaluate(code.data(), code.length(), &out, &err) && err)
-            fprintf(stderr, "[antjs] %s\n", err);
+        if (!AntRuntime::evaluate(code.data(), code.length(), &out, &err)) {
+            CString where = filename.isNull() ? String("(inline)").utf8() : filename.utf8();
+            fprintf(stderr, "[antjs] %s: %s\n", where.data(), err ? err : "(no message)");
+        }
 
         free(out);
         free(err);

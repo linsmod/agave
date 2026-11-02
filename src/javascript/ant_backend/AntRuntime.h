@@ -36,6 +36,10 @@ void bindDocument(void* document);
  * addEventListener(). Called from EventTargetNode::dispatchEvent(). */
 void dispatchEvent(void* node, void* event);
 
+/* Fires a synthetic event on the window/document listeners (used for
+ * DOMContentLoaded and load, which jQuery's ready queue waits for). */
+void dispatchWindowEvent(const char* type);
+
 } /* namespace AntRuntime */
 
 #endif /* ANT_RUNTIME_H */

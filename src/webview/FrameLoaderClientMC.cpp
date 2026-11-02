@@ -8,6 +8,10 @@
 #include "FrameLoader.h"
 #include "CString.h"
 #include "FrameLoaderClientMC.h"
+
+#if ENABLE(ANTJS)
+#include "AntRuntime.h"
+#endif
 #include "PlatformString.h"
 #include "ResourceRequest.h"
 #include "ResourceError.h"
@@ -604,11 +608,17 @@ void FrameLoaderClientMC::dispatchDidCommitLoad()
 
 void FrameLoaderClientMC::dispatchDidFinishDocumentLoad()
 {
-    notImplemented();
+#if ENABLE(ANTJS)
+    /* jQuery-style ready queues hang off DOMContentLoaded. */
+    AntRuntime::dispatchWindowEvent("DOMContentLoaded");
+#endif
 }
 
 void FrameLoaderClientMC::dispatchDidFinishLoad()
 {
+#if ENABLE(ANTJS)
+    AntRuntime::dispatchWindowEvent("load");
+#endif
     notImplemented();
 }
 

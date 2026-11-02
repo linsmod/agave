@@ -39,11 +39,30 @@ static void copy_cstr(AntbEngine* e, const char* what, ant_value_t v)
     ant_value_t mv = js_get(e->js, v, "message");
 
     if (vtype(nv) == T_STR && vtype(mv) == T_STR) {
+        /* Include the first stack line when the engine provides one: the
+         * message alone does not say where a page script broke. */
+        ant_value_t sv = js_get(e->js, v, "stack");
+        char sbuf[512];
+        js_cstr_t stk;
+        const char* stack = "";
+
         name = js_to_cstr(e->js, nv, nbuf, sizeof(nbuf));
         msg  = js_to_cstr(e->js, mv, mbuf, sizeof(mbuf));
-        snprintf(e->err, sizeof(e->err), "%s: %.*s: %.*s", what,
-                 (int)name.len, name.ptr ? name.ptr : "",
-                 (int)msg.len, msg.ptr ? msg.ptr : "");
+
+        if (vtype(sv) == T_STR) {
+            stk = js_to_cstr(e->js, sv, sbuf, sizeof(sbuf));
+            if (stk.ptr && stk.len)
+                stack = stk.ptr;
+        }
+
+        if (stack[0])
+            snprintf(e->err, sizeof(e->err), "%s: %.*s: %.*s | %s", what,
+                     (int)name.len, name.ptr ? name.ptr : "",
+                     (int)msg.len, msg.ptr ? msg.ptr : "", stack);
+        else
+            snprintf(e->err, sizeof(e->err), "%s: %.*s: %.*s", what,
+                     (int)name.len, name.ptr ? name.ptr : "",
+                     (int)msg.len, msg.ptr ? msg.ptr : "");
     } else if (vtype(nv) == T_STR) {
         name = js_to_cstr(e->js, nv, nbuf, sizeof(nbuf));
         snprintf(e->err, sizeof(e->err), "%s: %.*s", what,
