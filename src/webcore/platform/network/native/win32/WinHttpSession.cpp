@@ -116,6 +116,64 @@ static std::map<std::wstring, PoolEntry>* g_pool = NULL;
 static std::mutex g_poolLock;
 static const unsigned long kPoolIdleMs = 60000;
 
+/* Win8.1+ knows how to use the system proxy configuration (including PAC). It is
+ * not in older SDK headers, so define it here. */
+#ifndef WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY
+#define WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY 4
+#endif
+
+/* Opens the session with the same proxy the user configured for the system.
+ *
+ * WINHTTP_ACCESS_TYPE_DEFAULT_PROXY only looks at the WinHTTP proxy
+ * (netsh winhttp set proxy), which is a different setting from the one the user
+ * configures in Windows settings / IE. Chrome follows the WinINET one, so a
+ * proxy that "obviously works" left our requests going direct and timing out.
+ *
+ * Order: AGB_NO_PROXY (force direct) -> AUTOMATIC_PROXY (system + PAC) ->
+ * named proxy from the IE settings -> direct. */
+static HINTERNET openProxyAwareSession(int timeout)
+{
+    HINTERNET session = NULL;
+
+    if (getenv("AGB_NO_PROXY"))
+        return WinHttpOpen(L"agave/1.0 (native)", WINHTTP_ACCESS_TYPE_NO_PROXY,
+                           WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+
+    session = WinHttpOpen(L"agave/1.0 (native)", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+                          WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+
+    if (session) {
+        if (Net::logEnabled())
+            Net::logLine("net.proxy   automatic (system/PAC)");
+
+        return session;
+    }
+
+    {
+        WINHTTP_CURRENT_USER_IE_PROXY_CONFIG config;
+
+        ZeroMemory(&config, sizeof(config));
+
+        if (WinHttpGetIEProxyConfigForCurrentUser(&config) && config.lpszProxy) {
+            session = WinHttpOpen(L"agave/1.0 (native)", WINHTTP_ACCESS_TYPE_NAMED_PROXY,
+                                  config.lpszProxy, config.lpszProxyBypass, 0);
+
+            if (Net::logEnabled())
+                Net::logLine("net.proxy   named proxy in use");
+
+            GlobalFree(config.lpszProxy);
+            if (config.lpszProxyBypass) GlobalFree(config.lpszProxyBypass);
+            if (config.lpszAutoConfigUrl) GlobalFree(config.lpszAutoConfigUrl);
+
+            if (session)
+                return session;
+        }
+    }
+
+    return WinHttpOpen(L"agave/1.0 (native)", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                       WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+}
+
 static HINTERNET poolAcquire(const std::wstring& host, INTERNET_PORT port, int timeout, DWORD* errOut)
 {
     std::wstring key = host + L":" + std::to_wstring((unsigned)port);
@@ -139,14 +197,9 @@ static HINTERNET poolAcquire(const std::wstring& host, INTERNET_PORT port, int t
     PoolEntry& entry = (*g_pool)[key];
 
     if (!entry.session) {
-        /* WPAD auto-proxy detection can stall for seconds on a network without
-         * it, which is why an unreachable host felt like a hang instead of a
-         * fast failure. AGB_NO_PROXY=1 forces a direct connection. */
-        DWORD accessType = getenv("AGB_NO_PROXY") ? WINHTTP_ACCESS_TYPE_NO_PROXY
-                                                  : WINHTTP_ACCESS_TYPE_DEFAULT_PROXY;
-
-        entry.session = WinHttpOpen(L"agave/1.0 (native)", accessType,
-                                    WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+        /* Uses the system proxy (WinINET/PAC), the same one the user configured
+         * for other browsers; see openProxyAwareSession(). */
+        entry.session = openProxyAwareSession(timeout);
 
         if (!entry.session) {
             if (errOut) *errOut = GetLastError();

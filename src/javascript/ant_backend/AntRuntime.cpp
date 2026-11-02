@@ -1294,8 +1294,38 @@ struct ModuleEntry {
 
 static std::map<std::string, ModuleEntry*>* g_moduleCache = NULL;
 static Net::Session* g_moduleSession = NULL;
+static std::vector<std::string>* g_modulePending = NULL;
 static int g_moduleInFlight = 0;
 static const int kModuleFetchLimit = 6;
+
+static void moduleStart(const std::string& url, bool force);
+
+/* Imports discovered while the fetch slots are full wait here; a finished
+ * request immediately starts the next one, so the graph loads ~6 wide instead
+ * of one file at a time. */
+static void moduleQueuePending(const std::string& url)
+{
+    if (!g_modulePending)
+        g_modulePending = new std::vector<std::string>();
+
+    for (size_t i = 0; i < g_modulePending->size(); ++i) {
+        if ((*g_modulePending)[i] == url)
+            return;
+    }
+
+    g_modulePending->push_back(url);
+}
+
+static void moduleDrainPending(void)
+{
+    while (g_modulePending && !g_modulePending->empty()
+            && g_moduleInFlight < kModuleFetchLimit) {
+        std::string url = g_modulePending->front();
+
+        g_modulePending->erase(g_modulePending->begin());
+        moduleStart(url, true);
+    }
+}
 
 static ModuleEntry* moduleEntryFor(const std::string& url)
 {
@@ -1348,6 +1378,8 @@ struct ModuleFetchClient : public Net::Client {
 
             if (g_moduleInFlight > 0)
                 --g_moduleInFlight;
+
+            moduleDrainPending();
         }
     }
 
@@ -1362,6 +1394,8 @@ struct ModuleFetchClient : public Net::Client {
 
             if (g_moduleInFlight > 0)
                 --g_moduleInFlight;
+
+            moduleDrainPending();
         }
     }
 };
@@ -1424,8 +1458,12 @@ static void moduleStart(const std::string& url, bool force)
     if (entry->done || entry->id)
         return;
 
-    if (!force && g_moduleInFlight >= kModuleFetchLimit)
-        return;
+    if (g_moduleInFlight >= kModuleFetchLimit) {
+        if (!force)
+            moduleQueuePending(url);
+        if (!force)
+            return;
+    }
 
     if (!g_moduleSession)
         g_moduleSession = Net::Session::create();
@@ -1449,6 +1487,9 @@ static void moduleStart(const std::string& url, bool force)
         }
 
         ++g_moduleInFlight;
+
+        if (getenv("AGB_MODULE_DEBUG"))
+            fprintf(stderr, "[modstart] %s in-flight=%d\n", url.c_str(), g_moduleInFlight);
     }
 }
 
@@ -1456,6 +1497,7 @@ static void moduleStart(const std::string& url, bool force)
 static void modulePrefetchImports(const std::string& url, const std::string& body)
 {
     size_t pos = 0;
+    int found = 0;
 
     while ((pos = body.find("from", pos)) != std::string::npos) {
         size_t at = pos + 4;
@@ -1470,8 +1512,10 @@ static void modulePrefetchImports(const std::string& url, const std::string& bod
             if (close != std::string::npos && close > at + 1) {
                 std::string specifier = body.substr(at + 1, close - at - 1);
 
-                if (!specifier.empty() && specifier[0] == '.')
+                if (!specifier.empty() && specifier[0] == '.') {
+                    ++found;
                     moduleStart(moduleUrlJoin(url, specifier), false);
+                }
 
                 pos = close;
                 continue;
@@ -1480,6 +1524,10 @@ static void modulePrefetchImports(const std::string& url, const std::string& bod
 
         pos = at;
     }
+
+    if (getenv("AGB_MODULE_DEBUG"))
+        fprintf(stderr, "[modprefetch] %s found=%d in-flight=%d\n",
+                url.c_str(), found, g_moduleInFlight);
 }
 
 static char* moduleFetch(const char* urlText, unsigned long* outSize)
@@ -1925,6 +1973,21 @@ static const char kPrelude[] =
 "    };"
 "  }"
 "  if (!g.CSS.escape) g.CSS.escape = function (s) { return String(s); };"
+"  if (!g.matchMedia) {"
+"    g.matchMedia = function (query) {"
+"      var list = {"
+"        media: String(query),"
+"        matches: false,"
+"        onchange: null,"
+"        addListener: function () {},"
+"        removeListener: function () {},"
+"        addEventListener: function () {},"
+"        removeEventListener: function () {},"
+"        dispatchEvent: function () { return false; }"
+"      };"
+"      return list;"
+"    };"
+"  }"
 "  {"
 "    var __evtHandlers = ['onload','onerror','onunload','onbeforeunload','onresize','onscroll','onhashchange',"
 "      'onpopstate','onmessage','onfocus','onblur','onclick','onmousedown','onmouseup','onmousemove','onkeydown',"
@@ -2225,6 +2288,54 @@ void setFilename(const char* name)
 
 /* --- ES modules ---------------------------------------------------------- */
 
+/* ES modules are deferred by spec: they run after the document has been parsed,
+ * not inline where the <script> sits. Running them during parsing made pages
+ * look up DOM nodes that did not exist yet (css3test's whole test harness hung
+ * on that). */
+struct DeferredModule {
+    std::string url;
+    std::string source;
+};
+
+static std::vector<DeferredModule>* g_deferredModules = NULL;
+
+int evaluateModule(const char* src, size_t len, const char* filename, char** out, char** err);
+
+void queueModule(const char* url, const char* source)
+{
+    if (!g_deferredModules)
+        g_deferredModules = new std::vector<DeferredModule>();
+
+    DeferredModule module;
+
+    module.url = url ? url : "";
+    module.source = source ? source : "";
+    g_deferredModules->push_back(module);
+}
+
+void flushDeferredModules(void)
+{
+    std::vector<DeferredModule> pending;
+
+    if (!g_deferredModules || g_deferredModules->empty())
+        return;
+
+    /* Take the list first: running a module may queue more (dynamic import). */
+    pending = *g_deferredModules;
+    g_deferredModules->clear();
+
+    for (size_t i = 0; i < pending.size(); ++i) {
+        char* err = NULL;
+
+        evaluateModule(pending[i].source.c_str(), pending[i].source.size(),
+                       pending[i].url.c_str(), NULL, &err);
+
+        if (err) {
+            fprintf(stderr, "[antjs] %s: %s\n", pending[i].url.c_str(), err);
+            free(err);
+        }
+    }
+}
 
 int evaluateModule(const char* src, size_t len, const char* filename, char** out, char** err)
 {
@@ -2259,6 +2370,66 @@ int evaluateModule(const char* src, size_t len, const char* filename, char** out
 
     antb_value_release(value);
     return 1;
+}
+
+/* Loads polyfills.js (next to the binary, or $AGB_POLYFILLS) and evaluates it.
+ * Kept out of the built-in prelude so the file can be edited without relinking
+ * the engine. */
+static void loadPolyfills(void)
+{
+    static int loaded = 0;
+    char path[AGB_PATH_CHARS];
+    char* buffer = NULL;
+    FILE* file = NULL;
+    long size = 0;
+    const char* env = getenv("AGB_POLYFILLS");
+
+    if (loaded)
+        return;
+
+    loaded = 1;
+
+    if (env && env[0])
+        file = fopen(env, "rb");
+
+    if (!file) {
+        DWORD len = GetModuleFileNameA(NULL, path, (DWORD)sizeof(path));
+
+        if (len > 0 && len < sizeof(path)) {
+            char* slash = strrchr(path, '\\');
+
+            if (slash) {
+                strcpy(slash + 1, "polyfills.js");
+                file = fopen(path, "rb");
+            }
+        }
+    }
+
+    if (!file) {
+        fprintf(stderr, "[agave] polyfills.js not found (set AGB_POLYFILLS to load one)\n");
+        return;
+    }
+
+    fseek(file, 0, SEEK_END);
+    size = ftell(file);
+    fseek(file, 0, SEEK_SET);
+
+    if (size > 0) {
+        buffer = (char*)malloc((size_t)size + 1);
+
+        if (buffer) {
+            size_t read = fread(buffer, 1, (size_t)size, file);
+
+            buffer[read] = 0;
+
+            if (g_engine && !antb_eval(g_engine, buffer, (int)read, NULL))
+                fprintf(stderr, "[agave] polyfills.js failed to evaluate\n");
+
+            free(buffer);
+        }
+    }
+
+    fclose(file);
 }
 
 void bindDocument(void* document)
@@ -2455,7 +2626,12 @@ void bindDocument(void* document)
         antb_eval(g_engine, kHideWorkers, (int)strlen(kHideWorkers), NULL);
     }
 
+    /* Polyfills live in polyfills.js next to the binary (or at AGB_POLYFILLS)
+     * so they can be edited without rebuilding the engine. */
+    loadPolyfills();
+
     g_documentBound = true;
+
 }
 
 } /* namespace AntRuntime */
@@ -2577,6 +2753,31 @@ static int styleGetter(AntbEngine* engine, AntbValue* self, const char* name, An
 {
     WebCore::StyledElement* element = styledElementOf(self);
 
+    if (getenv("AGB_STYLE_DEBUG")) {
+        static int reads = 0;
+        static unsigned long insideTotal = 0;
+        unsigned long began = GetTickCount();
+
+        ++reads;
+
+        {
+            /* Measure the whole read path, not just the lookup. */
+            struct ReadTimer {
+                unsigned long began;
+                ~ReadTimer() {
+                    insideTotal += GetTickCount() - began;
+                    if (reads % 2000 == 0)
+                        fprintf(stderr, "[style] reads=%d inside=%u ms (avg %u us)\n",
+                                reads, (unsigned)insideTotal,
+                                (unsigned)(insideTotal * 1000 / reads));
+                }
+            } timer = { began };
+
+            (void)timer;
+        }
+    }
+
+
     if (!name) {
         makeStringResult(engine, out, "");
         return 1;
@@ -2681,7 +2882,7 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
     if (!strcmp(name, "textContent")) {
         WebCore::String s = n->textContent();
         v = antb_make_string(engine, s.utf8().data());
-    } else if (!strcmp(name, "nodeName")) {
+    } else if (!strcmp(name, "nodeName") || !strcmp(name, "tagName")) {
         WebCore::String s = n->nodeName();
         v = antb_make_string(engine, s.utf8().data());
     } else if (!strcmp(name, "nodeType")) {
@@ -3213,7 +3414,26 @@ int nodeAppendChild(AntbEngine* engine, AntbValue* self, AntbValue** args, int a
     if (!parent || !child)
         return 1;
 
-    parent->appendChild(child, ec);
+    {
+        bool debugDom = getenv("AGB_DOM_DEBUG") != NULL;
+        unsigned long began = debugDom ? GetTickCount() : 0;
+
+        parent->appendChild(child, ec);
+
+        if (debugDom) {
+            static int appends = 0;
+            static unsigned long insideTotal = 0;
+
+            insideTotal += GetTickCount() - began;
+            ++appends;
+
+            if (appends % 2000 == 0)
+                fprintf(stderr, "[dom] appends=%d inside=%u ms (avg %u us)\n",
+                        appends, (unsigned)insideTotal,
+                        (unsigned)(insideTotal * 1000 / appends));
+        }
+    }
+
     if (ec)
         return 1;
 
@@ -3984,6 +4204,13 @@ int globalComputedStyle(AntbEngine* engine, AntbValue*, AntbValue** args, int ar
     WebCore::Node* node = (argc > 0) ? nodeOf(args[0]) : NULL;
     char* property = (argc > 1) ? antb_to_utf8(args[1]) : NULL;
     std::string value;
+    static int calls = 0;
+    static unsigned long totalUs = 0;
+    unsigned long beganUs = 0;
+    bool timed = getenv("AGB_CSS_DEBUG") != NULL;
+
+    if (timed)
+        beganUs = (unsigned long)GetTickCount();
 
     if (node && node->document() && property && property[0]) {
         RefPtr<WebCore::CSSComputedStyleDeclaration> declaration =
@@ -3998,6 +4225,14 @@ int globalComputedStyle(AntbEngine* engine, AntbValue*, AntbValue** args, int ar
             if (!computed.isNull())
                 value = std::string(computed.utf8().data());
         }
+    }
+
+    if (timed) {
+        totalUs += (unsigned long)GetTickCount() - beganUs;
+        ++calls;
+
+        if (calls % 200 == 0)
+            fprintf(stderr, "[gcs] calls=%d total=%u ms\n", calls, (unsigned)totalUs);
     }
 
     antb_free(property);

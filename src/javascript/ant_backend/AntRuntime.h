@@ -59,6 +59,11 @@ int evaluate(const char* src, size_t len, char** out, char** err);
  * imports resolve against it). Same out/err contract as evaluate(). */
 int evaluateModule(const char* src, size_t len, const char* filename, char** out, char** err);
 
+/* Module scripts are deferred until the document has been parsed. The script
+ * element queues them; the frame loader flushes the queue once parsing ends. */
+void queueModule(const char* url, const char* source);
+void flushDeferredModules(void);
+
 /* Binds the page's document to the JS `document` object (task 2 acceptance):
  * `document.title` reads/writes WebCore::Document::title(). `document` is a
  * pointer to a WebCore::Document. Safe to call on every script evaluation. */

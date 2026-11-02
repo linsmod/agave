@@ -36,6 +36,10 @@
 #include "kjs_proxy.h"
 #endif
 
+#if ENABLE(ANTJS)
+#include "../javascript/ant_backend/AntRuntime.h"
+#endif
+
 #if ENABLE(QJS)
 #include "qjs_script.h"
 #endif
@@ -155,7 +159,8 @@ void HTMLScriptElement::notifyFinished(CachedResource* o)
 {
     CachedScript *cs = static_cast<CachedScript *>(o);
 
-    ASSERT(cs == m_cachedScript);
+    /* For <script async> the tokenizer requests the body itself and hands the
+     * resource straight to this element, so m_cachedScript stays null. */
 
     // Evaluating the script could lead to a garbage collection which
     // can delete the script element so we need to protect it.
@@ -283,10 +288,13 @@ void HTMLScriptElement::evaluateScript(const String& URL, const String& script)
                         getAttribute(typeAttr).domString().utf8().data(),
                         isModuleScript() ? 1 : 0);
 
-            if (isModuleScript())
-                proxy->evaluateModule(URL, script);
-            else
+            if (isModuleScript()) {
+                /* Modules run after parsing, like defer; evaluating here would
+                 * run them against a half built document. */
+                AntRuntime::queueModule(URL.utf8().data(), script.utf8().data());
+            } else {
                 proxy->evaluate(URL, 0, script);
+            }
 
             Document::updateDocumentsRendering();
         }
