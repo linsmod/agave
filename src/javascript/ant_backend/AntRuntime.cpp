@@ -1305,28 +1305,50 @@ static char* moduleFetch(const char* url, unsigned long* outSize)
     ModuleFetchClient client;
     long long id;
     int waited = 0;
+    int attempt;
 
     if (outSize)
         *outSize = 0;
 
-    if (!session)
-        session = Net::Session::create();
-
-    if (!session)
-        return NULL;
-
     request.url = url;
     request.method = "GET";
+    request.timeoutMs = 5000;
 
-    id = session->start(request, &client);
+    /* A pooled keep-alive connection can go stale between two module loads; a
+     * hung request used to block the whole import graph for 30s and then fail.
+     * Retry once on a brand new session. */
+    for (attempt = 0; attempt < 2; ++attempt) {
+        if (!session)
+            session = Net::Session::create();
 
-    if (!id)
-        return NULL;
+        if (!session)
+            return NULL;
 
-    while (!client.done && waited < 30000) {
-        session->pump();
-        Sleep(1);
-        waited += 1;
+        client.done = false;
+        client.failed = false;
+        client.body.clear();
+
+        id = session->start(request, &client);
+
+        if (id) {
+            while (!client.done && waited < 5000) {
+                session->pump();
+                Sleep(1);
+                waited += 1;
+            }
+        }
+
+        if (client.done && !client.failed)
+            break;
+
+        if (getenv("AGB_MODULE_DEBUG"))
+            fprintf(stderr, "[modfetch] retry %s after %u ms (%s)\n", url,
+                    (unsigned)waited, id ? "timeout" : "start failed");
+
+        session->shutdown();
+        delete session;
+        session = NULL;
+        waited = 0;
     }
 
     if (getenv("AGB_MODULE_DEBUG"))
@@ -1691,6 +1713,41 @@ static const char kPrelude[] =
 "  }"
 "  if (!g.requestIdleCallback) { g.requestIdleCallback = function (cb) { return 1; }; g.cancelIdleCallback = function () {}; }"
 "  if (!g.createImageBitmap) g.createImageBitmap = function () { return null; };"
+"  if (!g.CSS) g.CSS = {};"
+"  if (!g.CSS.supports) {"
+"    g.CSS.supports = function (a, b) {"
+"      var decl, el, name, value, got;"
+"      if (b !== undefined) { decl = String(a) + ':' + String(b); }"
+"      else { decl = String(a); }"
+"      var colon = decl.indexOf(':');"
+"      if (colon < 0) {"
+"        /* 'prop: value' was not given: treat the whole string as a declaration only"
+"           when it contains a colon, otherwise the query is a property name. */"
+"        return false;"
+"      }"
+"      name = decl.slice(0, colon).replace(/^\\s+|\\s+$/g, '');"
+"      value = decl.slice(colon + 1).replace(/^\\s+|\\s+$/g, '');"
+"      el = g.document ? g.document.createElement('div') : null;"
+"      if (!el || !name || !value) return false;"
+"      try {"
+"        if (el.style.setProperty) el.style.setProperty(name, value);"
+"        else el.style[name] = value;"
+"        got = el.style.getPropertyValue ? el.style.getPropertyValue(name) : el.style[name];"
+"      } catch (e) { return false; }"
+"      return !!(got && String(got).length);"
+"    };"
+"  }"
+"  if (!g.CSS.escape) g.CSS.escape = function (s) { return String(s); };"
+"  {"
+"    var __evtHandlers = ['onload','onerror','onunload','onbeforeunload','onresize','onscroll','onhashchange',"
+"      'onpopstate','onmessage','onfocus','onblur','onclick','onmousedown','onmouseup','onmousemove','onkeydown',"
+"      'onkeyup','onkeypress','ondblclick','oncontextmenu','onwheel','ontouchstart','ontouchend','ontouchmove',"
+"      'onreadystatechange','onstorage','onoffline','ononline','onbeforeprint','onafterprint','onpageshow','onpagehide'];"
+"    for (var __i = 0; __i < __evtHandlers.length; ++__i) {"
+"      try { if (typeof g[__evtHandlers[__i]] === 'undefined') g[__evtHandlers[__i]] = null; } catch (e) {}"
+"    }"
+"    try { if (typeof g.name === 'undefined') g.name = ''; } catch (e) {}"
+"  }"
 "  if (!g.getComputedStyle) {"
 "    g.__computedCamel = ['backgroundColor','backgroundImage','backgroundRepeat','backgroundPosition',"
 "      'backgroundSize','backgroundAttachment','backgroundClip','backgroundOrigin','color','width',"
