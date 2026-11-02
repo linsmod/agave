@@ -90,6 +90,15 @@ static int onNewWindow(AgaveWebView* view, AgaveWebView* popup, const char* url,
     return 1;
 }
 
+static void onMessage(AgaveWebView* view, const char* message, void* user)
+{
+    (void)view;
+    (void)user;
+
+    _snprintf(g_status, sizeof(g_status), "message: %s", message ? message : "");
+    InvalidateRect(g_hwnd, NULL, FALSE);
+}
+
 static void onError(AgaveWebView* view, int code, const char* url, void* user)
 {
     (void)view;
@@ -154,6 +163,11 @@ static LRESULT CALLBACK hostProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM 
         return 0;
     }
 
+    case WM_KEYDOWN:
+        if (wParam == VK_F5 && g_left)
+            agave_webview_post_message(g_left, "hello from host");
+        return 0;
+
     case WM_DESTROY:
         PostQuitMessage(0);
         return 0;
@@ -204,6 +218,7 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
     callbacks.on_url = onUrl;
     callbacks.on_progress = onProgress;
     callbacks.on_error = onError;
+    callbacks.on_message = onMessage;
     callbacks.on_new_window = onNewWindow;
 
     g_left = agave_webview_create(g_hwnd, 8, 40, 560, 660, &callbacks, NULL);

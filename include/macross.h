@@ -498,6 +498,15 @@ typedef int (*MC_OPEN_WINDOW_HOOK)(const char* utf8_url);
 MACROSS_API void macross_set_open_window_hook(MC_OPEN_WINDOW_HOOK hook);
 
 /**
+ * \brief Page-to-host message hook.
+ *
+ * Pages call window.agavePostMessage(text); the text is delivered verbatim to
+ * this hook. Hosts usually surface it as an event on their webview control.
+ */
+typedef void (*MC_POST_MESSAGE_HOOK)(const char* utf8_message);
+MACROSS_API void macross_set_post_message_hook(MC_POST_MESSAGE_HOOK hook);
+
+/**
  * \fn MC_STATUS macross_view_get_scale_factor(MaCrossView* view, int* precent)
  * 
  * \param view  	Pointer to an existing webview object.

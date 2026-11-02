@@ -147,6 +147,7 @@ int nodeQuerySelectorAll(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, 
 int nodeQuerySelector(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalFrameSlot(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalOpenWindow(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int globalPostMessage(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalStorageGet(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalStorageHas(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalStorageSet(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
@@ -1397,6 +1398,9 @@ static const char kPrelude[] =
 "      close: function () { this.closed = true; }, postMessage: function () {} };"
 "  };"
 "  g.close = function () {};"
+"  g.agavePostMessage = function (message) {"
+"    try { __agbPostMessage(message == null ? '' : String(message)); } catch (e) {}"
+"  };"
 "  if (typeof g.setTimeout === 'function' && !g.__agbTimersWrapped) {"
 "    g.__agbTimersWrapped = true;"
 "    var _st = g.setTimeout, _si = g.setInterval;"
@@ -1683,6 +1687,7 @@ void bindDocument(void* document)
         antb_define_method(g_engine, global, "__agbFrameSlot", globalFrameSlot, NULL);
         antb_define_method(g_engine, global, "__agbActivateSlot", globalActivateSlot, NULL);
         antb_define_method(g_engine, global, "__agbOpenWindow", globalOpenWindow, NULL);
+        antb_define_method(g_engine, global, "__agbPostMessage", globalPostMessage, NULL);
         antb_define_method(g_engine, global, "__agbStorageGet", globalStorageGet, NULL);
         antb_define_method(g_engine, global, "__agbStorageHas", globalStorageHas, NULL);
         antb_define_method(g_engine, global, "__agbStorageSet", globalStorageSet, NULL);
@@ -2913,6 +2918,20 @@ static WebCore::String tokensWithout(const WebCore::String& tokens, const WebCor
 /* JS-visible context switching, used by the timer wrapper in the prelude and by
  * async XHR delivery. */
 static AntRuntime::OpenWindowHook g_openWindowHook = NULL;
+static AntRuntime::PostMessageHook g_postMessageHook = NULL;
+
+int globalPostMessage(AntbEngine*, AntbValue*, AntbValue** args, int argc,
+                      AntbValue* out, void*)
+{
+    char* message = (argc > 0) ? antb_to_utf8(args[0]) : NULL;
+
+    if (g_postMessageHook)
+        g_postMessageHook(message ? message : "");
+
+    antb_free(message);
+    (void)out;
+    return 1;
+}
 
 static AntbValue* makeStringResult(AntbEngine* engine, AntbValue* out, const char* text)
 {
@@ -3692,6 +3711,11 @@ namespace AntRuntime {
 void setOpenWindowHook(OpenWindowHook hook)
 {
     g_openWindowHook = hook;
+}
+
+void setPostMessageHook(PostMessageHook hook)
+{
+    g_postMessageHook = hook;
 }
 
 } /* namespace AntRuntime */

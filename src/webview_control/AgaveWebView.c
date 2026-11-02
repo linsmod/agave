@@ -74,6 +74,7 @@ static CRITICAL_SECTION g_lock;
 static int              g_lockReady;
 static AgaveWebView*    g_views[AGW_MAX_VIEWS];
 static int              g_viewCount;
+static AgaveWebView*    g_lastActive;
 static AgwCommand       g_queue[AGW_QUEUE_SIZE];
 static int              g_queueHead;
 static int              g_queueTail;
@@ -156,6 +157,19 @@ static void agwOnInvalidate(MaCrossView* view, const MC_RECT* rect)
 
     if (item && item->hwnd)
         PostMessageA(item->hwnd, AGW_MSG_REPAINT, 0, 0);
+}
+
+/* window.agavePostMessage(): the engine does not say which view produced the
+ * message, so we use the control whose view was updated last. */
+static void agwOnPostMessage(const char* message)
+{
+    AgaveWebView* item = g_lastActive;
+
+    if (!item)
+        return;
+
+    if (item->callbacks.on_message)
+        item->callbacks.on_message(item, message ? message : "", item->user);
 }
 
 static void agwOnUpdateNow(MaCrossView* view)
@@ -587,6 +601,7 @@ static DWORD WINAPI agwEngineThread(LPVOID param)
                 continue;
 
             macross_view_update(item->view, NULL);
+            g_lastActive = item;
             active = 1;
         }
         agwUnlock();
@@ -911,6 +926,7 @@ AgaveWebView* agave_webview_create(void* parent, int x, int y, int width, int he
     agwRegisterClass((HINSTANCE)GetWindowLongPtrA((HWND)parent, GWLP_HINSTANCE));
 
     macross_set_open_window_hook(agave_control_open_window);
+    macross_set_post_message_hook(agwOnPostMessage);
     agwInstallCallbacks();
     agwEnsureEngine();
 
@@ -1086,6 +1102,45 @@ void agave_webview_set_focus(AgaveWebView* item)
 {
     if (item && item->hwnd)
         SetFocus(item->hwnd);
+}
+
+/* Host -> page. The text is passed as a JS string literal; quotes, backslashes
+ * and newlines are escaped, everything else is passed through as UTF-8. */
+void agave_webview_post_message(AgaveWebView* item, const char* message)
+{
+    char script[2048];
+    char escaped[1400];
+    size_t i = 0;
+    size_t out = 0;
+
+    if (!item || !message)
+        return;
+
+    while (message[i] && out + 6 < sizeof(escaped)) {
+        unsigned char c = (unsigned char)message[i++];
+
+        if (c == '\\' || c == '\'') {
+            escaped[out++] = '\\';
+            escaped[out++] = (char)c;
+        } else if (c == '\n') {
+            escaped[out++] = '\\';
+            escaped[out++] = 'n';
+        } else if (c == '\r') {
+            escaped[out++] = '\\';
+            escaped[out++] = 'r';
+        } else {
+            escaped[out++] = (char)c;
+        }
+    }
+    escaped[out] = 0;
+
+    _snprintf(script, sizeof(script),
+              "try { if (typeof window.onAgaveMessage === 'function') "
+              "window.onAgaveMessage('%s'); } catch (e) {}",
+              escaped);
+    script[sizeof(script) - 1] = 0;
+
+    agave_webview_eval(item, script);
 }
 
 void agave_webview_set_user_agent(AgaveWebView* item, const char* userAgent)

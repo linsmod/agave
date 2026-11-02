@@ -58,6 +58,8 @@ typedef struct AgaveWebViewCallback {
     void (*on_error)(AgaveWebView* view, int code, const char* url, void* user);
     /* A download finished, path is the file written by the control. */
     void (*on_download)(AgaveWebView* view, const char* url, const char* path, void* user);
+    /* The page called window.agavePostMessage(text). */
+    void (*on_message)(AgaveWebView* view, const char* message, void* user);
 } AgaveWebViewCallback;
 
 /* Creates the control as a child of `parent`. Returns NULL on failure. */
@@ -98,6 +100,9 @@ AGW_API const char* agave_webview_title(AgaveWebView* view);
 
 /* Focus handling, mostly for hosts with several controls. */
 AGW_API void agave_webview_set_focus(AgaveWebView* view);
+
+/* Host -> page: calls window.onAgaveMessage(text) in the page (if defined). */
+AGW_API void agave_webview_post_message(AgaveWebView* view, const char* message);
 
 /* Per-control overrides (thread safe, queued). */
 AGW_API void agave_webview_set_user_agent(AgaveWebView* view, const char* user_agent);

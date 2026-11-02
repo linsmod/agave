@@ -313,6 +313,11 @@ void macross_set_open_window_hook(MC_OPEN_WINDOW_HOOK hook)
     AntRuntime::setOpenWindowHook((AntRuntime::OpenWindowHook)hook);
 }
 
+void macross_set_post_message_hook(MC_POST_MESSAGE_HOOK hook)
+{
+    AntRuntime::setPostMessageHook((AntRuntime::PostMessageHook)hook);
+}
+
 MC_STATUS macross_view_set_scale_factor(MaCrossView* view, int scale)
 {
 	if (!view)

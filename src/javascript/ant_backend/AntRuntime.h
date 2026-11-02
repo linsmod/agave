@@ -17,6 +17,10 @@ namespace AntRuntime {
 typedef int (*OpenWindowHook)(const char* url);
 void setOpenWindowHook(OpenWindowHook hook);
 
+/* window.agavePostMessage(str) hands a string to the embedding host. */
+typedef void (*PostMessageHook)(const char* message);
+void setPostMessageHook(PostMessageHook hook);
+
 /* Creates the JS engine. Safe to call more than once; returns false on failure. */
 bool start();
 
