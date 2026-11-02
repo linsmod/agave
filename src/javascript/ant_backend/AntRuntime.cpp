@@ -45,6 +45,8 @@ int nodeDispatchEvent(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, voi
 int locationGetter(AntbEngine*, AntbValue*, const char*, AntbValue*, void*);
 AntbValue* wrapNode(AntbEngine*, WebCore::Node*);
 int docCreateElement(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeFocus(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeBlur(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int docCreateTextNode(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeAppendChild(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeRemoveChild(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
@@ -259,6 +261,8 @@ void bindDocument(void* document)
                 antb_class_add_method(g_engine, g_nodeClass, "removeChild", nodeRemoveChild, NULL);
                 antb_class_add_method(g_engine, g_nodeClass, "insertBefore", nodeInsertBefore, NULL);
                 antb_class_add_method(g_engine, g_nodeClass, "setAttribute", nodeSetAttribute, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "focus", nodeFocus, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "blur", nodeBlur, NULL);
                 antb_class_add_method(g_engine, g_nodeClass, "removeAttribute", nodeRemoveAttribute, NULL);
             }
         }
@@ -672,6 +676,30 @@ int nodeInsertBefore(AntbEngine* engine, AntbValue* self, AntbValue** args, int 
             antb_value_release(v);
         }
     }
+    return 1;
+}
+
+int nodeFocus(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+               AntbValue* out, void*)
+{
+    WebCore::Node* n = nodeOf(self);
+
+    (void)engine; (void)args; (void)argc; (void)out;
+
+    if (n && n->isElementNode())
+        static_cast<WebCore::Element*>(n)->focus(true);
+    return 1;
+}
+
+int nodeBlur(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+              AntbValue* out, void*)
+{
+    WebCore::Node* n = nodeOf(self);
+
+    (void)engine; (void)args; (void)argc; (void)out;
+
+    if (n && n->isElementNode())
+        static_cast<WebCore::Element*>(n)->blur();
     return 1;
 }
 

@@ -48,6 +48,7 @@ public:
     virtual void calcPrefWidths();
     virtual void removeLeftoverAnonymousBlock(RenderBlock*) { }
     virtual void setStyle(RenderStyle*);
+    virtual void paintObject(PaintInfo&, int tx, int ty);
     virtual void updateFromElement();
     virtual bool canHaveChildren() const { return false; }
     virtual short baselinePosition(bool firstLine, bool isRootLineBox) const;

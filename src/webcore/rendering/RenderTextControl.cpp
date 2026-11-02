@@ -20,6 +20,7 @@
 
 #include "config.h"
 #include "RenderTextControl.h"
+#include "GraphicsContext.h"
 
 #include "CharacterNames.h"
 #include "CSSStyleSelector.h"
@@ -185,8 +186,9 @@ RenderStyle* RenderTextControl::createInnerTextStyle(RenderStyle* startStyle)
     } else {
         textBlockStyle->setWhiteSpace(PRE);
         textBlockStyle->setWordWrap(NormalWordWrap);
-        textBlockStyle->setOverflowX(OHIDDEN);
-        textBlockStyle->setOverflowY(OHIDDEN);
+        /* No overflow clip here: it would give this block its own RenderLayer,
+         * and that layer stops painting once the control is focused; the
+         * control clips its own content instead, see paintObject(). */
         
         // Do not allow line-height to be smaller than our default.
         if (textBlockStyle->font().lineSpacing() > lineHeight(true, true))
@@ -768,6 +770,27 @@ IntRect RenderTextControl::controlClipRect(int tx, int ty) const
     return clipRect;
 }
 
+void RenderTextControl::paintObject(PaintInfo& paintInfo, int tx, int ty)
+{
+    /* setStyle() forces hasOverflowClip() off (see below), so the field would
+     * otherwise let long values spill across the page. Clip the foreground to
+     * the content box instead of giving the inner text its own clipped layer,
+     * which is what used to make focused text disappear. */
+    if (paintInfo.phase == PaintPhaseBlockBackground || !style()) {
+        RenderBlock::paintObject(paintInfo, tx, ty);
+        return;
+    }
+
+    {
+        GraphicsContext* context = paintInfo.context;
+        context->save();
+        context->clip(IntRect(tx + borderLeft() + paddingLeft(), ty + borderTop() + paddingTop(),
+                              contentWidth(), contentHeight()));
+        RenderBlock::paintObject(paintInfo, tx, ty);
+        context->restore();
+    }
+}
+
 void RenderTextControl::layout()
 {
     int oldHeight = m_height;
@@ -887,6 +910,7 @@ void RenderTextControl::calcPrefWidths()
 
 void RenderTextControl::forwardEvent(Event* evt)
 {
+
     if (evt->type() == blurEvent) {
         RenderObject* innerRenderer = m_innerText->renderer();
         if (innerRenderer) {
