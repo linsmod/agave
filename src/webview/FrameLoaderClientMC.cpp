@@ -610,9 +610,23 @@ void FrameLoaderClientMC::dispatchDidCommitLoad()
     notImplemented();
 }
 
+/* True when this client belongs to the page's main frame. The Ant JS window is
+ * one object per engine, so only the main frame may deliver window events. */
+static bool isMainFrameClient(Frame* frame)
+{
+    return frame && frame->page() && frame->page()->mainFrame() == frame;
+}
+
 void FrameLoaderClientMC::dispatchDidFinishDocumentLoad()
 {
     Net::logEvent("page.domready", "");
+
+    /* The JS window object is one per engine, not one per frame, so an iframe
+     * finishing must not re-run the embedding page's DOMContentLoaded/onload
+     * handlers. css3test has ad iframes and used to run its whole suite twice. */
+    if (!isMainFrameClient(m_frame))
+        return;
+
 #if ENABLE(ANTJS)
     /* Deferred module scripts run when parsing finishes, before DOMContentLoaded. */
     AntRuntime::flushDeferredModules();
@@ -626,7 +640,8 @@ void FrameLoaderClientMC::dispatchDidFinishLoad()
 {
     Net::logEvent("page.load", "url=%s", m_frame && m_frame->document() ? m_frame->document()->URL().utf8().data() : "");
 #if ENABLE(ANTJS)
-    AntRuntime::dispatchWindowEvent("load");
+    if (isMainFrameClient(m_frame))
+        AntRuntime::dispatchWindowEvent("load");
 #endif
 
     /* Report progress 100 / finished: hosts use this to stop their frame loop,

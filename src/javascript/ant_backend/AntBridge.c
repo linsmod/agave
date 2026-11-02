@@ -218,6 +218,16 @@ int antb_is_string(const AntbValue* value)
     return value && value->js && vtype(value->v) == kTypeString;
 }
 
+/* Identity test for two wrappers: removeEventListener gets back the same
+ * function object the page registered, and must not remove a different one. */
+int antb_value_same(const AntbValue* a, const AntbValue* b)
+{
+    if (!a || !b || a->js != b->js)
+        return 0;
+
+    return strict_eq_values(a->js, a->v, b->v) ? 1 : 0;
+}
+
 int antb_is_number(const AntbValue* value)
 {
     if (!value)

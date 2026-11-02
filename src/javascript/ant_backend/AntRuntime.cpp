@@ -192,6 +192,7 @@ static void activateSlot(int slot)
 }
 int nodeGetAttribute(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeAddEventListener(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeRemoveEventListener(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 WebCore::Document* documentOf(AntbValue* self);
 int docGetElementById(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeDispatchEvent(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
@@ -2052,14 +2053,19 @@ static const char kPrelude[] =
 "      try {"
 "        if (g.addEventListener && Object.defineProperty) {"
 "          (function (name) {"
-"            var slot = null;"
+"            var slot = null, installed = false;"
+"            /* One listener per event, forever: assigning onload twice must not"
+"               register twice (removeEventListener is not reliable here). The"
+"               dispatcher always calls whatever the current assignment is. */"
 "            Object.defineProperty(g, name, {"
 "              configurable: true, enumerable: true,"
 "              get: function () { return slot; },"
 "              set: function (fn) {"
-"                if (slot) { try { g.removeEventListener(name.slice(2), slot); } catch (e) {} }"
 "                slot = fn;"
-"                if (typeof fn === 'function') { try { g.addEventListener(name.slice(2), fn); } catch (e) {} }"
+"                if (!installed && typeof fn === 'function') {"
+"                  installed = true;"
+"                  try { g.addEventListener(name.slice(2), function (ev) { if (typeof slot === 'function') { try { slot.call(g, ev); } catch (e) {} } }); } catch (e) {}"
+"                }"
 "              }"
 "            });"
 "          })(__evtHandlers[__i]);"
@@ -2562,6 +2568,7 @@ void bindDocument(void* document)
             if (g_nodeClass) {
                 antb_class_add_method(g_engine, g_nodeClass, "getAttribute", nodeGetAttribute, NULL);
                 antb_class_add_method(g_engine, g_nodeClass, "addEventListener", nodeAddEventListener, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "removeEventListener", nodeRemoveEventListener, NULL);
                 antb_class_add_method(g_engine, g_nodeClass, "dispatchEvent", nodeDispatchEvent, NULL);
                 antb_class_add_method(g_engine, g_nodeClass, "appendChild", nodeAppendChild, NULL);
                 antb_class_add_method(g_engine, g_nodeClass, "removeChild", nodeRemoveChild, NULL);
@@ -2603,6 +2610,7 @@ void bindDocument(void* document)
         antb_define_method(g_engine, docObj, "write", docWrite, NULL);
         antb_define_method(g_engine, docObj, "writeln", docWriteln, NULL);
         antb_define_method(g_engine, docObj, "addEventListener", nodeAddEventListener, NULL);
+        antb_define_method(g_engine, docObj, "removeEventListener", nodeRemoveEventListener, NULL);
         antb_define_method(g_engine, docObj, "dispatchEvent", nodeDispatchEvent, NULL);
         /* The document is a plain object (not a Node wrapper), so the node
          * methods have to be installed on it explicitly. */
@@ -2627,6 +2635,7 @@ void bindDocument(void* document)
          * listeners live on the document node so both targets share one list. */
         antb_set_native(window, g_document, AGB_TAG_NODE);
         antb_define_method(g_engine, window, "addEventListener", nodeAddEventListener, NULL);
+        antb_define_method(g_engine, window, "removeEventListener", nodeRemoveEventListener, NULL);
         antb_define_method(g_engine, window, "dispatchEvent", nodeDispatchEvent, NULL);
 
         antb_set_prop(g_engine, window, "document", docObj);
@@ -2887,11 +2896,22 @@ static int styleGetter(AntbEngine* engine, AntbValue* self, const char* name, An
         return 1;
     }
 
-    /* setProperty / getPropertyValue / removeProperty come from the prelude
-     * helper object, so they behave like prototype methods. */
+    /* CSSStyleDeclaration.length / item(i) describe the declaration itself, not
+     * a property lookup: css3test decides "did the engine accept this value?"
+     * by `inline[prop] = value; inline.length > 0`, so these must be real. */
+    if (!strcmp(name, "length")) {
+        AntbValue* v = antb_make_number(engine, element ? (double)element->style()->length() : 0.0);
+        if (!v)
+            return 0;
+        antb_value_assign(out, v);
+        antb_value_release(v);
+        return 1;
+    }
+
+    /* setProperty / getPropertyValue / removeProperty / item come from the
+     * prelude helper object, so they behave like prototype methods. */
     if (!strcmp(name, "setProperty") || !strcmp(name, "getPropertyValue")
-            || !strcmp(name, "removeProperty") || !strcmp(name, "item")
-            || !strcmp(name, "length")) {
+            || !strcmp(name, "removeProperty") || !strcmp(name, "item")) {
         AntbValue* global = antb_global(engine);
         AntbValue* api = global ? antb_get_prop(engine, global, "__agbStyleApi") : NULL;
         AntbValue* member = api ? antb_get_prop(engine, api, name) : NULL;
@@ -3394,6 +3414,40 @@ int nodeAddEventListener(AntbEngine* engine, AntbValue* self, AntbValue** args, 
         l.fn = antb_is_function(args[1]) ? antb_retain(args[1]) : NULL;
         if (l.fn)
             g_listeners->push_back(l);
+    }
+
+    antb_free(type);
+    return 1;
+}
+
+/* removeEventListener(type, fn): without this, `window.onload = f` assignments
+ * (which the prelude implements as remove-then-add) piled up listeners and ran
+ * the page's load handler once per assignment - css3test ran its whole suite
+ * three times that way. */
+int nodeRemoveEventListener(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                            AntbValue* out, void*)
+{
+    WebCore::Node* n = nodeOf(self);
+    char* type = (argc > 0) ? antb_to_utf8(args[0]) : NULL;
+
+    (void)engine; (void)out;
+
+    if (!n || !type || argc < 2) {
+        antb_free(type);
+        return 0;
+    }
+
+    if (g_listeners) {
+        for (size_t i = 0; i < g_listeners->size(); ) {
+            Listener& l = (*g_listeners)[i];
+
+            if (l.node == n && l.type == type && l.fn && antb_value_same(l.fn, args[1])) {
+                antb_value_release(l.fn);
+                g_listeners->erase(g_listeners->begin() + i);
+                continue;
+            }
+            ++i;
+        }
     }
 
     antb_free(type);
@@ -4981,3 +5035,5 @@ void setDialogHook(DialogHook hook)
 }
 
 } /* namespace AntRuntime */
+
+
