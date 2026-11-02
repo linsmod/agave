@@ -26,7 +26,13 @@ extern "C" {
 #endif
 
 #if defined(_WIN32)
-#  define AGW_API __declspec(dllexport)
+#  if defined(AGW_BUILD_DLL)
+#    define AGW_API __declspec(dllexport)
+#  elif defined(AGW_USE_DLL)
+#    define AGW_API __declspec(dllimport)
+#  else
+#    define AGW_API
+#  endif
 #else
 #  define AGW_API
 #endif
@@ -42,8 +48,12 @@ typedef struct AgaveWebViewCallback {
     void (*on_progress)(AgaveWebView* view, int percent, int finished, void* user);
     /* Status bar text (hovered link etc). */
     void (*on_status)(AgaveWebView* view, const char* text, void* user);
-    /* Page asked to open a new window; the host usually opens a new tab. */
-    void (*on_new_window)(AgaveWebView* view, const char* url, void* user);
+    /* Page asked to open a new window. `new_view` is a freshly created control
+     * (already parented to the same host window); the host may reparent or
+     * resize it (e.g. into a new tab) and must return non-zero to keep it.
+     * Return 0 to block the popup - the control is destroyed for you. */
+    int (*on_new_window)(AgaveWebView* view, AgaveWebView* new_view,
+                         const char* url, void* user);
     /* Navigation failed. */
     void (*on_error)(AgaveWebView* view, int code, const char* url, void* user);
     /* A download finished, path is the file written by the control. */
@@ -56,6 +66,10 @@ AGW_API AgaveWebView* agave_webview_create(void* parent, int x, int y, int width
 
 /* Destroys the control (stops its engine work, frees the buffer). */
 AGW_API void agave_webview_destroy(AgaveWebView* view);
+
+/* Creates a popup control as a child of the same host window as `from`, sized
+ * like `from`. Used to implement window.open(); hosts may also call it. */
+AGW_API AgaveWebView* agave_webview_create_popup(AgaveWebView* from, const char* url);
 
 /* Moves / resizes the control. */
 AGW_API void agave_webview_set_rect(AgaveWebView* view, int x, int y, int width, int height);

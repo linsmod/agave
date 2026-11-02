@@ -789,6 +789,43 @@ static char* agwOnUserAgent(const char* url)
     return buffer;
 }
 
+/* window.open(): create a sibling control and ask the host whether to keep it. */
+static MaCrossView* agwOnOpenWindow(const char* url, unsigned int flags, const MC_RECT* rect)
+{
+    AgaveWebView* origin = NULL;
+    AgaveWebView* created = NULL;
+    int i;
+
+    (void)flags;
+    (void)rect;
+
+    /* macross does not tell us which view opened the window; use the first live
+     * control as the reference for the host window. */
+    for (i = 0; i < g_viewCount; ++i) {
+        if (g_views[i] && g_views[i]->hwnd && !g_views[i]->destroyed) {
+            origin = g_views[i];
+            break;
+        }
+    }
+
+    if (!origin)
+        return NULL;
+
+    created = agave_webview_create_popup(origin, url ? url : "about:blank");
+
+    if (!created)
+        return NULL;
+
+    if (origin->callbacks.on_new_window) {
+        if (!origin->callbacks.on_new_window(origin, created, url ? url : "", origin->user)) {
+            agave_webview_destroy(created);
+            return NULL;
+        }
+    }
+
+    return created->view;
+}
+
 static void agwInstallCallbacks(void)
 {
     static int installed = 0;
@@ -809,6 +846,7 @@ static void agwInstallCallbacks(void)
     info.cb_set_cursor       = agwOnCursor;
     info.cb_write_file_data  = agwOnWriteFile;
     info.cb_user_agent_custom = agwOnUserAgent;
+    info.cb_open_window      = agwOnOpenWindow;
 
     macross_set_callback(&info);
 }
@@ -895,6 +933,38 @@ void agave_webview_destroy(AgaveWebView* item)
     }
 
     free(item);
+}
+
+AgaveWebView* agave_webview_create_popup(AgaveWebView* from, const char* url)
+{
+    HWND parent;
+    RECT rect;
+    AgaveWebView* created;
+
+    if (!from || !from->hwnd)
+        return NULL;
+
+    parent = GetParent(from->hwnd);
+
+    if (!parent)
+        return NULL;
+
+    GetWindowRect(from->hwnd, &rect);
+    MapWindowPoints(HWND_DESKTOP, parent, (POINT*)&rect, 2);
+
+    created = agave_webview_create(parent,
+                                   rect.left, rect.top,
+                                   rect.right - rect.left,
+                                   rect.bottom - rect.top,
+                                   &from->callbacks, from->user);
+
+    if (!created)
+        return NULL;
+
+    if (url && url[0])
+        agave_webview_navigate(created, url);
+
+    return created;
 }
 
 void agave_webview_set_rect(AgaveWebView* item, int x, int y, int width, int height)

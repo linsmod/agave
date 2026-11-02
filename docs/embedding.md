@@ -25,7 +25,16 @@ cmake --build build-zig-native --target agave_webview   # 静态库
 cmake --build build-zig-native --target agave_embed     # 双控件演示
 ```
 
-宿主链接 `agave_webview` + `libagave.dll.a`，并把 `libagave.dll`、`antbridge.dll` 放到 exe 旁边。
+产物：
+
+| 文件 | 用途 |
+|---|---|
+| `libagave_webview.dll` | 控件 DLL（第三方只需这个 + 头文件） |
+| `libagave_webview.dll.a` | MinGW 导入库 |
+| `agave_embed.exe` | 演示宿主 |
+
+宿主编译时定义 `AGW_USE_DLL` 并链接导入库；运行时把
+`libagave_webview.dll`、`libagave.dll`、`antbridge.dll` 放到 exe 旁边。
 
 ## API 一览
 
@@ -62,5 +71,9 @@ cmake --build build-zig-native --target agave_embed     # 双控件演示
 
 * 只支持 Windows（子窗口 + DIB）；
 * 每个控件一个引擎 view，但 `macross_initialize` 是进程级，只初始化一次；
-* `on_new_window` 目前不会被触发（引擎没有暴露 window.open 回调）；
+* `on_new_window` 由引擎的 `cb_open_window` 驱动：控件已创建好 popup 控件并
+  交给宿主摆放，宿主返回 0 表示阻止（控件自动销毁）；
+* 多控件共享一个 Ant 引擎实例（`g_document` 是进程级），
+  多个控件同时执行有 DOM 依赖的脚本时，document 绑定会互相影响 —— 这是
+  当前最大的架构限制，接入方应尽量让一个进程只跑一个"活"页面；
 * 控件不处理右键菜单，宿主可以自己弹（或等我们补）。

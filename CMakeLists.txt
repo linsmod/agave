@@ -107,12 +107,14 @@ endif()
 
 # Embeddable WebView control: child HWND + engine thread, plus a demo host.
 if (OPT_SHELL AND WIN32)
-    add_library(agave_webview STATIC ${PROJ_ROOT}/src/webview_control/AgaveWebView.c)
+    add_library(agave_webview SHARED ${PROJ_ROOT}/src/webview_control/AgaveWebView.c)
     target_include_directories(agave_webview PRIVATE ${PROJ_ROOT}/include ${PROJ_OUT})
+    target_compile_definitions(agave_webview PRIVATE AGW_BUILD_DLL)
     target_link_libraries(agave_webview PRIVATE ${LIB_NAME} user32 gdi32)
 
     add_executable(agave_embed WIN32 ${PROJ_ROOT}/examples/embed_demo/main.c)
     target_include_directories(agave_embed PRIVATE ${PROJ_ROOT}/include ${PROJ_OUT})
+    target_compile_definitions(agave_embed PRIVATE AGW_USE_DLL)
     target_link_libraries(agave_embed PRIVATE agave_webview ${LIB_NAME} user32 gdi32)
 endif()
 

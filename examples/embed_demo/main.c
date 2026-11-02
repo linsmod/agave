@@ -74,6 +74,22 @@ static void onProgress(AgaveWebView* view, int percent, int finished, void* user
     InvalidateRect(g_hwnd, NULL, FALSE);
 }
 
+/* window.open(): the control already created the popup; place it on top and
+ * keep it (returning 0 would close it). */
+static int onNewWindow(AgaveWebView* view, AgaveWebView* popup, const char* url, void* user)
+{
+    (void)view;
+    (void)user;
+
+    agave_webview_set_rect(popup, 200, 100, 640, 520);
+    agave_webview_set_zoom(popup, 100);
+
+    _snprintf(g_status, sizeof(g_status), "popup: %s", url ? url : "");
+    InvalidateRect(g_hwnd, NULL, FALSE);
+
+    return 1;
+}
+
 static void onError(AgaveWebView* view, int code, const char* url, void* user)
 {
     (void)view;
@@ -188,6 +204,7 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
     callbacks.on_url = onUrl;
     callbacks.on_progress = onProgress;
     callbacks.on_error = onError;
+    callbacks.on_new_window = onNewWindow;
 
     g_left = agave_webview_create(g_hwnd, 8, 40, 560, 660, &callbacks, NULL);
     g_right = agave_webview_create(g_hwnd, 600, 40, 560, 660, &callbacks, NULL);
@@ -197,10 +214,23 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
         return 1;
     }
 
-    SetWindowTextA(g_addrLeft, "http://127.0.0.1:8899/css3.html");
-    SetWindowTextA(g_addrRight, "https://www.163.com");
-    agave_webview_navigate(g_left, "http://127.0.0.1:8899/css3.html");
-    agave_webview_navigate(g_right, "https://www.163.com");
+    {
+        const char* leftUrl = "http://127.0.0.1:8899/css3.html";
+        char** argv = __argv;
+        int argc = 0;
+
+        while (argv && argv[argc])
+            ++argc;
+
+        if (argc > 1)
+            leftUrl = argv[1];
+
+        strncpy(g_leftUrl, leftUrl, sizeof(g_leftUrl) - 1);
+        SetWindowTextA(g_addrLeft, g_leftUrl);
+        SetWindowTextA(g_addrRight, "https://www.163.com");
+        agave_webview_navigate(g_left, g_leftUrl);
+        agave_webview_navigate(g_right, "https://www.163.com");
+    }
 
     ShowWindow(g_hwnd, SW_SHOW);
     UpdateWindow(g_hwnd);
