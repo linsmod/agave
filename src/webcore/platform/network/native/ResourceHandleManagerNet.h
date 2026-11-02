@@ -39,6 +39,7 @@ private:
     Net::Session*                m_session;
     Timer<ResourceHandleManager> m_downloadTimer;
     Vector<ResourceHandle*>      m_handles;
+    Vector<ResourceHandle*>      m_skipped;
 };
 
 } /* namespace WebCore */

@@ -161,6 +161,11 @@ double antb_to_number(const AntbValue* value)
     return js_getnum(value->v);
 }
 
+int antb_is_string(const AntbValue* value)
+{
+    return value && value->js && vtype(value->v) == kTypeString;
+}
+
 int antb_is_number(const AntbValue* value)
 {
     if (!value)

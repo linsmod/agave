@@ -28,13 +28,13 @@ public:
 
     AffineTransform matrix;
     ps_context* context;
-    int transparencyDepth;
+    Vector<float> alphaStack;
 };
 
 GraphicsContextPlatformPrivate::GraphicsContextPlatformPrivate()
     :  context(0)
 {
-    transparencyDepth = 0;
+
 }
 
 GraphicsContextPlatformPrivate::~GraphicsContextPlatformPrivate()
@@ -815,9 +815,10 @@ void GraphicsContext::addInnerRoundedRectClip(const IntRect& rect, int thickness
 }
 
 /* Group opacity: picasso has no offscreen layer here, so approximate by
- * multiplying the paint alpha for the duration of the layer. Correct for a
- * single child (the common fade/overlay case); overlapping children blend
- * individually instead of as a group. */
+ * multiplying the paint alpha for the duration of the layer. The alpha stack
+ * keeps begin/end balanced without touching save/restore (an unbalanced
+ * save/restore made clip restoration recurse on pages with many opacity
+ * layers, ending in a stack overflow). */
 void GraphicsContext::beginTransparencyLayer(float opacity) 
 { 
     if (paintingDisabled())
@@ -825,12 +826,10 @@ void GraphicsContext::beginTransparencyLayer(float opacity)
 
     {
         ps_context* gc = m_data->context;
-        float current;
+        float current = ps_set_alpha(gc, 1.0f);
 
-        save();
-        current = ps_set_alpha(gc, 1.0f);
+        m_data->alphaStack.append(current);
         ps_set_alpha(gc, current * opacity);
-        m_data->transparencyDepth++;
     }
 }
 
@@ -839,9 +838,11 @@ void GraphicsContext::endTransparencyLayer()
     if (paintingDisabled())
         return;
 
-    if (m_data->transparencyDepth > 0) {
-        restore();
-        m_data->transparencyDepth--;
+    if (!m_data->alphaStack.isEmpty()) {
+        float previous = m_data->alphaStack.last();
+
+        m_data->alphaStack.removeLast();
+        ps_set_alpha(m_data->context, previous);
     }
 }
 

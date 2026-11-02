@@ -5,6 +5,7 @@
 #include "config.h"
 
 #include "ResourceHandleManagerNet.h"
+#include "SkipList.h"
 
 #include "ResourceHandle.h"
 #include "ResourceHandleInternal.h"
@@ -45,6 +46,22 @@ void ResourceHandleManager::add(ResourceHandle* job)
     if (!m_session || !d) {
         job->cancel();
         return;
+    }
+
+    /* Blocklist: drop the request before it reaches the network. The failure is
+     * reported from the timer so the caller sees it asynchronously, like a real
+     * network error. */
+    {
+        DeprecatedString urlText = d->m_request.url().url();
+
+        if (Net::isSkippedResource(std::string(urlText.ascii()))) {
+            job->ref();
+            m_skipped.append(job);
+
+            if (!m_downloadTimer.isActive())
+                m_downloadTimer.startRepeating(0.01);
+            return;
+        }
     }
 
     {
@@ -123,6 +140,26 @@ void ResourceHandleManager::pump()
 
 void ResourceHandleManager::downloadTimerCallback(Timer<ResourceHandleManager>*)
 {
+    /* Fail blocklisted requests first, then pump the real session. */
+    if (!m_skipped.isEmpty()) {
+        Vector<ResourceHandle*> failed;
+
+        failed.swap(m_skipped);
+
+        for (unsigned i = 0; i < failed.size(); ++i) {
+            ResourceHandleInternal* d = failed[i]->getInternal();
+
+            if (d) {
+                Net::Error error;
+
+                error.code = -2;
+                error.text = "skipped by skipres.txt";
+                d->onError(error);
+            }
+            failed[i]->deref();
+        }
+    }
+
     pump();
 
     /* Nothing to prune: handles deregister themselves through cancel() (also

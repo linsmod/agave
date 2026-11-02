@@ -12,6 +12,8 @@
 #include "AntBridge.h"
 
 #include "Document.h"
+#include "DOMImplementation.h"
+#include "HTMLDocument.h"
 #include "Element.h"
 #include "RenderObject.h"
 #include "Node.h"
@@ -67,6 +69,8 @@ int locationAssign(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*)
 int locationReplace(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int locationReload(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int docWrite(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int docCreateHTMLDocument(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int docHasFeature(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int docWriteln(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int historyBack(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int historyForward(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
@@ -565,6 +569,54 @@ int locationReload(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*)
 {
     if (g_document && g_document->frame())
         g_document->frame()->loader()->reload();
+    return 1;
+}
+/* document.implementation.hasFeature(): always true, like modern browsers. */
+int docHasFeature(AntbEngine* engine, AntbValue*, AntbValue**, int, AntbValue* out, void*)
+{
+    AntbValue* v = antb_make_number(engine, 1.0);
+    if (!v)
+        return 0;
+    antb_value_assign(out, v);
+    antb_value_release(v);
+    return 1;
+}
+
+/* document.createHTMLDocument(title): jQuery feature-tests this. */
+int docCreateHTMLDocument(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
+                          AntbValue* out, void*)
+{
+    WebCore::Document* doc = documentOf(NULL);
+    WebCore::ExceptionCode ec = 0;
+    WTF::PassRefPtr<WebCore::HTMLDocument> created;
+
+    if (!doc)
+        return 1;
+
+    {
+        WebCore::String title;
+        if (argc > 0) {
+            char* text = antb_to_utf8(args[0]);
+            if (text) {
+                title = WebCore::String::fromUTF8(text);
+                antb_free(text);
+            }
+        }
+        created = doc->implementation()->createHTMLDocument(title);
+    }
+
+    if (!created)
+        return 1;
+
+    created->ref();   /* the wrapper keeps it alive */
+
+    {
+        AntbValue* v = wrapNode(engine, created.get());
+        if (v) {
+            antb_value_assign(out, v);
+            antb_value_release(v);
+        }
+    }
     return 1;
 }
 /* document.write / writeln feed the parser, as the spec does. */
@@ -1162,6 +1214,18 @@ void bindDocument(void* document)
         antb_define_method(g_engine, docObj, "createElement", docCreateElement, NULL);
         antb_define_method(g_engine, docObj, "createTextNode", docCreateTextNode, NULL);
         antb_define_method(g_engine, docObj, "createDocumentFragment", docCreateDocumentFragment, NULL);
+        /* document.implementation: jQuery and others feature-test
+         * document.implementation.createHTMLDocument(). */
+        {
+            AntbValue* implObj = antb_make_object(g_engine);
+            if (implObj) {
+                antb_define_method(g_engine, implObj, "createHTMLDocument", docCreateHTMLDocument, NULL);
+                antb_define_method(g_engine, implObj, "hasFeature", docHasFeature, NULL);
+                antb_set_prop(g_engine, docObj, "implementation", implObj);
+                antb_value_release(implObj);
+            }
+        }
+        antb_define_method(g_engine, docObj, "createHTMLDocument", docCreateHTMLDocument, NULL);
         antb_define_method(g_engine, docObj, "write", docWrite, NULL);
         antb_define_method(g_engine, docObj, "writeln", docWriteln, NULL);
         antb_define_method(g_engine, docObj, "addEventListener", nodeAddEventListener, NULL);
@@ -1644,6 +1708,42 @@ int nodeSetter(AntbEngine* engine, AntbValue* self, const char* name, const Antb
         antb_free(text);
         return 1;
     }
+    /* Attribute reflection for the common reflected properties: `img.src = ...`
+     * and friends are plain attribute writes in the DOM. Kept to a whitelist so
+     * that arbitrary JS fields (handlers, expando data) never become attributes. */
+    if (n->isElementNode() && (antb_is_string(value) || antb_is_number(value))) {
+        /* Deliberately narrow: only properties that JS builds at runtime and that
+         * the shim has no dedicated setter for. Everything else (id, class, href,
+         * value, onclick, expando data...) must stay a plain JS property, or
+         * libraries like jQuery break en masse. */
+        static const char* reflected[] = {
+            "src", "srcset", "alt", "placeholder", "poster", "width", "height",
+            "loading", "decoding", "crossorigin"
+        };
+        bool allow = false;
+
+        for (unsigned i = 0; i < sizeof(reflected) / sizeof(reflected[0]); ++i) {
+            if (!strcmp(name, reflected[i])) {
+                allow = true;
+                break;
+            }
+        }
+
+        if (allow) {
+            char* text = antb_to_utf8(value);
+
+            if (text) {
+                WebCore::ExceptionCode ec = 0;
+                WebCore::String attrName = !strcmp(name, "className") ? WebCore::String("class")
+                                                                     : WebCore::String(name);
+                static_cast<WebCore::Element*>(n)->setAttribute(attrName,
+                                                             WebCore::String::fromUTF8(text), ec);
+                antb_free(text);
+                return 1;
+            }
+        }
+    }
+
     return 0;
 }
 
