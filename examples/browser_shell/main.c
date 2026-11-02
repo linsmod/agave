@@ -1,1453 +1,81 @@
 /*
- * main.c - Agave BrowserShell (dual-threaded, tabbed Win32 shell)
+ * main.c - Agave BrowserShell, built on the AgaveWebView control.
  *
- * Threading model
- * ---------------
- *   UI thread    : window, controls, message pump, BitBlt of the active tab.
- *   engine thread: owns every MaCrossView, drains the command queue, runs
- *                  macross_event_dispatch() + macross_view_update().
+ * The shell used to drive macross_* directly (its own engine thread, DIB and
+ * input translation). It now only owns UI: every tab is an AgaveWebView child
+ * window, so the control gets exercised the way an embedding host would.
  *
- * Nothing in the engine is touched from the UI thread. Input and navigation are
- * posted into a locked command queue; engine callbacks only publish state into
- * per-tab fields and PostMessage() the UI so it repaints itself.
- *
- * Build: cmake -DOPT_SHELL=ON && ninja agave_shell
+ * Threading: the control owns the engine thread; this file never touches the
+ * engine directly and only uses the control's C API (queued, thread safe).
  */
 
 #include <windows.h>
 #include <stdio.h>
-#include <string.h>
 #include <stdlib.h>
+#include <string.h>
 
-#include "macross.h"
+#include "agave_webview.h"
 
-#define TOOLBAR_HEIGHT    38
-#define TABBAR_HEIGHT     28
-#define STATUSBAR_HEIGHT  22
-#define BUTTON_WIDTH      32
-#define MAX_TABS          12
-#define MAX_PATH_CHARS    2048
+#define MAX_TABS        16
+#define MAX_PATH_CHARS  1024
 
-#define ID_ADDRESS  1001
-#define ID_BACK     1002
-#define ID_FORWARD  1003
-#define ID_RELOAD   1004
-#define ID_STOP     1005
-#define ID_GO       1006
-#define ID_NEWTAB   1007
-#define ID_FIND     1008
-#define ID_MENU     1009
+#define ID_BACK       1001
+#define ID_FORWARD    1002
+#define ID_RELOAD     1003
+#define ID_STOP       1004
+#define ID_ADDRESS    1005
+#define ID_GO         1006
+#define ID_NEWTAB     1007
+#define ID_MENU       1009
 
-/* UI -> engine */
-enum CommandType {
-    CMD_NAVIGATE, CMD_BACK, CMD_FORWARD, CMD_RELOAD, CMD_STOP,
-    CMD_MOUSE, CMD_KEY, CMD_CHAR, CMD_RESIZE, CMD_NEW_TAB, CMD_FIND, CMD_CLOSE_TAB, CMD_ZOOM
-};
+#define ID_FIND_EDIT  1010
+#define ID_FIND_NEXT  1011
+#define ID_FIND_PREV  1012
+#define ID_FIND_CLOSE 1013
+
+#define TAB_HEIGHT    28
+#define TOOLBAR_Y     4
+#define TOOLBAR_H     34
+#define FIND_H        30
+#define STATUS_H      22
+#define BUTTON_W      34
+#define TAB_W         172
 
 typedef struct {
-    int  type;
-    int  tab;
-    int  x, y, button, modifier, key;
-    char text[MAX_PATH_CHARS];
-} ShellCommand;
-
-/* engine -> UI */
-#define WM_SHELL_STATE   (WM_APP + 1)
-
-typedef struct Tab {
-    MaCrossView* view;
-    MC_BYTE*     bits;
-    HBITMAP      bitmap;
-    HDC          memdc;
-    HGDIOBJ      oldBitmap;
-    int          width;
-    int          height;
-    int          id;
-    char         url[MAX_PATH_CHARS];
-    char         title[256];
-    char         status[512];
-    int          progress;
-    int          loading;
-    int          wantWidth;
-    int          wantHeight;
-    int          closed;
+    AgaveWebView* view;
+    HWND          hwnd;          /* the control's HWND */
+    char          url[MAX_PATH_CHARS];
+    char          title[256];
+    char          status[512];
+    int           loading;
+    int           progress;
+    int           used;
 } Tab;
 
-static CRITICAL_SECTION   g_lock;
-static ShellCommand       g_queue[512];
-static int                g_queueHead;
-static int                g_queueTail;
-static volatile int       g_engineQuit;
+static HWND  g_hwnd;
+static HWND  g_back, g_forward, g_reload, g_stop, g_address, g_go, g_newtab, g_menu;
+static HWND  g_findEdit, g_findNext, g_findPrev, g_findClose;
+static HINSTANCE g_instance;
 
-static Tab                g_tabs[MAX_TABS];
-static int                g_tabCount;
-static int                g_activeTab;
-static int                g_nextTabId = 1;
-
-static HWND               g_hwnd;
-static HWND               g_address;
-static HWND               g_find;
-static HWND               g_buttons[7];
+static Tab   g_tabs[MAX_TABS];
+static int   g_activeTab;
+static int   g_zoom = 100;
+static int   g_findVisible;
+static char  g_status[1024];
 
 #define AGW_MAX_BOOKMARKS 64
 #define AGW_MAX_HISTORY   200
 
-typedef struct { char url[1024]; char title[256]; } Bookmark;
+typedef struct { char url[MAX_PATH_CHARS]; char title[256]; } Bookmark;
 
-static Bookmark           g_bookmarks[AGW_MAX_BOOKMARKS];
-static int                g_bookmarkCount;
-static char               g_history[AGW_MAX_HISTORY][1100];
-static int                g_historyCount;
-static int                g_zoom = 100;
-static char               g_dataDir[MAX_PATH_CHARS];
-
-static int                g_tabOrder[MAX_TABS];
-static int                g_tabOrderCount;
-
-static char               g_initialUrl[MAX_PATH_CHARS];
-static char               g_downloadDir[MAX_PATH_CHARS];
+static Bookmark g_bookmarks[AGW_MAX_BOOKMARKS];
+static int      g_bookmarkCount;
+static char     g_history[AGW_MAX_HISTORY][MAX_PATH_CHARS];
+static int      g_historyCount;
+static char     g_dataDir[MAX_PATH_CHARS];
 
 /* ------------------------------------------------------------------------- */
-/* helpers                                                                    */
-/* ------------------------------------------------------------------------- */
-
-static void lockAcquire(void)   { EnterCriticalSection(&g_lock); }
-static void lockRelease(void)   { LeaveCriticalSection(&g_lock); }
-
-static Tab* tabByView(MaCrossView* view)
-{
-    int i;
-
-    for (i = 0; i < g_tabCount; ++i) {
-        if (g_tabs[i].view == view)
-            return &g_tabs[i];
-    }
-    return NULL;
-}
-
-static void addTab(const char* url);
-static void resizeActiveTab(void);
-static void syncUiFromState(void);
-static void postCommand(const ShellCommand* command);
-static void notifyUi(void);
-static void addBookmarkCurrent(void);
-static void navigateTo(const char* text, int inNewTab);
-static void addBookmark(const char* url, const char* title);
-static void recordHistory(const char* url);
-static int loadSession(char urls[][MAX_PATH_CHARS], int max);
-static void saveSession(void);
-
-static void addTab(const char* url);
-static void resizeActiveTab(void);
-static void syncUiFromState(void);
-
-static void rebuildTabOrder(void)
-{
-    int i;
-
-    g_tabOrderCount = 0;
-    for (i = 0; i < g_tabCount; ++i) {
-        if (!g_tabs[i].closed)
-            g_tabOrder[g_tabOrderCount++] = i;
-    }
-}
-
-static void activateTab(int index)
-{
-    if (index < 0 || index >= g_tabCount || g_tabs[index].closed)
-        return;
-
-    g_activeTab = index;
-    resizeActiveTab();
-    syncUiFromState();
-}
-
-static void closeTab(int index)
-{
-    ShellCommand command;
-    int i;
-
-    if (index < 0 || index >= g_tabCount || g_tabs[index].closed)
-        return;
-
-    g_tabs[index].closed = 1;
-
-    memset(&command, 0, sizeof(command));
-    command.type = CMD_CLOSE_TAB;
-    command.tab = index;
-    postCommand(&command);
-
-    rebuildTabOrder();
-
-    if (g_tabOrderCount == 0) {
-        /* Closing the last tab opens a fresh one instead of leaving nothing. */
-        addTab("about:blank");
-        return;
-    }
-
-    if (g_activeTab == index) {
-        for (i = 0; i < g_tabOrderCount; ++i) {
-            if (g_tabOrder[i] > index) {
-                activateTab(g_tabOrder[i]);
-                break;
-            }
-        }
-        if (g_activeTab == index)
-            activateTab(g_tabOrder[g_tabOrderCount - 1]);
-    } else {
-        notifyUi();
-    }
-}
-
-static void postCommand(const ShellCommand* command)
-{
-    lockAcquire();
-
-    if (((g_queueTail + 1) % (int)(sizeof(g_queue) / sizeof(g_queue[0]))) != g_queueHead) {
-        g_queue[g_queueTail] = *command;
-        g_queueTail = (g_queueTail + 1) % (int)(sizeof(g_queue) / sizeof(g_queue[0]));
-    }
-    lockRelease();
-}
-
-static void postSimple(int type, int tab)
-{
-    ShellCommand command;
-
-    memset(&command, 0, sizeof(command));
-    command.type = type;
-    command.tab = tab;
-    postCommand(&command);
-}
-
-static void notifyUi(void)
-{
-    if (g_hwnd)
-        PostMessageA(g_hwnd, WM_SHELL_STATE, 0, 0);
-}
-
-/* ------------------------------------------------------------------------- */
-/* URL handling                                                               */
-/* ------------------------------------------------------------------------- */
-
-static void urlNormalize(const char* input, char* out, size_t outSize)
-{
-    size_t i;
-    int hasDot = 0, hasColon = 0, hasSpace = 0;
-
-    if (!input || !input[0]) {
-        _snprintf(out, outSize, "about:blank");
-        out[outSize - 1] = 0;
-        return;
-    }
-
-    for (i = 0; input[i]; ++i) {
-        if (input[i] == '.') hasDot = 1;
-        if (input[i] == ':') hasColon = 1;
-        if (input[i] == ' ') hasSpace = 1;
-    }
-
-    if (hasSpace || (!hasDot && !hasColon)) {
-        _snprintf(out, outSize, "https://www.baidu.com/s?wd=%s", input);
-        out[outSize - 1] = 0;
-    } else if (!hasColon) {
-        _snprintf(out, outSize, "http://%s", input);
-        out[outSize - 1] = 0;
-    } else {
-        strncpy(out, input, outSize - 1);
-        out[outSize - 1] = 0;
-    }
-}
-
-static void navigateTo(const char* text, int inNewTab)
-{
-    char normalized[MAX_PATH_CHARS];
-    ShellCommand command;
-
-    urlNormalize(text, normalized, sizeof(normalized));
-
-    if (inNewTab) {
-        /* Tab bookkeeping lives on the UI thread; addTab() posts the command
-         * that makes the engine create the view. */
-        addTab(normalized);
-        return;
-    }
-
-    memset(&command, 0, sizeof(command));
-    command.type = CMD_NAVIGATE;
-    command.tab = g_activeTab;
-    strncpy(command.text, normalized, sizeof(command.text) - 1);
-    postCommand(&command);
-}
-
-/* ------------------------------------------------------------------------- */
-/* engine callbacks (engine thread)                                           */
-/* ------------------------------------------------------------------------- */
-
-static void onInvalidate(MaCrossView* view, const MC_RECT* rect)
-{
-    (void)view; (void)rect;
-    notifyUi();
-}
-
-static void onUpdateNow(MaCrossView* view)
-{
-    (void)view;
-    notifyUi();
-}
-
-static void publishText(MaCrossView* view, const char* text, int field)
-{
-    Tab* tab = tabByView(view);
-
-    if (!tab || !text)
-        return;
-
-    lockAcquire();
-    if (field == 0) {
-        strncpy(tab->title, text, sizeof(tab->title) - 1);
-        tab->title[sizeof(tab->title) - 1] = 0;
-    } else if (field == 1) {
-        strncpy(tab->url, text, sizeof(tab->url) - 1);
-        tab->url[sizeof(tab->url) - 1] = 0;
-    } else {
-        strncpy(tab->status, text, sizeof(tab->status) - 1);
-        tab->status[sizeof(tab->status) - 1] = 0;
-    }
-    lockRelease();
-
-    notifyUi();
-}
-
-static void onTitle(MaCrossView* view, const char* title)   { publishText(view, title, 0); }
-static void onLocation(MaCrossView* view, const char* url)  { publishText(view, url, 1); }
-static void onStatus(MaCrossView* view, const char* text)   { publishText(view, text, 2); }
-
-static void onProgress(MaCrossView* view, unsigned int percent, MC_BOOL finished)
-{
-    Tab* tab = tabByView(view);
-
-    if (!tab)
-        return;
-
-    lockAcquire();
-    tab->progress = (int)percent;
-    tab->loading = finished ? 0 : 1;
-    lockRelease();
-
-    notifyUi();
-}
-
-static void onError(int err, const char* failedUrl)
-{
-    char message[600];
-
-    _snprintf(message, sizeof(message), "Load failed (%d): %s", err,
-              failedUrl ? failedUrl : "");
-    message[sizeof(message) - 1] = 0;
-
-    lockAcquire();
-    if (g_tabCount > 0) {
-        Tab* tab = &g_tabs[g_activeTab];
-
-        strncpy(tab->status, message, sizeof(tab->status) - 1);
-        tab->status[sizeof(tab->status) - 1] = 0;
-        tab->loading = 0;
-    }
-    lockRelease();
-
-    notifyUi();
-}
-
-static void onCursor(MC_CURSOR cursor)
-{
-    LPCSTR name = IDC_ARROW;
-
-    switch (cursor) {
-    case HAND_CURSOR:       name = IDC_HAND; break;
-    case IBEAM_CURSOR:      name = IDC_IBEAM; break;
-    case CROSS_CURSOR:      name = IDC_CROSS; break;
-    case WAIT_CURSOR:       name = IDC_WAIT; break;
-    case NORTHSOUTH_CURSOR: name = IDC_SIZENS; break;
-    case EASTWEST_CURSOR:   name = IDC_SIZEWE; break;
-    default: break;
-    }
-
-    SetCursor(LoadCursorA(NULL, name));
-}
-
-/* Downloads: write straight into %USERPROFILE%\Downloads. */
-static MC_BOOL onWriteFile(int id, const char* url, const void* data,
-                           unsigned long dataLen, unsigned long totalLen)
-{
-    static FILE* file = NULL;
-    static int   currentId = -1;
-
-    (void)totalLen;
-
-    if (currentId != id) {
-        char name[MAX_PATH_CHARS];
-        char path[MAX_PATH];
-        const char* slash = url ? strrchr(url, '/') : NULL;
-        size_t i, n = 0;
-
-        if (file) {
-            fclose(file);
-            file = NULL;
-        }
-
-        currentId = id;
-        name[0] = 0;
-
-        if (slash && slash[1]) {
-            for (i = 0; slash[1 + i] && i < sizeof(name) - 1; ++i) {
-                char c = slash[1 + i];
-
-                if (c == '?' || c == '#' || c == '\\' || c == ':' || c == '*' ||
-                    c == '"' || c == '<' || c == '>' || c == '|')
-                    break;
-                name[n++] = c;
-            }
-        }
-        name[n] = 0;
-
-        if (!name[0])
-            strcpy(name, "download.bin");
-
-        _snprintf(path, sizeof(path), "%s\\%s", g_downloadDir, name);
-        path[sizeof(path) - 1] = 0;
-
-        file = fopen(path, "wb");
-
-        if (file) {
-            char message[600];
-
-            _snprintf(message, sizeof(message), "Downloading: %s", path);
-            message[sizeof(message) - 1] = 0;
-
-            lockAcquire();
-            if (g_tabCount > 0) {
-                Tab* tab = &g_tabs[g_activeTab];
-
-                strncpy(tab->status, message, sizeof(tab->status) - 1);
-                tab->status[sizeof(tab->status) - 1] = 0;
-            }
-            lockRelease();
-            notifyUi();
-        }
-    }
-
-    if (file && data && dataLen)
-        fwrite(data, 1, dataLen, file);
-
-    return file ? TRUE : FALSE;
-}
-
-/* ------------------------------------------------------------------------- */
-/* surface management (GDI objects are created on the UI thread)              */
-/* ------------------------------------------------------------------------- */
-
-static void tabDestroySurface(Tab* tab)
-{
-    if (tab->memdc) {
-        SelectObject(tab->memdc, tab->oldBitmap);
-        DeleteDC(tab->memdc);
-        tab->memdc = NULL;
-    }
-    if (tab->bitmap) {
-        DeleteObject(tab->bitmap);
-        tab->bitmap = NULL;
-    }
-    tab->bits = NULL;
-}
-
-static int tabCreateSurface(Tab* tab, int width, int height)
-{
-    BITMAPINFO info;
-    HDC hdc;
-
-    if (width < 1) width = 1;
-    if (height < 1) height = 1;
-
-    memset(&info, 0, sizeof(info));
-    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    info.bmiHeader.biWidth = width;
-    info.bmiHeader.biHeight = -height;
-    info.bmiHeader.biPlanes = 1;
-    info.bmiHeader.biBitCount = 32;
-    info.bmiHeader.biCompression = BI_RGB;
-
-    hdc = GetDC(g_hwnd);
-    tab->bitmap = CreateDIBSection(hdc, &info, DIB_RGB_COLORS, (void**)&tab->bits, NULL, 0);
-
-    if (tab->bitmap) {
-        tab->memdc = CreateCompatibleDC(hdc);
-        tab->oldBitmap = SelectObject(tab->memdc, tab->bitmap);
-    }
-    ReleaseDC(g_hwnd, hdc);
-
-    tab->width = width;
-    tab->height = height;
-
-    return tab->bits != NULL;
-}
-
-/* ------------------------------------------------------------------------- */
-/* engine thread                                                              */
-/* ------------------------------------------------------------------------- */
-
-static void engineCreateView(Tab* tab, const char* url)
-{
-    if (!tab || !tab->bits)
-        return;
-
-    tab->view = macross_view_create(tab->bits, tab->width, tab->height,
-                                    tab->width * 4, NULL);
-
-    if (tab->view) {
-        if (g_zoom != 100)
-            macross_view_set_scale_factor(tab->view, g_zoom);
-
-        if (url && url[0])
-            macross_view_open_url(tab->view, url);
-    }
-}
-
-/* Creates the DIB the engine renders into. Always called on the engine thread,
- * so the UI can never free a buffer that is being painted. */
-static void engineApplyResize(Tab* tab, int width, int height)
-{
-    if (!tab)
-        return;
-
-    if (width < 1) width = 1;
-    if (height < 1) height = 1;
-
-    if (tab->bits && tab->width == width && tab->height == height && tab->view)
-        return;
-
-    tabDestroySurface(tab);
-
-    if (!tabCreateSurface(tab, width, height))
-        return;
-
-    if (tab->view)
-        macross_view_resize(tab->view, tab->bits, width, height, width * 4);
-    else
-        engineCreateView(tab, tab->url[0] ? tab->url : g_initialUrl);
-
-    notifyUi();
-}
-
-static void engineDrainCommands(void)
-{
-    for (;;) {
-        ShellCommand command;
-        int have = 0;
-
-        lockAcquire();
-        if (g_queueHead != g_queueTail) {
-            command = g_queue[g_queueHead];
-            g_queueHead = (g_queueHead + 1) % (int)(sizeof(g_queue) / sizeof(g_queue[0]));
-            have = 1;
-        }
-        lockRelease();
-
-        if (!have)
-            break;
-
-        switch (command.type) {
-        case CMD_NAVIGATE:
-            if (command.tab >= 0 && command.tab < g_tabCount && g_tabs[command.tab].view)
-                macross_view_open_url(g_tabs[command.tab].view, command.text);
-            break;
-        case CMD_NEW_TAB:
-            if (command.tab >= 0 && command.tab < g_tabCount) {
-                Tab* tab = &g_tabs[command.tab];
-
-                if (command.text[0]) {
-                    strncpy(tab->url, command.text, sizeof(tab->url) - 1);
-                    tab->url[sizeof(tab->url) - 1] = 0;
-                }
-                engineApplyResize(tab, tab->wantWidth, tab->wantHeight);
-            }
-            break;
-        case CMD_BACK:
-            if (g_activeTab < g_tabCount && g_tabs[g_activeTab].view)
-                macross_view_backward(g_tabs[g_activeTab].view);
-            break;
-        case CMD_FORWARD:
-            if (g_activeTab < g_tabCount && g_tabs[g_activeTab].view)
-                macross_view_forward(g_tabs[g_activeTab].view);
-            break;
-        case CMD_RELOAD:
-            if (g_activeTab < g_tabCount && g_tabs[g_activeTab].view)
-                macross_view_reload(g_tabs[g_activeTab].view);
-            break;
-        case CMD_STOP:
-            if (g_activeTab < g_tabCount && g_tabs[g_activeTab].view)
-                macross_view_stop(g_tabs[g_activeTab].view);
-            break;
-        case CMD_ZOOM:
-            if (g_activeTab < g_tabCount && g_tabs[g_activeTab].view)
-                macross_view_set_scale_factor(g_tabs[g_activeTab].view, g_zoom);
-            break;
-        case CMD_FIND:
-            if (g_activeTab < g_tabCount && g_tabs[g_activeTab].view && command.text[0])
-                macross_view_search_text(g_tabs[g_activeTab].view, command.text,
-                                         TRUE, TRUE, FALSE);
-            break;
-        case CMD_MOUSE:
-            if (command.tab >= 0 && command.tab < g_tabCount && g_tabs[command.tab].view) {
-                MC_MOUSE_EVENT event;
-
-                memset(&event, 0, sizeof(event));
-                event.type = (MC_MOUSE_EVENT_TYPE)command.key;
-                event.button = (MC_MOUSE_BUTTON)command.button;
-                event.point.x = command.x;
-                event.point.y = command.y;
-                event.modifier = command.modifier;
-                macross_mouse_event(g_tabs[command.tab].view, &event);
-            }
-            break;
-        case CMD_KEY:
-            if (command.tab >= 0 && command.tab < g_tabCount && g_tabs[command.tab].view) {
-                MC_KEY_EVENT event;
-
-                memset(&event, 0, sizeof(event));
-                event.type = (MC_KEY_EVENT_TYPE)command.key;
-                event.key = (MC_VIRTUAL_KEY)command.x;
-                event.modifier = command.modifier;
-                macross_keyboard_event(g_tabs[command.tab].view, &event);
-            }
-            break;
-        case CMD_CHAR:
-            if (g_activeTab < g_tabCount && g_tabs[g_activeTab].view)
-                macross_view_input_text(g_tabs[g_activeTab].view, command.text);
-            break;
-        case CMD_CLOSE_TAB:
-            if (command.tab >= 0 && command.tab < g_tabCount) {
-                Tab* tab = &g_tabs[command.tab];
-
-                if (tab->view) {
-                    macross_view_destroy(tab->view);
-                    tab->view = NULL;
-                }
-                tabDestroySurface(tab);
-            }
-            break;
-        case CMD_RESIZE:
-            if (command.tab >= 0 && command.tab < g_tabCount)
-                engineApplyResize(&g_tabs[command.tab],
-                                  g_tabs[command.tab].wantWidth,
-                                  g_tabs[command.tab].wantHeight);
-            break;
-        default:
-            break;
-        }
-    }
-}
-
-static DWORD WINAPI engineThread(LPVOID param)
-{
-    (void)param;
-
-    if (macross_initialize(PIXEL_FORMAT_BGRA32, 1100, 800) != MC_STATUS_SUCCESS)
-        return 0;
-
-    lockAcquire();
-    if (g_tabCount > 0)
-        engineApplyResize(&g_tabs[0], g_tabs[0].wantWidth, g_tabs[0].wantHeight);
-    lockRelease();
-
-    notifyUi();
-
-    while (!g_engineQuit) {
-        engineDrainCommands();
-
-        macross_event_dispatch();
-
-        lockAcquire();
-        if (g_activeTab < g_tabCount && g_tabs[g_activeTab].view)
-            macross_view_update(g_tabs[g_activeTab].view, NULL);
-        lockRelease();
-
-        Sleep(6);
-    }
-
-    lockAcquire();
-    {
-        int i;
-
-        for (i = 0; i < g_tabCount; ++i) {
-            if (g_tabs[i].view) {
-                macross_view_destroy(g_tabs[i].view);
-                g_tabs[i].view = NULL;
-            }
-        }
-    }
-    lockRelease();
-
-    macross_shutdown();
-    return 0;
-}
-
-/* ------------------------------------------------------------------------- */
-/* UI                                                                         */
-/* ------------------------------------------------------------------------- */
-
-static int viewTop(void)
-{
-    return TOOLBAR_HEIGHT + TABBAR_HEIGHT;
-}
-
-static int viewHeightFor(int clientHeight)
-{
-    int height = clientHeight - viewTop() - STATUSBAR_HEIGHT;
-
-    return height > 0 ? height : 1;
-}
-
-/* The engine thread owns the DIB: the UI only records the size it wants. This
- * avoids freeing a buffer the engine may still be painting into. */
-static void requestViewSize(int index, int width, int height)
-{
-    ShellCommand command;
-
-    if (index < 0 || index >= g_tabCount)
-        return;
-
-    lockAcquire();
-    g_tabs[index].wantWidth = width;
-    g_tabs[index].wantHeight = height;
-    lockRelease();
-
-    memset(&command, 0, sizeof(command));
-    command.type = CMD_RESIZE;
-    command.tab = index;
-    command.x = width;
-    command.y = height;
-    postCommand(&command);
-}
-
-static void resizeActiveTab(void)
-{
-    RECT client;
-    int height;
-
-    GetClientRect(g_hwnd, &client);
-    height = viewHeightFor(client.bottom);
-    requestViewSize(g_activeTab, client.right, height);
-
-    notifyUi();
-}
-
-static void layoutChildren(HWND hwnd, int width, int height)
-{
-    int x = 4;
-
-    MoveWindow(g_buttons[0], x, 7, BUTTON_WIDTH, 24, TRUE); x += BUTTON_WIDTH + 2;
-    MoveWindow(g_buttons[1], x, 7, BUTTON_WIDTH, 24, TRUE); x += BUTTON_WIDTH + 2;
-    MoveWindow(g_buttons[2], x, 7, BUTTON_WIDTH, 24, TRUE); x += BUTTON_WIDTH + 2;
-    MoveWindow(g_buttons[3], x, 7, BUTTON_WIDTH, 24, TRUE); x += BUTTON_WIDTH + 6;
-
-    {
-        int reserved = (BUTTON_WIDTH + 16) * 3 + 30;
-        int editWidth = width - x - reserved;
-
-        if (editWidth < 80)
-            editWidth = 80;
-
-        MoveWindow(g_address, x, 7, editWidth, 24, TRUE);
-        x += editWidth + 4;
-        MoveWindow(g_buttons[4], x, 7, BUTTON_WIDTH + 16, 24, TRUE);
-        x += BUTTON_WIDTH + 20;
-        MoveWindow(g_buttons[5], x, 7, BUTTON_WIDTH + 16, 24, TRUE);
-        x += BUTTON_WIDTH + 20;
-        MoveWindow(g_buttons[6], x, 7, BUTTON_WIDTH + 16, 24, TRUE);
-    }
-
-    MoveWindow(g_find, 4, TOOLBAR_HEIGHT + 2, 260, 24, FALSE);
-
-    (void)height;
-}
-
-static int tabFromPoint(int x, int y)
-{
-    int slot;
-    int tabWidth = 170;
-
-    if (y < TOOLBAR_HEIGHT || y >= viewTop())
-        return -1;
-
-    slot = (x - 4) / tabWidth;
-    if (slot < 0 || slot >= g_tabOrderCount)
-        return -1;
-
-    return g_tabOrder[slot];
-}
-
-static void drawTabBar(HDC hdc, int width)
-{
-    int slot;
-    int x = 4;
-    int tabWidth = 170;
-
-    for (slot = 0; slot < g_tabOrderCount; ++slot) {
-        int i = g_tabOrder[slot];
-        RECT box;
-        RECT text;
-        char label[400];
-        HBRUSH brush;
-        COLORREF oldText;
-
-        SetRect(&box, x, TOOLBAR_HEIGHT + 2, x + tabWidth - 4, TOOLBAR_HEIGHT + TABBAR_HEIGHT - 2);
-
-        brush = CreateSolidBrush(i == g_activeTab ? RGB(255, 255, 255) : RGB(226, 226, 226));
-        FillRect(hdc, &box, brush);
-        DeleteObject(brush);
-        FrameRect(hdc, &box, (HBRUSH)GetStockObject(GRAY_BRUSH));
-
-        lockAcquire();
-        _snprintf(label, sizeof(label), "%d  %s", i + 1,
-                  g_tabs[i].title[0] ? g_tabs[i].title :
-                  (g_tabs[i].url[0] ? g_tabs[i].url : "New Tab"));
-        lockRelease();
-        label[sizeof(label) - 1] = 0;
-
-        text = box;
-        text.left += 8;
-        text.right -= 30;
-
-        oldText = SetTextColor(hdc, i == g_activeTab ? RGB(0, 0, 0) : RGB(90, 90, 90));
-        SetBkMode(hdc, TRANSPARENT);
-        DrawTextA(hdc, label, -1, &text, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_END_ELLIPSIS);
-        SetTextColor(hdc, oldText);
-
-        /* close box */
-        {
-            RECT closeBox;
-            RECT closeText;
-
-            SetRect(&closeBox, box.right - 22, box.top + 4, box.right - 6, box.bottom - 4);
-            FrameRect(hdc, &closeBox, (HBRUSH)GetStockObject(GRAY_BRUSH));
-
-            closeText = closeBox;
-            SetBkMode(hdc, TRANSPARENT);
-            DrawTextA(hdc, "x", -1, &closeText, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
-        }
-
-        x += tabWidth;
-    }
-
-    (void)width;
-}
-
-static void paintWindow(HWND hwnd)
-{
-    PAINTSTRUCT ps;
-    HDC hdc = BeginPaint(hwnd, &ps);
-
-    lockAcquire();
-    if (g_activeTab < g_tabCount) {
-        Tab* tab = &g_tabs[g_activeTab];
-
-        if (tab->memdc && tab->bits) {
-            BitBlt(hdc, 0, viewTop(), tab->width, tab->height, tab->memdc, 0, 0, SRCCOPY);
-        } else {
-            RECT fill;
-
-            SetRect(&fill, 0, viewTop(), tab->width, viewTop() + tab->height);
-            FillRect(hdc, &fill, (HBRUSH)GetStockObject(WHITE_BRUSH));
-        }
-
-        if (tab->loading) {
-            RECT strip;
-            int width = (tab->width * (tab->progress > 0 ? tab->progress : 5)) / 100;
-
-            SetRect(&strip, 0, viewTop() - 3, width, viewTop());
-            FillRect(hdc, &strip, (HBRUSH)GetStockObject(BLACK_BRUSH));
-        }
-    }
-    lockRelease();
-
-    {
-        RECT bar;
-        RECT client;
-
-        GetClientRect(hwnd, &client);
-        SetRect(&bar, 0, TOOLBAR_HEIGHT, client.right, viewTop());
-        FillRect(hdc, &bar, (HBRUSH)(COLOR_BTNFACE + 1));
-        drawTabBar(hdc, client.right);
-    }
-
-    {
-        RECT client;
-        RECT bar;
-        char text[800];
-        int active = g_activeTab;
-
-        GetClientRect(hwnd, &client);
-        SetRect(&bar, 0, client.bottom - STATUSBAR_HEIGHT, client.right, client.bottom);
-        FillRect(hdc, &bar, (HBRUSH)(COLOR_BTNFACE + 1));
-
-        lockAcquire();
-        if (active < g_tabCount) {
-            Tab* tab = &g_tabs[active];
-
-            _snprintf(text, sizeof(text), "%s%s%s",
-                      tab->loading ? "Loading... " : "",
-                      tab->status[0] ? tab->status : "",
-                      (!tab->loading && !tab->status[0]) ? (tab->url[0] ? tab->url : "Ready") : "");
-            if (g_zoom != 100) {
-                char zoomText[32];
-
-                _snprintf(zoomText, sizeof(zoomText), "  [%d%%]", g_zoom);
-                strncat(text, zoomText, sizeof(text) - strlen(text) - 1);
-            }
-        } else {
-            strcpy(text, "Ready");
-        }
-        lockRelease();
-        text[sizeof(text) - 1] = 0;
-
-        bar.left += 6;
-        SetBkMode(hdc, TRANSPARENT);
-        DrawTextA(hdc, text, -1, &bar, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_END_ELLIPSIS);
-    }
-
-    EndPaint(hwnd, &ps);
-}
-
-static void syncUiFromState(void)
-{
-    int active;
-    char title[400];
-    char url[MAX_PATH_CHARS];
-    char tabTitle[300];
-    static char lastRecorded[MAX_TABS][MAX_PATH_CHARS];
-
-    lockAcquire();
-    active = g_activeTab;
-    if (active < g_tabCount) {
-        strncpy(url, g_tabs[active].url, sizeof(url) - 1);
-        url[sizeof(url) - 1] = 0;
-        strncpy(tabTitle, g_tabs[active].title, sizeof(tabTitle) - 1);
-        tabTitle[sizeof(tabTitle) - 1] = 0;
-    } else {
-        url[0] = 0;
-        tabTitle[0] = 0;
-    }
-    lockRelease();
-
-    if (active < g_tabCount && url[0] && strcmp(lastRecorded[active], url)) {
-        strncpy(lastRecorded[active], url, MAX_PATH_CHARS - 1);
-        lastRecorded[active][MAX_PATH_CHARS - 1] = 0;
-        recordHistory(url);
-    }
-
-    if (GetFocus() != g_address)
-        SetWindowTextA(g_address, url);
-
-    _snprintf(title, sizeof(title), "%s - Agave BrowserShell",
-              tabTitle[0] ? tabTitle : "BrowserShell");
-    title[sizeof(title) - 1] = 0;
-    SetWindowTextA(g_hwnd, title);
-
-    InvalidateRect(g_hwnd, NULL, FALSE);
-}
-
-static unsigned int currentModifiers(void)
-{
-    unsigned int modifier = 0;
-
-    if (GetKeyState(VK_MENU) & 0x8000)    modifier |= MF_ALT;
-    if (GetKeyState(VK_CONTROL) & 0x8000) modifier |= MF_CTRL;
-    if (GetKeyState(VK_SHIFT) & 0x8000)   modifier |= MF_SHIFT;
-
-    return modifier;
-}
-
-static void sendMouse(MC_MOUSE_EVENT_TYPE type, int x, int y, MC_MOUSE_BUTTON button)
-{
-    ShellCommand command;
-
-    memset(&command, 0, sizeof(command));
-    command.type = CMD_MOUSE;
-    command.tab = g_activeTab;
-    command.key = (int)type;
-    command.button = (int)button;
-    command.x = x;
-    command.y = y;
-    command.modifier = (int)currentModifiers();
-    postCommand(&command);
-}
-
-/* Main menu: bookmarks, history, zoom. */
-static void showMainMenu(void)
-{
-    HMENU menu = CreatePopupMenu();
-    HMENU bookmarks = CreatePopupMenu();
-    HMENU history = CreatePopupMenu();
-    POINT point;
-    int choice;
-    int i;
-
-    for (i = 0; i < g_bookmarkCount && i < 20; ++i)
-        AppendMenuA(bookmarks, MF_STRING, 100 + i,
-                    g_bookmarks[i].title[0] ? g_bookmarks[i].title : g_bookmarks[i].url);
-
-    if (g_bookmarkCount == 0)
-        AppendMenuA(bookmarks, MF_STRING | MF_GRAYED, 0, "(empty)");
-
-    for (i = g_historyCount - 1; i >= 0 && i >= g_historyCount - 20; --i) {
-        char label[1200];
-
-        _snprintf(label, sizeof(label), "%s", g_history[i]);
-        label[sizeof(label) - 1] = 0;
-        AppendMenuA(history, MF_STRING, 200 + (g_historyCount - 1 - i), label);
-    }
-
-    if (g_historyCount == 0)
-        AppendMenuA(history, MF_STRING | MF_GRAYED, 0, "(empty)");
-
-    AppendMenuA(menu, MF_STRING, 1, "Add bookmark\tCtrl+D");
-    AppendMenuA(menu, MF_POPUP, (UINT_PTR)bookmarks, "Bookmarks");
-    AppendMenuA(menu, MF_POPUP, (UINT_PTR)history, "History");
-    AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
-    AppendMenuA(menu, MF_STRING, 2, "Zoom in\tCtrl+=");
-    AppendMenuA(menu, MF_STRING, 3, "Zoom out\tCtrl+-");
-    AppendMenuA(menu, MF_STRING, 4, "Reset zoom\tCtrl+0");
-    AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
-    AppendMenuA(menu, MF_STRING, 5, "New tab\tCtrl+T");
-    AppendMenuA(menu, MF_STRING, 6, "Find\tCtrl+F");
-    AppendMenuA(menu, MF_STRING, 7, "Reload\tF5");
-
-    GetCursorPos(&point);
-    choice = (int)TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN,
-                                 point.x, point.y, 0, g_hwnd, NULL);
-    DestroyMenu(menu);
-
-    if (choice >= 200) {
-        int index = g_historyCount - 1 - (choice - 200);
-
-        if (index >= 0 && index < g_historyCount)
-            navigateTo(g_history[index], 0);
-        return;
-    }
-
-    if (choice >= 100) {
-        int index = choice - 100;
-
-        if (index >= 0 && index < g_bookmarkCount)
-            navigateTo(g_bookmarks[index].url, 0);
-        return;
-    }
-
-    switch (choice) {
-    case 1: addBookmarkCurrent(); break;
-    case 2: g_zoom = g_zoom < 400 ? g_zoom + 25 : g_zoom; postSimple(CMD_ZOOM, g_activeTab); break;
-    case 3: g_zoom = g_zoom > 25 ? g_zoom - 25 : g_zoom; postSimple(CMD_ZOOM, g_activeTab); break;
-    case 4: g_zoom = 100; postSimple(CMD_ZOOM, g_activeTab); break;
-    case 5: navigateTo("about:blank", 1); break;
-    case 6: ShowWindow(g_find, SW_SHOW); SetFocus(g_find); break;
-    case 7: postSimple(CMD_RELOAD, g_activeTab); break;
-    default: break;
-    }
-}
-
-static void addBookmarkCurrent(void)
-{
-    char url[MAX_PATH_CHARS];
-    char title[256];
-
-    lockAcquire();
-    strncpy(url, g_tabs[g_activeTab].url, sizeof(url) - 1);
-    url[sizeof(url) - 1] = 0;
-    strncpy(title, g_tabs[g_activeTab].title, sizeof(title) - 1);
-    title[sizeof(title) - 1] = 0;
-    lockRelease();
-
-    addBookmark(url, title);
-
-    lockAcquire();
-    strncpy(g_tabs[g_activeTab].status, "Bookmark added",
-            sizeof(g_tabs[0].status) - 1);
-    g_tabs[g_activeTab].status[sizeof(g_tabs[0].status) - 1] = 0;
-    lockRelease();
-
-    notifyUi();
-}
-
-static void showContextMenu(int x, int y)
-{
-    HMENU menu = CreatePopupMenu();
-    POINT point;
-    int choice;
-
-    AppendMenuA(menu, MF_STRING, 1, "Back");
-    AppendMenuA(menu, MF_STRING, 2, "Forward");
-    AppendMenuA(menu, MF_STRING, 3, "Reload");
-    AppendMenuA(menu, MF_STRING, 4, "Stop");
-    AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
-    AppendMenuA(menu, MF_STRING, 5, "New Tab");
-    AppendMenuA(menu, MF_STRING, 6, "Find...");
-
-    point.x = x;
-    point.y = y;
-    ClientToScreen(g_hwnd, &point);
-
-    choice = (int)TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN,
-                                 point.x, point.y, 0, g_hwnd, NULL);
-    DestroyMenu(menu);
-
-    switch (choice) {
-    case 1: postSimple(CMD_BACK, g_activeTab); break;
-    case 2: postSimple(CMD_FORWARD, g_activeTab); break;
-    case 3: postSimple(CMD_RELOAD, g_activeTab); break;
-    case 4: postSimple(CMD_STOP, g_activeTab); break;
-    case 5: navigateTo("about:blank", 1); break;
-    case 6: ShowWindow(g_find, SW_SHOW); SetFocus(g_find); break;
-    default: break;
-    }
-}
-
-static LRESULT CALLBACK windowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
-
-/* Address bar: Enter navigates, Escape returns focus to the page. Never handle
- * EN_CHANGE here - SetWindowText would call straight back into navigate(). */
-static WNDPROC    g_addressOldProc;
-static WNDPROC    g_findOldProc;
-
-static LRESULT CALLBACK addressProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
-{
-    if (message == WM_KEYDOWN) {
-        if (wParam == VK_RETURN) {
-            char buffer[MAX_PATH_CHARS];
-
-            GetWindowTextA(hwnd, buffer, sizeof(buffer));
-            navigateTo(buffer, 0);
-            return 0;
-        }
-
-        if (wParam == VK_ESCAPE) {
-            SetFocus(g_hwnd);
-            return 0;
-        }
-    }
-
-    return CallWindowProcA(g_addressOldProc, hwnd, message, wParam, lParam);
-}
-
-static LRESULT CALLBACK findProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
-{
-    if (message == WM_KEYDOWN) {
-        if (wParam == VK_RETURN) {
-            ShellCommand command;
-
-            memset(&command, 0, sizeof(command));
-            command.type = CMD_FIND;
-            command.tab = g_activeTab;
-            GetWindowTextA(hwnd, command.text, sizeof(command.text));
-            postCommand(&command);
-            return 0;
-        }
-
-        if (wParam == VK_ESCAPE) {
-            ShowWindow(hwnd, SW_HIDE);
-            SetFocus(g_hwnd);
-            return 0;
-        }
-    }
-
-    return CallWindowProcA(g_findOldProc, hwnd, message, wParam, lParam);
-}
-
-static LRESULT CALLBACK windowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
-{
-    switch (message) {
-    case WM_CREATE:
-        g_hwnd = hwnd;
-        return 0;
-
-    case WM_SIZE: {
-        int width = LOWORD(lParam);
-
-        if (getenv("AGB_SHELL_DEBUG")) {
-            RECT frame;
-            RECT client;
-
-            GetWindowRect(hwnd, &frame);
-            GetClientRect(hwnd, &client);
-            fprintf(stderr, "[shell] WM_SIZE %dx%d frame=%ldx%ld client=%ldx%ld\n",
-                    width, HIWORD(lParam),
-                    frame.right - frame.left, frame.bottom - frame.top,
-                    client.right, client.bottom);
-        }
-
-        layoutChildren(hwnd, width, HIWORD(lParam));
-        resizeActiveTab();
-        return 0;
-    }
-
-    case WM_PAINT:
-        paintWindow(hwnd);
-        return 0;
-
-    case WM_ERASEBKGND:
-        return 1;
-
-    case WM_SHELL_STATE:
-        syncUiFromState();
-        return 0;
-
-    case WM_LBUTTONDOWN: {
-        int x = (short)LOWORD(lParam);
-        int y = (short)HIWORD(lParam);
-        int index = tabFromPoint(x, y);
-
-        if (index >= 0) {
-            RECT tabBox;
-            int slot = 0;
-            int i;
-
-            /* hit-test the close box first */
-            for (i = 0; i < g_tabOrderCount; ++i) {
-                if (g_tabOrder[i] == index) { slot = i; break; }
-            }
-
-            SetRect(&tabBox, 4 + slot * 170, TOOLBAR_HEIGHT + 2,
-                    4 + slot * 170 + 166, TOOLBAR_HEIGHT + TABBAR_HEIGHT - 2);
-
-            if (x >= tabBox.right - 22) {
-                closeTab(index);
-                return 0;
-            }
-
-            activateTab(index);
-            return 0;
-        }
-        return 0;
-    }
-
-    case WM_MOUSEMOVE:
-    case WM_LBUTTONUP:
-    case WM_RBUTTONDOWN:
-    case WM_RBUTTONUP:
-    case WM_MBUTTONDOWN:
-    case WM_MBUTTONUP: {
-        MC_MOUSE_EVENT_TYPE type = EVT_MOUSE_MOVE;
-        MC_MOUSE_BUTTON button = MOUSE_BTN_NONE;
-        int x = (short)LOWORD(lParam);
-        int y = (short)HIWORD(lParam);
-
-        if (y < viewTop() || g_activeTab >= g_tabCount)
-            return 0;
-
-        y -= viewTop();
-
-        if (message == WM_LBUTTONDOWN || message == WM_MBUTTONDOWN || message == WM_RBUTTONDOWN)
-            type = EVT_MOUSE_DOWN;
-        else if (message == WM_LBUTTONUP || message == WM_MBUTTONUP || message == WM_RBUTTONUP)
-            type = EVT_MOUSE_UP;
-
-        if (message == WM_LBUTTONDOWN || message == WM_LBUTTONUP)
-            button = MOUSE_BTN_LEFT;
-        else if (message == WM_MBUTTONDOWN || message == WM_MBUTTONUP)
-            button = MOUSE_BTN_MIDDLE;
-        else if (message == WM_RBUTTONDOWN || message == WM_RBUTTONUP)
-            button = MOUSE_BTN_RIGHT;
-
-        if (message == WM_LBUTTONDOWN)
-            SetFocus(hwnd);
-
-        sendMouse(type, x, y, button);
-        return 0;
-    }
-
-    case WM_CONTEXTMENU:
-        showContextMenu((short)LOWORD(lParam), (short)HIWORD(lParam));
-        return 0;
-
-    case WM_MOUSEWHEEL: {
-        POINT point;
-        int delta = (short)HIWORD(wParam);
-
-        point.x = (short)LOWORD(lParam);
-        point.y = (short)HIWORD(lParam);
-        ScreenToClient(hwnd, &point);
-
-        if (point.y < viewTop())
-            return 0;
-
-        sendMouse(EVT_MOUSE_WHEEL, point.x, point.y - viewTop(),
-                  delta > 0 ? MOUSE_WHEEL_UP : MOUSE_WHEEL_DOWN);
-        return 0;
-    }
-
-    case WM_KEYDOWN:
-    case WM_KEYUP: {
-        ShellCommand command;
-
-        if (message == WM_KEYDOWN) {
-            if (GetKeyState(VK_MENU) & 0x8000) {
-                if (wParam == VK_LEFT)  { postSimple(CMD_BACK, g_activeTab);    return 0; }
-                if (wParam == VK_RIGHT) { postSimple(CMD_FORWARD, g_activeTab); return 0; }
-            }
-            if (wParam == VK_F5) { postSimple(CMD_RELOAD, g_activeTab); return 0; }
-            if (wParam == VK_ESCAPE) { postSimple(CMD_STOP, g_activeTab); return 0; }
-            if (wParam == VK_F6 || ((GetKeyState(VK_CONTROL) & 0x8000) && wParam == 'L')) {
-                SetFocus(g_address);
-                SendMessageA(g_address, EM_SETSEL, 0, -1);
-                return 0;
-            }
-            if ((GetKeyState(VK_CONTROL) & 0x8000) && wParam == 'D') {
-                addBookmarkCurrent();
-                return 0;
-            }
-            if ((GetKeyState(VK_CONTROL) & 0x8000) && (wParam == VK_ADD || wParam == 0xBB)) {
-                g_zoom = g_zoom < 400 ? g_zoom + 25 : g_zoom;
-                postSimple(CMD_ZOOM, g_activeTab);
-                return 0;
-            }
-            if ((GetKeyState(VK_CONTROL) & 0x8000) && (wParam == VK_SUBTRACT || wParam == 0xBD)) {
-                g_zoom = g_zoom > 25 ? g_zoom - 25 : g_zoom;
-                postSimple(CMD_ZOOM, g_activeTab);
-                return 0;
-            }
-            if ((GetKeyState(VK_CONTROL) & 0x8000) && wParam == '0') {
-                g_zoom = 100;
-                postSimple(CMD_ZOOM, g_activeTab);
-                return 0;
-            }
-            if ((GetKeyState(VK_CONTROL) & 0x8000) && wParam == 'T') {
-                navigateTo("about:blank", 1);
-                return 0;
-            }
-            if ((GetKeyState(VK_CONTROL) & 0x8000) && wParam == 'F') {
-                ShowWindow(g_find, SW_SHOW);
-                SetFocus(g_find);
-                return 0;
-            }
-        }
-
-        memset(&command, 0, sizeof(command));
-        command.type = CMD_KEY;
-        command.tab = g_activeTab;
-        command.key = (message == WM_KEYDOWN) ? EVT_KEY_DOWN : EVT_KEY_UP;
-        command.x = (int)wParam;
-        command.modifier = (int)currentModifiers();
-        postCommand(&command);
-        return 0;
-    }
-
-    case WM_CHAR: {
-        ShellCommand command;
-        unsigned int code = (unsigned int)wParam;
-        int length = 0;
-
-        memset(&command, 0, sizeof(command));
-        command.type = CMD_CHAR;
-        command.tab = g_activeTab;
-
-        if (code < 0x80) {
-            command.text[length++] = (char)code;
-        } else if (code < 0x800) {
-            command.text[length++] = (char)(0xC0 | (code >> 6));
-            command.text[length++] = (char)(0x80 | (code & 0x3F));
-        } else {
-            command.text[length++] = (char)(0xE0 | (code >> 12));
-            command.text[length++] = (char)(0x80 | ((code >> 6) & 0x3F));
-            command.text[length++] = (char)(0x80 | (code & 0x3F));
-        }
-        command.text[length] = 0;
-        postCommand(&command);
-        return 0;
-    }
-
-    case WM_COMMAND: {
-        int id = LOWORD(wParam);
-
-        switch (id) {
-        case ID_GO: {
-            char buffer[MAX_PATH_CHARS];
-            GetWindowTextA(g_address, buffer, sizeof(buffer));
-            navigateTo(buffer, 0);
-            return 0;
-        }
-        case ID_BACK:    postSimple(CMD_BACK, g_activeTab);    return 0;
-        case ID_FORWARD: postSimple(CMD_FORWARD, g_activeTab); return 0;
-        case ID_RELOAD:  postSimple(CMD_RELOAD, g_activeTab);  return 0;
-        case ID_STOP:    postSimple(CMD_STOP, g_activeTab);    return 0;
-        case ID_NEWTAB:  navigateTo("about:blank", 1);         return 0;
-        case ID_MENU:    showMainMenu();                        return 0;
-        case ID_FIND:    ShowWindow(g_find, SW_SHOW); SetFocus(g_find); return 0;
-        default: break;
-        }
-        return 0;
-    }
-
-    case WM_DESTROY:
-        saveSession();
-        g_engineQuit = 1;
-        PostQuitMessage(0);
-        return 0;
-
-    default:
-        break;
-    }
-
-    return DefWindowProcA(hwnd, message, wParam, lParam);
-}
-
-/* ------------------------------------------------------------------------- */
-/* tab management (UI thread)                                                 */
-/* ------------------------------------------------------------------------- */
-
-static void addTab(const char* url)
-{
-    Tab* tab;
-    ShellCommand command;
-
-    if (g_tabCount >= MAX_TABS)
-        return;
-
-    tab = &g_tabs[g_tabCount];
-    memset(tab, 0, sizeof(*tab));
-    tab->id = g_nextTabId++;
-
-    if (url)
-        strncpy(tab->url, url, sizeof(tab->url) - 1);
-
-    {
-        RECT client;
-
-        GetClientRect(g_hwnd, &client);
-        tab->wantWidth = client.right;
-        tab->wantHeight = viewHeightFor(client.bottom);
-    }
-
-    lockAcquire();
-    ++g_tabCount;
-    g_activeTab = g_tabCount - 1;
-    lockRelease();
-
-    memset(&command, 0, sizeof(command));
-    command.type = CMD_NEW_TAB;
-    command.tab = g_activeTab;
-    strncpy(command.text, tab->url[0] ? tab->url : g_initialUrl, sizeof(command.text) - 1);
-    postCommand(&command);
-
-    rebuildTabOrder();
-    resizeActiveTab();
-}
-
-/* ------------------------------------------------------------------------- */
-/* entry point                                                                */
-/* ------------------------------------------------------------------------- */
-
-/* ------------------------------------------------------------------------- */
-/* persistent state: bookmarks, history, session                              */
+/* data directory + persisted state                                          */
 /* ------------------------------------------------------------------------- */
 
 static void dataDirInit(void)
@@ -1463,7 +91,7 @@ static void dataDirInit(void)
             return;
     }
 
-    /* Portable / restricted environments: keep the data next to the exe. */
+    /* Portable mode: next to the executable. */
     {
         char module[MAX_PATH];
 
@@ -1478,10 +106,6 @@ static void dataDirInit(void)
             CreateDirectoryA(g_dataDir, NULL);
         }
     }
-
-    if (getenv("AGAVE_SHELL_DEBUG"))
-        fprintf(stderr, "[shell] data dir=%s (created=%d)\n", g_dataDir,
-                GetFileAttributesA(g_dataDir) != INVALID_FILE_ATTRIBUTES);
 }
 
 static void statePath(char* out, size_t size, const char* name)
@@ -1493,8 +117,8 @@ static void statePath(char* out, size_t size, const char* name)
 static void loadBookmarks(void)
 {
     char path[MAX_PATH_CHARS];
-    FILE* file;
     char line[1400];
+    FILE* file;
 
     g_bookmarkCount = 0;
     statePath(path, sizeof(path), "bookmarks.txt");
@@ -1511,22 +135,19 @@ static void loadBookmarks(void)
             continue;
 
         *tab = 0;
-
         n = strlen(line);
         while (n && (line[n - 1] == '\n' || line[n - 1] == '\r'))
             line[--n] = 0;
 
-        strncpy(g_bookmarks[g_bookmarkCount].url, line,
-                sizeof(g_bookmarks[0].url) - 1);
-        strncpy(g_bookmarks[g_bookmarkCount].title, tab + 1,
-                sizeof(g_bookmarks[0].title) - 1);
+        strncpy(g_bookmarks[g_bookmarkCount].url, line, MAX_PATH_CHARS - 1);
+        strncpy(g_bookmarks[g_bookmarkCount].title, tab + 1, sizeof(g_bookmarks[0].title) - 1);
 
         {
-            char* tail = g_bookmarks[g_bookmarkCount].title;
-            size_t m = strlen(tail);
+            char* title = g_bookmarks[g_bookmarkCount].title;
+            size_t m = strlen(title);
 
-            while (m && (tail[m - 1] == '\n' || tail[m - 1] == '\r'))
-                tail[--m] = 0;
+            while (m && (title[m - 1] == '\n' || title[m - 1] == '\r'))
+                title[--m] = 0;
         }
 
         ++g_bookmarkCount;
@@ -1558,22 +179,17 @@ static void addBookmark(const char* url, const char* title)
 {
     int i;
 
-    if (!url || !url[0])
+    if (!url || !url[0] || g_bookmarkCount >= AGW_MAX_BOOKMARKS)
         return;
 
     for (i = 0; i < g_bookmarkCount; ++i) {
         if (!strcmp(g_bookmarks[i].url, url))
-            return;   /* already there */
+            return;
     }
 
-    if (g_bookmarkCount >= AGW_MAX_BOOKMARKS)
-        return;
-
-    strncpy(g_bookmarks[g_bookmarkCount].url, url, sizeof(g_bookmarks[0].url) - 1);
-    strncpy(g_bookmarks[g_bookmarkCount].title, title ? title : "",
-            sizeof(g_bookmarks[0].title) - 1);
+    strncpy(g_bookmarks[g_bookmarkCount].url, url, MAX_PATH_CHARS - 1);
+    strncpy(g_bookmarks[g_bookmarkCount].title, title ? title : "", sizeof(g_bookmarks[0].title) - 1);
     ++g_bookmarkCount;
-
     saveBookmarks();
 }
 
@@ -1589,13 +205,12 @@ static void recordHistory(const char* url)
         return;
 
     if (g_historyCount == AGW_MAX_HISTORY) {
-        memmove(&g_history[0][0], &g_history[1][0],
-                sizeof(g_history[0]) * (AGW_MAX_HISTORY - 1));
+        memmove(g_history[0], g_history[1], sizeof(g_history[0]) * (AGW_MAX_HISTORY - 1));
         --g_historyCount;
     }
 
-    strncpy(g_history[g_historyCount], url, sizeof(g_history[0]) - 1);
-    g_history[g_historyCount][sizeof(g_history[0]) - 1] = 0;
+    strncpy(g_history[g_historyCount], url, MAX_PATH_CHARS - 1);
+    g_history[g_historyCount][MAX_PATH_CHARS - 1] = 0;
     ++g_historyCount;
 
     statePath(path, sizeof(path), "history.txt");
@@ -1619,8 +234,8 @@ static void saveSession(void)
     if (!file)
         return;
 
-    for (i = 0; i < g_tabCount; ++i) {
-        if (!g_tabs[i].closed && g_tabs[i].url[0])
+    for (i = 0; i < MAX_TABS; ++i) {
+        if (g_tabs[i].used && g_tabs[i].url[0])
             fprintf(file, "%s\n", g_tabs[i].url);
     }
 
@@ -1653,147 +268,858 @@ static int loadSession(char urls[][MAX_PATH_CHARS], int max)
     return count;
 }
 
-static void makeDownloadDir(void)
+/* ------------------------------------------------------------------------- */
+/* layout                                                                    */
+/* ------------------------------------------------------------------------- */
+
+static int nextFreeTab(void)
 {
-    const char* home = getenv("USERPROFILE");
+    int i;
 
-    if (!home)
-        home = ".";
+    for (i = 0; i < MAX_TABS; ++i) {
+        if (!g_tabs[i].used)
+            return i;
+    }
 
-    _snprintf(g_downloadDir, sizeof(g_downloadDir), "%s\\Downloads", home);
-    g_downloadDir[sizeof(g_downloadDir) - 1] = 0;
-    CreateDirectoryA(g_downloadDir, NULL);
+    return -1;
+}
+
+static void layoutTab(int index)
+{
+    RECT client;
+    int top;
+
+    if (!g_tabs[index].used || !g_tabs[index].view)
+        return;
+
+    GetClientRect(g_hwnd, &client);
+    top = TAB_HEIGHT + TOOLBAR_H + (g_findVisible ? FIND_H : 0);
+
+    agave_webview_set_rect(g_tabs[index].view, 0, top,
+                           client.right, client.bottom - top - STATUS_H);
+}
+
+static void layoutAll(void)
+{
+    RECT client;
+    int width, i;
+    int y = TOOLBAR_Y + TAB_HEIGHT;
+    int x = 6;
+    int reserved;
+
+    GetClientRect(g_hwnd, &client);
+    width = client.right;
+
+    MoveWindow(g_back, x, y, BUTTON_W, 26, TRUE);        x += BUTTON_W + 2;
+    MoveWindow(g_forward, x, y, BUTTON_W, 26, TRUE);     x += BUTTON_W + 2;
+    MoveWindow(g_reload, x, y, BUTTON_W, 26, TRUE);      x += BUTTON_W + 2;
+    MoveWindow(g_stop, x, y, BUTTON_W, 26, TRUE);        x += BUTTON_W + 6;
+
+    reserved = (BUTTON_W + 6) * 3 + 20;
+    MoveWindow(g_address, x, y + 1, width - x - reserved, 24, TRUE);
+    x = width - reserved + 6;
+    MoveWindow(g_go, x, y, 46, 26, TRUE);                x += 46 + 4;
+    MoveWindow(g_newtab, x, y, BUTTON_W, 26, TRUE);      x += BUTTON_W + 4;
+    MoveWindow(g_menu, x, y, BUTTON_W, 26, TRUE);
+
+    if (g_findVisible) {
+        int fy = TAB_HEIGHT + TOOLBAR_H + 2;
+
+        MoveWindow(g_findEdit, 8, fy, 260, 24, TRUE);
+        MoveWindow(g_findPrev, 274, fy, 34, 24, TRUE);
+        MoveWindow(g_findNext, 312, fy, 34, 24, TRUE);
+        MoveWindow(g_findClose, 350, fy, 28, 24, TRUE);
+    }
+
+    for (i = 0; i < MAX_TABS; ++i)
+        layoutTab(i);
+}
+
+static void updateStatus(void)
+{
+    Tab* tab = &g_tabs[g_activeTab];
+    char text[1024];
+
+    if (tab->used) {
+        if (tab->loading)
+            _snprintf(text, sizeof(text), "Loading %s... %d%%", tab->url, tab->progress);
+        else if (tab->status[0])
+            _snprintf(text, sizeof(text), "%s", tab->status);
+        else
+            _snprintf(text, sizeof(text), "%s", tab->url[0] ? tab->url : "Ready");
+    } else {
+        strcpy(text, "Ready");
+    }
+
+    text[sizeof(text) - 1] = 0;
+
+    if (g_zoom != 100) {
+        char zoom[32];
+
+        _snprintf(zoom, sizeof(zoom), "  [%d%%]", g_zoom);
+        strncat(text, zoom, sizeof(text) - strlen(text) - 1);
+    }
+
+    strncpy(g_status, text, sizeof(g_status) - 1);
+    g_status[sizeof(g_status) - 1] = 0;
+    InvalidateRect(g_hwnd, NULL, FALSE);
+}
+
+static void applyZoomToActive(void)
+{
+    Tab* tab = &g_tabs[g_activeTab];
+
+    if (tab->used && tab->view)
+        agave_webview_set_zoom(tab->view, g_zoom);
+}
+
+/* ------------------------------------------------------------------------- */
+/* tabs                                                                      */
+/* ------------------------------------------------------------------------- */
+
+static void setActiveTab(int index)
+{
+    int i;
+
+    if (index < 0 || index >= MAX_TABS || !g_tabs[index].used)
+        return;
+
+    g_activeTab = index;
+
+    for (i = 0; i < MAX_TABS; ++i) {
+        if (g_tabs[i].used && g_tabs[i].hwnd)
+            ShowWindow(g_tabs[i].hwnd, i == index ? SW_SHOW : SW_HIDE);
+    }
+
+    layoutTab(index);
+    applyZoomToActive();
+
+    if (g_tabs[index].view) {
+        SetWindowTextA(g_address, g_tabs[index].url);
+        agave_webview_set_focus(g_tabs[index].view);
+    }
+
+    updateStatus();
+    InvalidateRect(g_hwnd, NULL, FALSE);
+}
+
+static void closeTab(int index)
+{
+    int i;
+
+    if (index < 0 || index >= MAX_TABS || !g_tabs[index].used)
+        return;
+
+    if (g_tabs[index].view)
+        agave_webview_destroy(g_tabs[index].view);
+
+    memset(&g_tabs[index], 0, sizeof(Tab));
+
+    if (g_activeTab == index) {
+        for (i = 0; i < MAX_TABS; ++i) {
+            if (g_tabs[i].used) {
+                setActiveTab(i);
+                break;
+            }
+        }
+
+        if (i == MAX_TABS) {
+            g_activeTab = 0;
+            updateStatus();
+        }
+    }
+
+    InvalidateRect(g_hwnd, NULL, TRUE);
+}
+
+/* ------------------------------------------------------------------------- */
+/* control callbacks (engine thread)                                         */
+/* ------------------------------------------------------------------------- */
+
+static void onTitle(AgaveWebView* view, const char* title, void* user)
+{
+    Tab* tab = (Tab*)user;
+
+    (void)view;
+
+    if (!tab)
+        return;
+
+    strncpy(tab->title, title ? title : "", sizeof(tab->title) - 1);
+    tab->title[sizeof(tab->title) - 1] = 0;
+
+    if (tab == &g_tabs[g_activeTab])
+        SetWindowTextA(g_hwnd, tab->title[0] ? tab->title : "BrowserShell - Agave");
+
+    InvalidateRect(g_hwnd, NULL, FALSE);
+}
+
+static void onUrl(AgaveWebView* view, const char* url, void* user)
+{
+    Tab* tab = (Tab*)user;
+
+    (void)view;
+
+    if (!tab || !url)
+        return;
+
+    strncpy(tab->url, url, MAX_PATH_CHARS - 1);
+    tab->url[MAX_PATH_CHARS - 1] = 0;
+
+    if (tab == &g_tabs[g_activeTab]) {
+        if (GetFocus() != g_address)
+            SetWindowTextA(g_address, tab->url);
+
+        recordHistory(tab->url);
+    }
+}
+
+static void onProgress(AgaveWebView* view, int percent, int finished, void* user)
+{
+    Tab* tab = (Tab*)user;
+
+    (void)view;
+
+    if (!tab)
+        return;
+
+    tab->progress = percent;
+    tab->loading = finished ? 0 : 1;
+
+    if (tab == &g_tabs[g_activeTab])
+        updateStatus();
+}
+
+static void onStatus(AgaveWebView* view, const char* text, void* user)
+{
+    Tab* tab = (Tab*)user;
+
+    (void)view;
+
+    if (!tab)
+        return;
+
+    strncpy(tab->status, text ? text : "", sizeof(tab->status) - 1);
+    tab->status[sizeof(tab->status) - 1] = 0;
+
+    if (tab == &g_tabs[g_activeTab])
+        updateStatus();
+}
+
+static void onError(AgaveWebView* view, int code, const char* url, void* user)
+{
+    Tab* tab = (Tab*)user;
+    char text[512];
+
+    (void)view;
+
+    if (!tab)
+        return;
+
+    _snprintf(text, sizeof(text), "Failed to load (%d): %s", code, url ? url : "");
+    text[sizeof(text) - 1] = 0;
+    strncpy(tab->status, text, sizeof(tab->status) - 1);
+    tab->loading = 0;
+
+    if (tab == &g_tabs[g_activeTab])
+        updateStatus();
+}
+
+static int onDialog(AgaveWebView* view, int type, const char* message,
+                    const char* defaultValue, char* result, int resultSize, void* user)
+{
+    (void)view;
+    (void)user;
+
+    if (type == 0) {
+        MessageBoxA(g_hwnd, message ? message : "", "Page says", MB_OK | MB_ICONINFORMATION);
+        return 1;
+    }
+
+    if (type == 1) {
+        return MessageBoxA(g_hwnd, message ? message : "", "Confirm",
+                           MB_OKCANCEL | MB_ICONQUESTION) == IDOK;
+    }
+
+    if (result && resultSize > 0) {
+        _snprintf(result, resultSize, "%s", defaultValue ? defaultValue : "");
+        result[resultSize - 1] = 0;
+    }
+
+    return 1;
+}
+
+static int onNewWindow(AgaveWebView* from, AgaveWebView* popup,
+                       const char* url, void* user)
+{
+    int index = nextFreeTab();
+    (void)from;
+    (void)user;
+
+    if (index < 0 || !url || !url[0]) {
+        agave_webview_destroy(popup);
+        return 0;
+    }
+
+    g_tabs[index].used = 1;
+    g_tabs[index].view = popup;
+    g_tabs[index].hwnd = (HWND)agave_webview_hwnd(popup);
+    strncpy(g_tabs[index].url, url, MAX_PATH_CHARS - 1);
+    strncpy(g_tabs[index].title, url, sizeof(g_tabs[index].title) - 1);
+
+    /* Re-parent into the shell so it behaves like a tab, not a floating popup. */
+    SetParent(g_tabs[index].hwnd, g_hwnd);
+    ShowWindow(g_tabs[index].hwnd, SW_HIDE);
+
+    setActiveTab(index);
+    return 1;
+}
+
+static void onDownload(AgaveWebView* view, const char* url, const char* path, void* user)
+{
+    (void)view;
+    (void)user;
+    (void)url;
+
+    _snprintf(g_status, sizeof(g_status), "Downloaded: %s", path ? path : "");
+    g_status[sizeof(g_status) - 1] = 0;
+    InvalidateRect(g_hwnd, NULL, FALSE);
+}
+
+/* ------------------------------------------------------------------------- */
+/* navigation helpers                                                        */
+/* ------------------------------------------------------------------------- */
+
+static void normalizeUrl(const char* input, char* out, size_t outSize)
+{
+    const char* text = input;
+
+    while (*text == ' ')
+        ++text;
+
+    if (!strncmp(text, "http://", 7) || !strncmp(text, "https://", 8) ||
+        !strncmp(text, "about:", 6) || !strncmp(text, "file://", 7) ||
+        !strncmp(text, "data:", 5)) {
+        strncpy(out, text, outSize - 1);
+        out[outSize - 1] = 0;
+        return;
+    }
+
+    if (strchr(text, ' ') || !strchr(text, '.')) {
+        char encoded[512];
+        size_t i, o = 0;
+
+        for (i = 0; text[i] && o + 4 < sizeof(encoded); ++i)
+            encoded[o++] = (text[i] == ' ') ? '+' : text[i];
+
+        encoded[o] = 0;
+
+        _snprintf(out, outSize, "https://www.baidu.com/s?wd=%s", encoded);
+        out[outSize - 1] = 0;
+        return;
+    }
+
+    _snprintf(out, outSize, "http://%s", text);
+    out[outSize - 1] = 0;
+}
+
+static void createTab(const char* url)
+{
+    int index = nextFreeTab();
+    AgaveWebViewCallback callbacks;
+    Tab* tab;
+
+    if (index < 0)
+        return;
+
+    tab = &g_tabs[index];
+    memset(tab, 0, sizeof(Tab));
+    memset(&callbacks, 0, sizeof(callbacks));
+
+    callbacks.on_title = onTitle;
+    callbacks.on_url = onUrl;
+    callbacks.on_progress = onProgress;
+    callbacks.on_status = onStatus;
+    callbacks.on_error = onError;
+    callbacks.on_dialog = onDialog;
+    callbacks.on_new_window = onNewWindow;
+    callbacks.on_download = onDownload;
+
+    tab->used = 1;
+    tab->view = agave_webview_create(g_hwnd, 0, TAB_HEIGHT + TOOLBAR_H,
+                                     800, 400, &callbacks, tab);
+
+    if (!tab->view) {
+        tab->used = 0;
+        return;
+    }
+
+    tab->hwnd = (HWND)agave_webview_hwnd(tab->view);
+    strncpy(tab->url, url, MAX_PATH_CHARS - 1);
+    ShowWindow(tab->hwnd, SW_HIDE);
+
+    agave_webview_set_zoom(tab->view, g_zoom);
+    setActiveTab(index);
+    agave_webview_navigate(tab->view, url);
+}
+
+static void navigateActive(const char* text, int newTab)
+{
+    char url[MAX_PATH_CHARS];
+
+    normalizeUrl(text, url, sizeof(url));
+
+    if (newTab || !g_tabs[g_activeTab].used) {
+        createTab(url);
+        return;
+    }
+
+    strncpy(g_tabs[g_activeTab].url, url, MAX_PATH_CHARS - 1);
+    recordHistory(url);
+    SetWindowTextA(g_address, url);
+    agave_webview_navigate(g_tabs[g_activeTab].view, url);
+}
+
+static void addBookmarkCurrent(void)
+{
+    Tab* tab = &g_tabs[g_activeTab];
+
+    if (!tab->used)
+        return;
+
+    addBookmark(tab->url, tab->title);
+    strncpy(tab->status, "Bookmark added", sizeof(tab->status) - 1);
+    updateStatus();
+}
+
+static void toggleFind(void)
+{
+    g_findVisible = !g_findVisible;
+
+    ShowWindow(g_findEdit, g_findVisible ? SW_SHOW : SW_HIDE);
+    ShowWindow(g_findPrev, g_findVisible ? SW_SHOW : SW_HIDE);
+    ShowWindow(g_findNext, g_findVisible ? SW_SHOW : SW_HIDE);
+    ShowWindow(g_findClose, g_findVisible ? SW_SHOW : SW_HIDE);
+
+    if (g_findVisible)
+        SetFocus(g_findEdit);
+
+    layoutAll();
+    InvalidateRect(g_hwnd, NULL, TRUE);
+}
+
+static void doFind(int forward)
+{
+    char text[256];
+    Tab* tab = &g_tabs[g_activeTab];
+
+    if (!tab->used || !tab->view)
+        return;
+
+    GetWindowTextA(g_findEdit, text, sizeof(text));
+
+    if (text[0])
+        agave_webview_search(tab->view, text, forward, 0);
+}
+
+static void updateToolbarState(void)
+{
+    Tab* tab = &g_tabs[g_activeTab];
+
+    EnableWindow(g_back, tab->used && agave_webview_can_back(tab->view));
+    EnableWindow(g_forward, tab->used && agave_webview_can_forward(tab->view));
+}
+
+/* ------------------------------------------------------------------------- */
+/* menu                                                                      */
+/* ------------------------------------------------------------------------- */
+
+static void showMainMenu(void)
+{
+    HMENU menu = CreatePopupMenu();
+    HMENU bookmarks = CreatePopupMenu();
+    HMENU history = CreatePopupMenu();
+    POINT point;
+    int choice;
+    int i;
+
+    for (i = 0; i < g_bookmarkCount && i < 20; ++i)
+        AppendMenuA(bookmarks, MF_STRING, 100 + i,
+                    g_bookmarks[i].title[0] ? g_bookmarks[i].title : g_bookmarks[i].url);
+
+    if (g_bookmarkCount == 0)
+        AppendMenuA(bookmarks, MF_STRING | MF_GRAYED, 0, "(empty)");
+
+    for (i = g_historyCount - 1; i >= 0 && i >= g_historyCount - 20; --i)
+        AppendMenuA(history, MF_STRING, 200 + (g_historyCount - 1 - i), g_history[i]);
+
+    if (g_historyCount == 0)
+        AppendMenuA(history, MF_STRING | MF_GRAYED, 0, "(empty)");
+
+    AppendMenuA(menu, MF_STRING, 1, "Add bookmark\tCtrl+D");
+    AppendMenuA(menu, MF_POPUP, (UINT_PTR)bookmarks, "Bookmarks");
+    AppendMenuA(menu, MF_POPUP, (UINT_PTR)history, "History");
+    AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuA(menu, MF_STRING, 2, "Zoom in\tCtrl+=");
+    AppendMenuA(menu, MF_STRING, 3, "Zoom out\tCtrl+-");
+    AppendMenuA(menu, MF_STRING, 4, "Reset zoom\tCtrl+0");
+    AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuA(menu, MF_STRING, 5, "New tab\tCtrl+T");
+    AppendMenuA(menu, MF_STRING, 6, "Find\tCtrl+F");
+    AppendMenuA(menu, MF_STRING, 7, "Reload\tF5");
+
+    GetCursorPos(&point);
+    choice = (int)TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN,
+                                 point.x, point.y, 0, g_hwnd, NULL);
+    DestroyMenu(menu);
+
+    if (choice >= 200) {
+        int index = g_historyCount - 1 - (choice - 200);
+
+        if (index >= 0 && index < g_historyCount)
+            navigateActive(g_history[index], 0);
+        return;
+    }
+
+    if (choice >= 100) {
+        int index = choice - 100;
+
+        if (index >= 0 && index < g_bookmarkCount)
+            navigateActive(g_bookmarks[index].url, 0);
+        return;
+    }
+
+    switch (choice) {
+    case 1: addBookmarkCurrent(); break;
+    case 2: g_zoom = g_zoom < 400 ? g_zoom + 25 : g_zoom; applyZoomToActive(); updateStatus(); break;
+    case 3: g_zoom = g_zoom > 25 ? g_zoom - 25 : g_zoom; applyZoomToActive(); updateStatus(); break;
+    case 4: g_zoom = 100; applyZoomToActive(); updateStatus(); break;
+    case 5: navigateActive("about:blank", 1); break;
+    case 6: toggleFind(); break;
+    case 7: if (g_tabs[g_activeTab].used) agave_webview_reload(g_tabs[g_activeTab].view); break;
+    default: break;
+    }
+}
+
+/* ------------------------------------------------------------------------- */
+/* painting: tab bar + status bar                                            */
+/* ------------------------------------------------------------------------- */
+
+static void paintTabs(HDC hdc, int width)
+{
+    int i, x = 0;
+    HFONT font = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+    HFONT old = (HFONT)SelectObject(hdc, font);
+    RECT strip;
+
+    SetRect(&strip, 0, 0, width, TAB_HEIGHT);
+    SetBkMode(hdc, TRANSPARENT);
+    FillRect(hdc, &strip, (HBRUSH)(COLOR_BTNFACE + 1));
+
+    for (i = 0; i < MAX_TABS; ++i) {
+        RECT box;
+        char label[128];
+
+        if (!g_tabs[i].used)
+            continue;
+
+        SetRect(&box, x, 2, x + TAB_W, TAB_HEIGHT - 2);
+        FillRect(hdc, &box, (HBRUSH)((i == g_activeTab) ? COLOR_WINDOW : COLOR_BTNSHADOW + 1));
+
+        SetRect(&box, x + 6, 2, x + 146, TAB_HEIGHT - 2);
+        _snprintf(label, sizeof(label), "%s", g_tabs[i].title[0] ? g_tabs[i].title : "New tab");
+        label[sizeof(label) - 1] = 0;
+        DrawTextA(hdc, label, -1, &box,
+                  DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_END_ELLIPSIS);
+
+        SetRect(&box, x + 148, 2, x + 168, TAB_HEIGHT - 2);
+        DrawTextA(hdc, "x", -1, &box, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
+
+        x += TAB_W;
+    }
+
+    SelectObject(hdc, old);
+}
+
+static void paintStatus(HDC hdc, int width, int height)
+{
+    RECT bar;
+    HFONT font = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+    HFONT old = (HFONT)SelectObject(hdc, font);
+
+    SetRect(&bar, 0, height - STATUS_H, width, height);
+    FillRect(hdc, &bar, (HBRUSH)(COLOR_BTNFACE + 1));
+
+    bar.left = 8;
+    bar.right = width - 8;
+    SetBkMode(hdc, TRANSPARENT);
+    DrawTextA(hdc, g_status, -1, &bar,
+              DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_END_ELLIPSIS);
+
+    SelectObject(hdc, old);
+}
+
+/* ------------------------------------------------------------------------- */
+/* window procedure                                                          */
+/* ------------------------------------------------------------------------- */
+
+static LRESULT CALLBACK shellProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    switch (message) {
+    case WM_CREATE:
+        g_hwnd = hwnd;
+        return 0;
+
+    case WM_SIZE:
+        layoutAll();
+        updateToolbarState();
+        return 0;
+
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        RECT client;
+        HDC hdc = BeginPaint(hwnd, &ps);
+
+        GetClientRect(hwnd, &client);
+        paintTabs(hdc, client.right);
+        paintStatus(hdc, client.right, client.bottom);
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+
+    case WM_ERASEBKGND:
+        return 1;
+
+    case WM_LBUTTONDOWN: {
+        int x = (short)LOWORD(lParam);
+        int y = (short)HIWORD(lParam);
+        int i, slot = 0;
+
+        if (y >= TAB_HEIGHT)
+            break;
+
+        for (i = 0; i < MAX_TABS; ++i) {
+            int left;
+
+            if (!g_tabs[i].used)
+                continue;
+
+            left = slot * TAB_W;
+
+            if (x >= left && x < left + TAB_W) {
+                if (x >= left + 148)
+                    closeTab(i);
+                else
+                    setActiveTab(i);
+                return 0;
+            }
+
+            ++slot;
+        }
+        return 0;
+    }
+
+    case WM_COMMAND: {
+        int id = LOWORD(wParam);
+        Tab* tab = &g_tabs[g_activeTab];
+
+        switch (id) {
+        case ID_BACK:    if (tab->used) agave_webview_back(tab->view); break;
+        case ID_FORWARD: if (tab->used) agave_webview_forward(tab->view); break;
+        case ID_RELOAD:  if (tab->used) agave_webview_reload(tab->view); break;
+        case ID_STOP:    if (tab->used) agave_webview_stop(tab->view); break;
+
+        case ID_GO: {
+            char text[MAX_PATH_CHARS];
+
+            GetWindowTextA(g_address, text, sizeof(text));
+            navigateActive(text, 0);
+            break;
+        }
+
+        case ID_NEWTAB: navigateActive("about:blank", 1); break;
+        case ID_MENU:   showMainMenu(); break;
+
+        case ID_FIND_NEXT:  doFind(1); break;
+        case ID_FIND_PREV:  doFind(-1); break;
+        case ID_FIND_CLOSE: toggleFind(); break;
+        default: break;
+        }
+        return 0;
+    }
+
+    case WM_DESTROY:
+        saveSession();
+        PostQuitMessage(0);
+        return 0;
+
+    default:
+        break;
+    }
+
+    return DefWindowProcA(hwnd, message, wParam, lParam);
+}
+
+/* ------------------------------------------------------------------------- */
+/* entry point                                                               */
+/* ------------------------------------------------------------------------- */
+
+static HWND makeButton(const char* text, int id)
+{
+    return CreateWindowA("BUTTON", text, WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                         0, 0, 0, 0, g_hwnd, (HMENU)(INT_PTR)id, g_instance, NULL);
 }
 
 int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, int show)
 {
     WNDCLASSA wc;
-    MSG message;
-    MC_CALLBACK_INFO callbacks;
-    HANDLE thread;
-    int argc = 0;
-    char** argv = __argv;
+    MSG msg;
+    char initial[MAX_PATH_CHARS];
+    static char session[8][MAX_PATH_CHARS];
+    int restored = 0;
 
     (void)previous;
     (void)show;
     (void)commandLine;
 
-    while (argv && argv[argc])
-        ++argc;
-
-    if (argc > 1) {
-        strncpy(g_initialUrl, argv[1], sizeof(g_initialUrl) - 1);
-        g_initialUrl[sizeof(g_initialUrl) - 1] = 0;
-    } else {
-        strcpy(g_initialUrl, "http://www.163.com");
-    }
-
-    InitializeCriticalSection(&g_lock);
-    makeDownloadDir();
-    dataDirInit();
-    loadBookmarks();
+    g_instance = instance;
 
     memset(&wc, 0, sizeof(wc));
-    wc.lpfnWndProc = windowProc;
+    wc.lpfnWndProc = shellProc;
     wc.hInstance = instance;
     wc.hCursor = LoadCursorA(NULL, IDC_ARROW);
     wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
     wc.lpszClassName = "AgaveShellWindow";
 
-    if (!RegisterClassA(&wc))
-        return 1;
+    RegisterClassA(&wc);
 
-    g_hwnd = CreateWindowExA(0, "AgaveShellWindow", "Agave BrowserShell",
-                             WS_OVERLAPPEDWINDOW,
-                             CW_USEDEFAULT, CW_USEDEFAULT, 1100, 800,
-                             NULL, NULL, instance, NULL);
+    g_hwnd = CreateWindowExA(0, "AgaveShellWindow", "BrowserShell - Agave",
+                             WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
+                             1100, 800, NULL, NULL, instance, NULL);
 
     if (!g_hwnd)
         return 1;
 
-    g_buttons[0] = CreateWindowA("BUTTON", "<",  WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, g_hwnd, (HMENU)ID_BACK,    instance, NULL);
-    g_buttons[1] = CreateWindowA("BUTTON", ">",  WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, g_hwnd, (HMENU)ID_FORWARD, instance, NULL);
-    g_buttons[2] = CreateWindowA("BUTTON", "R",  WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, g_hwnd, (HMENU)ID_RELOAD,  instance, NULL);
-    g_buttons[3] = CreateWindowA("BUTTON", "X",  WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, g_hwnd, (HMENU)ID_STOP,    instance, NULL);
-    g_buttons[4] = CreateWindowA("BUTTON", "Go", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 0, 0, 0, 0, g_hwnd, (HMENU)ID_GO,     instance, NULL);
-    g_buttons[5] = CreateWindowA("BUTTON", "+",  WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, g_hwnd, (HMENU)ID_NEWTAB, instance, NULL);
-    g_buttons[6] = CreateWindowA("BUTTON", "=",  WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, g_hwnd, (HMENU)ID_MENU,   instance, NULL);
+    dataDirInit();
+    loadBookmarks();
+
+    g_back = makeButton("<", ID_BACK);
+    g_forward = makeButton(">", ID_FORWARD);
+    g_reload = makeButton("R", ID_RELOAD);
+    g_stop = makeButton("X", ID_STOP);
+    g_go = makeButton("Go", ID_GO);
+    g_newtab = makeButton("+", ID_NEWTAB);
+    g_menu = makeButton("=", ID_MENU);
 
     g_address = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "",
                                 WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
-                                0, 0, 0, 0, g_hwnd, (HMENU)ID_ADDRESS, instance, NULL);
+                                0, 0, 0, 0, g_hwnd, (HMENU)(INT_PTR)ID_ADDRESS, instance, NULL);
 
-    g_find = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "",
-                             WS_CHILD | ES_AUTOHSCROLL,
-                             0, 0, 0, 0, g_hwnd, (HMENU)ID_FIND, instance, NULL);
+    g_findEdit = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "",
+                                 WS_CHILD | ES_AUTOHSCROLL,
+                                 0, 0, 0, 0, g_hwnd, (HMENU)(INT_PTR)ID_FIND_EDIT, instance, NULL);
+    g_findNext = makeButton("v", ID_FIND_NEXT);
+    g_findPrev = makeButton("^", ID_FIND_PREV);
+    g_findClose = makeButton("x", ID_FIND_CLOSE);
 
-    g_addressOldProc = (WNDPROC)SetWindowLongPtrA(g_address, GWLP_WNDPROC, (LONG_PTR)addressProc);
-    g_findOldProc    = (WNDPROC)SetWindowLongPtrA(g_find, GWLP_WNDPROC, (LONG_PTR)findProc);
-
-    memset(&callbacks, 0, sizeof(callbacks));
-    callbacks.cb_invalidate_rect  = onInvalidate;
-    callbacks.cb_update_view_now  = onUpdateNow;
-    callbacks.cb_set_title        = onTitle;
-    callbacks.cb_set_location     = onLocation;
-    callbacks.cb_set_status       = onStatus;
-    callbacks.cb_loading_progress = onProgress;
-    callbacks.cb_error            = onError;
-    callbacks.cb_set_cursor       = onCursor;
-    callbacks.cb_write_file_data  = onWriteFile;
-    macross_set_callback(&callbacks);
-
-    {
-        static char sessionUrls[8][MAX_PATH_CHARS];
-        int restored = 0;
-
-        if (argc <= 1)
-            restored = loadSession(sessionUrls, 8);
-
-        if (restored > 0) {
-            int i;
-
-            for (i = 0; i < restored; ++i)
-                addTab(sessionUrls[i]);
-        } else {
-            addTab(g_initialUrl);
-        }
-    }
-
-    if (getenv("AGB_SHELL_DEBUG")) {
-        RECT frame;
-
-        GetWindowRect(g_hwnd, &frame);
-        fprintf(stderr, "[shell] before show frame=%ldx%ld\n",
-                frame.right - frame.left, frame.bottom - frame.top);
-    }
+    ShowWindow(g_findEdit, SW_HIDE);
+    ShowWindow(g_findNext, SW_HIDE);
+    ShowWindow(g_findPrev, SW_HIDE);
+    ShowWindow(g_findClose, SW_HIDE);
 
     ShowWindow(g_hwnd, SW_SHOW);
     UpdateWindow(g_hwnd);
 
-    if (getenv("AGB_SHELL_DEBUG")) {
-        RECT frame;
+    /* Initial tabs: command line URL wins, otherwise restore the session. */
+    {
+        const char* cmd = GetCommandLineA();
+        const char* arg = NULL;
 
-        GetWindowRect(g_hwnd, &frame);
-        fprintf(stderr, "[shell] after show frame=%ldx%ld\n",
-                frame.right - frame.left, frame.bottom - frame.top);
+        if (cmd) {
+            if (*cmd == '"') {
+                cmd = strchr(cmd + 1, '"');
+                if (cmd)
+                    ++cmd;
+            } else {
+                cmd = strchr(cmd, ' ');
+            }
+
+            while (cmd && *cmd == ' ')
+                ++cmd;
+
+            if (cmd && *cmd)
+                arg = cmd;
+        }
+
+        if (arg && arg[0] && arg[0] != '"') {
+            strncpy(initial, arg, sizeof(initial) - 1);
+            initial[sizeof(initial) - 1] = 0;
+        } else {
+            restored = loadSession(session, 8);
+            strcpy(initial, restored > 0 ? session[0] : "http://www.163.com");
+        }
     }
 
-    thread = CreateThread(NULL, 0, engineThread, NULL, 0, NULL);
+    if (restored > 1) {
+        int i;
 
-    SetFocus(g_address);
-    SendMessageA(g_address, EM_SETSEL, 0, -1);
+        for (i = 0; i < restored; ++i)
+            createTab(session[i]);
 
-    while (GetMessageA(&message, NULL, 0, 0)) {
-        TranslateMessage(&message);
-        DispatchMessageA(&message);
+        setActiveTab(g_activeTab);
+    } else {
+        createTab(initial);
     }
 
-    g_engineQuit = 1;
-    if (thread) {
-        WaitForSingleObject(thread, 3000);
-        CloseHandle(thread);
+    while (GetMessageA(&msg, NULL, 0, 0)) {
+        if (msg.message == WM_KEYDOWN) {
+            if (msg.hwnd == g_address && msg.wParam == VK_RETURN) {
+                char text[MAX_PATH_CHARS];
+
+                GetWindowTextA(g_address, text, sizeof(text));
+                navigateActive(text, 0);
+                continue;
+            }
+
+            if (msg.hwnd == g_findEdit && msg.wParam == VK_RETURN) {
+                doFind(1);
+                continue;
+            }
+
+            if (GetKeyState(VK_CONTROL) & 0x8000) {
+                if (msg.wParam == 'D') { addBookmarkCurrent(); continue; }
+                if (msg.wParam == 'F') { toggleFind(); continue; }
+                if (msg.wParam == 'T') { navigateActive("about:blank", 1); continue; }
+                if (msg.wParam == 'L') { SetFocus(g_address); continue; }
+                if (msg.wParam == VK_ADD || msg.wParam == 0xBB) {
+                    g_zoom = g_zoom < 400 ? g_zoom + 25 : g_zoom;
+                    applyZoomToActive();
+                    updateStatus();
+                    continue;
+                }
+                if (msg.wParam == VK_SUBTRACT || msg.wParam == 0xBD) {
+                    g_zoom = g_zoom > 25 ? g_zoom - 25 : g_zoom;
+                    applyZoomToActive();
+                    updateStatus();
+                    continue;
+                }
+                if (msg.wParam == '0') {
+                    g_zoom = 100;
+                    applyZoomToActive();
+                    updateStatus();
+                    continue;
+                }
+            }
+
+            if (msg.wParam == VK_F5 && g_tabs[g_activeTab].used) {
+                agave_webview_reload(g_tabs[g_activeTab].view);
+                continue;
+            }
+        }
+
+        TranslateMessage(&msg);
+        DispatchMessageA(&msg);
     }
 
-    DeleteCriticalSection(&g_lock);
     return 0;
 }

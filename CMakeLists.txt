@@ -100,9 +100,12 @@ endif()
 
 option(OPT_SHELL "Build the Win32 browser shell" OFF)
 if (OPT_SHELL AND WIN32)
+    # The shell is now an embedding host: all page handling goes through the
+    # AgaveWebView control.
     add_executable(agave_shell WIN32 ${PROJ_ROOT}/examples/browser_shell/main.c)
     target_include_directories(agave_shell PRIVATE ${PROJ_ROOT}/include ${PROJ_OUT})
-    target_link_libraries(agave_shell PRIVATE ${LIB_NAME} user32 gdi32 shell32 comdlg32)
+    target_compile_definitions(agave_shell PRIVATE AGW_USE_DLL)
+    target_link_libraries(agave_shell PRIVATE agave_webview ${LIB_NAME} user32 gdi32 shell32 comdlg32)
 endif()
 
 # Embeddable WebView control: child HWND + engine thread, plus a demo host.
