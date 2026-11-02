@@ -781,8 +781,23 @@ static DWORD WINAPI agwEngineThread(LPVOID param)
             for (i = 0; i < count; ++i) {
                 AgaveWebView* item = batch[i];
 
-                if (!item->destroyed)
+                if (!item->destroyed) {
+                    unsigned long began = GetTickCount();
+
                     macross_view_update(item->view, NULL);
+
+                    if (getenv("AGB_LOOP_DEBUG")) {
+                        static int frames = 0;
+                        static unsigned long total = 0;
+
+                        total += GetTickCount() - began;
+                        ++frames;
+
+                        if (frames % 100 == 0)
+                            fprintf(stderr, "[loop] frames=%d update=%u ms (avg %u ms)\n",
+                                    frames, (unsigned)total, (unsigned)(total / frames));
+                    }
+                }
 
                 /* Copy the finished frame into the mirror buffer the window
                  * paints from. Doing this under the lock keeps the UI thread

@@ -24,6 +24,19 @@
  */
 
 #include "config.h"
+
+/* Monotonic millisecond clock for the layout accounting below. */
+#if defined(_WIN32)
+#include <windows.h>
+namespace WebCore {
+inline unsigned long layoutTickCount() { return (unsigned long)GetTickCount(); }
+}
+#else
+#include <time.h>
+namespace WebCore {
+inline unsigned long layoutTickCount() { return 0; }
+}
+#endif
 #include "FrameView.h"
 
 #include "AXObjectCache.h"
@@ -296,6 +309,32 @@ void FrameView::layout(bool allowSubtree)
 {
     if (d->midLayout)
         return;
+
+    /* Layout accounting: a page that lays out thousands of times hides its real
+     * cost behind "loading" (css3test built ~16k elements). */
+    bool layoutDebug = getenv("AGB_LAYOUT_DEBUG") != NULL;
+    unsigned long layoutBegan = layoutDebug ? WebCore::layoutTickCount() : 0;
+
+    struct LayoutTimer {
+        bool     active;
+        unsigned long began;
+
+        ~LayoutTimer()
+        {
+            static int calls = 0;
+            static unsigned long total = 0;
+
+            if (!active)
+                return;
+
+            total += WebCore::layoutTickCount() - began;
+            ++calls;
+
+            if (calls % 5 == 0)
+                fprintf(stderr, "[layout] calls=%d total=%u ms (last20 avg %u ms)\n",
+                        calls, (unsigned)total, (unsigned)(total / calls));
+        }
+    } layoutTimer = { layoutDebug, layoutBegan };
 
     d->layoutTimer.stop();
     d->delayedLayout = false;

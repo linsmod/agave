@@ -1807,6 +1807,9 @@ static bool looksLikeModule(const char* src, size_t len)
     return false;
 }
 
+/* Set once the document has been parsed: ES modules run only after that. */
+static bool g_documentParsed = false;
+
 int evaluate(const char* src, size_t len, char** out, char** err)
 {
     AntbValue* value;
@@ -1819,9 +1822,19 @@ int evaluate(const char* src, size_t len, char** out, char** err)
     if (!g_engine || !src)
         return 0;
 
-    /* ES module syntax cannot be evaluated as a classic script. */
-    if (looksLikeModule(src, len))
+    /* ES module syntax cannot be evaluated as a classic script, and modules are
+     * deferred by spec: running one while the parser is still building the
+     * document makes it look for nodes that do not exist yet. */
+    if (looksLikeModule(src, len)) {
+        if (!g_documentParsed) {
+            std::string body(src, len);
+
+            queueModule(g_currentFilename.c_str(), body.c_str());
+            return 1;
+        }
+
         return evaluateModule(src, len, g_currentFilename.c_str(), out, err);
+    }
 
     collectXhrJobs();
 
