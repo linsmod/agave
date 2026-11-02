@@ -71,8 +71,9 @@ cmake --build build-zig-native --target agave_embed     # 双控件演示
 
 * 只支持 Windows（子窗口 + DIB）；
 * 每个控件一个引擎 view，但 `macross_initialize` 是进程级，只初始化一次；
-* `on_new_window` 由引擎的 `cb_open_window` 驱动：控件已创建好 popup 控件并
-  交给宿主摆放，宿主返回 0 表示阻止（控件自动销毁）；
+* `on_new_window` 由 shim 的 `window.open` 驱动：控件创建好 popup 控件并
+  交给宿主摆放（宿主可改位置/尺寸），宿主返回 0 表示阻止（控件自动销毁）；
+  popup 窗口属于引擎线程，其消息由控件的引擎循环泵出；
 * 多控件共享一个 Ant 引擎实例（`g_document` 是进程级），
   多个控件同时执行有 DOM 依赖的脚本时，document 绑定会互相影响 —— 这是
   当前最大的架构限制，接入方应尽量让一个进程只跑一个"活"页面；

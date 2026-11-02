@@ -109,7 +109,7 @@ endif()
 if (OPT_SHELL AND WIN32)
     add_library(agave_webview SHARED ${PROJ_ROOT}/src/webview_control/AgaveWebView.c)
     target_include_directories(agave_webview PRIVATE ${PROJ_ROOT}/include ${PROJ_OUT})
-    target_compile_definitions(agave_webview PRIVATE AGW_BUILD_DLL)
+    target_compile_definitions(agave_webview PRIVATE AGW_BUILD_DLL AGB_USE_DLL)
     target_link_libraries(agave_webview PRIVATE ${LIB_NAME} user32 gdi32)
 
     add_executable(agave_embed WIN32 ${PROJ_ROOT}/examples/embed_demo/main.c)

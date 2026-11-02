@@ -488,6 +488,16 @@ MACROSS_API MC_STATUS macross_view_get_rendering_mode(MaCrossView* view, MC_REND
 MACROSS_API MC_STATUS macross_view_set_scale_factor(MaCrossView* view, int precent);
 
 /**
+ * \brief window.open() hook.
+ *
+ * The engine asks this hook to create a new view. Returning non-zero means the
+ * hook created (and took ownership of) a new MaCrossView; the engine will load
+ * the URL into it. Returning 0 blocks the popup.
+ */
+typedef int (*MC_OPEN_WINDOW_HOOK)(const char* utf8_url);
+MACROSS_API void macross_set_open_window_hook(MC_OPEN_WINDOW_HOOK hook);
+
+/**
  * \fn MC_STATUS macross_view_get_scale_factor(MaCrossView* view, int* precent)
  * 
  * \param view  	Pointer to an existing webview object.

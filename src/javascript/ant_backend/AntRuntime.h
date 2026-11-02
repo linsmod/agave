@@ -12,6 +12,11 @@
 
 namespace AntRuntime {
 
+/* window.open() goes through this hook: the embedding layer decides whether a
+ * new view is created (return non-zero) or the popup is blocked (return 0). */
+typedef int (*OpenWindowHook)(const char* url);
+void setOpenWindowHook(OpenWindowHook hook);
+
 /* Creates the JS engine. Safe to call more than once; returns false on failure. */
 bool start();
 

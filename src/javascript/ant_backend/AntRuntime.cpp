@@ -139,6 +139,7 @@ int nodeGetElementsByClassName(AntbEngine*, AntbValue*, AntbValue**, int, AntbVa
 int nodeQuerySelectorAll(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeQuerySelector(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalFrameSlot(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int globalOpenWindow(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalActivateSlot(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int imageConstructor(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 /* ------------------------------------------------------------------------- */
@@ -1056,6 +1057,14 @@ static const char kPrelude[] =
 "      finally { g.__agbActivateSlot(old); }"
 "    };"
 "  };"
+"  g.open = function (url) {"
+"    var ok = false;"
+"    try { ok = !!__agbOpenWindow(url == null ? '' : String(url)); } catch (e) { ok = false; }"
+"    if (!ok) return null;"
+"    return { closed: false, focus: function () {}, blur: function () {},"
+"      close: function () { this.closed = true; }, postMessage: function () {} };"
+"  };"
+"  g.close = function () {};"
 "  if (typeof g.setTimeout === 'function' && !g.__agbTimersWrapped) {"
 "    g.__agbTimersWrapped = true;"
 "    var _st = g.setTimeout, _si = g.setInterval;"
@@ -1341,6 +1350,7 @@ void bindDocument(void* document)
         antb_define_method(g_engine, global, "__agbClassOp", globalClassOp, NULL);
         antb_define_method(g_engine, global, "__agbFrameSlot", globalFrameSlot, NULL);
         antb_define_method(g_engine, global, "__agbActivateSlot", globalActivateSlot, NULL);
+        antb_define_method(g_engine, global, "__agbOpenWindow", globalOpenWindow, NULL);
 
         /* history: SPA routers and "go back" links use it. */
         {
@@ -2563,6 +2573,30 @@ static WebCore::String tokensWithout(const WebCore::String& tokens, const WebCor
 }
 /* JS-visible context switching, used by the timer wrapper in the prelude and by
  * async XHR delivery. */
+static AntRuntime::OpenWindowHook g_openWindowHook = NULL;
+
+int globalOpenWindow(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
+                     AntbValue* out, void*)
+{
+    char* url = (argc > 0) ? antb_to_utf8(args[0]) : NULL;
+    int created = 0;
+    AntbValue* v;
+
+    if (g_openWindowHook)
+        created = g_openWindowHook(url ? url : "");
+
+    antb_free(url);
+
+    v = antb_make_number(engine, created ? 1.0 : 0.0);
+
+    if (!v)
+        return 0;
+
+    antb_value_assign(out, v);
+    antb_value_release(v);
+    return 1;
+}
+
 int globalFrameSlot(AntbEngine* engine, AntbValue*, AntbValue**, int, AntbValue* out, void*)
 {
     AntbValue* v = antb_make_number(engine, (double)g_currentSlot);
@@ -3159,6 +3193,15 @@ void dispatchEvent(void* nodePtr, void* eventPtr)
         }
         antb_value_release(evt);
     }
+}
+
+} /* namespace AntRuntime */
+
+namespace AntRuntime {
+
+void setOpenWindowHook(OpenWindowHook hook)
+{
+    g_openWindowHook = hook;
 }
 
 } /* namespace AntRuntime */

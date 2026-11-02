@@ -564,6 +564,17 @@ static DWORD WINAPI agwEngineThread(LPVOID param)
         if (g_engineQuit)
             break;
 
+        /* Popups created from window.open() live on this thread, so their
+         * messages have to be pumped here or they never paint. */
+        {
+            MSG msg;
+
+            while (PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE)) {
+                TranslateMessage(&msg);
+                DispatchMessageA(&msg);
+            }
+        }
+
         agwDrainCommands();
 
         macross_event_dispatch();
@@ -826,6 +837,39 @@ static MaCrossView* agwOnOpenWindow(const char* url, unsigned int flags, const M
     return created->view;
 }
 
+/* window.open(): create a sibling control and let the host decide. */
+
+int agave_control_open_window(const char* url)
+{
+    AgaveWebView* origin = NULL;
+    AgaveWebView* created = NULL;
+    int i;
+
+    for (i = 0; i < g_viewCount; ++i) {
+        if (g_views[i] && g_views[i]->hwnd && !g_views[i]->destroyed) {
+            origin = g_views[i];
+            break;
+        }
+    }
+
+    if (!origin)
+        return 0;
+
+    created = agave_webview_create_popup(origin, url && url[0] ? url : "about:blank");
+
+    if (!created)
+        return 0;
+
+    if (origin->callbacks.on_new_window) {
+        if (!origin->callbacks.on_new_window(origin, created, url ? url : "", origin->user)) {
+            agave_webview_destroy(created);
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
 static void agwInstallCallbacks(void)
 {
     static int installed = 0;
@@ -865,6 +909,8 @@ AgaveWebView* agave_webview_create(void* parent, int x, int y, int width, int he
     }
 
     agwRegisterClass((HINSTANCE)GetWindowLongPtrA((HWND)parent, GWLP_HINSTANCE));
+
+    macross_set_open_window_hook(agave_control_open_window);
     agwInstallCallbacks();
     agwEnsureEngine();
 

@@ -308,6 +308,11 @@ MC_STATUS macross_view_get_rendering_mode(MaCrossView* view, MC_RENDERING_MODE* 
 	return MC_STATUS_SUCCESS;
 }
 
+void macross_set_open_window_hook(MC_OPEN_WINDOW_HOOK hook)
+{
+    AntRuntime::setOpenWindowHook((AntRuntime::OpenWindowHook)hook);
+}
+
 MC_STATUS macross_view_set_scale_factor(MaCrossView* view, int scale)
 {
 	if (!view)
