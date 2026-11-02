@@ -115,6 +115,35 @@ static CString utf8ForScript(const String& text)
     return CString(out.data(), (unsigned)(out.size() - 1));
 }
 #endif
+JSValue* KJSProxy::evaluateModule(const String& filename, const String& str)
+{
+#if ENABLE(ANTJS)
+    if (AntRuntime::isRunning() && m_frame) {
+        CString code = utf8ForScript(str);
+        char* out = 0;
+        char* err = 0;
+        String url = filename.isNull() ? String("about:blank") : filename;
+
+        if (m_frame->page())
+            AntRuntime::activateContext(AntRuntime::contextForPage(m_frame->page()));
+
+        m_frame->keepAlive();
+        AntRuntime::bindDocument(m_frame->document());
+
+        if (!AntRuntime::evaluateModule(code.data(), code.length(), url.utf8().data(), &out, &err)) {
+            fprintf(stderr, "[antjs] %s: %s\n", url.utf8().data(), err ? err : "(no message)");
+            if (err) free(err);
+            return 0;
+        }
+
+        if (err) free(err);
+        if (out) free(out);
+        return jsUndefined();
+    }
+#endif
+    return 0;
+}
+
 JSValue* KJSProxy::evaluate(const String& filename, int baseLine, const String& str) 
 {
     // evaluate code. Returns the JS return value or 0

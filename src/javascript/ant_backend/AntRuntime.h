@@ -55,6 +55,10 @@ bool isRunning();
  * malloc'd message (may be NULL). Passing NULL for out/err is allowed. */
 int evaluate(const char* src, size_t len, char** out, char** err);
 
+/* Evaluates UTF-8 `src` as an ES module whose URL is `filename` (so relative
+ * imports resolve against it). Same out/err contract as evaluate(). */
+int evaluateModule(const char* src, size_t len, const char* filename, char** out, char** err);
+
 /* Binds the page's document to the JS `document` object (task 2 acceptance):
  * `document.title` reads/writes WebCore::Document::title(). `document` is a
  * pointer to a WebCore::Document. Safe to call on every script evaluation. */

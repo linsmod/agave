@@ -175,6 +175,16 @@ void HTMLScriptElement::notifyFinished(CachedResource* o)
     }
 }
 
+bool HTMLScriptElement::isModuleScript() const
+{
+    const AtomicString& type = getAttribute(typeAttr);
+
+    if (type.isEmpty())
+        return false;
+
+    return type.domString().stripWhiteSpace().lower() == "module";
+}
+
 bool HTMLScriptElement::shouldExecuteAsJavaScript()
 {
     /*
@@ -186,6 +196,7 @@ bool HTMLScriptElement::shouldExecuteAsJavaScript()
         We want to accept all the values that either of these browsers accept, but not other values.
      */
     static const AtomicString validTypes[] = {
+        "module",           /* ES module: handled by evaluateScript below */
         "text/javascript",
         "text/ecmascript",
         "application/javascript",
@@ -248,6 +259,11 @@ bool HTMLScriptElement::shouldExecuteAsJavaScript()
 
 void HTMLScriptElement::evaluateScript(const String& URL, const String& script)
 {
+    if (getenv("AGB_MODULE_DEBUG"))
+        fprintf(stderr, "[eval] enter %s evaluated=%d type='%s'\n",
+                URL.utf8().data(), m_evaluated ? 1 : 0,
+                getAttribute(typeAttr).domString().utf8().data());
+
     if (m_evaluated)
         return;
     
@@ -260,7 +276,18 @@ void HTMLScriptElement::evaluateScript(const String& URL, const String& script)
         KJSProxy* proxy = frame->scriptProxy();
         if (proxy) {
             m_evaluated = true;
-            proxy->evaluate(URL, 0, script);
+
+            if (getenv("AGB_MODULE_DEBUG"))
+                fprintf(stderr, "[module] %s type='%s' isModule=%d\n",
+                        URL.utf8().data(),
+                        getAttribute(typeAttr).domString().utf8().data(),
+                        isModuleScript() ? 1 : 0);
+
+            if (isModuleScript())
+                proxy->evaluateModule(URL, script);
+            else
+                proxy->evaluate(URL, 0, script);
+
             Document::updateDocumentsRendering();
         }
 #endif

@@ -54,6 +54,7 @@ public:
     virtual void finishedParsing();
 
     bool shouldExecuteAsJavaScript();
+    bool isModuleScript() const;
     void evaluateScript(const String &URL, const String &script);
 
     String text() const;

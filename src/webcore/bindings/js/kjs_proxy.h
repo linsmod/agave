@@ -42,6 +42,10 @@ public:
     ~KJSProxy();
 
     KJS::JSValue* evaluate(const String& filename, int baseLine, const String& code);
+
+    /* Evaluates `code` as an ES module whose URL is `filename`, so its imports
+     * resolve against the script URL. */
+    KJS::JSValue* evaluateModule(const String& filename, const String& code);
     void clear();
     EventListener* createHTMLEventHandler(const String& functionName, const String& code, Node*);
 #if ENABLE(SVG)

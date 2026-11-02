@@ -10,6 +10,7 @@
 #include <stdio.h>
 
 #include "ant.h"
+#include "esm/loader.h"
 #include "internal.h"
 #include "cfunc.h"     /* js_mkfun_dyn */
 #include "reactor.h"   /* ant_uv_run, js_poll_events */
@@ -152,6 +153,52 @@ AntbValue* antb_eval(AntbEngine* engine, const char* src, int len, char** err)
         out->v  = v;
         return out;
     }
+}
+
+/* Evaluates `src` as an ES module whose URL is `filename`, so relative imports
+ * resolve against it. Errors are reported the same way as antb_eval(). */
+AntbValue* antb_eval_module(AntbEngine* engine, const char* src, int len,
+                            const char* filename, char** err)
+{
+    ant_value_t v;
+
+    if (err)
+        *err = NULL;
+    if (!engine || !engine->js || !src || len < 0)
+        return NULL;
+
+    if (filename && filename[0]) {
+        js_setup_import_meta(engine->js, filename);
+        js_set_filename(engine->js, filename);
+    }
+
+    v = js_eval_bytecode_module(engine->js, src, (size_t)len);
+
+    if (is_err(v)) {
+        ant_value_t thrown = js_take_thrown(engine->js, v);
+        copy_cstr(engine, "module evaluation failed", is_err(thrown) ? v : thrown);
+        if (err) {
+            *err = (char*)malloc(strlen(engine->err) + 1);
+            if (*err)
+                strcpy(*err, engine->err);
+        }
+        return NULL;
+    }
+
+    {
+        AntbValue* out = (AntbValue*)calloc(1, sizeof(AntbValue));
+
+        if (!out)
+            return NULL;
+        out->js = engine->js;
+        out->v  = v;
+        return out;
+    }
+}
+
+void antb_set_module_fetcher(AntbModuleFetcher fn)
+{
+    esm_set_http_fetch((esm_http_fetch_fn)fn);
 }
 
 double antb_to_number(const AntbValue* value)

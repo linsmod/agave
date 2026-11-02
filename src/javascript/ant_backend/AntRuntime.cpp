@@ -17,6 +17,7 @@
 #include <string.h>
 
 #include "AntBridge.h"
+#include "../../webcore/platform/network/native/NetworkSession.h"
 #include "../platform/network/native/NetLog.h"
 
 #include "Document.h"
@@ -1271,6 +1272,90 @@ static void contextActivate(AntbEngine* engine)
         activateState(state);
 }
 
+/* URL of the script currently being evaluated; used as the base for the
+ * relative imports of module scripts. */
+static std::string g_currentFilename;
+
+struct ModuleFetchClient : public Net::Client {
+    std::string body;
+    bool failed;
+    bool done;
+
+    ModuleFetchClient() : failed(false), done(false) {}
+
+    virtual void onResponse(const Net::Response&) {}
+    virtual void onData(const char* data, unsigned int length)
+    {
+        if (data && length)
+            body.append(data, length);
+    }
+    virtual void onComplete() { done = true; }
+    virtual void onError(const Net::Error&) { failed = true; done = true; }
+};
+
+/* Module loads happen while the document is still parsing; a nested synchronous
+ * WebCore load gets its connection reset there, so go through the native layer
+ * and drive its pump loop by hand. */
+static char* moduleFetch(const char* url, unsigned long* outSize)
+{
+    /* One session for the whole page: creating one per module meant a fresh TLS
+     * handshake for every file of an import graph (100+ files on real sites). */
+    static Net::Session* session = NULL;
+    Net::Request request;
+    ModuleFetchClient client;
+    long long id;
+    int waited = 0;
+
+    if (outSize)
+        *outSize = 0;
+
+    if (!session)
+        session = Net::Session::create();
+
+    if (!session)
+        return NULL;
+
+    request.url = url;
+    request.method = "GET";
+
+    id = session->start(request, &client);
+
+    if (!id)
+        return NULL;
+
+    while (!client.done && waited < 30000) {
+        session->pump();
+        Sleep(1);
+        waited += 1;
+    }
+
+    if (getenv("AGB_MODULE_DEBUG"))
+        fprintf(stderr, "[modfetch] %s %s %u bytes in %u ms\n", url,
+                (client.done && !client.failed) ? "ok" : "FAILED",
+                (unsigned)client.body.size(), (unsigned)waited);
+
+    if (!client.done || client.failed)
+        return NULL;
+
+    {
+        const std::string& data = client.body;
+        char* buffer = (char*)malloc(data.size() + 1);
+
+        if (!buffer)
+            return NULL;
+
+        if (data.size())
+            memcpy(buffer, data.data(), data.size());
+
+        buffer[data.size()] = 0;
+
+        if (outSize)
+            *outSize = (unsigned long)data.size();
+
+        return buffer;
+    }
+}
+
 bool start()
 {
     AntbEngine* engine;
@@ -1288,6 +1373,7 @@ bool start()
 
     activateState(createRuntimeState(engine));
     antb_set_context_activate(contextActivate);
+    antb_set_module_fetcher(moduleFetch);
 
     return true;
 }
@@ -1402,6 +1488,64 @@ bool isRunning()
     return g_engine != NULL;
 }
 
+/* Scripts reach the engine through the tokenizer path, which does not know the
+ * <script> carried type="module", so module syntax is detected here instead: a
+ * script starting with import/export is evaluated as an ES module, which also
+ * makes its relative imports resolve against the script URL. */
+static bool looksLikeModule(const char* src, size_t len)
+{
+    size_t i = 0;
+
+    for (; i < len; ++i) {
+        char c = src[i];
+
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n')
+            continue;
+        if (c == '/' && i + 1 < len && src[i + 1] == '/') {
+            while (i < len && src[i] != '\n') ++i;
+            continue;
+        }
+        if (c == '/' && i + 1 < len && src[i + 1] == '*') {
+            i += 2;
+            while (i + 1 < len && !(src[i] == '*' && src[i + 1] == '/')) ++i;
+            ++i;
+            continue;
+        }
+        break;
+    }
+
+    if (i >= len)
+        return false;
+
+    if (len - i >= 6 && !strncmp(src + i, "import", 6)) {
+        size_t j = i + 6;
+
+        for (; j < len; ++j) {
+            char c = src[j];
+
+            if (c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '(' || c == '.' || c == '{' || c == '*')
+                return true;
+            break;
+        }
+        return false;
+    }
+
+    if (len - i >= 6 && !strncmp(src + i, "export", 6)) {
+        size_t j = i + 6;
+
+        for (; j < len; ++j) {
+            char c = src[j];
+
+            if (c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '{' || c == '*')
+                return true;
+            break;
+        }
+        return false;
+    }
+
+    return false;
+}
+
 int evaluate(const char* src, size_t len, char** out, char** err)
 {
     AntbValue* value;
@@ -1413,6 +1557,10 @@ int evaluate(const char* src, size_t len, char** out, char** err)
 
     if (!g_engine || !src)
         return 0;
+
+    /* ES module syntax cannot be evaluated as a classic script. */
+    if (looksLikeModule(src, len))
+        return evaluateModule(src, len, g_currentFilename.c_str(), out, err);
 
     collectXhrJobs();
 
@@ -1806,8 +1954,49 @@ void pumpAsyncRequests(void)
 
 void setFilename(const char* name)
 {
+    if (name)
+        g_currentFilename = name;
+
     if (g_engine && name)
         antb_set_filename(g_engine, name);
+}
+
+/* --- ES modules ---------------------------------------------------------- */
+
+
+int evaluateModule(const char* src, size_t len, const char* filename, char** out, char** err)
+{
+    AntbValue* value;
+
+    if (out)
+        *out = NULL;
+    if (err)
+        *err = NULL;
+
+    if (!g_engine || !src)
+        return 0;
+
+    collectXhrJobs();
+
+    {
+        unsigned long began = GetTickCount();
+
+        value = antb_eval_module(g_engine, src, (int)len, filename, err);
+
+        if (getenv("AGB_MODULE_DEBUG"))
+            fprintf(stderr, "[modeval] %s %u bytes %s in %u ms\n",
+                    filename ? filename : "(null)", (unsigned)len,
+                    value ? "ok" : "FAILED", (unsigned)(GetTickCount() - began));
+    }
+
+    if (!value)
+        return 0;
+
+    if (out)
+        *out = antb_to_utf8(value);
+
+    antb_value_release(value);
+    return 1;
 }
 
 void bindDocument(void* document)
