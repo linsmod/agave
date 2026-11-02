@@ -333,6 +333,15 @@ typedef struct {
 } agb_method_entry;
 
 static agb_method_entry g_methods[AGB_TRAMPOLINE_COUNT];
+
+/* Diagnostics: name of the last bridged callback entered, so errors raised from
+ * native code (which have no VM frame) can still be attributed. */
+static const char* g_last_call = "";
+
+AGB_API const char* antb_last_call(void)
+{
+    return g_last_call;
+}
 static int              g_method_count = 0;
 
 static ant_value_t agb_dispatch(int slot, ant_t* js, ant_value_t* args, int nargs,
@@ -493,6 +502,7 @@ static ant_value_t agb_dispatch(int slot, ant_t* js, ant_value_t* args, int narg
     if (slot < 0 || slot >= g_method_count)
         return js_mkundef();
     e = &g_methods[slot];
+    g_last_call = e->name;
     if (e->js != js) {
         return js_mkundef();
     }

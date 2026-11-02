@@ -387,6 +387,20 @@ static const char kPrelude[] =
 "    if (!g.navigator.appCodeName) g.navigator.appCodeName = 'Mozilla';"
 "    if (!g.navigator.appName) g.navigator.appName = 'Netscape';"
 "  }"
+"  {"
+"    var _lsData = {};"
+"    g.localStorage = {"
+"      getItem: function (k) { return Object.prototype.hasOwnProperty.call(_lsData, k) ? _lsData[k] : null; },"
+"      setItem: function (k, v) { _lsData[k] = String(v); },"
+"      removeItem: function (k) { delete _lsData[k]; },"
+"      clear: function () { _lsData = {}; },"
+"      key: function (i) { var ks = Object.keys(_lsData); return i < ks.length ? ks[i] : null; }"
+"    };"
+"    g.sessionStorage = g.localStorage;"
+"  }"
+"  if (!g.requestIdleCallback) { g.requestIdleCallback = function (cb) { return 1; }; g.cancelIdleCallback = function () {}; }"
+"  if (!g.createImageBitmap) g.createImageBitmap = function () { return null; };"
+"  if (!g.getComputedStyle) g.getComputedStyle = function (el) { return (el && el.style) ? el.style : {}; };"
 "  if (typeof g.XMLHttpRequest === 'undefined') {"
 "    var XHR = function XMLHttpRequest() {"
 "      this.readyState = 0; this.status = 0; this.responseText = ''; this.response = '';"
@@ -530,7 +544,6 @@ void bindDocument(void* document)
         antb_define_method(g_engine, window, "dispatchEvent", nodeDispatchEvent, NULL);
 
         antb_set_prop(g_engine, window, "document", docObj);
-        antb_define_method(g_engine, global, "Image", imageConstructor, NULL);
         antb_define_method(g_engine, global, "__agbHttpGet", globalHttpGet, NULL);
 
         /* Web pages read bare globals like `location` and `navigator`. */

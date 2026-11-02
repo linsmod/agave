@@ -62,6 +62,9 @@ AGB_API AntbValue* antb_eval(AntbEngine* engine, const char* src, int len, char*
 /* Name used in stack traces for the next evaluations (usually the script URL). */
 AGB_API void antb_set_filename(AntbEngine* engine, const char* name);
 
+/* Name of the most recent bridged callback entered (diagnostics only). */
+AGB_API const char* antb_last_call(void);
+
 /* ---- value inspection --------------------------------------------------- */
 
 AGB_API double antb_to_number(const AntbValue* value);
