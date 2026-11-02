@@ -166,3 +166,26 @@ configure_file(
 # <wtf/Platform.h> is force-included for GCC/Clang builds and pulls in mconfig.h,
 # so every target needs the generated header directory on its include path.
 include_directories(${PROJ_OUT})
+
+# polyfills.js is read at runtime from the directory of the running executable
+# (loadPolyfills() in src/javascript/ant_backend/AntRuntime.cpp) instead of being
+# compiled in, so it can be edited without relinking. Keep a fresh copy next to
+# the binaries, otherwise every run prints
+#   [agave] polyfills.js not found (set AGB_POLYFILLS to load one)
+set(AGB_POLYFILLS ${PROJ_ROOT}/src/javascript/ant_backend/polyfills.js)
+if (EXISTS ${AGB_POLYFILLS})
+    add_custom_command(
+        OUTPUT ${PROJ_OUT}/polyfills.js
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${AGB_POLYFILLS} ${PROJ_OUT}/polyfills.js
+        DEPENDS ${AGB_POLYFILLS}
+        COMMENT "Copying polyfills.js next to the binaries"
+        VERBATIM)
+    add_custom_target(polyfills ALL DEPENDS ${PROJ_OUT}/polyfills.js)
+    foreach (agb_target agave_shell agave_embed agave_view_host touchweb)
+        if (TARGET ${agb_target})
+            add_dependencies(${agb_target} polyfills)
+        endif()
+    endforeach()
+else()
+    message(WARNING "polyfills.js not found at ${AGB_POLYFILLS}; pages will run without the DOM polyfills")
+endif()

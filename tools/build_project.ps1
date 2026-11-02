@@ -59,7 +59,7 @@ $build = if ([IO.Path]::IsPathRooted($BuildDir)) { $BuildDir } else { Join-Path 
 $log   = if ($Log) { $Log } else { Join-Path $root 'build-native.log' }
 
 $artifacts = @('libagave.dll', 'libagave_webview.dll', 'agave_shell.exe', 'agave_embed.exe',
-               'agave_view_host.exe', 'touchweb.exe')
+               'agave_view_host.exe', 'touchweb.exe', 'polyfills.js')
 
 function Fail([string]$message) {
     Write-Host "build failed: $message" -ForegroundColor Red
@@ -315,13 +315,6 @@ if ($Deploy) {
             Copy-Item $path $Deploy -Force
             Write-Host "copied $name"
         }
-    }
-    # The headless/view hosts load the engine next to themselves; polyfills.js is
-    # read at runtime and only lives in the repo.
-    $polyfills = Join-Path $root 'src\javascript\ant_backend\polyfills.js'
-    if ((Test-Path $polyfills) -and (Test-Path (Join-Path $Deploy 'agave_view_host.exe'))) {
-        Copy-Item $polyfills $Deploy -Force
-        Write-Host 'copied polyfills.js'
     }
 }
 
