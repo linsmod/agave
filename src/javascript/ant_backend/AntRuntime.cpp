@@ -707,6 +707,7 @@ int titleSetter(AntbEngine* engine, AntbValue* self, const char* name, const Ant
     return nodeSetter(engine, self, name, value, NULL);
 }
 
+void dropListenersForOldDocument();
 } /* namespace */
 
 namespace AntRuntime {
@@ -1260,6 +1261,23 @@ struct Listener {
 };
 
 std::vector<Listener>* g_listeners = NULL;
+
+
+/* Navigation dropped the previous document: its listeners reference nodes and
+ * closures from that page, so drop them (closing over freed DOM would fire on
+ * the wrong elements). Nodes stay pinned, so no stale pointer can be handed
+ * out for a recycled address. */
+void dropListenersForOldDocument()
+{
+    if (!g_listeners)
+        return;
+
+    for (size_t i = 0; i < g_listeners->size(); ++i) {
+        if ((*g_listeners)[i].fn)
+            antb_value_release((*g_listeners)[i].fn);
+    }
+    g_listeners->clear();
+}
 
 WebCore::Node* nodeOf(AntbValue* self)
 {
