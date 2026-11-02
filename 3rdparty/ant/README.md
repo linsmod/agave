@@ -66,3 +66,43 @@ meson compile -C build-zig-dev
 副作用：`antbridge.dll` 从 43.7 MB 降到 **13.5 MB**（少了 UBSan 运行库）。
 `C:\msys64\usr\bin` 必须在 PATH 里，否则 meson 的 `version/meson.build` 找不到 `date`
 而让 `build.ninja` 重新生成失败。
+## 上游来源与补丁清单（2026-11 更新）
+
+当前使用的 ant 源码：`https://github.com/theMackabu/ant`
+提交 **`5fb9ddb3`**（tag `v14.0.ff84a70d.0-10-g5fb9ddb3`），构建目录 `H:\ant-upstream\build-zig-up`。
+
+选择 v14 而不是最新的 `v16.5.c41757b4.0`：`C:\Users\linswin\Documents\antjs-windows-build-patch`
+里的 Windows 构建补丁（`ant-master-buildfix.patch` + MIR 固定提交 + `mir-c2mir.patch`）
+是针对这个提交验证过的，直接套在 `master` 上会 `patch does not apply`。
+
+### 应用的补丁
+
+1. `ant-master-buildfix.patch`（Windows 构建修复，3 个文件）
+2. `vendor/mir` 固定到 `d89ca1d079576924c0c7e2d38e5845a7e75b1f30`，并应用 `mir-c2mir.patch`
+3. `include/internal.h` + `src/ant.c`：导出 `js_call_value()`（宿主从 C 调用 JS 闭包）
+4. `src/modules/tls.c`：`default_tls_context(ca,len)` → `default_tls_context()`
+   —— 该提交的源码期望新版 tlsuv，而仓库里 vendor 的 tlsuv 是旧签名
+5. `src/silver/lexer.c`：`?.` 后面紧跟数字时不能再当作可选链
+   （`e?.88*e.offsetHeight` 是三元 + 数字字面量；上游 master 已修，这里回移一行）
+
+### 构建
+
+```powershell
+cd H:\ant-upstream
+$env:PATH = "C:\msys64\usr\bin;C:\msys64\mingw64\bin;" + $env:PATH
+$env:CC  = "zig cc -target x86_64-windows-gnu"
+$env:CXX = "zig c++ -target x86_64-windows-gnu"
+meson setup build-zig-up --wipe --buildtype=release -Db_lto=false -Dtemporal=disabled `
+    "-Dzlib-ng:b_lto=false" `
+    "-Dc_args=-fno-sanitize=undefined -fno-sanitize=alignment" `
+    "-Dcpp_args=-fno-sanitize=undefined -fno-sanitize=alignment"
+meson compile -C build-zig-up
+```
+
+产物：`build-zig-up/libant.a`（约 40 MB）、`libpkg.a`、`vendor/**/*.a`。
+`-fno-sanitize=*` 不能省：zig cc 默认开 UBSan，会在这套代码的非对齐访问上直接 panic。
+
+### 重新链接 antbridge.dll
+
+见上文「重新生成」，把 `H:\ant\build-zig-dev` 换成 `H:\ant-upstream\build-zig-up`、
+头文件路径换成 `H:\ant-upstream\include` 即可。
