@@ -200,6 +200,7 @@ int locationSetter(AntbEngine*, AntbValue*, const char*, const AntbValue*, void*
 int locationAssign(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int locationReplace(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int locationReload(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int locationToString(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int docWrite(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int docCreateHTMLDocument(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int docHasFeature(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
@@ -956,6 +957,8 @@ int titleGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue
             if (!obj)
                 return 0;
             antb_define_property_rw(engine, obj, "href", locationGetter, NULL, NULL);
+            antb_define_method(engine, obj, "toString", locationToString, NULL);
+            antb_define_method(engine, obj, "valueOf", locationToString, NULL);
             g_locationObj = antb_retain(obj);   /* keep it alive across GC */
             antb_value_release(obj);
         }
@@ -1188,6 +1191,29 @@ int locationGetter(AntbEngine* engine, AntbValue*, const char* name, AntbValue* 
             antb_value_assign(out, v);
             antb_value_release(v);
         }
+    }
+    return 1;
+}
+
+/* location.toString() / valueOf(): `String(location)` and
+ * `location.toString()` return the href. carbon.js builds its request headers
+ * from window.location.toString() and dies with "undefined is not a function"
+ * without them. */
+int locationToString(AntbEngine* engine, AntbValue*, AntbValue**, int, AntbValue* out, void*)
+{
+    WebCore::String href;
+
+    if (!g_document)
+        return 0;
+
+    href = WebCore::String(WebCore::KURL(g_document->URL()).url());
+
+    {
+        AntbValue* v = antb_make_string(engine, href.utf8().data());
+        if (!v)
+            return 0;
+        antb_value_assign(out, v);
+        antb_value_release(v);
     }
     return 1;
 }
@@ -2642,6 +2668,8 @@ void bindDocument(void* document)
                 antb_define_method(g_engine, loc, "assign", locationAssign, NULL);
                 antb_define_method(g_engine, loc, "replace", locationReplace, NULL);
                 antb_define_method(g_engine, loc, "reload", locationReload, NULL);
+                antb_define_method(g_engine, loc, "toString", locationToString, NULL);
+                antb_define_method(g_engine, loc, "valueOf", locationToString, NULL);
                 antb_set_prop(g_engine, global, "location", loc);
                 antb_set_prop(g_engine, docObj, "defaultView", global);
                 antb_value_release(loc);
