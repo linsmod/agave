@@ -432,6 +432,41 @@ void bindDocument(void* document)
         antb_set_prop(g_engine, window, "document", docObj);
         antb_define_method(g_engine, global, "Image", imageConstructor, NULL);
         antb_define_method(g_engine, global, "__agbHttpGet", globalHttpGet, NULL);
+
+        /* Web pages read bare globals like `location` and `navigator`. */
+        {
+            AntbValue* loc = antb_make_object(g_engine);
+            if (loc) {
+                antb_define_property_rw(g_engine, loc, "href", locationGetter, NULL, NULL);
+                antb_set_prop(g_engine, global, "location", loc);
+                antb_set_prop(g_engine, docObj, "defaultView", global);
+                antb_value_release(loc);
+            }
+            {
+                AntbValue* nav = antb_make_object(g_engine);
+                if (nav) {
+                    AntbValue* ua = antb_make_string(g_engine, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) agave/1.0");
+                    if (ua) {
+                        antb_set_prop(g_engine, nav, "userAgent", ua);
+                        antb_set_prop(g_engine, nav, "appName", ua);
+                        antb_value_release(ua);
+                    }
+                    antb_set_prop(g_engine, global, "navigator", nav);
+                    antb_value_release(nav);
+                }
+            }
+            {
+                AntbValue* scr = antb_make_object(g_engine);
+                if (scr) {
+                    AntbValue* v = antb_make_number(g_engine, 1920);
+                    if (v) { antb_set_prop(g_engine, scr, "width", v); antb_value_release(v); }
+                    v = antb_make_number(g_engine, 1080);
+                    if (v) { antb_set_prop(g_engine, scr, "height", v); antb_value_release(v); }
+                    antb_set_prop(g_engine, global, "screen", scr);
+                    antb_value_release(scr);
+                }
+            }
+        }
         antb_set_prop(g_engine, global, "window", window);
         antb_set_prop(g_engine, global, "document", docObj);
 

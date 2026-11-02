@@ -11,6 +11,7 @@
 
 #include "ant.h"
 #include "internal.h"
+#include "cfunc.h"     /* js_mkfun_dyn */
 #include "runtime.h"
 #include "bootstrap.h"
 #include "ptr.h"        /* js_set_native / js_get_native (static inline) */
@@ -38,7 +39,7 @@ static void copy_cstr(AntbEngine* e, const char* what, ant_value_t v)
     ant_value_t nv = js_get(e->js, v, "name");
     ant_value_t mv = js_get(e->js, v, "message");
 
-    if (vtype(nv) == T_STR && vtype(mv) == T_STR) {
+    if (vtype(nv) == kTypeString && vtype(mv) == kTypeString) {
         /* Include the first stack line when the engine provides one: the
          * message alone does not say where a page script broke. */
         ant_value_t sv = js_get(e->js, v, "stack");
@@ -49,7 +50,7 @@ static void copy_cstr(AntbEngine* e, const char* what, ant_value_t v)
         name = js_to_cstr(e->js, nv, nbuf, sizeof(nbuf));
         msg  = js_to_cstr(e->js, mv, mbuf, sizeof(mbuf));
 
-        if (vtype(sv) == T_STR) {
+        if (vtype(sv) == kTypeString) {
             stk = js_to_cstr(e->js, sv, sbuf, sizeof(sbuf));
             if (stk.ptr && stk.len)
                 stack = stk.ptr;
@@ -63,7 +64,7 @@ static void copy_cstr(AntbEngine* e, const char* what, ant_value_t v)
             snprintf(e->err, sizeof(e->err), "%s: %.*s: %.*s", what,
                      (int)name.len, name.ptr ? name.ptr : "",
                      (int)msg.len, msg.ptr ? msg.ptr : "");
-    } else if (vtype(nv) == T_STR) {
+    } else if (vtype(nv) == kTypeString) {
         name = js_to_cstr(e->js, nv, nbuf, sizeof(nbuf));
         snprintf(e->err, sizeof(e->err), "%s: %.*s", what,
                  (int)name.len, name.ptr ? name.ptr : "");
@@ -81,7 +82,7 @@ AntbEngine* antb_engine_create(const void* stack_anchor)
     if (!e)
         return NULL;
 
-    e->js = ant_create();
+    e->js = ant_create(NULL);
     if (!e->js) {
         free(e);
         return NULL;
@@ -157,7 +158,7 @@ int antb_is_number(const AntbValue* value)
 {
     if (!value)
         return 0;
-    return vtype(value->v) == T_NUM;
+    return vtype(value->v) == kTypeNumber;
 }
 
 char* antb_to_utf8(const AntbValue* value)
@@ -227,7 +228,7 @@ AntbValue* antb_make_object(AntbEngine* engine)
 {
     if (!engine || !engine->js)
         return NULL;
-    return alloc_value(engine->js, js_mkobj(engine->js));
+    return alloc_value(engine->js, mkobj(engine->js, 0));
 }
 
 AntbValue* antb_make_string(AntbEngine* engine, const char* utf8)
@@ -289,7 +290,7 @@ AntbValue* antb_get_prop(AntbEngine* engine, AntbValue* obj, const char* name)
         return NULL;
 
     v = js_getprop_fallback(engine->js, obj->v, name);
-    if (vtype(v) == T_UNDEF || is_err(v))
+    if (vtype(v) == kTypeUndefined || is_err(v))
         return NULL;
 
     return alloc_value(engine->js, v);
@@ -328,11 +329,13 @@ typedef struct {
 static agb_method_entry g_methods[AGB_TRAMPOLINE_COUNT];
 static int              g_method_count = 0;
 
-static ant_value_t agb_dispatch(int slot, ant_t* js, ant_value_t* args, int nargs);
+static ant_value_t agb_dispatch(int slot, ant_t* js, ant_value_t* args, int nargs,
+                                ant_value_t call_new_target);
 
 #define AGB_TRAMP_DECL(n) \
-    static ant_value_t agb_tramp_##n(ant_t* js, ant_value_t* args, int nargs) \
-    { return agb_dispatch(n, js, args, nargs); }
+    static ant_value_t agb_tramp_##n(ant_t* js, ant_value_t* args, int nargs, \
+                                     ant_value_t call_new_target) \
+    { return agb_dispatch(n, js, args, nargs, call_new_target); }
 
 AGB_TRAMP_DECL(0)  AGB_TRAMP_DECL(1)  AGB_TRAMP_DECL(2)  AGB_TRAMP_DECL(3)
 AGB_TRAMP_DECL(4)  AGB_TRAMP_DECL(5)  AGB_TRAMP_DECL(6)  AGB_TRAMP_DECL(7)
@@ -399,7 +402,7 @@ AGB_TRAMP_DECL(244)  AGB_TRAMP_DECL(245)  AGB_TRAMP_DECL(246)  AGB_TRAMP_DECL(24
 AGB_TRAMP_DECL(248)  AGB_TRAMP_DECL(249)  AGB_TRAMP_DECL(250)  AGB_TRAMP_DECL(251)
 AGB_TRAMP_DECL(252)  AGB_TRAMP_DECL(253)  AGB_TRAMP_DECL(254)  AGB_TRAMP_DECL(255)
 
-typedef ant_value_t (*agb_cfunc)(ant_t*, ant_value_t*, int);
+typedef ant_value_t (*agb_cfunc)(ant_t*, ant_value_t*, int, ant_value_t);
 
 static agb_cfunc const g_tramps[AGB_TRAMPOLINE_COUNT] = {
     agb_tramp_0,  agb_tramp_1,  agb_tramp_2,  agb_tramp_3,
@@ -467,7 +470,8 @@ static agb_cfunc const g_tramps[AGB_TRAMPOLINE_COUNT] = {
     agb_tramp_248,  agb_tramp_249,  agb_tramp_250,  agb_tramp_251,
     agb_tramp_252,  agb_tramp_253,  agb_tramp_254,  agb_tramp_255,
 };
-static ant_value_t agb_dispatch(int slot, ant_t* js, ant_value_t* args, int nargs)
+static ant_value_t agb_dispatch(int slot, ant_t* js, ant_value_t* args, int nargs,
+                                ant_value_t call_new_target)
 {
     agb_method_entry* e;
     AntbValue  self_v;
@@ -478,6 +482,8 @@ static ant_value_t agb_dispatch(int slot, ant_t* js, ant_value_t* args, int narg
     AntbValue*  self_p = NULL;
     int i, n;
 
+    (void)call_new_target;
+
     if (slot < 0 || slot >= g_method_count)
         return js_mkundef();
     e = &g_methods[slot];
@@ -486,7 +492,7 @@ static ant_value_t agb_dispatch(int slot, ant_t* js, ant_value_t* args, int narg
     }
 
     thiz = js_getthis(js);
-    if (vtype(thiz) != T_UNDEF && vtype(thiz) != T_NULL) {
+    if (vtype(thiz) != kTypeUndefined && vtype(thiz) != kTypeNull) {
         self_v.js = js;
         self_v.v  = thiz;
         self_p    = &self_v;
@@ -733,7 +739,7 @@ AntbValue* antb_wrap_native(AntbEngine* engine, void* ptr, unsigned tag)
 
     {
         agb_wrapper_entry* e = &g_wrappers[g_wrapper_count];
-        ant_value_t obj = js_mkobj(engine->js);
+        ant_value_t obj = mkobj(engine->js, 0);
 
         js_set_native(obj, ptr, (uint32_t)tag);
 
@@ -744,7 +750,7 @@ AntbValue* antb_wrap_native(AntbEngine* engine, void* ptr, unsigned tag)
         e->used  = 1;
 
         /* keep the wrapper alive for the lifetime of the engine */
-        gc_register_root(&e->value);
+        gc_pin_permanent(e->js, e->value);
         g_wrapper_count++;
 
         return alloc_value(engine->js, obj);
@@ -762,7 +768,7 @@ AntbValue* antb_retain(const AntbValue* value)
     if (!out)
         return NULL;
 
-    gc_register_root(&out->v);
+    gc_pin_permanent(value->js, out->v);
     return out;
 }
 
@@ -807,11 +813,11 @@ AntbClass* antb_class_create(AntbEngine* engine, const char* name)
 
     k->engine = engine;
     k->js     = engine->js;
-    k->proto  = js_mkobj(engine->js);
+    k->proto  = mkobj(engine->js, 0);
     strncpy(k->name, name, sizeof(k->name) - 1);
 
     /* the prototype must outlive every instance */
-    gc_register_root(&k->proto);
+    gc_pin_permanent(engine->js, k->proto);
 
     g_classes[g_class_count++] = k;
     return k;
