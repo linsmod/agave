@@ -119,6 +119,13 @@ if (OPT_SHELL AND WIN32)
     target_include_directories(agave_embed PRIVATE ${PROJ_ROOT}/include ${PROJ_OUT})
     target_compile_definitions(agave_embed PRIVATE AGW_USE_DLL)
     target_link_libraries(agave_embed PRIVATE agave_webview ${LIB_NAME} user32 gdi32)
+
+    # Headless test host: renders into a memory buffer, prints title/progress/
+    # timings and saves a BMP. This is what the perf and probe scripts run, and
+    # it is the only way a page can report results back (via document.title).
+    add_executable(agave_view_host ${PROJ_ROOT}/examples/view_host/main.cpp)
+    target_include_directories(agave_view_host PRIVATE ${PROJ_ROOT}/include ${PROJ_OUT})
+    target_link_libraries(agave_view_host PRIVATE ${LIB_NAME} user32 gdi32)
 endif()
 
 

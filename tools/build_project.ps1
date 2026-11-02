@@ -22,6 +22,13 @@
 #   pwsh -File tools/build_project.ps1 -Fresh          # wipe build dir, configure, build
 #   pwsh -File tools/build_project.ps1 -Deploy $run    # ... and copy artifacts into $run
 #
+# -Fresh refuses to terminate anything by default: if a program started from the
+# build dir (e.g. agave_shell, which is a real browser window) holds the files,
+# the script lists it and stops. Add -StopLockingProcesses to let it kill them.
+#
+# Targets built: libagave.dll / libagave_webview.dll / agave_shell.exe /
+# agave_embed.exe / agave_view_host.exe (headless test host).
+#
 # Typical output:
 #   build ok   1320/1320 targets in 120.1s (0 errors, 915 warnings)
 #   libagave.dll        12476416 bytes  2026-11-03 01:04:06
@@ -38,6 +45,7 @@ param(
     [string]$ZigPath = '',          # zig.exe; default: $env:AGB_ZIG, winget, PATH
     [string]$MinGWRoot = '',        # default: C:\msys64\mingw64
     [string]$Deploy = '',           # copy libagave*.dll / agave_*.exe here afterwards
+    [switch]$StopLockingProcesses,  # -Fresh: stop processes running from the build dir if they block the delete
     [string]$Log = '',              # default: <repo>\build-native.log
     [switch]$NoLog                  # do not write a log file, just stream
 )
@@ -48,7 +56,7 @@ $root  = Split-Path -Parent $PSScriptRoot           # agave repo
 $build = if ([IO.Path]::IsPathRooted($BuildDir)) { $BuildDir } else { Join-Path $root $BuildDir }
 $log   = if ($Log) { $Log } else { Join-Path $root 'build-native.log' }
 
-$artifacts = @('libagave.dll', 'libagave_webview.dll', 'agave_shell.exe', 'agave_embed.exe')
+$artifacts = @('libagave.dll', 'libagave_webview.dll', 'agave_shell.exe', 'agave_embed.exe', 'agave_view_host.exe')
 
 function Fail([string]$message) {
     Write-Host "build failed: $message" -ForegroundColor Red
@@ -140,9 +148,10 @@ Section 'configure'
 if ($Fresh -and (Test-Path $build)) {
     Write-Host "removing $build"
 
-    # A left-over agave_shell.exe/agave_embed.exe started from the build dir keeps
-    # its images mapped, and Remove-Item then dies half way through - leaving a
-    # broken tree. Stop anything running out of the build dir and retry.
+    # A program started from the build dir (agave_shell is a real browser window,
+    # not a test fixture) keeps its images mapped and Remove-Item then dies half
+    # way through, leaving a broken tree. Never terminate anything on our own:
+    # report what is holding the files and let the caller decide.
     for ($attempt = 1; $attempt -le 3; $attempt++) {
         try {
             Remove-Item -Recurse -Force $build -ErrorAction Stop
@@ -151,14 +160,18 @@ if ($Fresh -and (Test-Path $build)) {
             $locked = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
                 $_.Path -and $_.Path.StartsWith($build, [StringComparison]::OrdinalIgnoreCase)
             })
-            if ($attempt -eq 3) {
-                $names = ($locked | ForEach-Object { "$($_.ProcessName)($($_.Id))" }) -join ', '
-                Fail "cannot delete $build - still in use by: $names; close it and retry"
+
+            if ($attempt -ge 3 -or -not $StopLockingProcesses) {
+                $names = if ($locked.Count -gt 0) {
+                    ($locked | ForEach-Object { "$($_.ProcessName) (pid $($_.Id))" }) -join ', '
+                } else { 'a program outside this build dir' }
+                $msg = "cannot delete $build - in use by: $names." + [Environment]::NewLine +
+                       "Close it and retry, or pass -StopLockingProcesses to let the script stop them."
+                Fail $msg
             }
-            if ($locked.Count -gt 0) {
-                Write-Host ("stopping {0} running from the build dir" -f (($locked | ForEach-Object { $_.ProcessName }) -join ', '))
-                $locked | ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }
-            }
+
+            Write-Host ("stopping {0} running from the build dir (-StopLockingProcesses)" -f (($locked | ForEach-Object { $_.ProcessName }) -join ', '))
+            $locked | ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }
             Start-Sleep -Milliseconds 500
         }
     }
@@ -239,7 +252,7 @@ if ($lines -match 'ninja: no work to do') {
     Write-Host ("build ok   nothing to do ({0}s) - sources already built" -f $seconds) -ForegroundColor Green
 } else {
     Write-Host ''
-    Write-Host ("build ok   {0}/{0} targets in {1}s ({2} warnings, 0 errors)" -f $targets, $seconds, $warnings) -ForegroundColor Green
+    Write-Host ("build ok   {0} targets in {1}s ({2} warnings, 0 errors)" -f $targets, $seconds, $warnings) -ForegroundColor Green
 }
 
 Section 'artifacts'
