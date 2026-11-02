@@ -26,6 +26,9 @@
 #include "Settings.h"
 #include "CookieJar.h"
 #include "WebEngine.h"
+#include <windows.h>
+#include <stdlib.h>
+#include <stdio.h>
 #include "WebEncoding.h"
 #include "WebCallback.h"
 #include "Language.h"
@@ -102,12 +105,35 @@ MC_STATUS macross_view_update(MaCrossView* view, const MC_RECT* rc)
 	if (rc) {
 		view->view->setDirtyRect(rc->x, rc->y, rc->w, rc->h);
 	}
-	view->view->paintView();
+	{
+		LARGE_INTEGER freq, t0, t1;
+		double paintMs = 0.0;
+		double jsMs = 0.0;
 
-	/* Async XHR results and JS timers are delivered after painting: the page may
-	 * detach nodes, which must not happen while the paint traversal holds
-	 * render object pointers. */
-	AntRuntime::pumpAsyncRequests();
+		QueryPerformanceFrequency(&freq);
+		QueryPerformanceCounter(&t0);
+		view->view->paintView();
+		QueryPerformanceCounter(&t1);
+
+		/* Async XHR results and JS timers are delivered after painting: the page may
+		 * detach nodes, which must not happen while the paint traversal holds
+		 * render object pointers. */
+		{
+			LARGE_INTEGER t2;
+			QueryPerformanceCounter(&t2);
+			AntRuntime::pumpAsyncRequests();
+			{
+				LARGE_INTEGER t3;
+				QueryPerformanceCounter(&t3);
+				jsMs = (double)(t3.QuadPart - t2.QuadPart) * 1000.0 / (double)freq.QuadPart;
+			}
+		}
+
+		paintMs = (double)(t1.QuadPart - t0.QuadPart) * 1000.0 / (double)freq.QuadPart;
+
+		if (getenv("AGB_PERF_LOG") && (paintMs + jsMs) > 100.0)
+			fprintf(stderr, "[perf] update paint=%.0fms js=%.0fms\n", paintMs, jsMs);
+	}
 
 	return MC_STATUS_SUCCESS;
 }

@@ -792,10 +792,23 @@ typedef struct {
     unsigned    tag;
     ant_value_t value;   /* GC root: registered with gc_register_root() */
     int         used;
+    int         next;    /* hash chain index+1 */
 } agb_wrapper_entry;
 
 static agb_wrapper_entry g_wrappers[AGB_MAX_WRAPPERS];
+#define AGB_WRAPPER_HASH_SIZE 65521   /* prime */
+
+static int                g_wrapperHash[AGB_WRAPPER_HASH_SIZE];   /* index+1 */
 static int                g_wrapper_count = 0;
+
+static unsigned agbWrapperBucket(ant_t* js, void* ptr, unsigned tag)
+{
+    unsigned long long h = ((unsigned long long)(size_t)ptr >> 4) ^ tag;
+
+    h ^= (unsigned long long)(size_t)js >> 4;
+    h *= 1099511628211ULL;
+    return (unsigned)(h % AGB_WRAPPER_HASH_SIZE);
+}
 
 AntbValue* antb_wrap_native(AntbEngine* engine, void* ptr, unsigned tag)
 {
@@ -804,10 +817,19 @@ AntbValue* antb_wrap_native(AntbEngine* engine, void* ptr, unsigned tag)
     if (!engine || !engine->js || !ptr)
         return NULL;
 
-    for (i = 0; i < g_wrapper_count; i++) {
-        if (g_wrappers[i].used && g_wrappers[i].js == engine->js
-            && g_wrappers[i].ptr == ptr && g_wrappers[i].tag == tag)
-            return alloc_value(engine->js, g_wrappers[i].value);
+    /* O(1) lookup: the old linear scan over every wrapper turned node-heavy
+     * pages into O(n^2) (163.com spent minutes here). */
+    {
+        unsigned bucket = agbWrapperBucket(engine->js, ptr, tag);
+        int idx = g_wrapperHash[bucket];
+
+        while (idx) {
+            agb_wrapper_entry* e = &g_wrappers[idx - 1];
+
+            if (e->used && e->js == engine->js && e->ptr == ptr && e->tag == tag)
+                return alloc_value(engine->js, e->value);
+            idx = e->next;
+        }
     }
 
     if (g_wrapper_count >= AGB_MAX_WRAPPERS)
@@ -827,6 +849,13 @@ AntbValue* antb_wrap_native(AntbEngine* engine, void* ptr, unsigned tag)
 
         /* keep the wrapper alive for the lifetime of the engine */
         gc_pin_permanent(e->js, e->value);
+
+        {
+            unsigned bucket = agbWrapperBucket(e->js, e->ptr, e->tag);
+
+            e->next = g_wrapperHash[bucket];
+            g_wrapperHash[bucket] = g_wrapper_count + 1;
+        }
         g_wrapper_count++;
 
         return alloc_value(engine->js, obj);

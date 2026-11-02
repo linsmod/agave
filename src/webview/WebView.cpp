@@ -40,6 +40,9 @@
 #include "GCController.h"
 
 #include "WebView.h"
+#include <windows.h>
+#include <stdlib.h>
+#include <stdio.h>
 #include "WebEngine.h"
 #include "WebEncoding.h"
 #include "WebCallback.h"
@@ -238,15 +241,36 @@ void WebView::paintView(void)
 		d->m_txtanti = isTextAntialias();
 	}
 
-	d->m_frameView->layoutIfNeededRecursive();
-	//last draw update rect
-	if (!d->m_drawRect.isEmpty()) {
-		GraphicsContext gc(d->m_context);
-		gc.save();
-		gc.clip(d->m_drawRect);
-		d->m_frameView->paint(&gc, d->m_drawRect);
-		gc.restore();
-		d->m_drawRect = IntRect(0, 0, 0, 0); //clear the invalidate Rect 
+	/* Split timing: layout and paint are the two places a single frame can
+	 * stall for seconds on rule-heavy pages. Logged only when slow. */
+	{
+		LARGE_INTEGER freq, t0, t1, t2;
+		double layoutMs = 0.0;
+		double paintMs = 0.0;
+
+		QueryPerformanceFrequency(&freq);
+		QueryPerformanceCounter(&t0);
+
+		d->m_frameView->layoutIfNeededRecursive();
+
+		QueryPerformanceCounter(&t1);
+		//last draw update rect
+		if (!d->m_drawRect.isEmpty()) {
+			GraphicsContext gc(d->m_context);
+			gc.save();
+			gc.clip(d->m_drawRect);
+			d->m_frameView->paint(&gc, d->m_drawRect);
+			gc.restore();
+			d->m_drawRect = IntRect(0, 0, 0, 0); //clear the invalidate Rect 
+		}
+		QueryPerformanceCounter(&t2);
+
+		layoutMs = (double)(t1.QuadPart - t0.QuadPart) * 1000.0 / (double)freq.QuadPart;
+		paintMs  = (double)(t2.QuadPart - t1.QuadPart) * 1000.0 / (double)freq.QuadPart;
+
+		if (getenv("AGB_PERF_LOG") && (layoutMs + paintMs) > 100.0)
+			fprintf(stderr, "[perf] layout=%.0fms paint=%.0fms total=%.0fms\n",
+			        layoutMs, paintMs, layoutMs + paintMs);
 	}
 }
 

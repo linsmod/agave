@@ -5,6 +5,9 @@
 #include "config.h"
 
 #include "ResourceHandleManagerNet.h"
+#include <windows.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include "SkipList.h"
 
 #include "ResourceHandle.h"
@@ -140,6 +143,9 @@ void ResourceHandleManager::pump()
 
 void ResourceHandleManager::downloadTimerCallback(Timer<ResourceHandleManager>*)
 {
+    LARGE_INTEGER freq, t0, t1;
+    QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&t0);
     /* Fail blocklisted requests first, then pump the real session. */
     if (!m_skipped.isEmpty()) {
         Vector<ResourceHandle*> failed;
@@ -161,6 +167,12 @@ void ResourceHandleManager::downloadTimerCallback(Timer<ResourceHandleManager>*)
     }
 
     pump();
+    QueryPerformanceCounter(&t1);
+    if (getenv("AGB_PERF_LOG")) {
+        double ms = (double)(t1.QuadPart - t0.QuadPart) * 1000.0 / (double)freq.QuadPart;
+        if (ms > 100.0)
+            fprintf(stderr, "[perf] net.pump %.0fms pending=%d\n", ms, m_session ? m_session->pending() : -1);
+    }
 
     /* Nothing to prune: handles deregister themselves through cancel() (also
      * from their destructor), so the manager never touches a stale pointer. */
