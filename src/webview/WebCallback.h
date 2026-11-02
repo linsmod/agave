@@ -63,5 +63,8 @@ extern unsigned int (*cb_clipboard_get_data)(void*, unsigned int);
 
 void _init_callback(void);
 void _set_callback(const _mc_callback_t*);
+/* Re-applies the last registered callback table (macross_initialize() resets it,
+ * so hosts that register before initializing would otherwise lose callbacks). */
+void _reapply_callback(void);
 }
 #endif/*_WEBCALLBACK_H_*/

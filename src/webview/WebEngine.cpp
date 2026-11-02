@@ -134,6 +134,29 @@ MC_STATUS macross_view_update(MaCrossView* view, const MC_RECT* rc)
 		view->view->paintView();
 		QueryPerformanceCounter(&t1);
 
+		/* The legacy loader never delivers didReceiveTitle on this port, so hosts
+		 * never saw a page title. Poll document.title once per frame instead. */
+		{
+			WebCore::String title;
+
+			if (view->view->mainDocumentTitle(title)) {
+				CString utf8 = title.utf8();
+
+				if (getenv("AGB_TITLE_DEBUG"))
+					fprintf(stderr, "[title] '%s' last='%s' cb=%p\n",
+					        utf8.data() ? utf8.data() : "(null)",
+					        view->lastTitle, (void*)cb_set_title);
+
+				if (utf8.data() && strcmp(utf8.data(), view->lastTitle)) {
+					strncpy(view->lastTitle, utf8.data(), sizeof(view->lastTitle) - 1);
+					view->lastTitle[sizeof(view->lastTitle) - 1] = 0;
+
+					if (cb_set_title)
+						cb_set_title(view, view->lastTitle);
+				}
+			}
+		}
+
 		/* Async XHR results and JS timers are delivered after painting: the page may
 		 * detach nodes, which must not happen while the paint traversal holds
 		 * render object pointers. */
@@ -971,6 +994,8 @@ MC_STATUS macross_initialize(MC_PIXEL_FORMAT format, int w, int h)
 		WebCore::eventInitialize();
 		
 		_init_callback();
+		/* Hosts usually register their callbacks before initializing; keep them. */
+		_reapply_callback();
 		g_initialize = true;
 	}
 	return MC_STATUS_SUCCESS;

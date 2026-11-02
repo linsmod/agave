@@ -82,6 +82,8 @@ public:
 	void setViewSource(bool b);
 	// JS context lookup (per-view Ant VM is registered per Page)
 	WebCore::Page * page(void);
+	// Current document title (the legacy loader never reports it itself).
+	bool mainDocumentTitle(WebCore::String& out);
 	//render mode
 	int renderMode(void);
 	void setRenderMode(int mode, int limit);	

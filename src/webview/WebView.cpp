@@ -171,6 +171,17 @@ Page * WebView::page(void)
     return frame ? frame->page() : 0;
 }
 
+bool WebView::mainDocumentTitle(String& out)
+{
+    Frame* frame = d->m_frame.get();
+
+    if (!frame || !frame->document())
+        return false;
+
+    out = frame->document()->title();
+    return !out.isEmpty();
+}
+
 void WebView::resizeView(unsigned char* buffer, int width, int height, int pitch)
 {
 	if ((d->m_buffer != buffer) || (d->m_width != width) || (d->m_height != height)) {

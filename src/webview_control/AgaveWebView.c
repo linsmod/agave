@@ -29,7 +29,7 @@ enum {
     AGW_CMD_NAVIGATE, AGW_CMD_LOAD_HTML, AGW_CMD_BACK, AGW_CMD_FORWARD,
     AGW_CMD_RELOAD, AGW_CMD_STOP, AGW_CMD_EVAL, AGW_CMD_ZOOM,
     AGW_CMD_RESIZE, AGW_CMD_UA, AGW_CMD_DL_DIR, AGW_CMD_MOUSE, AGW_CMD_KEY,
-    AGW_CMD_CHAR, AGW_CMD_FOCUS
+    AGW_CMD_CHAR, AGW_CMD_FOCUS, AGW_CMD_SEARCH
 };
 
 typedef struct {
@@ -60,6 +60,8 @@ struct AgaveWebView {
     int                progress;
     int                loading;
     int                lastRecordedProgress;
+    int                backCount;
+    int                forwardCount;
 
     char               downloadDir[MAX_PATH];
     char               userAgent[256];
@@ -252,6 +254,19 @@ static void agwOnStatus(MaCrossView* view, const char* text)
 
     if (item->callbacks.on_status)
         item->callbacks.on_status(item, item->status, item->user);
+}
+
+static void agwOnHistoryStatus(MaCrossView* view, unsigned int backCount, unsigned int forwardCount)
+{
+    AgaveWebView* item = agwByView(view);
+
+    if (!item)
+        return;
+
+    agwLock();
+    item->backCount = (int)backCount;
+    item->forwardCount = (int)forwardCount;
+    agwUnlock();
 }
 
 static void agwOnProgress(MaCrossView* view, unsigned int percent, MC_BOOL finished)
@@ -575,6 +590,13 @@ static void agwDrainCommands(void)
         case AGW_CMD_FOCUS:
             if (item->view)
                 macross_view_set_focus(item->view);
+            break;
+
+        case AGW_CMD_SEARCH:
+            if (item->view && command.text[0])
+                macross_view_search_text(item->view, command.text,
+                                         command.a ? TRUE : FALSE,
+                                         command.b ? TRUE : FALSE, TRUE);
             break;
 
         default:
@@ -920,6 +942,7 @@ static void agwInstallCallbacks(void)
     info.cb_set_location     = agwOnLocation;
     info.cb_set_status       = agwOnStatus;
     info.cb_loading_progress = agwOnProgress;
+    info.cb_history_status   = agwOnHistoryStatus;
     info.cb_error            = agwOnError;
     info.cb_set_cursor       = agwOnCursor;
     info.cb_write_file_data  = agwOnWriteFile;
@@ -1106,6 +1129,25 @@ void agave_webview_set_zoom(AgaveWebView* item, int percent)
 int agave_webview_zoom(AgaveWebView* item)
 {
     return item ? item->zoom : 100;
+}
+
+int agave_webview_search(AgaveWebView* item, const char* text, int forward, int case_sensitive)
+{
+    if (!item || !text || !text[0])
+        return 0;
+
+    agwPost(AGW_CMD_SEARCH, item, text, 0, 0, forward ? 1 : 0, case_sensitive ? 1 : 0);
+    return 1;
+}
+
+int agave_webview_can_back(AgaveWebView* item)
+{
+    return item ? item->backCount > 0 : 0;
+}
+
+int agave_webview_can_forward(AgaveWebView* item)
+{
+    return item ? item->forwardCount > 0 : 0;
 }
 
 const char* agave_webview_url(AgaveWebView* item)

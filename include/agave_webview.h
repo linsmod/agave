@@ -109,6 +109,15 @@ AGW_API void agave_webview_set_focus(AgaveWebView* view);
 /* Host -> page: calls window.onAgaveMessage(text) in the page (if defined). */
 AGW_API void agave_webview_post_message(AgaveWebView* view, const char* message);
 
+/* Find in page (queued, fire-and-forget): highlights and scrolls to the next
+ * match. Returns non-zero when the request was queued. */
+AGW_API int agave_webview_search(AgaveWebView* view, const char* text,
+                                 int forward, int case_sensitive);
+
+/* History availability, driven by the engine's history status callback. */
+AGW_API int agave_webview_can_back(AgaveWebView* view);
+AGW_API int agave_webview_can_forward(AgaveWebView* view);
+
 /* Per-control overrides (thread safe, queued). */
 AGW_API void agave_webview_set_user_agent(AgaveWebView* view, const char* user_agent);
 AGW_API void agave_webview_set_download_dir(AgaveWebView* view, const char* directory);

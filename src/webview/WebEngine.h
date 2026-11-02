@@ -21,6 +21,7 @@ struct _mc_view {
 	WebView * view;
 	void    * data;
 	void    * jscontext;   /* per-view Ant VM (AntRuntime::createContext) */
+	char      lastTitle[256]; /* last reported document title */
 };
 
 #ifdef __cplusplus

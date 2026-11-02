@@ -56,6 +56,11 @@ void (*cb_clipboard_set_data)(void*, unsigned int);
 unsigned int (*cb_clipboard_data_len)(void);
 unsigned int (*cb_clipboard_get_data)(void*, unsigned int);
 
+/* Last registered table, re-applied after macross_initialize() zeroes the
+ * callback pointers (hosts normally register before initializing). */
+static _mc_callback_t g_savedCallbacks;
+static int g_haveSavedCallbacks = 0;
+
 void _init_callback(void)
 {
 	cb_invalidate_rect		 = 0;
@@ -130,6 +135,15 @@ void _set_callback(const _mc_callback_t* cb)
 	cb_clipboard_set_data	 = cb->cb_clipboard_set_data;
 	cb_clipboard_data_len	 = cb->cb_clipboard_data_len;
 	cb_clipboard_get_data	 = cb->cb_clipboard_get_data;
+
+	g_savedCallbacks = *cb;
+	g_haveSavedCallbacks = 1;
+}
+
+void _reapply_callback(void)
+{
+	if (g_haveSavedCallbacks)
+		_set_callback(&g_savedCallbacks);
 }
 
 }
