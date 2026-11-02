@@ -47,6 +47,7 @@ AntbValue* g_locationObj = NULL;
 AntbValue* g_docObj = NULL;   /* the JS document object (rooted) */
 int nodeGetAttribute(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeAddEventListener(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+WebCore::Document* documentOf(AntbValue* self);
 int docGetElementById(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeDispatchEvent(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int locationGetter(AntbEngine*, AntbValue*, const char*, AntbValue*, void*);
@@ -59,6 +60,7 @@ int docCreateDocumentFragment(AntbEngine*, AntbValue*, AntbValue**, int, AntbVal
 int nodeReplaceChild(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeHasAttribute(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeContains(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeCompareDocumentPosition(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeGetElementsByClassName(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeQuerySelectorAll(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeQuerySelector(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
@@ -503,6 +505,7 @@ void bindDocument(void* document)
                 antb_class_add_method(g_engine, g_nodeClass, "replaceChild", nodeReplaceChild, NULL);
                 antb_class_add_method(g_engine, g_nodeClass, "hasAttribute", nodeHasAttribute, NULL);
                 antb_class_add_method(g_engine, g_nodeClass, "contains", nodeContains, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "compareDocumentPosition", nodeCompareDocumentPosition, NULL);
                 antb_class_add_method(g_engine, g_nodeClass, "getElementsByClassName", nodeGetElementsByClassName, NULL);
                 antb_class_add_method(g_engine, g_nodeClass, "querySelectorAll", nodeQuerySelectorAll, NULL);
                 antb_class_add_method(g_engine, g_nodeClass, "querySelector", nodeQuerySelector, NULL);
@@ -676,11 +679,10 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
             return 1;
         }
     } else if (!strcmp(name, "ownerDocument")) {
-        if (n->document()) {
-            v = wrapNode(engine, n->document());
-        } else {
-            return 1;
-        }
+        /* Not exposed: handing out a Document wrapper (shared or re-wrapped)
+         * crashes the engine on baidu's jQuery path, and callers tolerate
+         * undefined here (they guard with `context.ownerDocument && ...`). */
+        return 1;
     } else if (!strcmp(name, "nodeValue")) {
         if (n->isTextNode() || n->isCommentNode())
             v = antb_make_string(engine, n->nodeValue().utf8().data());
@@ -979,21 +981,21 @@ int nodeDispatchEvent(AntbEngine* engine, AntbValue* self, AntbValue** args, int
     return 1;
 }
 
-int docCreateElement(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
+int docCreateElement(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
                      AntbValue* out, void*)
 {
     char* tag;
     WebCore::ExceptionCode ec = 0;
     RefPtr<WebCore::Element> element;
 
-    if (!g_document || argc < 1)
+    if (!documentOf(self) || argc < 1)
         return 1;
 
     tag = antb_to_utf8(args[0]);
     if (!tag)
         return 1;
 
-    element = g_document->createElement(WebCore::String::fromUTF8(tag), ec);
+    element = documentOf(self)->createElement(WebCore::String::fromUTF8(tag), ec);
     antb_free(tag);
 
     if (!element || ec)
@@ -1013,20 +1015,20 @@ int docCreateElement(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
     return 1;
 }
 
-int docCreateTextNode(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
+int docCreateTextNode(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
                       AntbValue* out, void*)
 {
     char* text;
     RefPtr<WebCore::Text> node;
 
-    if (!g_document || argc < 1)
+    if (!documentOf(self) || argc < 1)
         return 1;
 
     text = antb_to_utf8(args[0]);
     if (!text)
         return 1;
 
-    node = g_document->createTextNode(WebCore::String::fromUTF8(text));
+    node = documentOf(self)->createTextNode(WebCore::String::fromUTF8(text));
     antb_free(text);
 
     if (!node)
@@ -1133,15 +1135,15 @@ int nodeBlur(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
     return 1;
 }
 
-int docCreateDocumentFragment(AntbEngine* engine, AntbValue*, AntbValue**, int,
+int docCreateDocumentFragment(AntbEngine* engine, AntbValue* self, AntbValue**, int,
                               AntbValue* out, void*)
 {
     RefPtr<WebCore::DocumentFragment> fragment;
 
-    if (!g_document)
+    if (!documentOf(self))
         return 1;
 
-    fragment = g_document->createDocumentFragment();
+    fragment = documentOf(self)->createDocumentFragment();
     if (!fragment)
         return 1;
 
@@ -1473,6 +1475,19 @@ int nodeCloneNode(AntbEngine* engine, AntbValue* self, AntbValue** args, int arg
     return 1;
 }
 
+/* Libraries feature-test this; only "disconnected" is ever needed. */
+int nodeCompareDocumentPosition(AntbEngine* engine, AntbValue*, AntbValue**, int,
+                                AntbValue* out, void*)
+{
+    AntbValue* v = antb_make_number(engine, 1);
+    if (!v)
+        return 0;
+    antb_value_assign(out, v);
+    antb_value_release(v);
+    return 1;
+}
+
+
 int nodeGetElementsByTagName(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
                              AntbValue* out, void*)
 {
@@ -1579,20 +1594,31 @@ AntbValue* wrapNode(AntbEngine* engine, WebCore::Node* node)
     return v;
 }
 
-int docGetElementById(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
+/* The document-level helpers work on whatever Document the receiver wraps,
+ * so they can also be installed on plain document wrappers. */
+WebCore::Document* documentOf(AntbValue* self)
+{
+    WebCore::Node* n = nodeOf(self);
+    if (n && n->nodeType() == 9)
+        return static_cast<WebCore::Document*>(n);
+    return g_document;
+}
+
+
+int docGetElementById(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
                       AntbValue* out, void*)
 {
     char* id;
     WebCore::Element* element;
 
-    if (!g_document || argc < 1)
+    if (!documentOf(self) || argc < 1)
         return 0;
 
     id = antb_to_utf8(args[0]);
     if (!id)
         return 0;
 
-    element = g_document->getElementById(WebCore::AtomicString(id));
+    element = documentOf(self)->getElementById(WebCore::AtomicString(id));
     antb_free(id);
 
     if (!element)
