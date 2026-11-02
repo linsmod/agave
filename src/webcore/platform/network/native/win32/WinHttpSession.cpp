@@ -139,7 +139,13 @@ static HINTERNET poolAcquire(const std::wstring& host, INTERNET_PORT port, int t
     PoolEntry& entry = (*g_pool)[key];
 
     if (!entry.session) {
-        entry.session = WinHttpOpen(L"agave/1.0 (native)", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+        /* WPAD auto-proxy detection can stall for seconds on a network without
+         * it, which is why an unreachable host felt like a hang instead of a
+         * fast failure. AGB_NO_PROXY=1 forces a direct connection. */
+        DWORD accessType = getenv("AGB_NO_PROXY") ? WINHTTP_ACCESS_TYPE_NO_PROXY
+                                                  : WINHTTP_ACCESS_TYPE_DEFAULT_PROXY;
+
+        entry.session = WinHttpOpen(L"agave/1.0 (native)", accessType,
                                     WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
 
         if (!entry.session) {
@@ -147,14 +153,16 @@ static HINTERNET poolAcquire(const std::wstring& host, INTERNET_PORT port, int t
             g_pool->erase(key);
             return NULL;
         }
-
-        WinHttpSetTimeouts(entry.session, timeout, timeout, timeout, timeout);
     }
 
-    /* The session is shared by every request to this host, so the timeout has to
-     * be refreshed per request (it used to stick to the first caller's value,
-     * which is why an 8s timeout took 11.6s to fire). */
-    WinHttpSetTimeouts(entry.session, timeout, timeout, timeout, timeout);
+    /* Resolve and connect get short budgets so a dead host fails fast, the way a
+     * browser does; send/receive keep the caller's timeout for slow servers. */
+    {
+        int resolveTimeout = timeout < 2000 ? timeout : 2000;
+        int connectTimeout = timeout < 3000 ? timeout : 3000;
+
+        WinHttpSetTimeouts(entry.session, resolveTimeout, connectTimeout, timeout, timeout);
+    }
 
     if (!entry.connect) {
         entry.connect = WinHttpConnect(entry.session, host.c_str(), port, 0);
