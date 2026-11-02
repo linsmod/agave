@@ -288,14 +288,78 @@ int evaluate(const char* src, size_t len, char** out, char** err)
     if (!g_engine || !src)
         return 0;
 
-    value = antb_eval(g_engine, src, (int)len, err);
-    if (!value)
-        return 0;
+    /* Page scripts are wrapped in try/catch so engine-thrown errors come with a
+     * stack: the engine's own TypeErrors carry no position information. `var`
+     * inside a try block is still global, so top-level declarations keep their
+     * meaning; only top-level let/const become block scoped, which pages in
+     * practice do not rely on. */
+    {
+        size_t wrappedLen = len + 64;
+        char* wrapped = (char*)malloc(wrappedLen);
+        if (!wrapped)
+            return 0;
 
-    if (out)
-        *out = antb_to_utf8(value);
+        {
+            int written = snprintf(wrapped, wrappedLen,
+                                   "try{\n%.*s\n}catch(__agbE){__agbLastError=__agbDescribe(__agbE);}\n",
+                                   (int)len, src);
+            if (written <= 0 || (size_t)written >= wrappedLen) {
+                free(wrapped);
+                value = antb_eval(g_engine, src, (int)len, err);
+                if (!value)
+                    return 0;
+                if (out)
+                    *out = antb_to_utf8(value);
+                antb_value_release(value);
+                return 1;
+            }
+
+            value = antb_eval(g_engine, wrapped, written, err);
+        }
+        free(wrapped);
+    }
+
+    if (!value) {
+        /* A syntax error still surfaces through the eval result. */
+        return 0;
+    }
 
     antb_value_release(value);
+
+    /* Did the wrapped script throw? */
+    {
+        AntbValue* global = antb_global(g_engine);
+        AntbValue* reported = global ? antb_get_prop(g_engine, global, "__agbLastError") : NULL;
+        bool threw = false;
+
+        if (reported) {
+            char* text = antb_to_utf8(reported);
+            if (text && text[0]) {
+                threw = true;
+                if (err) {
+                    *err = (char*)malloc(strlen(text) + 1);
+                    if (*err)
+                        strcpy(*err, text);
+                }
+            }
+            antb_free(text);
+            antb_value_release(reported);
+        }
+        antb_value_release(global);
+
+        /* Reset for the next evaluation. */
+        if (threw) {
+            AntbValue* global2 = antb_global(g_engine);
+            if (global2) {
+                antb_delete_prop(g_engine, global2, "__agbLastError");
+                antb_value_release(global2);
+            }
+            return 0;
+        }
+    }
+
+    if (out)
+        *out = NULL;
     return 1;
 }
 
@@ -306,6 +370,13 @@ static const char kPrelude[] =
 "  if (typeof g.Image === 'undefined' && g.document) {"
 "    g.Image = function Image() { return g.document.createElement('img'); };"
 "  }"
+"  g.__agbDescribe = function (e) {"
+"    try {"
+"      if (e && e.stack) return String(e.stack);"
+"      if (e && e.message) return String(e.name) + ': ' + String(e.message);"
+"      return String(e);"
+"    } catch (_) { return 'unknown error'; }"
+"  };"
 "  if (g.navigator) {"
 "    if (!g.navigator.platform) g.navigator.platform = 'Win32';"
 "    if (!g.navigator.language) g.navigator.language = 'zh-CN';"
