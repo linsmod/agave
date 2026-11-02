@@ -13,7 +13,7 @@ char** __argv;
 int main(int argc, char* argv[])
 {
     __argc = argc;
-    __argv == argv;
+    __argv = argv;
 
     Application app;
     if (!app.init(0, argv[1])) {

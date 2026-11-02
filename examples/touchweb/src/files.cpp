@@ -145,7 +145,7 @@ ustring File::GetCurrentDir(void)
 #endif
 }
 
-ustring CreatePath(ustring& path)
+ustring CreatePath(const ustring& path)
 {
     ustring dir = File::GetCurrentDir();
     dir += ustring(U("/"));

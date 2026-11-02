@@ -1,4 +1,4 @@
-﻿/* config.h - Agave application
+/* config.h - Agave application
  *
  * Copyright (C) 2024 Zhang Ji Peng
  * Contact : onecoolx@gmail.com
@@ -56,6 +56,22 @@
     #include "files.h"
     #define DATA_PATH(path) CreatePath(ustring(U(path))).c_str()
     #define FILENAME_UNICODE 1
+#endif
+
+/* MinGW / any other Windows toolchain: mirror the MSVC block above. */
+#if defined(WIN32) && !defined(_MSC_VER)
+    #include <string>
+    #include <string.h>
+    #define PATHMAX     512
+    typedef wchar_t uchar_t;
+    typedef std::basic_string<uchar_t> ustring;
+    #define U(text) ((uchar_t*)(L##text))
+    #include "files.h"
+    #define DATA_PATH(path) CreatePath(ustring(U(path))).c_str()
+    #define FILENAME_UNICODE 1
+    #ifndef strncasecmp
+        #define strncasecmp _strnicmp
+    #endif
 #endif
 
 #if defined(__linux)

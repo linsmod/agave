@@ -1,4 +1,4 @@
-﻿/* dialog_win32.cpp - Agave application
+/* dialog_win32.cpp - Agave application
  *
  * Copyright (C) 2010 Zhang Ji Peng
  * Contact : onecoolx@gmail.com
@@ -9,6 +9,8 @@
 
 #include "dialog.h"
 #include "dialog_win32.h"
+
+INT_PTR CALLBACK DlgProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
 #include "mainwindow_win32.h"
 #include "application.h"
 #include "application_win32.h"
@@ -157,7 +159,7 @@ void DialogImpl::EndModal(int code)
     }
 }
 
-static BOOL CALLBACK DlgProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
+INT_PTR CALLBACK DlgProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
     PAINTSTRUCT ps;
     HDC hdc;
@@ -169,7 +171,7 @@ static BOOL CALLBACK DlgProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPar
                 GetClientRect(hWnd, &r);
                 dlg = (DialogImpl*)lParam;
                 dlg->m_data->m_hWnd = hWnd;
-                SetWindowLong(hWnd, GWL_USERDATA, (LONG)dlg);
+                SetWindowLongPtr(hWnd, GWLP_USERDATA, (LONG_PTR)dlg);
                 dlg->OnCreate(r.left, r.top, r.right - r.left, r.bottom - r.top);
                 SetFocus(hWnd);
             }
@@ -182,7 +184,7 @@ static BOOL CALLBACK DlgProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPar
                 if (wParam & MK_RBUTTON) {
                     b |= 2;
                 }
-                dlg = (DialogImpl*)GetWindowLong(hWnd, GWL_USERDATA);
+                dlg = (DialogImpl*)GetWindowLongPtr(hWnd, GWLP_USERDATA);
                 dlg->OnMouse(1, b, LOWORD(lParam), HIWORD(lParam));
             }
             return TRUE;
@@ -194,7 +196,7 @@ static BOOL CALLBACK DlgProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPar
                 if (wParam & MK_RBUTTON) {
                     b |= 2;
                 }
-                dlg = (DialogImpl*)GetWindowLong(hWnd, GWL_USERDATA);
+                dlg = (DialogImpl*)GetWindowLongPtr(hWnd, GWLP_USERDATA);
                 dlg->OnMouse(0, b, LOWORD(lParam), HIWORD(lParam));
             }
             return TRUE;
@@ -206,7 +208,7 @@ static BOOL CALLBACK DlgProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPar
                 if (wParam & MK_RBUTTON) {
                     b |= 2;
                 }
-                dlg = (DialogImpl*)GetWindowLong(hWnd, GWL_USERDATA);
+                dlg = (DialogImpl*)GetWindowLongPtr(hWnd, GWLP_USERDATA);
                 dlg->OnMouse(2, b, LOWORD(lParam), HIWORD(lParam));
             }
             return TRUE;
@@ -219,7 +221,7 @@ static BOOL CALLBACK DlgProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPar
                 wParam = uc;
             }
         case WM_CHAR: {
-                dlg = (DialogImpl*)GetWindowLong(hWnd, GWL_USERDATA);
+                dlg = (DialogImpl*)GetWindowLongPtr(hWnd, GWLP_USERDATA);
                 dlg->OnChar(wParam);
             }
             return TRUE;
@@ -241,7 +243,7 @@ static BOOL CALLBACK DlgProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPar
                 HBITMAP hbmp;
                 BITMAP* pm;
                 RECT crc;
-                dlg = (DialogImpl*)GetWindowLong(hWnd, GWL_USERDATA);
+                dlg = (DialogImpl*)GetWindowLongPtr(hWnd, GWLP_USERDATA);
                 if (GetUpdateRect(hWnd, &crc, FALSE)) {
                     dlg->OnPaint(crc.left, crc.top, crc.right - crc.left, crc.bottom - crc.top);
                     hdc = BeginPaint(hWnd, &ps);

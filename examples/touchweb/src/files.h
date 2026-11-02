@@ -39,6 +39,6 @@ private:
     void* m_file;
 };
 
-ustring CreatePath(ustring& path);
+ustring CreatePath(const ustring& path);
 
 #endif/*_FILES_H_*/

@@ -36,7 +36,7 @@ public:
 
     int SysWidth(void);
     int SysHeight(void);
-    friend static LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
+    friend LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
 public:
     bool getChooseFile(uchar_t* name, unsigned int len);
 private:

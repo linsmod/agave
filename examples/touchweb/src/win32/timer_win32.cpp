@@ -12,9 +12,9 @@
 #pragma warning(disable:4786)
 #include <map>
 
-static std::map<UINT, TimerImpl*> g_timer_map;
+static std::map<UINT_PTR, TimerImpl*> g_timer_map;
 
-VOID CALLBACK TimerProc(HWND h, UINT msg, UINT id, DWORD t)
+VOID CALLBACK TimerProc(HWND h, UINT msg, UINT_PTR id, DWORD t)
 {
     TimerImpl* timer = g_timer_map.find(id)->second;
     timer->OnTimer();

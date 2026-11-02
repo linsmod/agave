@@ -1,4 +1,4 @@
-﻿/* mainwindow_win32.cpp - Agave application
+/* mainwindow_win32.cpp - Agave application
  *
  * Copyright (C) 2010 Zhang Ji Peng
  * Contact : onecoolx@gmail.com
@@ -11,6 +11,8 @@
 #include "event.h"
 #include "mainwindow.h"
 #include "mainwindow_win32.h"
+
+LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
 #include "application.h"
 #include "application_win32.h"
 
@@ -312,7 +314,7 @@ void MainWindowImpl::DrawImage(const BITMAP* bmp, int vx, int vy, int cx, int cy
     m_data->m_sy = sy;
 }
 
-static LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
+LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
     PAINTSTRUCT ps;
     HDC hdc;
@@ -329,27 +331,27 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM l
             }
             break;
         case WM_LBUTTONDOWN: {
-                window = (MainWindowImpl*)GetWindowLongPtr(hWnd, GWL_USERDATA);
+                window = (MainWindowImpl*)GetWindowLongPtr(hWnd, GWLP_USERDATA);
                 window->OnMouse(1, 1, LOWORD(lParam), HIWORD(lParam));
             }
             break;
         case WM_LBUTTONUP: {
-                window = (MainWindowImpl*)GetWindowLongPtr(hWnd, GWL_USERDATA);
+                window = (MainWindowImpl*)GetWindowLongPtr(hWnd, GWLP_USERDATA);
                 window->OnMouse(0, 1, LOWORD(lParam), HIWORD(lParam));
             }
             break;
         case WM_MOUSEMOVE: {
-                window = (MainWindowImpl*)GetWindowLongPtr(hWnd, GWL_USERDATA);
+                window = (MainWindowImpl*)GetWindowLongPtr(hWnd, GWLP_USERDATA);
                 window->OnMouse(2, 0, LOWORD(lParam), HIWORD(lParam));
             }
             break;
         case WM_KEYDOWN: {
-                window = (MainWindowImpl*)GetWindowLongPtr(hWnd, GWL_USERDATA);
+                window = (MainWindowImpl*)GetWindowLongPtr(hWnd, GWLP_USERDATA);
                 window->OnKey(1, wParam);
             }
             break;
         case WM_KEYUP: {
-                window = (MainWindowImpl*)GetWindowLongPtr(hWnd, GWL_USERDATA);
+                window = (MainWindowImpl*)GetWindowLongPtr(hWnd, GWLP_USERDATA);
                 window->OnKey(0, wParam);
             }
             break;
@@ -362,7 +364,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM l
                 wParam = uc;
             }
         case WM_CHAR: {
-                window = (MainWindowImpl*)GetWindowLongPtr(hWnd, GWL_USERDATA);
+                window = (MainWindowImpl*)GetWindowLongPtr(hWnd, GWLP_USERDATA);
                 window->OnChar(wParam);
             }
             break;
@@ -374,7 +376,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM l
                 HBITMAP hbmp;
                 BITMAP* pm;
                 RECT crc;
-                window = (MainWindowImpl*)GetWindowLongPtr(hWnd, GWL_USERDATA);
+                window = (MainWindowImpl*)GetWindowLongPtr(hWnd, GWLP_USERDATA);
                 if (GetUpdateRect(hWnd, &crc, FALSE)) {
                     window->OnPaint(crc.left, crc.top, crc.right - crc.left, crc.bottom - crc.top);
                     hdc = BeginPaint(hWnd, &ps);
@@ -391,12 +393,12 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM l
             }
             break;
         case WM_CLOSE: {
-                window = (MainWindowImpl*)GetWindowLongPtr(hWnd, GWL_USERDATA);
+                window = (MainWindowImpl*)GetWindowLongPtr(hWnd, GWLP_USERDATA);
                 window->m_data->m_window->Destroy();
             }
             break;
         case WM_DESTROY: {
-                window = (MainWindowImpl*)GetWindowLongPtr(hWnd, GWL_USERDATA);
+                window = (MainWindowImpl*)GetWindowLongPtr(hWnd, GWLP_USERDATA);
                 PostQuitMessage(0);
                 window->OnDestroy();
             }

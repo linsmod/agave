@@ -29,7 +29,7 @@ public:
     void OnChar(unsigned int c);
     void OnMouse(int type, unsigned btn, int x, int y);
 
-    friend static BOOL CALLBACK DlgProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
+    friend INT_PTR CALLBACK DlgProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
 private:
     DialogImplPrive* m_data;
 };

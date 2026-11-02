@@ -7,6 +7,8 @@
 #ifndef _EXTRACFG_H_
 #define _EXTRACFG_H_
 
+#include <string>
+
 struct config_data;
 
 class ExtraConfig

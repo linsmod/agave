@@ -7,6 +7,8 @@
 #ifndef _TIMER_WIN32_H_
 #define _TIMER_WIN32_H_
 
+#include <windows.h>
+
 class Timer;
 
 class TimerImpl
@@ -21,7 +23,7 @@ public:
     virtual void OnTimer(void);
 private:
     Timer* timer;
-    unsigned int id;
+    UINT_PTR id;
     void* data;
 };
 
