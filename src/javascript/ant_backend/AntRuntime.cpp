@@ -437,6 +437,7 @@ int globalClassOp(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalHttpRequest(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeSetter(AntbEngine*, AntbValue*, const char*, const AntbValue*, void*);
 int docCreateElement(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int docCreateElementNS(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeFocus(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeBlur(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int docCreateTextNode(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
@@ -2742,6 +2743,7 @@ void bindDocument(void* document)
 
         antb_define_method(g_engine, docObj, "getElementById", docGetElementById, NULL);
         antb_define_method(g_engine, docObj, "createElement", docCreateElement, NULL);
+        antb_define_method(g_engine, docObj, "createElementNS", docCreateElementNS, NULL);
         antb_define_method(g_engine, docObj, "createTextNode", docCreateTextNode, NULL);
         antb_define_method(g_engine, docObj, "createComment", docCreateComment, NULL);
         antb_define_method(g_engine, docObj, "createDocumentFragment", docCreateDocumentFragment, NULL);
@@ -2972,6 +2974,91 @@ static std::string cssNameFromCamel(const char* name)
 }
 
 /* The element a style object belongs to (stored as __agbElement). */
+/* element.dataset: a DOMStringMap over the data-* attributes. Same one-dispatcher
+ * trick as style: the getter/setter receive the property name and map it to a
+ * data- attribute (camelCase -> kebab-case). Vue directives read it constantly
+ * (browserscore's v-content does `el.dataset.fallback`). */
+static WebCore::Element* datasetElementOf(AntbValue* self)
+{
+    AntbValue* owner;
+    WebCore::Node* node;
+
+    if (!self)
+        return NULL;
+
+    owner = antb_get_prop(g_engine, self, "__agbElement");
+
+    if (!owner)
+        return NULL;
+
+    node = nodeOf(owner);
+    antb_value_release(owner);
+
+    return (node && node->isElementNode()) ? static_cast<WebCore::Element*>(node) : NULL;
+}
+
+static std::string dataAttributeName(const char* name)
+{
+    std::string attr = "data-";
+
+    for (const char* c = name; c && *c; ++c) {
+        if (*c >= 'A' && *c <= 'Z') {
+            attr += '-';
+            attr += (char)(*c - 'A' + 'a');
+        } else {
+            attr += *c;
+        }
+    }
+
+    return attr;
+}
+
+int datasetGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue* out, void*)
+{
+    WebCore::Element* element = datasetElementOf(self);
+
+    if (!element || !name) {
+        makeStringResult(engine, out, "");
+        return 1;
+    }
+
+    {
+        std::string attr = dataAttributeName(name);
+        WebCore::String value = element->getAttribute(WebCore::AtomicString(attr.c_str()));
+
+        makeStringResult(engine, out, value.utf8().data());
+    }
+    return 1;
+}
+
+int datasetSetter(AntbEngine* engine, AntbValue* self, const char* name, const AntbValue* value, void*)
+{
+    WebCore::Element* element = datasetElementOf(self);
+    char* text;
+
+    (void)engine;
+
+    if (!element || !name)
+        return 1;
+
+    {
+        std::string attr = dataAttributeName(name);
+        WebCore::String attrName(attr.c_str());
+        WebCore::ExceptionCode ec = 0;
+
+        text = value ? antb_to_utf8(const_cast<AntbValue*>(value)) : NULL;
+
+        if (!text || !text[0])
+            element->removeAttribute(attrName, ec);
+        else
+            element->setAttribute(attrName, WebCore::String::fromUTF8(text), ec);
+
+        antb_free(text);
+    }
+    element->setChanged();
+    return 1;
+}
+
 static WebCore::StyledElement* styledElementOf(AntbValue* self)
 {
     AntbValue* owner;
@@ -3309,6 +3396,30 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
             antb_set_prop(engine, self, "__agbAttrs", attrs);
             antb_value_assign(out, attrs);
             antb_value_release(attrs);
+        }
+        return 1;
+    } else if (!strcmp(name, "dataset")) {
+        AntbValue* existing = antb_get_prop(engine, self, "__agbDataset");
+
+        if (existing && !antb_is_number(existing)) {
+            antb_value_assign(out, existing);
+            antb_value_release(existing);
+            return 1;
+        }
+        antb_value_release(existing);
+
+        {
+            AntbValue* dataset = antb_make_object(engine);
+
+            if (!dataset)
+                return 0;
+
+            antb_set_prop(engine, dataset, "__agbElement", self);
+            antb_define_property_rw(engine, dataset, "dataset", datasetGetter, datasetSetter, NULL);
+            antb_set_prop(engine, self, "__agbDataset", dataset);
+
+            antb_value_assign(out, dataset);
+            antb_value_release(dataset);
         }
         return 1;
     } else if (!strcmp(name, "style")) {
@@ -3735,6 +3846,42 @@ int docCreateElement(AntbEngine* engine, AntbValue* self, AntbValue** args, int 
 
     {
         AntbValue* v = wrapNode(engine, element.get());
+        if (v) {
+            antb_value_assign(out, v);
+            antb_value_release(v);
+        }
+    }
+    return 1;
+}
+/* document.createElementNS(ns, name): Vue renders every <svg>/<math> element
+ * through it, and pages use it for namespaced markup. */
+int docCreateElementNS(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                       AntbValue* out, void*)
+{
+    char* ns;
+    char* name;
+    RefPtr<WebCore::Element> node;
+    WebCore::ExceptionCode ec = 0;
+
+    if (!documentOf(self) || argc < 2)
+        return 1;
+
+    ns = antb_to_utf8(args[0]);
+    name = antb_to_utf8(args[1]);
+
+    node = documentOf(self)->createElementNS(WebCore::String::fromUTF8(ns ? ns : ""),
+                                             WebCore::String::fromUTF8(name ? name : ""), ec);
+    antb_free(ns);
+    antb_free(name);
+
+    if (!node)
+        return 1;
+
+    node->ref();
+
+    {
+        AntbValue* v = wrapNode(engine, node.get());
+
         if (v) {
             antb_value_assign(out, v);
             antb_value_release(v);

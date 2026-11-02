@@ -3132,14 +3132,14 @@ struct BorderImageParseContext
     void commitSlash() { m_allowBreak = m_allowSlash = m_allowNumber = false; m_allowWidth = true; }
     void commitWidth(Value* val) {
         if (!m_borderTop)
-            m_borderTop.set(val);
+            m_borderTop.set(new Value(*val));
         else if (!m_borderRight)
-            m_borderRight.set(val);
+            m_borderRight.set(new Value(*val));
         else if (!m_borderBottom)
-            m_borderBottom.set(val);
+            m_borderBottom.set(new Value(*val));
         else {
             ASSERT(!m_borderLeft);
-            m_borderLeft.set(val);
+            m_borderLeft.set(new Value(*val));
         }
 
         m_allowBreak = m_allowRule = true;
