@@ -151,6 +151,11 @@ static HINTERNET poolAcquire(const std::wstring& host, INTERNET_PORT port, int t
         WinHttpSetTimeouts(entry.session, timeout, timeout, timeout, timeout);
     }
 
+    /* The session is shared by every request to this host, so the timeout has to
+     * be refreshed per request (it used to stick to the first caller's value,
+     * which is why an 8s timeout took 11.6s to fire). */
+    WinHttpSetTimeouts(entry.session, timeout, timeout, timeout, timeout);
+
     if (!entry.connect) {
         entry.connect = WinHttpConnect(entry.session, host.c_str(), port, 0);
 

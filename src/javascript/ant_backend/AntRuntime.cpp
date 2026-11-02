@@ -15,6 +15,7 @@
 
 #define AGB_PATH_CHARS 260
 #include <string.h>
+#include <map>
 
 #include "AntBridge.h"
 #include "../../webcore/platform/network/native/NetworkSession.h"
@@ -1278,123 +1279,278 @@ static void contextActivate(AntbEngine* engine)
  * relative imports of module scripts. */
 static std::string g_currentFilename;
 
-struct ModuleFetchClient : public Net::Client {
+/* Module bodies are cached by URL and fetched ahead of time: as soon as a module
+ * arrives, its static imports are queued on the same session, so the network
+ * works in parallel while the engine parses. A 154 module graph is otherwise
+ * 154 serial round trips (~15s on a remote host). */
+struct ModuleEntry {
     std::string body;
-    bool failed;
-    bool done;
+    bool        done;
+    bool        failed;
+    long long   id;
 
-    ModuleFetchClient() : failed(false), done(false) {}
-
-    virtual void onResponse(const Net::Response&) {}
-    virtual void onData(const char* data, unsigned int length)
-    {
-        if (data && length)
-            body.append(data, length);
-    }
-    virtual void onComplete() { done = true; }
-    virtual void onError(const Net::Error&) { failed = true; done = true; }
+    ModuleEntry() : done(false), failed(false), id(0) {}
 };
 
-/* Module loads happen while the document is still parsing; a nested synchronous
- * WebCore load gets its connection reset there, so go through the native layer
- * and drive its pump loop by hand. */
-static char* moduleFetch(const char* url, unsigned long* outSize)
+static std::map<std::string, ModuleEntry*>* g_moduleCache = NULL;
+static Net::Session* g_moduleSession = NULL;
+static int g_moduleInFlight = 0;
+static const int kModuleFetchLimit = 6;
+
+static ModuleEntry* moduleEntryFor(const std::string& url)
 {
-    /* One session for the whole page: creating one per module meant a fresh TLS
-     * handshake for every file of an import graph (100+ files on real sites). */
-    static Net::Session* session = NULL;
-    Net::Request request;
-    ModuleFetchClient client;
-    long long id;
-    int waited = 0;
+    if (!g_moduleCache)
+        g_moduleCache = new std::map<std::string, ModuleEntry*>();
+
+    std::map<std::string, ModuleEntry*>::iterator it = g_moduleCache->find(url);
+
+    if (it != g_moduleCache->end())
+        return it->second;
+
+    ModuleEntry* entry = new ModuleEntry();
+
+    (*g_moduleCache)[url] = entry;
+    return entry;
+}
+
+struct ModuleFetchClient : public Net::Client {
+    std::string url;
+
+    explicit ModuleFetchClient(const std::string& u) : url(u) {}
+
+    ModuleEntry* target() const
+    {
+        if (!g_moduleCache)
+            return NULL;
+
+        std::map<std::string, ModuleEntry*>::iterator it = g_moduleCache->find(url);
+
+        return (it == g_moduleCache->end()) ? NULL : it->second;
+    }
+
+    virtual void onResponse(const Net::Response&) {}
+
+    virtual void onData(const char* data, unsigned int length)
+    {
+        ModuleEntry* entry = target();
+
+        if (entry && data && length)
+            entry->body.append(data, length);
+    }
+
+    virtual void onComplete()
+    {
+        ModuleEntry* entry = target();
+
+        if (entry && !entry->done) {
+            entry->done = true;
+            entry->id = 0;
+
+            if (g_moduleInFlight > 0)
+                --g_moduleInFlight;
+        }
+    }
+
+    virtual void onError(const Net::Error&)
+    {
+        ModuleEntry* entry = target();
+
+        if (entry && !entry->done) {
+            entry->failed = true;
+            entry->done = true;
+            entry->id = 0;
+
+            if (g_moduleInFlight > 0)
+                --g_moduleInFlight;
+        }
+    }
+};
+
+/* Resolves a relative specifier against the URL of the module holding it. */
+static std::string moduleUrlJoin(const std::string& baseUrl, const std::string& specifier)
+{
+    std::string out;
+    std::string host;
+    size_t schemeEnd;
+    size_t slash;
+    size_t i;
+
+    if (specifier.empty())
+        return specifier;
+
+    if (specifier.compare(0, 7, "http://") == 0 || specifier.compare(0, 8, "https://") == 0)
+        return specifier;
+
+    schemeEnd = baseUrl.find("://");
+
+    if (schemeEnd == std::string::npos)
+        return specifier;
+
+    slash = baseUrl.find('/', schemeEnd + 3);
+    host = (slash == std::string::npos) ? baseUrl : baseUrl.substr(0, slash);
+
+    if (!specifier.empty() && specifier[0] == '/')
+        return host + specifier;
+
+    out = (slash == std::string::npos) ? host + "/" : baseUrl.substr(0, slash + 1);
+
+    for (i = 0; i < specifier.size(); ++i) {
+        if (specifier.compare(i, 3, "../") == 0) {
+            size_t cut = out.size();
+
+            if (cut > host.size() + 1) {
+                cut -= 1;
+                while (cut > host.size() && out[cut - 1] != '/')
+                    --cut;
+                out.erase(cut);
+            }
+
+            i += 2;
+        } else if (specifier.compare(i, 2, "./") == 0) {
+            i += 1;
+        } else {
+            out += specifier.substr(i);
+            break;
+        }
+    }
+
+    return out;
+}
+
+static void moduleStart(const std::string& url, bool force)
+{
+    ModuleEntry* entry = moduleEntryFor(url);
+
+    if (entry->done || entry->id)
+        return;
+
+    if (!force && g_moduleInFlight >= kModuleFetchLimit)
+        return;
+
+    if (!g_moduleSession)
+        g_moduleSession = Net::Session::create();
+
+    if (!g_moduleSession)
+        return;
+
+    {
+        Net::Request request;
+
+        request.url = url;
+        request.method = "GET";
+        request.timeoutMs = 5000;
+
+        entry->id = g_moduleSession->start(request, new ModuleFetchClient(url));
+
+        if (!entry->id) {
+            entry->done = true;
+            entry->failed = true;
+            return;
+        }
+
+        ++g_moduleInFlight;
+    }
+}
+
+/* Queues the static imports of a freshly received module. */
+static void modulePrefetchImports(const std::string& url, const std::string& body)
+{
+    size_t pos = 0;
+
+    while ((pos = body.find("from", pos)) != std::string::npos) {
+        size_t at = pos + 4;
+
+        while (at < body.size() && (body[at] == ' ' || body[at] == '\t' || body[at] == '\r' || body[at] == '\n'))
+            ++at;
+
+        if (at < body.size() && (body[at] == '\'' || body[at] == '"')) {
+            char quote = body[at];
+            size_t close = body.find(quote, at + 1);
+
+            if (close != std::string::npos && close > at + 1) {
+                std::string specifier = body.substr(at + 1, close - at - 1);
+
+                if (!specifier.empty() && specifier[0] == '.')
+                    moduleStart(moduleUrlJoin(url, specifier), false);
+
+                pos = close;
+                continue;
+            }
+        }
+
+        pos = at;
+    }
+}
+
+static char* moduleFetch(const char* urlText, unsigned long* outSize)
+{
+    std::string url(urlText ? urlText : "");
+    ModuleEntry* entry;
+    unsigned long began;
     int attempt;
 
     if (outSize)
         *outSize = 0;
 
-    request.url = url;
-    request.method = "GET";
-    request.timeoutMs = 5000;
-
-    /* A pooled keep-alive connection can go stale between two module loads; a
-     * hung request used to block the whole import graph for 30s and then fail.
-     * Retry once on a brand new session. */
-    for (attempt = 0; attempt < 2; ++attempt) {
-        if (!session)
-            session = Net::Session::create();
-
-        if (!session)
-            return NULL;
-
-        client.done = false;
-        client.failed = false;
-        client.body.clear();
-
-        id = session->start(request, &client);
-
-        if (id) {
-            /* Sleep(1) costs a full timer tick (15.6ms by default) on Windows,
-             * so a 12ms fetch took ~100ms; Sleep(0) only yields the CPU. */
-            unsigned long began = GetTickCount();
-
-            while (!client.done && GetTickCount() - began < 5000) {
-                session->pump();
-                if (!client.done)
-                    Sleep(0);
-            }
-
-            waited = (int)(GetTickCount() - began);
-        }
-
-        if (client.done && !client.failed)
-            break;
-
-        if (getenv("AGB_MODULE_DEBUG"))
-            fprintf(stderr, "[modfetch] retry %s after %u ms (%s)\n", url,
-                    (unsigned)waited, id ? "timeout" : "start failed");
-
-        session->shutdown();
-        delete session;
-        session = NULL;
-        waited = 0;
-    }
-
-    {
-        static int fetchCount = 0;
-        static unsigned long fetchTotal = 0;
-        static unsigned long graphStart = 0;
-        unsigned long now = GetTickCount();
-
-        ++fetchCount;
-        fetchTotal += waited;
-
-        if (!graphStart)
-            graphStart = now;
-
-        if (getenv("AGB_MODULE_DEBUG"))
-            fprintf(stderr, "[modfetch] %s %s %u bytes in %u ms | n=%d fetch=%u ms wall=%u ms\n",
-                    url, (client.done && !client.failed) ? "ok" : "FAILED",
-                    (unsigned)client.body.size(), (unsigned)waited,
-                    fetchCount, (unsigned)fetchTotal, (unsigned)(now - graphStart));
-    }
-
-    if (!client.done || client.failed)
+    if (url.empty())
         return NULL;
 
+    entry = moduleEntryFor(url);
+
+    for (attempt = 0; attempt < 2; ++attempt) {
+        if (!entry->done)
+            moduleStart(url, true);
+
+        began = GetTickCount();
+
+        while (!entry->done && GetTickCount() - began < 5000) {
+            if (g_moduleSession)
+                g_moduleSession->pump();
+
+            if (!entry->done)
+                Sleep(0);
+        }
+
+        if (entry->done && !entry->failed)
+            break;
+
+        /* A prefetched or pooled request can fail; retry once from scratch. */
+        if (attempt == 0) {
+            if (g_moduleCache)
+                g_moduleCache->erase(url);
+
+            delete entry;
+            entry = moduleEntryFor(url);
+
+            if (getenv("AGB_MODULE_DEBUG"))
+                fprintf(stderr, "[modfetch] retry %s\n", url.c_str());
+        }
+    }
+
+    if (!entry->done || entry->failed) {
+        if (getenv("AGB_MODULE_DEBUG"))
+            fprintf(stderr, "[modfetch] FAILED %s\n", url.c_str());
+
+        return NULL;
+    }
+
+    modulePrefetchImports(url, entry->body);
+
+    if (getenv("AGB_MODULE_DEBUG"))
+        fprintf(stderr, "[modfetch] %s %u bytes | in-flight=%d\n",
+                url.c_str(), (unsigned)entry->body.size(), g_moduleInFlight);
+
     {
-        const std::string& data = client.body;
-        char* buffer = (char*)malloc(data.size() + 1);
+        char* buffer = (char*)malloc(entry->body.size() + 1);
 
         if (!buffer)
             return NULL;
 
-        if (data.size())
-            memcpy(buffer, data.data(), data.size());
-
-        buffer[data.size()] = 0;
+        memcpy(buffer, entry->body.data(), entry->body.size());
+        buffer[entry->body.size()] = 0;
 
         if (outSize)
-            *outSize = (unsigned long)data.size();
+            *outSize = (unsigned long)entry->body.size();
 
         return buffer;
     }

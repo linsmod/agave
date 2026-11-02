@@ -24,7 +24,7 @@ inline int netDefaultTimeoutMs()
     static int cached = -1;
     if (cached < 0) {
         const char* env = getenv("AGB_NET_TIMEOUT_MS");
-        cached = env ? atoi(env) : 8000;
+        cached = env ? atoi(env) : 5000;
         if (cached <= 0)
             cached = 8000;
     }
