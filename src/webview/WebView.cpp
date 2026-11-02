@@ -164,6 +164,13 @@ Frame * WebView::mainframe(void)
     return d->m_frame.get();
 }
 
+Page * WebView::page(void)
+{
+    Frame* frame = d->m_frame.get();
+
+    return frame ? frame->page() : 0;
+}
+
 void WebView::resizeView(unsigned char* buffer, int width, int height, int pitch)
 {
 	if ((d->m_buffer != buffer) || (d->m_width != width) || (d->m_height != height)) {

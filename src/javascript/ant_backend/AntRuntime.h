@@ -29,6 +29,20 @@ void setDialogHook(DialogHook hook);
 /* Creates the JS engine. Safe to call more than once; returns false on failure. */
 bool start();
 
+/* Per-view JS context (own Ant VM). Returns an opaque handle, or NULL when the
+ * engine cannot be created. Callers must destroy it with destroyContext(). */
+void* createContext();
+
+/* Destroys a context and its engine (no-op for NULL). */
+void destroyContext(void* context);
+
+/* Makes `context` the active one; NULL is ignored. */
+void activateContext(void* context);
+
+/* Maps a WebCore::Page* to its context so KJSProxy can find the right engine. */
+void registerPageContext(void* page, void* context);
+void* contextForPage(void* page);
+
 /* Destroys the engine. */
 void stop();
 

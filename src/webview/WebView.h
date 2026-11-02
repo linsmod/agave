@@ -80,6 +80,8 @@ public:
 	_mc_encoding encodingName(void);
 	//source
 	void setViewSource(bool b);
+	// JS context lookup (per-view Ant VM is registered per Page)
+	WebCore::Page * page(void);
 	//render mode
 	int renderMode(void);
 	void setRenderMode(int mode, int limit);	

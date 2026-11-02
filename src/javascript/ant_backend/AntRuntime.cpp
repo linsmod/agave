@@ -97,6 +97,17 @@ static std::vector<RuntimeState*>& runtimeStates()
     return *g_states;
 }
 
+/* Page* -> RuntimeState*, so KJSProxy can evaluate in the right engine. */
+static std::vector<std::pair<void*, void*> >* g_pageContexts = NULL;
+
+static std::vector<std::pair<void*, void*> >& pageContexts()
+{
+    if (!g_pageContexts)
+        g_pageContexts = new std::vector<std::pair<void*, void*> >();
+
+    return *g_pageContexts;
+}
+
 static RuntimeState* createRuntimeState(AntbEngine* engine)
 {
     RuntimeState* state = new RuntimeState();
@@ -1277,6 +1288,94 @@ bool start()
     antb_set_context_activate(contextActivate);
 
     return true;
+}
+
+void* createContext()
+{
+    volatile char stack_anchor = 0;
+    AntbEngine* engine = antb_engine_create((const void*)&stack_anchor);
+
+    if (!engine)
+        return NULL;
+
+    if (!g_currentState || g_currentState == &g_emptyState) {
+        /* First context in the process: the prelude and the bridge hooks are
+         * installed lazily by bindDocument(), but the dispatch funnel must be
+         * registered before any script runs. */
+        antb_set_context_activate(contextActivate);
+        activateState(createRuntimeState(engine));
+        return g_currentState;
+    }
+
+    {
+        RuntimeState* state = createRuntimeState(engine);
+
+        return state;
+    }
+}
+
+void destroyContext(void* context)
+{
+    RuntimeState* state = (RuntimeState*)context;
+
+    if (!state || state == &g_emptyState)
+        return;
+
+    {
+        std::vector<RuntimeState*>& states = runtimeStates();
+
+        for (size_t i = 0; i < states.size(); ++i) {
+            if (states[i] == state) {
+                states.erase(states.begin() + i);
+                break;
+            }
+        }
+    }
+
+    if (state->engine)
+        antb_engine_destroy(state->engine);
+
+    if (g_currentState == state)
+        g_currentState = &g_emptyState;
+
+    delete state;
+}
+
+void activateContext(void* context)
+{
+    if (context && context != &g_emptyState)
+        activateState((RuntimeState*)context);
+}
+
+void registerPageContext(void* page, void* context)
+{
+    if (!page)
+        return;
+
+    {
+        std::vector<std::pair<void*, void*> >& pages = pageContexts();
+
+        for (size_t i = 0; i < pages.size(); ++i) {
+            if (pages[i].first == page) {
+                pages[i].second = context;
+                return;
+            }
+        }
+
+        pages.push_back(std::make_pair(page, context));
+    }
+}
+
+void* contextForPage(void* page)
+{
+    std::vector<std::pair<void*, void*> >& pages = pageContexts();
+
+    for (size_t i = 0; i < pages.size(); ++i) {
+        if (pages[i].first == page)
+            return pages[i].second;
+    }
+
+    return NULL;
 }
 
 void stop()

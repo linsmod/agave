@@ -74,6 +74,11 @@ MaCrossView* macross_view_create(MC_BYTE* buffer, int width, int height, int pit
 	if (p) {
 		p->view = new WebView(p, buffer, width, height, pitch);
 		p->data = user_data;
+		p->jscontext = AntRuntime::createContext();
+
+		if (p->jscontext && p->view && p->view->page())
+			AntRuntime::registerPageContext(p->view->page(), p->jscontext);
+
 		return p;
 	} else
 		return 0;
@@ -92,7 +97,19 @@ MC_STATUS macross_view_destroy(MaCrossView* view)
 	if (!view)
 		return MC_STATUS_FAILED;
 
+	if (view->view && view->view->page())
+		AntRuntime::registerPageContext(view->view->page(), 0);
+
+	/* Tear the DOM down first: destroying the VM before the frames can leave
+	 * frame teardown calling into a dead engine. */
 	delete view->view;
+	view->view = 0;
+
+	if (view->jscontext) {
+		AntRuntime::destroyContext(view->jscontext);
+		view->jscontext = 0;
+	}
+
 	fastFree(view);
 	return MC_STATUS_SUCCESS;
 }
@@ -101,6 +118,8 @@ MC_STATUS macross_view_update(MaCrossView* view, const MC_RECT* rc)
 {
 	if (!view)
 		return MC_STATUS_FAILED;
+
+	AntRuntime::activateContext(view->jscontext);
 
 	if (rc) {
 		view->view->setDirtyRect(rc->x, rc->y, rc->w, rc->h);
@@ -382,6 +401,7 @@ MC_STATUS macross_view_open_url(MaCrossView* view, const char* url)
 	if (!view || !url)
 		return MC_STATUS_FAILED;
 
+	AntRuntime::activateContext(view->jscontext);
 	view->view->loadUrl(url, false);
 	return MC_STATUS_SUCCESS;
 }
@@ -400,6 +420,7 @@ MC_STATUS macross_view_open_url_quietly(MaCrossView* view, const char* url)
 	if (!view || !url)
 		return MC_STATUS_FAILED;
 
+	AntRuntime::activateContext(view->jscontext);
 	view->view->loadUrl(url, true);
 	return MC_STATUS_SUCCESS;
 }

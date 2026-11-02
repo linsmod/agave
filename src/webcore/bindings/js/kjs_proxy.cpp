@@ -128,6 +128,12 @@ JSValue* KJSProxy::evaluate(const String& filename, int baseLine, const String& 
         char* out = 0;
         char* err = 0;
 
+        /* Each view owns an Ant VM: make sure this frame's page is the active
+         * one before evaluating, otherwise the script would see another view's
+         * window/document. */
+        if (m_frame->page())
+            AntRuntime::activateContext(AntRuntime::contextForPage(m_frame->page()));
+
         m_frame->keepAlive();
         AntRuntime::bindDocument(m_frame->document());
         AntRuntime::setFilename(filename.isNull() ? "agave://inline" : filename.utf8().data());

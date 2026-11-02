@@ -20,6 +20,7 @@ extern "C" {
 struct _mc_view {
 	WebView * view;
 	void    * data;
+	void    * jscontext;   /* per-view Ant VM (AntRuntime::createContext) */
 };
 
 #ifdef __cplusplus
