@@ -1333,11 +1333,17 @@ static char* moduleFetch(const char* url, unsigned long* outSize)
         id = session->start(request, &client);
 
         if (id) {
-            while (!client.done && waited < 5000) {
+            /* Sleep(1) costs a full timer tick (15.6ms by default) on Windows,
+             * so a 12ms fetch took ~100ms; Sleep(0) only yields the CPU. */
+            unsigned long began = GetTickCount();
+
+            while (!client.done && GetTickCount() - began < 5000) {
                 session->pump();
-                Sleep(1);
-                waited += 1;
+                if (!client.done)
+                    Sleep(0);
             }
+
+            waited = (int)(GetTickCount() - began);
         }
 
         if (client.done && !client.failed)
@@ -1353,10 +1359,24 @@ static char* moduleFetch(const char* url, unsigned long* outSize)
         waited = 0;
     }
 
-    if (getenv("AGB_MODULE_DEBUG"))
-        fprintf(stderr, "[modfetch] %s %s %u bytes in %u ms\n", url,
-                (client.done && !client.failed) ? "ok" : "FAILED",
-                (unsigned)client.body.size(), (unsigned)waited);
+    {
+        static int fetchCount = 0;
+        static unsigned long fetchTotal = 0;
+        static unsigned long graphStart = 0;
+        unsigned long now = GetTickCount();
+
+        ++fetchCount;
+        fetchTotal += waited;
+
+        if (!graphStart)
+            graphStart = now;
+
+        if (getenv("AGB_MODULE_DEBUG"))
+            fprintf(stderr, "[modfetch] %s %s %u bytes in %u ms | n=%d fetch=%u ms wall=%u ms\n",
+                    url, (client.done && !client.failed) ? "ok" : "FAILED",
+                    (unsigned)client.body.size(), (unsigned)waited,
+                    fetchCount, (unsigned)fetchTotal, (unsigned)(now - graphStart));
+    }
 
     if (!client.done || client.failed)
         return NULL;

@@ -15,6 +15,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <vector>
+#include <map>
+#include <mutex>
 
 #include "../NetworkSession.h"
 #include "../NetworkTypes.h"
@@ -94,6 +96,75 @@ void parseHeaders(const std::string& raw, HeaderList& out)
         }
         pos = eol + 2;
     }
+}
+
+/* --- connection pool -------------------------------------------------------
+ * WinHttpOpen + WinHttpConnect used to be created and destroyed per request, so
+ * every HTTPS request paid a full TLS handshake (a 150 module import graph cost
+ * 150 handshakes and took over a minute). Connect handles are now kept per
+ * host:port and reused; WinHTTP pools the TCP/TLS connections behind them. */
+
+struct PoolEntry {
+    HINTERNET     session;
+    HINTERNET     connect;
+    unsigned long lastUsed;
+
+    PoolEntry() : session(NULL), connect(NULL), lastUsed(0) {}
+};
+
+static std::map<std::wstring, PoolEntry>* g_pool = NULL;
+static std::mutex g_poolLock;
+static const unsigned long kPoolIdleMs = 60000;
+
+static HINTERNET poolAcquire(const std::wstring& host, INTERNET_PORT port, int timeout, DWORD* errOut)
+{
+    std::wstring key = host + L":" + std::to_wstring((unsigned)port);
+    std::lock_guard<std::mutex> guard(g_poolLock);
+    unsigned long now = GetTickCount();
+
+    if (!g_pool)
+        g_pool = new std::map<std::wstring, PoolEntry>();
+
+    /* Drop connections that have been idle for a while. */
+    for (std::map<std::wstring, PoolEntry>::iterator it = g_pool->begin(); it != g_pool->end(); ) {
+        if (now - it->second.lastUsed > kPoolIdleMs) {
+            if (it->second.connect) WinHttpCloseHandle(it->second.connect);
+            if (it->second.session) WinHttpCloseHandle(it->second.session);
+            g_pool->erase(it++);
+        } else {
+            ++it;
+        }
+    }
+
+    PoolEntry& entry = (*g_pool)[key];
+
+    if (!entry.session) {
+        entry.session = WinHttpOpen(L"agave/1.0 (native)", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                                    WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+
+        if (!entry.session) {
+            if (errOut) *errOut = GetLastError();
+            g_pool->erase(key);
+            return NULL;
+        }
+
+        WinHttpSetTimeouts(entry.session, timeout, timeout, timeout, timeout);
+    }
+
+    if (!entry.connect) {
+        entry.connect = WinHttpConnect(entry.session, host.c_str(), port, 0);
+
+        if (!entry.connect) {
+            if (errOut) *errOut = GetLastError();
+            WinHttpCloseHandle(entry.session);
+            entry.session = NULL;
+            g_pool->erase(key);
+            return NULL;
+        }
+    }
+
+    entry.lastUsed = now;
+    return entry.connect;
 }
 
 struct Event {
@@ -420,14 +491,11 @@ void WinHttpSession::run(Job* job)
         path = L"/";
     secure = (uc.nScheme == INTERNET_SCHEME_HTTPS);
 
-    session = WinHttpOpen(L"agave/1.0 (native)", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
-                          WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!session) { err = GetLastError(); goto cleanup; }
-
-    WinHttpSetTimeouts(session, timeout, timeout, timeout, timeout);
-
-    connect = WinHttpConnect(session, host.c_str(), uc.nPort, 0);
-    if (!connect) { err = GetLastError(); goto cleanup; }
+    connect = poolAcquire(host, uc.nPort, timeout, &err);
+    if (!connect) {
+        if (!err) err = GetLastError();
+        goto cleanup;
+    }
 
     {
         std::wstring verb = widen(job->request.method.empty() ? "GET" : job->request.method);
@@ -545,8 +613,8 @@ void WinHttpSession::run(Job* job)
 
 cleanup:
     if (request) WinHttpCloseHandle(request);
-    if (connect) WinHttpCloseHandle(connect);
-    if (session) WinHttpCloseHandle(session);
+    /* connect/session belong to the pool and stay open for reuse. */
+    (void)session;
 
     if (ok) {
         job->netDoneMs = Net::logElapsedMs();
