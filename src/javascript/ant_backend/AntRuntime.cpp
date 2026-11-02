@@ -2547,8 +2547,22 @@ void bindDocument(void* document)
         return;
 
     if (g_documentBound) {
+        AntbValue* global;
+
         if (g_docObj)
             antb_set_native(g_docObj, g_document, AGB_TAG_NODE);
+
+        /* window IS the global object and nodeAddEventListener() reads the node
+         * from it. Refreshing only g_docObj left the window pointing at the
+         * document that was replaced by the navigation, so a reloaded page
+         * registered its handlers against the old document, the load event
+         * matched no listener and css3test's tests never started again. */
+        global = antb_global(g_engine);
+
+        if (global) {
+            antb_set_native(global, g_document, AGB_TAG_NODE);
+            antb_value_release(global);
+        }
         return;
     }
 
@@ -5053,6 +5067,7 @@ void setDialogHook(DialogHook hook)
 }
 
 } /* namespace AntRuntime */
+
 
 
 
