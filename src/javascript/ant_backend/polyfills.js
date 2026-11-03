@@ -316,3 +316,25 @@
 
     install();
 }());
+
+/* Unhandled promise rejections: Ant follows Node and calls process.exit() when
+ * nothing handles them. The browser-side hook Ant checks before that is
+ * window.onunhandledrejection (see Ant's js_fire_unhandled_rejection), so log
+ * and mark the event handled there instead of letting the engine die. */
+(function () {
+    var g = typeof window !== 'undefined' ? window : this;
+
+    if (!g || g.__agbRejectionHook)
+        return;
+
+    g.__agbRejectionHook = true;
+    g.onunhandledrejection = function (event) {
+        try {
+            if (event && event.preventDefault)
+                event.preventDefault();
+            if (g.console && g.console.error)
+                g.console.error('Uncaught (in promise)', event && event.reason);
+        } catch (e) {}
+        return true;
+    };
+}());
