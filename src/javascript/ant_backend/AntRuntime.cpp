@@ -1472,7 +1472,7 @@ struct ProfScope {
  * second; the histogram points at the function that actually burns the time
  * when the JS engine itself is the bottleneck (the bridge counters only add
  * up to a couple of seconds on browserscore, so the cost is inside the VM). */
-#define PROF_SAMPLES 8192
+#define PROF_SAMPLES 65536
 
 static unsigned long long g_profSamples[PROF_SAMPLES];
 static volatile LONG      g_profSampleCount = 0;
@@ -1491,7 +1491,7 @@ static DWORD WINAPI profilerWatcher(LPVOID)
     while (!g_profStop) {
         CONTEXT context;
 
-        Sleep(2);
+        Sleep(1);
 
         if (SuspendThread(thread) == (DWORD)-1)
             continue;
