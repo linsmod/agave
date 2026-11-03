@@ -11,9 +11,8 @@
  * Usage:  agave_view_host.exe <url> [out.bmp] [--eval script] [--click x y]
  *                              [--type text] [--keys keys] [--repaint]
  *                              [--wheel n] [--wheelup n]
- *           --wheel n   n wheel-down events (the engine's wheel sign is
- *                       inverted, so this scrolls the document UP)
- *           --wheelup n n wheel-up events (scrolls the document DOWN)
+ *           --wheel n   n wheel-down events (scrolls the document down)
+ *           --wheelup n n wheel-up events (scrolls the document up)
  * Env:    AGB_MAX_FRAMES  settle-loop frame budget (default 800)
  *         AGB_IDLE_FRAMES consecutive repaint-less frames that count as
  *                         "settled" once the load reached 100% (default 60);
@@ -260,12 +259,7 @@ int main(int argc, char** argv)
 
             if (wheelClicks > 0 || wheelUpClicks > 0) {
                 /* Wheel events drive the real document scroll (ScrollView ->
-                 * scrollBackingStore), the same path a scrollbar drag takes.
-                 *
-                 * NOTE: the engine's wheel sign is inverted right now -
-                 * WebView::mouseWheel() maps MOUSE_WHEEL_UP to delta -10 and
-                 * ScrollView::wheelEvent() scrolls by -deltaY * LINE_STEP, so
-                 * MOUSE_WHEEL_UP moves the document DOWN. */
+                 * scrollBackingStore), the same path a scrollbar drag takes. */
                 MC_MOUSE_EVENT ev;
                 memset(&ev, 0, sizeof(ev));
                 ev.type   = EVT_MOUSE_WHEEL;

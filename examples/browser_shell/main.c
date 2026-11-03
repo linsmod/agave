@@ -63,6 +63,12 @@ static int   g_zoom = 100;
 static int   g_findVisible;
 static char  g_status[1024];
 
+/* Closed tabs, so ctrl+shift+T can bring the last one back. */
+#define MAX_CLOSED_TABS 16
+typedef struct { char url[MAX_PATH_CHARS]; char title[256]; } ClosedTab;
+static ClosedTab g_closed[MAX_CLOSED_TABS];
+static int       g_closedCount;
+
 #define AGW_MAX_BOOKMARKS 64
 #define AGW_MAX_HISTORY   200
 
@@ -412,6 +418,9 @@ static void applyZoomToActive(void)
 /* tabs                                                                      */
 /* ------------------------------------------------------------------------- */
 
+static void setActiveTab(int index);
+static void createTab(const char* url);
+
 static void setActiveTab(int index)
 {
     int i;
@@ -448,6 +457,19 @@ static void closeTab(int index)
     if (index < 0 || index >= MAX_TABS || !g_tabs[index].used)
         return;
 
+    /* Remember the page so ctrl+shift+T can reopen it. */
+    if (g_tabs[index].url[0] && strcmp(g_tabs[index].url, "about:blank") != 0) {
+        if (g_closedCount == MAX_CLOSED_TABS) {
+            memmove(&g_closed[0], &g_closed[1], sizeof(ClosedTab) * (MAX_CLOSED_TABS - 1));
+            g_closedCount--;
+        }
+        strncpy(g_closed[g_closedCount].url, g_tabs[index].url, MAX_PATH_CHARS - 1);
+        g_closed[g_closedCount].url[MAX_PATH_CHARS - 1] = 0;
+        strncpy(g_closed[g_closedCount].title, g_tabs[index].title, sizeof(g_closed[0].title) - 1);
+        g_closed[g_closedCount].title[sizeof(g_closed[0].title) - 1] = 0;
+        g_closedCount++;
+    }
+
     if (g_tabs[index].view)
         agave_webview_destroy(g_tabs[index].view);
 
@@ -468,6 +490,53 @@ static void closeTab(int index)
     }
 
     InvalidateRect(g_hwnd, NULL, TRUE);
+}
+
+/* ctrl+shift+T: reopen the tab that was closed last. */
+static void reopenClosedTab(void)
+{
+    ClosedTab closed;
+
+    if (g_closedCount <= 0)
+        return;
+
+    closed = g_closed[--g_closedCount];
+    createTab(closed.url);
+}
+
+/* ctrl+tab / ctrl+shift+tab: walk through the open tabs. */
+static void switchTab(int direction)
+{
+    int i, count = 0, index = -1, slot = 0;
+
+    for (i = 0; i < MAX_TABS; ++i) {
+        if (!g_tabs[i].used)
+            continue;
+
+        if (i == g_activeTab)
+            index = slot;
+
+        ++slot;
+        ++count;
+    }
+
+    if (count < 2)
+        return;
+
+    index = (index + direction + count) % count;
+
+    slot = 0;
+    for (i = 0; i < MAX_TABS; ++i) {
+        if (!g_tabs[i].used)
+            continue;
+
+        if (slot == index) {
+            setActiveTab(i);
+            return;
+        }
+
+        ++slot;
+    }
 }
 
 /* ------------------------------------------------------------------------- */
@@ -1784,12 +1853,20 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
             }
 
             if (GetKeyState(VK_CONTROL) & 0x8000) {
-                if (msg.wParam == 'D') { addBookmarkCurrent(); continue; }
-                if (msg.wParam == 'F') { toggleFind(); continue; }
-                if (msg.wParam == 'T') { navigateActive("about:blank", 1); continue; }
-                if (msg.wParam == 'W') { closeTab(g_activeTab); continue; }
-                if (msg.wParam == 'R') { if (g_tabs[g_activeTab].used) agave_webview_reload(g_tabs[g_activeTab].view); continue; }
-                if (msg.wParam == 'L') { SetFocus(g_address); continue; }
+                int shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+
+                if (msg.wParam == 'D' && !shift) { addBookmarkCurrent(); continue; }
+                if (msg.wParam == 'F' && !shift) { toggleFind(); continue; }
+                if (msg.wParam == 'T') {
+                    /* ctrl+shift+T reopens the last closed tab, ctrl+T a new one. */
+                    if (shift) reopenClosedTab();
+                    else navigateActive("about:blank", 1);
+                    continue;
+                }
+                if (msg.wParam == 'W' && !shift) { closeTab(g_activeTab); continue; }
+                if (msg.wParam == 'R' && !shift) { if (g_tabs[g_activeTab].used) agave_webview_reload(g_tabs[g_activeTab].view); continue; }
+                if (msg.wParam == VK_TAB) { switchTab(shift ? -1 : 1); continue; }
+                if (msg.wParam == 'L' && !shift) { SetFocus(g_address); continue; }
                 if (msg.wParam == VK_ADD || msg.wParam == 0xBB) {
                     g_zoom = g_zoom < 400 ? g_zoom + 25 : g_zoom;
                     applyZoomToActive();
@@ -1813,6 +1890,12 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
             if (msg.wParam == VK_F5 && g_tabs[g_activeTab].used) {
                 agave_webview_reload(g_tabs[g_activeTab].view);
                 continue;
+            }
+
+            /* alt+left / alt+right: back and forward. */
+            if ((GetKeyState(VK_MENU) & 0x8000) && g_tabs[g_activeTab].used) {
+                if (msg.wParam == VK_LEFT) { agave_webview_back(g_tabs[g_activeTab].view); continue; }
+                if (msg.wParam == VK_RIGHT) { agave_webview_forward(g_tabs[g_activeTab].view); continue; }
             }
         }
 
