@@ -6712,6 +6712,10 @@ void documentWillUnload(void)
     if (!g_engine || !g_document)
         return;
 
+    if (getenv("AGB_EVT_DEBUG"))
+        fprintf(stderr, "[evt] documentWillUnload doc=%p listeners=%d\n",
+                g_document, g_listeners ? (int)g_listeners->size() : 0);
+
     /* Browser order: pagehide, then unload. The listeners belong to the
      * document that is going away - g_document still points at it. */
     dispatchWindowEvent("pagehide");

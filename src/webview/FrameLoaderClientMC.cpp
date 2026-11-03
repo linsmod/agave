@@ -609,6 +609,8 @@ void FrameLoaderClientMC::dispatchDidChangeLocationWithinPage()
 
 void FrameLoaderClientMC::dispatchWillClose()
 {
+    Net::logEvent("page.willclose", "");
+
 #if ENABLE(ANTJS)
     /* The document that is going away gets its teardown events first
      * (pagehide, unload). The Ant JS window is one object per engine, so
@@ -616,7 +618,6 @@ void FrameLoaderClientMC::dispatchWillClose()
     if (isMainFrameClient(m_frame))
         AntRuntime::documentWillUnload();
 #endif
-    notImplemented();
 }
 void FrameLoaderClientMC::dispatchDidReceiveIcon()
 {
