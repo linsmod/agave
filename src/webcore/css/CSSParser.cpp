@@ -2060,9 +2060,19 @@ CSSValue* CSSParser::parseGradientFunction(Value* functionValue)
     {
         Vector<CSSGradientValue::Stop>& stops = gradient->mutableStops();
         unsigned count = stops.size();
-        float last = 0.0f;
 
-        for (unsigned s = 0; s < count; ++s) {
+        /* CSS Images 3: the first and the last stop default to the ends of the
+         * gradient; only the unknown ones in between are spread over the gap.
+         * Spreading every unknown stop the same way put the first colour at
+         * 1/(n+1) instead of 0. */
+        if (stops[0].offset < 0.0f)
+            stops[0].offset = 0.0f;
+        if (stops[count - 1].offset < 0.0f)
+            stops[count - 1].offset = 1.0f;
+
+        float last = stops[0].offset;
+
+        for (unsigned s = 1; s < count; ++s) {
             if (stops[s].offset >= 0.0f) {
                 last = stops[s].offset;
                 continue;
@@ -2089,11 +2099,20 @@ CSSValue* CSSParser::parseGradientFunction(Value* functionValue)
             }
         }
 
-        for (unsigned s = 0; s < count; ++s) {
-            if (stops[s].offset < 0.0f)
-                stops[s].offset = 0.0f;
-            if (stops[s].offset > 1.0f)
-                stops[s].offset = 1.0f;
+        /* Clamp, and keep the list non-decreasing (a stop placed before its
+         * predecessor is resolved to the predecessor's position). */
+        {
+            float prev = 0.0f;
+
+            for (unsigned s = 0; s < count; ++s) {
+                if (stops[s].offset < 0.0f)
+                    stops[s].offset = 0.0f;
+                if (stops[s].offset > 1.0f)
+                    stops[s].offset = 1.0f;
+                if (stops[s].offset < prev)
+                    stops[s].offset = prev;
+                prev = stops[s].offset;
+            }
         }
     }
 

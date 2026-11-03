@@ -21,6 +21,7 @@
 
 #include "config.h"
 #include "CSSComputedStyleDeclaration.h"
+#include "CSSGradientValue.h"
 
 #include "CSSMutableStyleDeclaration.h"
 #include "CSSPrimitiveValue.h"
@@ -548,6 +549,14 @@ PassRefPtr<CSSValue> CSSComputedStyleDeclaration::getPropertyCSSValue(int proper
         case CSS_PROP_BACKGROUND_COLOR:
             return new CSSPrimitiveValue(style->backgroundColor().rgb());
         case CSS_PROP_BACKGROUND_IMAGE:
+            /* A gradient is a background image the engine paints (RenderBox
+             * fills the gradient over the background colour) but it is not a
+             * CSSImageValue, so reporting only backgroundImage() answered
+             * `none` for every linear-gradient page. */
+            if (const CSSGradientValue* gradient = style->backgroundGradient()) {
+                RefPtr<CSSValue> value = const_cast<CSSGradientValue*>(gradient);
+                return value.release();
+            }
             if (style->backgroundImage())
                 return new CSSPrimitiveValue(style->backgroundImage()->url(), CSSPrimitiveValue::CSS_URI);
             return new CSSPrimitiveValue(CSS_VAL_NONE);
