@@ -1360,6 +1360,32 @@ static int probeOnNewWindow(AgaveWebView* view, AgaveWebView* newView,
     return 1;
 }
 
+static int probeOnDialog(AgaveWebView* view, int type, const char* message,
+                         const char* defaultValue, char* result, int resultSize,
+                         void* user)
+{
+    (void)view;
+    (void)type;
+    (void)defaultValue;
+    (void)result;
+    (void)resultSize;
+    (void)user;
+
+    /* A beforeunload guard blocks the navigation; everything else (page
+     * alert/confirm in other tests) auto-accepts. AGB_PROBE_ALLOW_UNLOAD=1
+     * flips the guard answer, to check that allowing really does navigate. */
+    fprintf(stderr, "[probe] dialog type=%d msg=%s\n", type, message ? message : "");
+    fflush(stderr);
+
+    if (message && strstr(message, "LEAVE-GUARD")) {
+        const char* allow = getenv("AGB_PROBE_ALLOW_UNLOAD");
+
+        return (allow && *allow && *allow != '0') ? 1 : 0;
+    }
+
+    return 1;
+}
+
 static void probeOnCloseWindow(AgaveWebView* view, void* user)
 {
     (void)view;
@@ -1443,6 +1469,7 @@ static int probeRun(const char* url)
     callbacks.on_error = probeOnError;
     callbacks.on_new_window = probeOnNewWindow;
     callbacks.on_close_window = probeOnCloseWindow;
+    callbacks.on_dialog = probeOnDialog;
 
     g_probeView = agave_webview_create(g_probeWnd, 0, 0, 1100, 800, &callbacks, NULL);
     if (!g_probeView) {

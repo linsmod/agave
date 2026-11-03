@@ -3206,7 +3206,9 @@ static const char kPrelude[] =
 "                slot = fn;"
 "                if (!installed && typeof fn === 'function') {"
 "                  installed = true;"
-"                  try { g.addEventListener(name.slice(2), function (ev) { if (typeof slot === 'function') { try { slot.call(g, ev); } catch (e) {} } }); } catch (e) {}"
+"                  /* The return value has to come back out: beforeunload's"
+"                     `return message` form is what the engine reads. */"
+"                  try { g.addEventListener(name.slice(2), function (ev) { if (typeof slot === 'function') { try { return slot.call(g, ev); } catch (e) {} } }); } catch (e) {}"
 "                }"
 "              }"
 "            });"
@@ -3381,6 +3383,25 @@ static const char kPrelude[] =
 "    g.requestAnimationFrame = function (cb) { return setTimeout(function () { cb((new Date()).getTime()); }, 16); };"
 "    g.cancelAnimationFrame = function (id) { clearTimeout(id); };"
 "  }"
+"  /* Minimal MutationObserver: the generic ctor stub below leaves instances"
+"   * with no methods, and defensive scripts then die on .observe() (deepseek's"
+"   * main.js). A real implementation needs engine DOM-mutation hooks; this one"
+"   * accepts the full API and never fires, which keeps those guards harmless."
+"   * Must come before the stub loop so it is not overwritten. */"
+"  g.__agbPreludeV1 = 1;"
+"  if (typeof g.MutationObserver === 'undefined') {"
+"    g.MutationObserver = function (cb) { this._cb = cb; };"
+"    g.MutationObserver.prototype.observe = function (target, options) {};"
+"    g.MutationObserver.prototype.disconnect = function () {};"
+"    g.MutationObserver.prototype.takeRecords = function () { return []; };"
+"  }"
+"  /* Worker is not implemented; sites subclass it to intercept blob URLs"
+"   * (deepseek's main.js does `class extends Worker`), so the stub must be a"
+"   * real constructor, not undefined. */"
+"  g.__agbWorkerTest = function (a) { return 1; };"
+"  g.Worker = function (url, options) {};"
+"  g.Worker.prototype.postMessage = function (msg) {};"
+"  g.Worker.prototype.terminate = function () {};"
 "    for (var _ci = 0; _ci < _ctors.length; _ci++) {"
 "      if (typeof g[_ctors[_ci]] === 'undefined') g[_ctors[_ci]] = function () { return null; };"
 "    }"
@@ -3567,9 +3588,22 @@ struct DeferredModule {
     std::string url;
     std::string source;
     unsigned long generation;   /* the realm that queued it */
+    void* document;             /* the document it belongs to (bound before it
+                                 * runs: the bridge may still point at the
+                                 * frame's initial about:blank document) */
+    bool isClassic;             /* classic <script defer> runs via evaluate(),
+                                 * module scripts via evaluateModule() */
+    DeferredModule() : generation(0), document(NULL), isClassic(false) {}
 };
 
 static std::vector<DeferredModule>* g_deferredModules = NULL;
+
+/* Set after the post-parse flush ran for a document. A defer script that
+ * arrives after that point (slow network, dynamically inserted) must still run,
+ * so it executes immediately instead of sitting in a queue that is never
+ * flushed. Keyed by document, not by generation: the frame's initial empty
+ * document shares the realm generation with the page that replaces it. */
+static void* g_lastFlushDocument = NULL;
 
 int evaluateModule(const char* src, size_t len, const char* filename, char** out, char** err);
 
@@ -3599,6 +3633,8 @@ void queueModule(const char* url, const char* source)
     module.url = url ? url : "";
     module.source = source ? source : "";
     module.generation = currentGeneration();
+    module.document = g_document;
+    module.isClassic = false;
     g_deferredModules->push_back(module);
 
     /* Start downloading the import graph now, while the rest of the page is still
@@ -3607,33 +3643,98 @@ void queueModule(const char* url, const char* source)
     modulePrefetchImports(module.url, module.source);
 }
 
-void flushDeferredModules(void)
+void flushDeferredModules(void* document)
 {
     std::vector<DeferredModule> pending;
+
+    /* The frame's initial empty document reaches DOMContentLoaded as well; it
+     * has no body and no deferred work, so it must not seal the queue for the
+     * page that replaces it (both share one realm generation). */
+    if (!document || !((WebCore::Document*)document)->body())
+        return;
+
+    /* Mark the flush first: an empty queue returns early, but a defer script
+     * that arrives after this point must not wait for a flush that already
+     * happened (it would sit in the queue forever). */
+    g_lastFlushDocument = document;
 
     if (!g_deferredModules || g_deferredModules->empty())
         return;
 
-    /* Take the list first: running a module may queue more (dynamic import). */
+    /* Take the list first: running a script may queue more (dynamic import). */
     pending = *g_deferredModules;
     g_deferredModules->clear();
 
     for (size_t i = 0; i < pending.size(); ++i) {
         char* err = NULL;
 
-        /* A module that another realm queued belongs to that realm: running
+        /* A script that another realm queued belongs to that realm: running
          * it here would execute a document's code in the wrong realm. */
         if (pending[i].generation != currentGeneration())
             continue;
 
-        evaluateModule(pending[i].source.c_str(), pending[i].source.size(),
-                       pending[i].url.c_str(), NULL, &err);
+        /* The bridge is bound to whatever document ran last, which is not
+         * necessarily this script's document (the frame's initial about:blank
+         * document is bound first, and a deferred script can be evaluated
+         * straight from the resource callback). Bind it before running. */
+        if (pending[i].document && pending[i].document != g_document)
+            bindDocument(pending[i].document);
+
+        if (pending[i].isClassic) {
+            /* Classic <script defer>: plain global evaluation, in document
+             * order. The document is fully parsed here, so document.body and
+             * the rest of the DOM exist. */
+            char* out = NULL;
+            setFilename(pending[i].url.c_str());
+            evaluate(pending[i].source.c_str(), pending[i].source.size(), &out, &err);
+            if (out)
+                free(out);
+        } else {
+            evaluateModule(pending[i].source.c_str(), pending[i].source.size(),
+                           pending[i].url.c_str(), NULL, &err);
+        }
 
         if (err) {
             fprintf(stderr, "[antjs] %s: %s\n", pending[i].url.c_str(), err);
             free(err);
         }
     }
+}
+
+void queueDeferredScript(void* document, const char* url, const char* source)
+{
+    /* The post-parse flush already ran for this document: nothing will consume
+     * the queue anymore, so run the script right away (slow network, dynamic
+     * insertion). */
+    if (g_lastFlushDocument && g_lastFlushDocument == document) {
+        char* out = NULL;
+        char* err = NULL;
+
+        if (document && document != g_document)
+            bindDocument(document);
+
+        setFilename(url ? url : "");
+        evaluate(source ? source : "", source ? strlen(source) : 0, &out, &err);
+        if (out)
+            free(out);
+        if (err) {
+            fprintf(stderr, "[antjs] %s: %s\n", url ? url : "", err);
+            free(err);
+        }
+        return;
+    }
+
+    if (!g_deferredModules)
+        g_deferredModules = new std::vector<DeferredModule>();
+
+    DeferredModule script;
+
+    script.url = url ? url : "";
+    script.source = source ? source : "";
+    script.generation = currentGeneration();
+    script.document = document;
+    script.isClassic = true;
+    g_deferredModules->push_back(script);
 }
 
 /* Drops the queued modules of a realm that is going away. */
@@ -3923,7 +4024,8 @@ void bindDocument(void* document)
     g_currentSlot = slotForDocument(g_document);
 
     if (getenv("AGB_EVT_DEBUG"))
-        fprintf(stderr, "[evt] bindDocument %p (bound=%d)\n", document, (int)g_documentBound);
+        fprintf(stderr, "[evt] bindDocument %p (bound=%d) url=%s\n", document, (int)g_documentBound,
+                g_document ? g_document->URL().utf8().data() : "?");
 
     if (!g_engine || !g_document)
         return;
@@ -6964,9 +7066,12 @@ static AntbValue* makeEventObject(const std::string& type, WebCore::Node* target
     return evt;
 }
 /* Runs every listener registered for `node` / `type`. Returns the JS event
- * object so the caller can inspect the preventDefault flag. */
+ * object so the caller can inspect the preventDefault flag. stringReturn
+ * collects the last non-empty string a listener returned (beforeunload's
+ * `return "..."` guard). */
 static void runListenersFor(WebCore::Node* node, const std::string& type, AntbValue* evt,
-                            AntbValue* currentTarget, bool& stopped, bool& stoppedImmediate)
+                            AntbValue* currentTarget, bool& stopped, bool& stoppedImmediate,
+                            std::string* stringReturn = NULL)
 {
     AntbValue* value = NULL;
     if (!g_listeners)
@@ -6987,6 +7092,13 @@ static void runListenersFor(WebCore::Node* node, const std::string& type, AntbVa
                 free(pending);
             }
         } else {
+            if (stringReturn && antb_is_string(value)) {
+                char* s = antb_to_utf8(value);
+
+                if (s && *s)
+                    *stringReturn = s;
+                antb_free(s);
+            }
             antb_value_release(value);
         }
         if (evt) {
@@ -7045,6 +7157,70 @@ void dispatchEvent(void* nodePtr, void* eventPtr)
         }
         antb_value_release(evt);
     }
+}
+
+/* window.onbeforeunload: runs the page's guard listeners and reports whether
+ * leaving needs confirming, with the message to show. WebCore's
+ * Document::handleWindowEvent only walks m_windowEventListeners (the inline
+ * onbeforeunload attribute), which the ant shim never fills - so before this
+ * existed, every `window.onbeforeunload = fn` in a page was dead code and
+ * navigations were never intercepted. */
+bool beforeUnloadGuard(std::string& text)
+{
+    AntbValue* evt;
+    AntbValue* target;
+    bool stopped = false;
+    bool stoppedImmediate = false;
+
+    text.clear();
+
+    if (!g_engine || !g_document || !g_listeners)
+        return false;
+
+    evt = makeEventObject("beforeunload", g_document, NULL);
+    if (!evt)
+        return false;
+
+    target = wrapNode(g_engine, g_document);
+    if (target) {
+        runListenersFor(g_document, "beforeunload", evt, target, stopped, stoppedImmediate, &text);
+        antb_value_release(target);
+    }
+
+    /* Old form: the handler assigns event.returnValue. */
+    if (text.empty()) {
+        AntbValue* rv = antb_get_prop(g_engine, evt, "returnValue");
+
+        if (rv) {
+            if (antb_is_string(rv)) {
+                char* s = antb_to_utf8(rv);
+
+                if (s && *s)
+                    text = s;
+                antb_free(s);
+            }
+            antb_value_release(rv);
+        }
+    }
+
+    bool guard = !text.empty();
+
+    if (!guard) {
+        AntbValue* prevented = antb_get_prop(g_engine, evt, "__prevented");
+
+        if (prevented) {
+            guard = antb_to_boolean(prevented) != 0;
+            antb_value_release(prevented);
+        }
+    }
+
+    /* preventDefault() without a message still asks, with the generic text
+     * browsers fall back to. */
+    if (guard && text.empty())
+        text = "This page is asking you to confirm that you want to leave.";
+
+    antb_value_release(evt);
+    return guard;
 }
 
 } /* namespace AntRuntime */

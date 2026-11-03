@@ -648,7 +648,7 @@ void FrameLoaderClientMC::dispatchDidFinishDocumentLoad()
 
 #if ENABLE(ANTJS)
     /* Deferred module scripts run when parsing finishes, before DOMContentLoaded. */
-    AntRuntime::flushDeferredModules();
+    AntRuntime::flushDeferredModules(m_frame ? m_frame->document() : 0);
 
     /* jQuery-style ready queues hang off DOMContentLoaded. */
     AntRuntime::dispatchWindowEvent("DOMContentLoaded");

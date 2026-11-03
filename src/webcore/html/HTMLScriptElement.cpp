@@ -278,7 +278,18 @@ void HTMLScriptElement::evaluateScript(const String& URL, const String& script)
     
     if (!shouldExecuteAsJavaScript())
         return;
-    
+
+    /* <script defer src> runs after parsing like a module, but unlike a module
+     * it must not hold the tokenizer: blocking the parse made it run before
+     * <body> existed (deepseek's main.js read document.body.classList and
+     * died). The element path is only reached for non-blocking scripts
+     * (async / defer / dynamic), so queue it for the post-parse flush. */
+    if (defer() && !hasAttribute(AtomicString("async"))) {
+        AntRuntime::queueDeferredScript(document(), URL.utf8().data(), script.utf8().data());
+        m_evaluated = true;
+        return;
+    }
+
     Frame* frame = document()->frame();
     if (frame) {
 #if ENABLE(KJS)

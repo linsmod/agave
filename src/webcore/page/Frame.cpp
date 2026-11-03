@@ -31,6 +31,11 @@
 #include "FramePrivate.h"
 
 #include "ApplyStyleCommand.h"
+
+#if ENABLE(ANTJS)
+#include "AntRuntime.h"
+#endif
+
 #include "BeforeUnloadEvent.h"
 #include "CSSComputedStyleDeclaration.h"
 #include "CSSProperty.h"
@@ -1909,6 +1914,21 @@ bool Frame::shouldClose()
     HTMLElement* body = doc->body();
     if (!body)
         return true;
+
+#if ENABLE(ANTJS)
+    {
+        /* The ant shim keeps its own listener table, so the event below never
+         * reaches window.onbeforeunload / addEventListener("beforeunload").
+         * Ask the bridge first; it also knows the "return string" form. */
+        std::string guardText;
+
+        if (AntRuntime::beforeUnloadGuard(guardText)) {
+            String text = String::fromUTF8(guardText.c_str());
+            text.replace('\\', backslashAsCurrencySymbol());
+            return chrome->runBeforeUnloadConfirmPanel(text, this);
+        }
+    }
+#endif
 
     RefPtr<BeforeUnloadEvent> beforeUnloadEvent = new BeforeUnloadEvent;
     beforeUnloadEvent->setTarget(doc);

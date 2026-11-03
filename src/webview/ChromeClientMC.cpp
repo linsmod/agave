@@ -328,14 +328,20 @@ void ChromeClientMC::addMessageToConsole(const String& message, unsigned int lin
 
 bool ChromeClientMC::canRunBeforeUnloadConfirmPanel()
 {
-    notImplemented();
-    return false;
+    /* Frame::shouldClose() dispatches beforeunload and only asks this if the
+     * host can confirm; saying no here silently dropped every handler. */
+    return cb_confirm_box != NULL;
 }
 
 bool ChromeClientMC::runBeforeUnloadConfirmPanel(const String& message, Frame* frame)
 {
-    notImplemented();
-    return false;
+    (void)frame;
+
+    if (!cb_confirm_box)
+        return true;
+
+    /* Same confirm dialog the page's own confirm() uses. */
+    return cb_confirm_box(m_view, message.utf8().data()) != 0;
 }
 
 bool ChromeClientMC::shouldInterruptJavaScript()

@@ -320,11 +320,13 @@ bool WebView::mouseWheel(_mc_mouse_btn btn, unsigned m, int x, int y)
      * port fed NSEvent.deltaY straight in). ScrollView::wheelEvent() scrolls
      * by -delta * LINE_STEP and EventHandler maps delta < 0 to ScrollDown,
      * so the wheel up has to be the positive one - with the signs the other
-     * way round the wheel scrolled the wrong way. */
+     * way round the wheel scrolled the wrong way. Each notch of a Windows
+     * wheel arrives as one event, so 5 lines (LINE_STEP is 20px) puts a notch
+     * at 100px, which is what Chrome scrolls on Windows. */
     if(btn == MOUSE_WHEEL_UP)
-        delta = 10;
+        delta = 5;
     else
-        delta = -10;
+        delta = -5;
     IntPoint p(x, y);
     PlatformWheelEvent wheelEvent(delta, p, m);
     return d->m_frame->eventHandler()->handleWheelEvent(wheelEvent);

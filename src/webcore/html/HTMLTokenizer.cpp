@@ -445,9 +445,19 @@ HTMLTokenizer::State HTMLTokenizer::scriptHandler(State state)
                 bool moduleEntryScript = false;
 #endif
 
+                /* <script defer src> must not block the parser either: it
+                 * queued into pendingScripts before, which stalled the parse
+                 * until the body arrived - so it executed before <body> was
+                 * even created (deepseek's main.js: document.body undefined).
+                 * Hand it to the element like async; the element queues it
+                 * for the post-parse flush (queueDeferredScript). */
+                bool deferScript = scriptNode && !asyncScript && !moduleEntryScript
+                    && static_cast<HTMLScriptElement*>(scriptNode.get())->defer();
+
                 if (getenv("AGB_SCRIPT_DEBUG"))
-                    fprintf(stderr, "[script] src=%s async=%d module=%d\n",
+                    fprintf(stderr, "[script] src=%s async=%d defer=%d module=%d\n",
                             scriptSrc.utf8().data(), asyncScript ? 1 : 0,
+                            deferScript ? 1 : 0,
                             moduleEntryScript ? 1 : 0);
 
                 if (moduleEntryScript) {
@@ -471,7 +481,7 @@ HTMLTokenizer::State HTMLTokenizer::scriptHandler(State state)
                     AntRuntime::fetchAndQueueModuleScript(scriptSrc.utf8().data());
                     m_requestingScript = savedRequestingScript;
 #endif
-                } else if (asyncScript && !m_parserStopped
+                } else if ((asyncScript || deferScript) && !m_parserStopped
                         && (cs = m_doc->docLoader()->requestScript(scriptSrc, scriptSrcCharset))) {
                     cs->ref(static_cast<HTMLScriptElement*>(scriptNode.get()));
                     scriptNode = 0;

@@ -9,6 +9,7 @@
 #define ANT_RUNTIME_H
 
 #include <stddef.h>
+#include <string>
 
 namespace AntRuntime {
 
@@ -63,7 +64,18 @@ int evaluateModule(const char* src, size_t len, const char* filename, char** out
  * element queues them; the frame loader flushes the queue once parsing ends. */
 void queueModule(const char* url, const char* source);
 void prefetchModuleGraph(const char* url, const char* source);
-void flushDeferredModules(void);
+
+/* `document` is the WebCore::Document that finished parsing (the queue is
+ * flushed per document, and every entry is bound to its own document before it
+ * runs). */
+void flushDeferredModules(void* document);
+
+/* Classic <script defer src>: must not block the parser (it used to run before
+ * <body> existed) and must run after parsing, before DOMContentLoaded. The
+ * element queues the body when it arrives; the post-parse flush runs it in
+ * document order. If the flush already happened for `document`, it runs
+ * immediately. */
+void queueDeferredScript(void* document, const char* url, const char* source);
 
 /* External <script type="module" src>: loads the body through the module
  * fetcher (the same cache and cancel owner as its imports) and hands it to
@@ -97,6 +109,11 @@ void dispatchWindowEvent(const char* type);
  * events (pagehide, unload) at its own listeners and stops its realm. Call it
  * while the old document is still the current one. */
 void documentWillUnload(void);
+
+/* Runs the page's beforeunload guards (window.onbeforeunload /
+ * addEventListener). Returns true when leaving must be confirmed and fills
+ * `text` with the message to show. Called from Frame::shouldClose(). */
+bool beforeUnloadGuard(std::string& text);
 
 /* Starts a fresh realm for the next document. Call it before the new document
  * is parsed: every document gets its own JS world (globals, module registry,
