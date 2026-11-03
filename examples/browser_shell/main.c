@@ -1544,7 +1544,9 @@ static void probeUsage(void)
             "  --settle  time after eval before exit (default 1000)\n"
             "  --timeout hard cap from start (default 60000)\n"
             "  --reload <n>  reload the page n times and run the eval after\n"
-            "                every round (page lifecycle comparison)\n");
+            "                every round (page lifecycle comparison)\n"
+            "  --offline module fetches are served from the cache only\n"
+            "            (no network; warm the cache with a normal run first)\n");
 }
 
 /* Parses the raw command line into argv/argc in place, honoring double quotes.
@@ -1684,6 +1686,12 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
                 g_probeReloadsLeft = atoi(argv[++i]);
                 g_probeReloadMode = 1;
                 g_probeTotalRounds = g_probeReloadsLeft + 1;
+            } else if (!strcmp(argv[i], "--offline")) {
+                /* Module fetches come from the cache only (read by the Ant
+                 * runtime as AGB_OFFLINE). Set before any view exists.
+                 * putenv, not SetEnvironmentVariable: MinGW's getenv reads the
+                 * CRT _environ copy, which SetEnvironmentVariableA misses. */
+                putenv("AGB_OFFLINE=1");
             } else if (argv[i][0] != '-') {
                 urlArg = argv[i];
             }

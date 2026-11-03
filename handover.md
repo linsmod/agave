@@ -174,8 +174,9 @@ $p = Start-Process -FilePath 'e:\mybrowsers\agave\build-zig-native\agave_shell.e
 ```
 退出码：`0` OK / `1` usage / `2` 超时未加载 / `3` 超时无 exit / `4` 无 exit / `5` 加载错误 / `6` 空文档。
 
-参数：`--probe <url> [--eval js] [--wait ms] [--settle ms] [--timeout ms] [--reload n]`。
+参数：`--probe <url> [--eval js] [--wait ms] [--settle ms] [--timeout ms] [--reload n] [--offline]`。
 `--reload n` 的语义：eval → reload → 轮询新文档就绪 → 再 eval，共 n+1 轮。
+`--offline`：模块只从磁盘缓存取（AGB_OFFLINE=1，与 `AGB_MODULE_DEBUG` 同一环境变量约定），未命中立刻失败、不发网络；重放时跳过 TTL 过期检查。用途：暖缓存（先在线跑一次）后确定性重放模块图，把网络时序从复现变量中剔除。
 
 ### 4.3 测试页
 | 文件 | 用途 |
@@ -199,19 +200,20 @@ $p = Start-Process -FilePath 'e:\mybrowsers\agave\build-zig-native\agave_shell.e
 
 | 项 | 状态 | 影响 |
 |---|---|---|
-| **R1 隔离模式下 154 模块大图求值失败** | **未定位**。现象：`import URLParams from './util/urlparams.js'` 的 default export 为 undefined → `app.js:50` 报 "undefined is not a function"；4/4 复现（基线同缓存 0/4 失败）；带 `AGB_MODULE_DEBUG` 时 1/1 成功；本地 4 模块小图在隔离模式下通过 | **P0**。在定位前，隔离模式不能视为可用。首选怀疑：M1（registry 作用域）/ M2（时序） |
+| **R1 隔离模式下 154 模块大图求值失败** | **已二分定位（--offline 实验证实，见下）** | **P0**。修复方向见下 |
 | R2 桥接层释放改造 | 已编译通过，**未做运行时验证** | 需确认：反复导航后 DOM 仍可用；wrapper/class 表不再耗尽 |
 | R3 DOM pin 延迟一代释放 | 设计如此（立即释放会提前 free 旧文档节点） | 同一时刻最多多留一代 DOM 内存 |
 | R4 wrapper 的 GC root 只能到 engine 边界 | ant 的 GC 无 unpin（`H:\ant-v16\include\gc\roots.h` 只有 `gc_pin_permanent` / 栈式 `gc_push_root`） | 同 engine 内换文档只能回收 cache，root 仍在；隔离模式下等价于每文档释放 ✓ |
 | R5 旧页面长定时器 | 实测刷新后**不再触发**（引擎按文档丢弃定时器） | 符合浏览器语义，无需处理 |
 | R6 `g_moduleCache`（内存 body + 磁盘缓存） | 仍按 URL 全局共享，只有"在途"部分按代取消 | 磁盘缓存是内容寻址，与 realm 无关，可保持全局 ✓ |
+| R1 定位详情（--offline 实验，2026-11-03） | 暖缓存 + `--offline` 确定性重放：214/214 模块全部磁盘缓存零网络供给，Vue 自身求值成功（打出 dev build 横幅），`app.js` 求值 100% 失败 "undefined is not a function"（1047ms，4/4 稳定）。**M2 网络时序交错被排除**；基线"通过"疑似旧架构共享 VM 的假象（上次运行的模块实例残留使 import 非 undefined）。症状与 ant 自家 tech-debt 逐字吻合（`H:\ant-v16\docs\exec-plans\tech-debt.md` §ESM loader linking：re-export 复制值不转发 live binding、`export default` 非 binding、循环图 → "undefined is not a function"，backlog 2026-10-22）。引擎侧 registry 确认 per-engine（`js->modules.state`，`loader.c:1657`），M1 假设不成立 | 修复：ant 侧按 spec 修 Link/Evaluate（上游 backlog 有完整验收标准），或 agave 侧"图就绪硬前置再统一求值"绕过（与 P0-b 合并做）。下一步：先做 P1-b 错误冒泡拿到失败 import 链 |
 
 ---
 
 ## 6. 待办清单（含验收标准）
 
-### P0-a 确认模块 registry 的作用域（对应 M1 / R1）
-- 动作：查 ant 侧模块实现（`H:\ant-v16`）是否按 URL 维护**进程级**状态；若 是，改为按 engine/realm。
+### P0-a 模块图求值失败（对应 M2 / R1，诊断已由 --offline 实验收敛）
+- 动作：~~查 ant 侧 registry 是否进程级~~（已排除：引擎侧 per-engine，见 R1 详情）。改为按 spec 修 ant 的 Link/Evaluate，或做"图就绪硬前置"绕过；先做 P1-b 拿失败 import 链。
 - 验收：隔离模式下 `https://browserscore.dev/` 的模块求值不再失败；`debug/mod/` 与远程大图均通过。
 
 ### P0-b 图就绪与执行解耦（对应 M2）

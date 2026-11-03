@@ -1779,6 +1779,24 @@ static std::map<std::string, ModuleEntry*>* g_moduleCache = NULL;
 static Net::Session* g_moduleSession = NULL;
 static std::vector<std::pair<std::string, unsigned long> >* g_modulePending = NULL;
 static int g_moduleInFlight = 0;
+
+/* AGB_OFFLINE=1 (shell --offline): module fetches are served from the cache
+ * only; cache misses fail fast instead of touching the network. Makes module
+ * evaluation deterministic (replay from a warmed cache) for reproducing
+ * module-graph failures without network timing in the picture. */
+static int g_moduleOffline = -1;
+
+static bool moduleOffline(void)
+{
+    if (g_moduleOffline < 0) {
+        g_moduleOffline = getenv("AGB_OFFLINE") ? 1 : 0;
+
+        if (g_moduleOffline)
+            fprintf(stderr, "[module] offline: fetches served from cache only\n");
+    }
+
+    return g_moduleOffline != 0;
+}
 static int moduleFetchLimit(void)
 {
     static int cached = -1;
@@ -2120,7 +2138,9 @@ static bool moduleCacheLoad(const std::string& url, std::string* body)
     if (ttlText)
         ttl = atoi(ttlText);
 
-    if (ttl > 0) {
+    if (ttl > 0 && !moduleOffline()) {
+        /* Offline replay ignores TTL: the point is a deterministic run from
+         * whatever the cache holds, however stale. */
         WIN32_FILE_ATTRIBUTE_DATA info;
 
         if (!GetFileAttributesExA(path.c_str(), GetFileExInfoStandard, &info))
@@ -2227,6 +2247,16 @@ static void moduleStart(const std::string& url, bool force)
     if (entry->done || entry->id)
         return;
 
+    if (moduleOffline()) {
+        /* No network in offline mode. Serve from the disk cache right here:
+         * prefetch runs before evaluation, and marking the entry failed
+         * without loading would make moduleFetch skip its own cache check
+         * (it only consults the cache for entries not yet done). */
+        entry->done = true;
+        entry->failed = !moduleCacheLoad(url, &entry->body);
+        return;
+    }
+
     /* The download belongs to the realm that asks for it: when that realm is
      * gone, the download is cancelled with it. */
     entry->generation = currentGeneration();
@@ -2323,6 +2353,13 @@ static char* moduleFetch(const char* urlText, unsigned long* outSize)
 
         if (getenv("AGB_MODULE_DEBUG"))
             fprintf(stderr, "[modcache] hit %s\n", url.c_str());
+    }
+
+    if (!entry->done && moduleOffline()) {
+        if (getenv("AGB_MODULE_DEBUG"))
+            fprintf(stderr, "[modfetch] OFFLINE miss %s\n", url.c_str());
+
+        return NULL;
     }
 
     for (attempt = 0; attempt < 2; ++attempt) {
