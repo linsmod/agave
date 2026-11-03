@@ -1771,14 +1771,16 @@ struct ModuleEntry {
     bool        failed;
     long long   id;
     unsigned long generation;   /* the realm that started the download */
+    unsigned long serial;       /* identity: a client may only write to the entry it was started for */
 
-    ModuleEntry() : done(false), failed(false), id(0), generation(0) {}
+    ModuleEntry() : done(false), failed(false), id(0), generation(0), serial(0) {}
 };
 
 static std::map<std::string, ModuleEntry*>* g_moduleCache = NULL;
 static Net::Session* g_moduleSession = NULL;
 static std::vector<std::pair<std::string, unsigned long> >* g_modulePending = NULL;
 static int g_moduleInFlight = 0;
+static unsigned long g_moduleSerial = 0;
 
 /* AGB_OFFLINE=1 (shell --offline): module fetches are served from the cache
  * only; cache misses fail fast instead of touching the network. Makes module
@@ -1863,6 +1865,27 @@ static void moduleDrainPending(void)
     }
 }
 
+/* Drops the request that owns the entry and frees its fetch slot. Used when
+ * the body turns out to be complete without it (a disk cache hit): the
+ * download is pure waste and, worse, its onData would append a second copy of
+ * the file to a body that is already complete - the doubled source then fails
+ * to compile ("Identifier 'x' has already been declared"). */
+static void moduleCancelRequest(ModuleEntry* entry)
+{
+    if (!entry || !entry->id)
+        return;
+
+    if (g_moduleSession)
+        g_moduleSession->cancel(entry->id);
+
+    entry->id = 0;
+
+    if (g_moduleInFlight > 0)
+        --g_moduleInFlight;
+
+    moduleDrainPending();
+}
+
 /* Cancels the module downloads that belong to a realm that is going away: the
  * bodies they would deliver are of no use to the realm that replaces it, and
  * the requests would keep the shared connection pool busy. */
@@ -1920,6 +1943,11 @@ static ModuleEntry* moduleEntryFor(const std::string& url)
         return it->second;
 
     ModuleEntry* entry = new ModuleEntry();
+
+    /* The serial is the entry's identity: requests started for an earlier
+     * entry of the same URL (deleted and recreated by moduleFetch's retry)
+     * must not be able to append their data to this one. */
+    entry->serial = ++g_moduleSerial;
 
     (*g_moduleCache)[url] = entry;
     return entry;
@@ -2109,17 +2137,32 @@ static void moduleEntryScriptArrived(const std::string& url, const ModuleEntry* 
 
 struct ModuleFetchClient : public Net::Client {
     std::string url;
+    unsigned long serial;
 
-    explicit ModuleFetchClient(const std::string& u) : url(u) {}
+    ModuleFetchClient(const std::string& u, unsigned long s) : url(u), serial(s) {}
 
     ModuleEntry* target() const
     {
+        ModuleEntry* entry;
+
         if (!g_moduleCache)
             return NULL;
 
-        std::map<std::string, ModuleEntry*>::iterator it = g_moduleCache->find(url);
+        {
+            std::map<std::string, ModuleEntry*>::iterator it = g_moduleCache->find(url);
 
-        return (it == g_moduleCache->end()) ? NULL : it->second;
+            if (it == g_moduleCache->end())
+                return NULL;
+
+            entry = it->second;
+        }
+
+        /* The entry was replaced by a newer request (retry / refetch): this
+         * client's bytes belong to an entry that is gone. */
+        if (!entry || entry->serial != serial)
+            return NULL;
+
+        return entry;
     }
 
     virtual void onResponse(const Net::Response&) {}
@@ -2128,7 +2171,10 @@ struct ModuleFetchClient : public Net::Client {
     {
         ModuleEntry* entry = target();
 
-        if (entry && data && length)
+        /* A complete body stays complete: once the entry is done (disk cache
+         * hit while the request was in flight), further bytes are a duplicate
+         * of the file, not a continuation of it. */
+        if (entry && !entry->done && data && length)
             entry->body.append(data, length);
     }
 
@@ -2464,13 +2510,28 @@ static void moduleStart(const std::string& url, bool force)
         return;
     }
 
-    if (moduleOffline()) {
-        /* No network in offline mode. Serve from the disk cache right here:
-         * prefetch runs before evaluation, and marking the entry failed
-         * without loading would make moduleFetch skip its own cache check
-         * (it only consults the cache for entries not yet done). */
+    /* Disk cache first, for prefetches too. Serving the body from disk here
+     * means the graph is built without network, no in-flight request is left
+     * behind for a body that is already complete, and a reload of a warm graph
+     * is as fast as the engine. The cache is content addressed by URL, which
+     * is realm independent (only the in-flight part belongs to a realm).
+     * Prefetch runs before evaluation, so a cache miss still has to fail the
+     * entry in offline mode (moduleFetch only consults the cache for entries
+     * that are not done yet). */
+    if (moduleCacheLoad(url, &entry->body)) {
         entry->done = true;
-        entry->failed = !moduleCacheLoad(url, &entry->body);
+        entry->failed = false;
+
+        if (getenv("AGB_MODULE_DEBUG"))
+            fprintf(stderr, "[modcache] hit(prefetch) %s\n", url.c_str());
+
+        modulePrefetchImports(url, entry->body);
+        return;
+    }
+
+    if (moduleOffline()) {
+        entry->done = true;
+        entry->failed = true;
         return;
     }
 
@@ -2498,7 +2559,7 @@ static void moduleStart(const std::string& url, bool force)
         request.method = "GET";
         request.timeoutMs = 5000;
 
-        entry->id = g_moduleSession->start(request, new ModuleFetchClient(url));
+        entry->id = g_moduleSession->start(request, new ModuleFetchClient(url, entry->serial));
 
         if (!entry->id) {
             entry->done = true;
@@ -2527,6 +2588,16 @@ void fetchAndQueueModuleScript(const char* url)
         return;
 
     entry = moduleEntryFor(u);
+
+    /* A failed entry may be the leftover of a realm teardown (the download was
+     * cancelled with the document that asked for it), not a property of the
+     * URL. Reloading the page must not inherit that failure: retry instead of
+     * reporting the entry as broken forever. */
+    if (entry->done && entry->failed) {
+        entry->done = false;
+        entry->failed = false;
+        entry->body.clear();
+    }
 
     if (entry->done) {
         notifyModuleEntry(u, &entry->body, entry->failed);
@@ -2607,9 +2678,14 @@ static char* moduleFetch(const char* urlText, unsigned long* outSize)
 
     if (!entry->done && moduleCacheLoad(url, &entry->body)) {
         entry->done = true;
+        entry->failed = false;
 
         if (getenv("AGB_MODULE_DEBUG"))
             fprintf(stderr, "[modcache] hit %s\n", url.c_str());
+
+        /* A prefetch may still be running for this URL: it would append a
+         * second copy of the file to the body just loaded from disk. */
+        moduleCancelRequest(entry);
     }
 
     if (!entry->done && moduleOffline()) {
