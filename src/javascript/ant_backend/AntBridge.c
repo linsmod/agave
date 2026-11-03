@@ -20,9 +20,21 @@
 #include "gc/roots.h"   /* gc_register_root: keep wrapper objects alive */
 #include "gc.h"         /* gc_run: forced collection in tests */
 
+struct AntbFilename {
+    struct AntbFilename* next;
+    char                 text[];
+};
+
 struct AntbEngine {
     ant_t* js;
     char   err[512];
+    /* Owned copies of every filename ever set. The engine hands the current
+     * pointer to compiled functions (fn->debug->filename), so an old copy must
+     * stay alive for the whole engine lifetime - freeing the previous copy when
+     * a new script starts (as an earlier revision did) left dangling names in
+     * the stack frames of already-compiled scripts: error stacks then rendered
+     * garbled file names. */
+    struct AntbFilename* filenames;
 };
 
 struct AntbValue {
@@ -125,13 +137,37 @@ void antb_engine_destroy(AntbEngine* engine)
 
     if (engine->js)
         js_destroy(engine->js);
+    {
+        struct AntbFilename* fn = engine->filenames;
+        while (fn) {
+            struct AntbFilename* next = fn->next;
+            free(fn);
+            fn = next;
+        }
+    }
     free(engine);
 }
 
 void antb_set_filename(AntbEngine* engine, const char* name)
 {
-    if (engine && engine->js && name)
-        js_set_filename(engine->js, name);
+    if (!engine)
+        return;
+
+    /* Take a copy: callers hand in transient strings (e.g. a script URL owned
+     * by the HTML tokenizer), and compiled functions keep pointing at the copy
+     * from their debug info, so every copy lives as long as the engine. */
+    struct AntbFilename* node = NULL;
+    if (name) {
+        node = (struct AntbFilename*)malloc(sizeof(struct AntbFilename) + strlen(name) + 1);
+        if (!node)
+            return;                      /* keep the previous name on OOM */
+        strcpy(node->text, name);
+        node->next = engine->filenames;
+        engine->filenames = node;
+    }
+
+    if (engine->js)
+        js_set_filename(engine->js, node ? node->text : "agave://page.js");
 }
 
 AntbValue* antb_eval(AntbEngine* engine, const char* src, int len, char** err)
@@ -181,8 +217,15 @@ AntbValue* antb_eval_module(AntbEngine* engine, const char* src, int len,
         return NULL;
 
     if (filename && filename[0]) {
+        struct AntbFilename* node =
+            (struct AntbFilename*)malloc(sizeof(struct AntbFilename) + strlen(filename) + 1);
+        if (node) {
+            strcpy(node->text, filename);
+            node->next = engine->filenames;
+            engine->filenames = node;
+            js_set_filename(engine->js, node->text);
+        }
         js_setup_import_meta(engine->js, filename);
-        js_set_filename(engine->js, filename);
     }
 
     v = js_eval_bytecode_module(engine->js, src, (size_t)len);

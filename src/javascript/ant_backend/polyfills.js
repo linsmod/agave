@@ -419,3 +419,20 @@
         return true;
     };
 }());
+
+/* Workers are not implemented. Sites still subclass the constructor to wrap
+ * it (deepseek's main.js does `class extends Worker` to intercept blob URLs),
+ * so the stub must be a real constructor, not undefined — otherwise the
+ * subclass declaration itself dies with "Class extends value is not a
+ * constructor". This one never runs anything; postMessage/terminate are
+ * silent no-ops. */
+(function () {
+    var g = typeof window !== 'undefined' ? window : this;
+
+    if (!g || typeof g.Worker !== 'undefined')
+        return;
+
+    g.Worker = function (url, options) {};
+    g.Worker.prototype.postMessage = function (msg) {};
+    g.Worker.prototype.terminate = function () {};
+}());

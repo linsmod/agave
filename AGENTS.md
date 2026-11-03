@@ -80,6 +80,15 @@ $env:AGB_NET_LOG = '1'      # 关闭置 $null；偶发挂起先重试
 # 挂起进程抓全线程栈
 tools\cdb.exe -p <pid> -c '~*k 30; qd'
 
+# CPU 热点（连 ant 内部符号一起解）：antbridge 默认链接没有调试信息，cdb 只能显示
+# antb_*+偏移。用 -g 重链出带 PDB 的调试版，再按 RVA 符号化：
+#   zig-cxx.cmd 参数同 tools\build_antbridge.ps1，额外加 -g，vendor 用
+#   build-zig\vendor 下递归 *.a（脚本里的列表是嵌套子目录，glob 到顶层会缺utf8proc）
+#   -> 产物 ab_dbg.dll + ab_dbg.pdb(35MB)；PDB 名必须与 DLL 内嵌记录一致，别改名
+#   替换 build-zig-native\antbridge.dll 后：AGB_PROFILE=1 跑探针拿 [profjs] 直方图，
+#   再 `cdb -y <dll目录> -z antbridge.dll -c "ln antbridge+0x<rva>; qd"` 出函数/源码行；
+#   在线抓栈用 `cdb -y <dll目录> -p <pid> -c "~*k 30; qd"`（帧上带 H:\ant-v16\src\... @ 行号）
+
 # 本地页面测试：直接 file://（模块管线对 file: URL 本地直读，无需起服务）
 # 如需 http 语义：Start-Process -WindowStyle Hidden python -ArgumentList '-m','http.server','8971','--directory','e:\mybrowsers\agave\debug'
 

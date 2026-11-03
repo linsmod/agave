@@ -41,6 +41,11 @@
 #include "Text.h"
 #include "Comment.h"
 #include "HTMLInputElement.h"
+#include "HTMLCanvasElement.h"
+#include "CanvasRenderingContext2D.h"
+#include "CanvasStyle.h"
+#include "CanvasGradient.h"
+#include "CanvasPattern.h"
 #include "HTMLNames.h"
 #include "HTMLElement.h"
 #include "NodeList.h"
@@ -80,6 +85,7 @@ struct RuntimeState {
     AntbEngine*        engine;
     WebCore::Document* document;
     AntbClass*         nodeClass;
+    AntbClass*         canvasCtxClass;  /* CanvasRenderingContext2D (2d context) */
     AntbValue*         locationObj;
     AntbValue*         docObj;          /* the JS document object (rooted) */
     bool               documentBound;
@@ -220,6 +226,7 @@ static void activateState(RuntimeState* state)
 #define g_engine        (g_currentState->engine)
 #define g_document      (g_currentState->document)
 #define g_nodeClass     (g_currentState->nodeClass)
+#define g_canvasCtxClass (g_currentState->canvasCtxClass)
 #define g_locationObj   (g_currentState->locationObj)
 #define g_docObj        (g_currentState->docObj)
 #define g_documentBound (g_currentState->documentBound)
@@ -304,6 +311,25 @@ int nodeContains(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeCompareDocumentPosition(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeRemove(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeGetBoundingClientRect(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeGetContext(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeToDataURL(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+
+/* CanvasRenderingContext2D methods, dispatched through one shared callback:
+ * `user` carries the operation. */
+enum CanvasCtxOp {
+    CV_SAVE, CV_RESTORE, CV_SCALE, CV_ROTATE, CV_TRANSLATE,
+    CV_CLEAR_RECT, CV_FILL_RECT, CV_STROKE_RECT,
+    CV_BEGIN_PATH, CV_CLOSE_PATH, CV_MOVE_TO, CV_LINE_TO,
+    CV_QUADRATIC, CV_BEZIER, CV_ARC, CV_ARC_TO, CV_RECT,
+    CV_FILL, CV_STROKE, CV_CLIP, CV_DRAW_IMAGE,
+    CV_CREATE_LINEAR, CV_CREATE_RADIAL, CV_CREATE_PATTERN,
+    CV_MEASURE_TEXT, CV_SET_TRANSFORM, CV_SET_LINE_DASH, CV_GET_LINE_DASH,
+    CV_GET_IMAGE_DATA, CV_PUT_IMAGE_DATA, CV_IS_POINT_IN_PATH
+};
+static int canvasCtxMethod(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+static int canvasCtxGetter(AntbEngine*, AntbValue*, const char*, AntbValue*, void*);
+static int canvasCtxSetter(AntbEngine*, AntbValue*, const char*, const AntbValue*, void*);
+AntbValue* wrapCanvasCtx(AntbEngine*, WebCore::CanvasRenderingContext2D*);
 static int nodeClassList(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 static int classListAdd(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 static int classListRemove(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
@@ -3388,20 +3414,12 @@ static const char kPrelude[] =
 "   * main.js). A real implementation needs engine DOM-mutation hooks; this one"
 "   * accepts the full API and never fires, which keeps those guards harmless."
 "   * Must come before the stub loop so it is not overwritten. */"
-"  g.__agbPreludeV1 = 1;"
 "  if (typeof g.MutationObserver === 'undefined') {"
 "    g.MutationObserver = function (cb) { this._cb = cb; };"
 "    g.MutationObserver.prototype.observe = function (target, options) {};"
 "    g.MutationObserver.prototype.disconnect = function () {};"
 "    g.MutationObserver.prototype.takeRecords = function () { return []; };"
 "  }"
-"  /* Worker is not implemented; sites subclass it to intercept blob URLs"
-"   * (deepseek's main.js does `class extends Worker`), so the stub must be a"
-"   * real constructor, not undefined. */"
-"  g.__agbWorkerTest = function (a) { return 1; };"
-"  g.Worker = function (url, options) {};"
-"  g.Worker.prototype.postMessage = function (msg) {};"
-"  g.Worker.prototype.terminate = function () {};"
 "    for (var _ci = 0; _ci < _ctors.length; _ci++) {"
 "      if (typeof g[_ctors[_ci]] === 'undefined') g[_ctors[_ci]] = function () { return null; };"
 "    }"
@@ -3953,6 +3971,7 @@ static void stopRealm(void)
 
     /* The node class belongs to the old engine. */
     g_nodeClass = 0;
+    g_canvasCtxClass = 0;
     g_documentBound = false;
 
     /* The slots point at documents that are going away: keeping them would
@@ -4090,6 +4109,10 @@ void bindDocument(void* document)
                 antb_class_add_method(g_engine, g_nodeClass, "removeAttribute", nodeRemoveAttribute, NULL);
                 antb_class_add_method(g_engine, g_nodeClass, "remove", nodeRemove, NULL);
                 antb_class_add_method(g_engine, g_nodeClass, "getBoundingClientRect", nodeGetBoundingClientRect, NULL);
+                /* Canvas: no per-tag classes exist, so the two element-side
+                 * canvas APIs live here and check the tag themselves. */
+                antb_class_add_method(g_engine, g_nodeClass, "getContext", nodeGetContext, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "toDataURL", nodeToDataURL, NULL);
 
                 /* Catch-all property: the class dispatching getter only serves
                  * names present in this table and returns undefined for
@@ -4099,6 +4122,44 @@ void bindDocument(void* document)
                  * with "Component is missing template or render function".
                  * nodeGetter dispatches on the name itself. */
                 antb_class_set_property(g_engine, g_nodeClass, "", nodeGetter, NULL);
+            }
+        }
+
+        if (!g_canvasCtxClass) {
+            g_canvasCtxClass = antb_class_create(g_engine, "CanvasRenderingContext2D");
+            if (g_canvasCtxClass) {
+                antb_class_add_method(g_engine, g_canvasCtxClass, "save", canvasCtxMethod, (void*)(intptr_t)CV_SAVE);
+                antb_class_add_method(g_engine, g_canvasCtxClass, "restore", canvasCtxMethod, (void*)(intptr_t)CV_RESTORE);
+                antb_class_add_method(g_engine, g_canvasCtxClass, "scale", canvasCtxMethod, (void*)(intptr_t)CV_SCALE);
+                antb_class_add_method(g_engine, g_canvasCtxClass, "rotate", canvasCtxMethod, (void*)(intptr_t)CV_ROTATE);
+                antb_class_add_method(g_engine, g_canvasCtxClass, "translate", canvasCtxMethod, (void*)(intptr_t)CV_TRANSLATE);
+                antb_class_add_method(g_engine, g_canvasCtxClass, "clearRect", canvasCtxMethod, (void*)(intptr_t)CV_CLEAR_RECT);
+                antb_class_add_method(g_engine, g_canvasCtxClass, "fillRect", canvasCtxMethod, (void*)(intptr_t)CV_FILL_RECT);
+                antb_class_add_method(g_engine, g_canvasCtxClass, "strokeRect", canvasCtxMethod, (void*)(intptr_t)CV_STROKE_RECT);
+                antb_class_add_method(g_engine, g_canvasCtxClass, "beginPath", canvasCtxMethod, (void*)(intptr_t)CV_BEGIN_PATH);
+                antb_class_add_method(g_engine, g_canvasCtxClass, "closePath", canvasCtxMethod, (void*)(intptr_t)CV_CLOSE_PATH);
+                antb_class_add_method(g_engine, g_canvasCtxClass, "moveTo", canvasCtxMethod, (void*)(intptr_t)CV_MOVE_TO);
+                antb_class_add_method(g_engine, g_canvasCtxClass, "lineTo", canvasCtxMethod, (void*)(intptr_t)CV_LINE_TO);
+                antb_class_add_method(g_engine, g_canvasCtxClass, "quadraticCurveTo", canvasCtxMethod, (void*)(intptr_t)CV_QUADRATIC);
+                antb_class_add_method(g_engine, g_canvasCtxClass, "bezierCurveTo", canvasCtxMethod, (void*)(intptr_t)CV_BEZIER);
+                antb_class_add_method(g_engine, g_canvasCtxClass, "arc", canvasCtxMethod, (void*)(intptr_t)CV_ARC);
+                antb_class_add_method(g_engine, g_canvasCtxClass, "arcTo", canvasCtxMethod, (void*)(intptr_t)CV_ARC_TO);
+                antb_class_add_method(g_engine, g_canvasCtxClass, "rect", canvasCtxMethod, (void*)(intptr_t)CV_RECT);
+                antb_class_add_method(g_engine, g_canvasCtxClass, "fill", canvasCtxMethod, (void*)(intptr_t)CV_FILL);
+                antb_class_add_method(g_engine, g_canvasCtxClass, "stroke", canvasCtxMethod, (void*)(intptr_t)CV_STROKE);
+                antb_class_add_method(g_engine, g_canvasCtxClass, "clip", canvasCtxMethod, (void*)(intptr_t)CV_CLIP);
+                antb_class_add_method(g_engine, g_canvasCtxClass, "drawImage", canvasCtxMethod, (void*)(intptr_t)CV_DRAW_IMAGE);
+                antb_class_add_method(g_engine, g_canvasCtxClass, "createLinearGradient", canvasCtxMethod, (void*)(intptr_t)CV_CREATE_LINEAR);
+                antb_class_add_method(g_engine, g_canvasCtxClass, "createRadialGradient", canvasCtxMethod, (void*)(intptr_t)CV_CREATE_RADIAL);
+                antb_class_add_method(g_engine, g_canvasCtxClass, "createPattern", canvasCtxMethod, (void*)(intptr_t)CV_CREATE_PATTERN);
+                antb_class_add_method(g_engine, g_canvasCtxClass, "measureText", canvasCtxMethod, (void*)(intptr_t)CV_MEASURE_TEXT);
+                antb_class_add_method(g_engine, g_canvasCtxClass, "setTransform", canvasCtxMethod, (void*)(intptr_t)CV_SET_TRANSFORM);
+                antb_class_add_method(g_engine, g_canvasCtxClass, "transform", canvasCtxMethod, (void*)(intptr_t)CV_SET_TRANSFORM);
+                antb_class_add_method(g_engine, g_canvasCtxClass, "setLineDash", canvasCtxMethod, (void*)(intptr_t)CV_SET_LINE_DASH);
+                antb_class_add_method(g_engine, g_canvasCtxClass, "getLineDash", canvasCtxMethod, (void*)(intptr_t)CV_GET_LINE_DASH);
+                antb_class_add_method(g_engine, g_canvasCtxClass, "getImageData", canvasCtxMethod, (void*)(intptr_t)CV_GET_IMAGE_DATA);
+                antb_class_add_method(g_engine, g_canvasCtxClass, "putImageData", canvasCtxMethod, (void*)(intptr_t)CV_PUT_IMAGE_DATA);
+                antb_class_add_method(g_engine, g_canvasCtxClass, "isPointInPath", canvasCtxMethod, (void*)(intptr_t)CV_IS_POINT_IN_PATH);
             }
         }
 
@@ -4740,6 +4801,20 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
 
     if (!n)
         return 0;
+
+    /* document.defaultView: React Router's data router reads
+     * `document.defaultView.history` before anything else, and the property
+     * set on the shared document object does not reach wrappers handed out
+     * for the same Document, so answer it here for every node. */
+    if (!strcmp(name, "defaultView")) {
+        AntbValue* global = antb_global(engine);
+
+        if (global) {
+            antb_value_assign(out, global);
+            antb_value_release(global);
+        }
+        return 1;
+    }
 
     if (!strcmp(name, "textContent")) {
         WebCore::String s = n->textContent();
@@ -6793,6 +6868,474 @@ int nodeRemoveAttribute(AntbEngine* engine, AntbValue* self, AntbValue** args, i
         antb_free(name);
     }
     return 1;
+}
+
+/* ------------------------------------------------------------------------- */
+/* Canvas 2D                                                                  */
+/*                                                                            */
+/* The DOM side already has a complete implementation (HTMLCanvasElement     */
+/* over the picasso rasteriser) - the ant bridge simply never exposed it,    */
+/* because it has no per-tag classes: every element is one Node class.       */
+/* getContext/toDataURL therefore live on the shared Node prototype and      */
+/* check the tag inside the callback; the context itself gets its own class  */
+/* (methods on the prototype, style properties through one dispatching       */
+/* getter/setter pair per instance, the same scheme node/style use).         */
+/* ------------------------------------------------------------------------- */
+
+#define AGB_TAG_CANVAS2D 0x434E5632u   /* 'CNV2' */
+
+static WebCore::CanvasRenderingContext2D* canvasCtxOf(AntbValue* self)
+{
+    return self ? (WebCore::CanvasRenderingContext2D*)antb_get_native(self, AGB_TAG_CANVAS2D) : 0;
+}
+
+static WebCore::HTMLCanvasElement* canvasElementOf(AntbValue* self)
+{
+    WebCore::Node* n = self ? nodeOf(self) : 0;
+
+    if (!n || !n->isElementNode())
+        return 0;
+
+    {
+        WebCore::Element* el = static_cast<WebCore::Element*>(n);
+
+        if (!el->hasTagName(WebCore::HTMLNames::canvasTag))
+            return 0;
+
+        return static_cast<WebCore::HTMLCanvasElement*>(el);
+    }
+}
+
+static double canvasArgNumber(AntbValue** args, int argc, int index)
+{
+    if (!args || index >= argc || !args[index])
+        return 0;
+    return antb_to_number(args[index]);
+}
+
+static std::string canvasArgString(AntbValue** args, int argc, int index)
+{
+    std::string out;
+
+    if (!args || index >= argc || !args[index])
+        return out;
+
+    {
+        char* text = antb_to_utf8(args[index]);
+
+        if (text) {
+            out = text;
+            antb_free(text);
+        }
+    }
+
+    return out;
+}
+
+static std::string canvasValueString(const AntbValue* value)
+{
+    std::string out;
+
+    if (!value)
+        return out;
+
+    {
+        char* text = antb_to_utf8(value);
+
+        if (text) {
+            out = text;
+            antb_free(text);
+        }
+    }
+
+    return out;
+}
+
+static int canvasReturnNumber(AntbEngine* engine, AntbValue* out, double v)
+{
+    AntbValue* value = antb_make_number(engine, v);
+
+    if (!value)
+        return 1;
+
+    antb_value_assign(out, value);
+    antb_value_release(value);
+    return 1;
+}
+
+static int canvasReturnString(AntbEngine* engine, AntbValue* out, const char* text)
+{
+    AntbValue* value = antb_make_string(engine, text ? text : "");
+
+    if (!value)
+        return 1;
+
+    antb_value_assign(out, value);
+    antb_value_release(value);
+    return 1;
+}
+
+static int canvasNoop(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*)
+{
+    return 1;
+}
+
+/* Shared body used for both gradient flavours: callers only ever call
+ * addColorStop on the result, so the placeholder carries that method. */
+static int canvasReturnGradient(AntbEngine* engine, AntbValue* out)
+{
+    AntbValue* obj = antb_make_object(engine);
+
+    if (!obj)
+        return 1;
+
+    antb_define_method(engine, obj, "addColorStop", canvasNoop, NULL);
+    antb_value_assign(out, obj);
+    antb_value_release(obj);
+    return 1;
+}
+
+static int canvasReturnImageData(AntbEngine* engine, AntbValue* out, int w, int h)
+{
+    AntbValue* obj = antb_make_object(engine);
+    AntbValue* arr = antb_make_array(engine);
+
+    if (!obj)
+        return 1;
+
+    if (arr) {
+        antb_set_prop(engine, obj, "data", arr);
+        antb_value_release(arr);
+    }
+
+    {
+        AntbValue* width = antb_make_number(engine, (double)(w > 0 ? w : 0));
+        if (width) {
+            antb_set_prop(engine, obj, "width", width);
+            antb_value_release(width);
+        }
+        {
+            AntbValue* height = antb_make_number(engine, (double)(h > 0 ? h : 0));
+            if (height) {
+                antb_set_prop(engine, obj, "height", height);
+                antb_value_release(height);
+            }
+        }
+    }
+
+    antb_value_assign(out, obj);
+    antb_value_release(obj);
+    return 1;
+}
+
+static int canvasCtxMethod(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                           AntbValue* out, void* user)
+{
+    WebCore::CanvasRenderingContext2D* ctx = canvasCtxOf(self);
+    int op = (int)(intptr_t)user;
+    int ec = 0;
+
+    (void)out;
+
+    if (!ctx)
+        return 1;
+
+    switch (op) {
+    case CV_SAVE:
+        ctx->save();
+        break;
+    case CV_RESTORE:
+        ctx->restore();
+        break;
+    case CV_SCALE:
+        ctx->scale((float)canvasArgNumber(args, argc, 0), (float)canvasArgNumber(args, argc, 1));
+        break;
+    case CV_ROTATE:
+        ctx->rotate((float)canvasArgNumber(args, argc, 0));
+        break;
+    case CV_TRANSLATE:
+        ctx->translate((float)canvasArgNumber(args, argc, 0), (float)canvasArgNumber(args, argc, 1));
+        break;
+    case CV_CLEAR_RECT:
+        ctx->clearRect((float)canvasArgNumber(args, argc, 0), (float)canvasArgNumber(args, argc, 1),
+                       (float)canvasArgNumber(args, argc, 2), (float)canvasArgNumber(args, argc, 3), ec);
+        break;
+    case CV_FILL_RECT:
+        ctx->fillRect((float)canvasArgNumber(args, argc, 0), (float)canvasArgNumber(args, argc, 1),
+                      (float)canvasArgNumber(args, argc, 2), (float)canvasArgNumber(args, argc, 3), ec);
+        break;
+    case CV_STROKE_RECT:
+        ctx->strokeRect((float)canvasArgNumber(args, argc, 0), (float)canvasArgNumber(args, argc, 1),
+                        (float)canvasArgNumber(args, argc, 2), (float)canvasArgNumber(args, argc, 3), ec);
+        break;
+    case CV_BEGIN_PATH:
+        ctx->beginPath();
+        break;
+    case CV_CLOSE_PATH:
+        ctx->closePath();
+        break;
+    case CV_MOVE_TO:
+        ctx->moveTo((float)canvasArgNumber(args, argc, 0), (float)canvasArgNumber(args, argc, 1));
+        break;
+    case CV_LINE_TO:
+        ctx->lineTo((float)canvasArgNumber(args, argc, 0), (float)canvasArgNumber(args, argc, 1));
+        break;
+    case CV_QUADRATIC:
+        ctx->quadraticCurveTo((float)canvasArgNumber(args, argc, 0), (float)canvasArgNumber(args, argc, 1),
+                              (float)canvasArgNumber(args, argc, 2), (float)canvasArgNumber(args, argc, 3));
+        break;
+    case CV_BEZIER:
+        ctx->bezierCurveTo((float)canvasArgNumber(args, argc, 0), (float)canvasArgNumber(args, argc, 1),
+                           (float)canvasArgNumber(args, argc, 2), (float)canvasArgNumber(args, argc, 3),
+                           (float)canvasArgNumber(args, argc, 4), (float)canvasArgNumber(args, argc, 5));
+        break;
+    case CV_ARC:
+        ctx->arc((float)canvasArgNumber(args, argc, 0), (float)canvasArgNumber(args, argc, 1),
+                 (float)canvasArgNumber(args, argc, 2), (float)canvasArgNumber(args, argc, 3),
+                 (float)canvasArgNumber(args, argc, 4),
+                 argc > 5 ? (canvasArgNumber(args, argc, 5) != 0) : false, ec);
+        break;
+    case CV_ARC_TO:
+        ctx->arcTo((float)canvasArgNumber(args, argc, 0), (float)canvasArgNumber(args, argc, 1),
+                   (float)canvasArgNumber(args, argc, 2), (float)canvasArgNumber(args, argc, 3),
+                   (float)canvasArgNumber(args, argc, 4), ec);
+        break;
+    case CV_RECT:
+        ctx->rect((float)canvasArgNumber(args, argc, 0), (float)canvasArgNumber(args, argc, 1),
+                  (float)canvasArgNumber(args, argc, 2), (float)canvasArgNumber(args, argc, 3), ec);
+        break;
+    case CV_FILL:
+        ctx->fill();
+        break;
+    case CV_STROKE:
+        ctx->stroke();
+        break;
+    case CV_CLIP:
+        ctx->clip();
+        break;
+    case CV_DRAW_IMAGE:
+        if (argc >= 1) {
+            WebCore::Node* src = nodeOf(args[0]);
+
+            if (src && src->isElementNode()) {
+                WebCore::Element* el = static_cast<WebCore::Element*>(src);
+
+                if (el->hasTagName(WebCore::HTMLNames::canvasTag)) {
+                    WebCore::HTMLCanvasElement* source =
+                        static_cast<WebCore::HTMLCanvasElement*>(el);
+
+                    if (argc >= 5)
+                        ctx->drawImage(source, (float)canvasArgNumber(args, argc, 1),
+                                       (float)canvasArgNumber(args, argc, 2),
+                                       (float)canvasArgNumber(args, argc, 3),
+                                       (float)canvasArgNumber(args, argc, 4), ec);
+                    else if (argc >= 3)
+                        ctx->drawImage(source, (float)canvasArgNumber(args, argc, 1),
+                                       (float)canvasArgNumber(args, argc, 2));
+                }
+            }
+        }
+        break;
+    case CV_CREATE_LINEAR:
+    case CV_CREATE_RADIAL:
+        canvasReturnGradient(engine, out);
+        break;
+    case CV_MEASURE_TEXT:
+        {
+            AntbValue* obj = antb_make_object(engine);
+            std::string text = canvasArgString(args, argc, 0);
+
+            if (obj) {
+                AntbValue* width = antb_make_number(engine, text.size() * 6.0);
+                if (width) {
+                    antb_set_prop(engine, obj, "width", width);
+                    antb_value_release(width);
+                }
+                antb_value_assign(out, obj);
+                antb_value_release(obj);
+            }
+        }
+        break;
+    case CV_GET_IMAGE_DATA:
+        canvasReturnImageData(engine, out, (int)canvasArgNumber(args, argc, 2),
+                              (int)canvasArgNumber(args, argc, 3));
+        break;
+    case CV_GET_LINE_DASH:
+        {
+            AntbValue* arr = antb_make_array(engine);
+            if (arr) {
+                antb_value_assign(out, arr);
+                antb_value_release(arr);
+            }
+        }
+        break;
+    case CV_IS_POINT_IN_PATH:
+        canvasReturnNumber(engine, out, 0);
+        break;
+    case CV_SET_TRANSFORM:
+    case CV_SET_LINE_DASH:
+    case CV_PUT_IMAGE_DATA:
+    case CV_CREATE_PATTERN:
+    default:
+        /* Not implemented by this rasteriser generation: stay silent so
+         * libraries that call them degrade instead of dying. */
+        break;
+    }
+
+    return 1;
+}
+
+static int canvasCtxGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue* out, void*)
+{
+    WebCore::CanvasRenderingContext2D* ctx = canvasCtxOf(self);
+
+    if (!ctx || !name)
+        return 0;
+
+    if (!strcmp(name, "canvas")) {
+        if (ctx->canvas()) {
+            AntbValue* v = wrapNode(engine, ctx->canvas());
+
+            if (v) {
+                antb_value_assign(out, v);
+                antb_value_release(v);
+            }
+        }
+        return 1;
+    }
+
+    if (!strcmp(name, "fillStyle") || !strcmp(name, "strokeStyle")) {
+        WebCore::CanvasStyle* style = !strcmp(name, "fillStyle")
+            ? ctx->fillStyle() : ctx->strokeStyle();
+
+        return canvasReturnString(engine, out, style ? style->color().utf8().data() : "#000000");
+    }
+
+    if (!strcmp(name, "lineWidth"))     return canvasReturnNumber(engine, out, ctx->lineWidth());
+    if (!strcmp(name, "lineCap"))       return canvasReturnString(engine, out, ctx->lineCap().utf8().data());
+    if (!strcmp(name, "lineJoin"))      return canvasReturnString(engine, out, ctx->lineJoin().utf8().data());
+    if (!strcmp(name, "miterLimit"))    return canvasReturnNumber(engine, out, ctx->miterLimit());
+    if (!strcmp(name, "shadowOffsetX")) return canvasReturnNumber(engine, out, ctx->shadowOffsetX());
+    if (!strcmp(name, "shadowOffsetY")) return canvasReturnNumber(engine, out, ctx->shadowOffsetY());
+    if (!strcmp(name, "shadowBlur"))    return canvasReturnNumber(engine, out, ctx->shadowBlur());
+    if (!strcmp(name, "shadowColor"))   return canvasReturnString(engine, out, ctx->shadowColor().utf8().data());
+    if (!strcmp(name, "globalAlpha"))   return canvasReturnNumber(engine, out, ctx->globalAlpha());
+    if (!strcmp(name, "globalCompositeOperation"))
+        return canvasReturnString(engine, out, ctx->globalCompositeOperation().utf8().data());
+
+    if (!strcmp(name, "isContextLost"))
+        return canvasReturnNumber(engine, out, 0);
+
+    return 0;
+}
+
+static int canvasCtxSetter(AntbEngine* engine, AntbValue* self, const char* name,
+                           const AntbValue* value, void*)
+{
+    WebCore::CanvasRenderingContext2D* ctx = canvasCtxOf(self);
+
+    (void)engine;
+
+    if (!ctx || !name || !value)
+        return 0;
+
+    if (!strcmp(name, "fillStyle") || !strcmp(name, "strokeStyle")) {
+        RefPtr<WebCore::CanvasStyle> style;
+
+        if (antb_is_number(value))
+            style = new WebCore::CanvasStyle((float)antb_to_number(value));
+        else
+            style = new WebCore::CanvasStyle(WebCore::String::fromUTF8(canvasValueString(value).c_str()));
+
+        if (!strcmp(name, "fillStyle"))
+            ctx->setFillStyle(style.release());
+        else
+            ctx->setStrokeStyle(style.release());
+        return 1;
+    }
+
+    if (!strcmp(name, "lineWidth"))     { ctx->setLineWidth((float)antb_to_number(value)); return 1; }
+    if (!strcmp(name, "miterLimit"))    { ctx->setMiterLimit((float)antb_to_number(value)); return 1; }
+    if (!strcmp(name, "shadowOffsetX")) { ctx->setShadowOffsetX((float)antb_to_number(value)); return 1; }
+    if (!strcmp(name, "shadowOffsetY")) { ctx->setShadowOffsetY((float)antb_to_number(value)); return 1; }
+    if (!strcmp(name, "shadowBlur"))    { ctx->setShadowBlur((float)antb_to_number(value)); return 1; }
+    if (!strcmp(name, "globalAlpha"))   { ctx->setGlobalAlpha((float)antb_to_number(value)); return 1; }
+    if (!strcmp(name, "lineCap"))       { ctx->setLineCap(WebCore::String::fromUTF8(canvasValueString(value).c_str())); return 1; }
+    if (!strcmp(name, "lineJoin"))      { ctx->setLineJoin(WebCore::String::fromUTF8(canvasValueString(value).c_str())); return 1; }
+    if (!strcmp(name, "shadowColor"))   { ctx->setShadowColor(WebCore::String::fromUTF8(canvasValueString(value).c_str())); return 1; }
+    if (!strcmp(name, "globalCompositeOperation")) {
+        ctx->setGlobalCompositeOperation(WebCore::String::fromUTF8(canvasValueString(value).c_str()));
+        return 1;
+    }
+
+    /* Let unknown names fall through to a plain JS expando on the wrapper. */
+    return 0;
+}
+
+AntbValue* wrapCanvasCtx(AntbEngine* engine, WebCore::CanvasRenderingContext2D* ctx)
+{
+    AntbValue* v;
+
+    if (!engine || !ctx || !g_canvasCtxClass)
+        return NULL;
+
+    v = antb_wrap_native_as(engine, g_canvasCtxClass, ctx, AGB_TAG_CANVAS2D);
+    if (!v)
+        return NULL;
+
+    /* Idempotent: the wrapper cache may hand back an already prepared
+     * instance, and re-installing the dispatch pair is harmless. */
+    antb_define_property_rw(engine, v, "", canvasCtxGetter, canvasCtxSetter, NULL);
+
+    return v;
+}
+
+int nodeGetContext(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                   AntbValue* out, void*)
+{
+    WebCore::HTMLCanvasElement* canvas = canvasElementOf(self);
+
+    if (!canvas || argc < 1)
+        return 1;   /* undefined: the caller sees no context, as with a null */
+
+    {
+        std::string type = canvasArgString(args, argc, 0);
+
+        /* "webgl"/"webgl2"/"bitmaprenderer" are not implemented; feature
+         * detects get the undefined (falsy) answer and take their fallback. */
+        if (type != "2d")
+            return 1;
+
+        {
+            WebCore::CanvasRenderingContext* generic =
+                canvas->getContext(WebCore::String::fromUTF8(type.c_str()));
+
+            if (!generic)
+                return 1;
+
+            {
+                AntbValue* v = wrapCanvasCtx(engine,
+                    static_cast<WebCore::CanvasRenderingContext2D*>(generic));
+
+                if (v) {
+                    antb_value_assign(out, v);
+                    antb_value_release(v);
+                }
+            }
+        }
+    }
+
+    return 1;
+}
+
+int nodeToDataURL(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                  AntbValue* out, void*)
+{
+    /* PNG encoding of the picasso surface is not wired up: answer with an
+     * empty data URL so feature probes and image probes stay usable. */
+    (void)self; (void)args; (void)argc;
+
+    return canvasReturnString(engine, out, "data:,");
 }
 
 AntbValue* wrapNode(AntbEngine* engine, WebCore::Node* node)
