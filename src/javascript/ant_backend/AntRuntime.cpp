@@ -1527,6 +1527,11 @@ struct ModuleFetchClient : public Net::Client {
             if (g_moduleInFlight > 0)
                 --g_moduleInFlight;
 
+            /* Fan out: scan a *prefetched* body for its imports too, otherwise the
+             * graph is only ever one import list deep and the ESM loader ends up
+             * fetching module after module with ~150ms of RTT each. */
+            modulePrefetchImports(url, entry->body);
+
             moduleDrainPending();
         }
     }
@@ -1733,8 +1738,8 @@ static char* moduleFetch(const char* urlText, unsigned long* outSize)
     modulePrefetchImports(url, entry->body);
 
     if (getenv("AGB_MODULE_DEBUG"))
-        fprintf(stderr, "[modfetch] %s %u bytes | in-flight=%d\n",
-                url.c_str(), (unsigned)entry->body.size(), g_moduleInFlight);
+        fprintf(stderr, "[modfetch] t=%lu %s %u bytes | in-flight=%d\n",
+                (unsigned long)GetTickCount(), url.c_str(), (unsigned)entry->body.size(), g_moduleInFlight);
 
     {
         char* buffer = (char*)malloc(entry->body.size() + 1);
@@ -1912,6 +1917,25 @@ static bool looksLikeModule(const char* src, size_t len)
 
     if (i >= len)
         return false;
+
+    /* <script type="module"> whose first statement is not an import still has to
+     * be treated as a module. Imports are line-based in practice, so look for a
+     * line that starts with import/xport. */
+    {
+        for (size_t at = i; at < len; ) {
+            while (at < len && (src[at] == ' ' || src[at] == '\t')) ++at;
+
+            if (at + 6 <= len && (!strncmp(src + at, "import", 6) || !strncmp(src + at, "export", 6))) {
+                char after = (at + 6 < len) ? src[at + 6] : ' ';
+
+                if (after == ' ' || after == '\t' || after == '{' || after == '*')
+                    return true;
+            }
+
+            while (at < len && src[at] != '\n') ++at;
+            if (at < len) ++at;
+        }
+    }
 
     if (len - i >= 6 && !strncmp(src + i, "import", 6)) {
         size_t j = i + 6;
