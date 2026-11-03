@@ -2911,6 +2911,30 @@ static const char kPrelude[] =
 "      return mod;"
 "    };"
 "    def.amd = {};"
+"  /* SVG viewBox: an object whose fields read and write the attribute. */"
+"  g.__agbViewBox = function (el) {"
+"    function parts() {"
+"      var s = String(el.getAttribute('viewBox') || '0 0 0 0').split(/[\\s,]+/);"
+"      var out = [], i, n;"
+"      for (i = 0; i < 4; i++) { n = parseFloat(s[i]); out.push(isNaN(n) ? 0 : n); }"
+"      return out;"
+"    }"
+"    function setField(i, value) {"
+"      var a = parts(), n = Number(value);"
+"      a[i] = isNaN(n) ? 0 : n;"
+"      el.setAttribute('viewBox', a.join(' '));"
+"    }"
+"    var rect = {}, names = ['x', 'y', 'width', 'height'], i;"
+"    function make(i) {"
+"      Object.defineProperty(rect, names[i], {"
+"        enumerable: true, configurable: true,"
+"        get: function () { return parts()[i]; },"
+"        set: function (v) { setField(i, v); }"
+"      });"
+"    }"
+"    for (i = 0; i < 4; i++) make(i);"
+"    return { baseVal: rect, animVal: rect };"
+"  };"
 "    g.define = def;"
 "    if (typeof g.require === 'undefined') {"
 "      g.require = function require(deps, cb) {"
@@ -3439,6 +3463,135 @@ static std::string cssNameFromCamel(const char* name)
  * trick as style: the getter/setter receive the property name and map it to a
  * data- attribute (camelCase -> kebab-case). Vue directives read it constantly
  * (browserscore's v-content does `el.dataset.fallback`). */
+/* SVG viewBox -> SVGAnimatedRect. browserscore clones its favicon SVG and
+ * writes `clone.viewBox.baseVal.x/y/width/height` before serialising it, so
+ * the four fields have to read *and write* the viewBox attribute. */
+static WebCore::Element* elementOfValue(AntbValue* self)
+{
+    AntbValue* owner;
+    WebCore::Node* node;
+
+    if (!self)
+        return NULL;
+
+    owner = antb_get_prop(g_engine, self, "__agbElement");
+
+    if (!owner)
+        return NULL;
+
+    node = nodeOf(owner);
+    antb_value_release(owner);
+
+    return (node && node->isElementNode()) ? static_cast<WebCore::Element*>(node) : NULL;
+}
+
+static bool parseViewBox(WebCore::Element* element, float* values)
+{
+    WebCore::String text;
+    const char* data;
+    int found = 0;
+
+    values[0] = values[1] = values[2] = values[3] = 0;
+
+    if (!element)
+        return false;
+
+    text = element->getAttribute(WebCore::AtomicString("viewBox"));
+
+    if (text.isEmpty())
+        return false;
+
+    data = text.utf8().data();
+
+    while (data && *data && found < 4) {
+        char* end = NULL;
+        double v = strtod(data, &end);
+
+        if (end == data) {
+            ++data;
+            continue;
+        }
+
+        values[found++] = (float)v;
+        data = end;
+    }
+
+    return found == 4;
+}
+
+static void storeViewBox(WebCore::Element* element, const float* values)
+{
+    char buffer[160];
+    WebCore::ExceptionCode ec = 0;
+
+    snprintf(buffer, sizeof(buffer), "%g %g %g %g",
+             values[0], values[1], values[2], values[3]);
+
+    element->setAttribute(WebCore::String("viewBox"), WebCore::String(buffer), ec);
+    element->setChanged();
+}
+
+static int viewBoxFieldIndex(const char* name)
+{
+    if (!name)
+        return -1;
+    if (!strcmp(name, "x"))
+        return 0;
+    if (!strcmp(name, "y"))
+        return 1;
+    if (!strcmp(name, "width"))
+        return 2;
+    if (!strcmp(name, "height"))
+        return 3;
+    return -1;
+}
+
+int viewBoxFieldGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue* out, void*)
+{
+    WebCore::Element* element = elementOfValue(self);
+    float values[4];
+    int index = viewBoxFieldIndex(name);
+
+    if (index < 0) {
+        antb_value_assign(out, antb_make_number(engine, 0));
+        return 1;
+    }
+
+    if (!parseViewBox(element, values))
+        values[0] = values[1] = values[2] = values[3] = 0;
+
+    antb_value_assign(out, antb_make_number(engine, values[index]));
+    return 1;
+}
+
+int viewBoxFieldSetter(AntbEngine* engine, AntbValue* self, const char* name, const AntbValue* value, void*)
+{
+    if (getenv("AGB_CALL_DEBUG"))
+        fprintf(stderr, "[vb] set %s value=%p self=%p\n", name ? name : "?", (void*)value, (void*)self);
+    WebCore::Element* element = elementOfValue(self);
+    float values[4];
+    int index = viewBoxFieldIndex(name);
+
+    (void)engine;
+
+    if (index < 0 || !element)
+        return 1;
+
+    parseViewBox(element, values);
+
+    {
+        double numeric = value ? antb_to_number(const_cast<AntbValue*>(value)) : 0.0;
+
+        if (numeric != numeric)
+            numeric = 0.0;
+
+        values[index] = (float)numeric;
+    }
+
+    storeViewBox(element, values);
+    return 1;
+}
+
 static WebCore::Element* datasetElementOf(AntbValue* self)
 {
     AntbValue* owner;
@@ -3863,6 +4016,34 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
             antb_set_prop(engine, self, "__agbAttrs", attrs);
             antb_value_assign(out, attrs);
             antb_value_release(attrs);
+        }
+        return 1;
+    } else if (!strcmp(name, "viewBox")) {
+        AntbValue* global = antb_global(engine);
+        AntbValue* fn = global ? antb_get_prop(engine, global, "__agbViewBox") : NULL;
+
+        antb_value_release(global);
+
+        if (!fn) {
+            antb_value_assign(out, antb_make_number(engine, 0));
+            return 1;
+        }
+
+        {
+            AntbValue* argv[1];
+            AntbValue* result;
+
+            argv[0] = self;
+            result = antb_call(engine, fn, NULL, argv, 1, NULL);
+            antb_value_release(fn);
+
+            if (!result) {
+                antb_value_assign(out, antb_make_number(engine, 0));
+                return 1;
+            }
+
+            antb_value_assign(out, result);
+            antb_value_release(result);
         }
         return 1;
     } else if (!strcmp(name, "dataset")) {
