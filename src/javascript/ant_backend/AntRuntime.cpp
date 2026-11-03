@@ -85,15 +85,78 @@ struct RuntimeState {
     bool               documentBound;
     void*              listeners;       /* std::vector<Listener>* (see below) */
     WebCore::Document* docSlots[AGB_MAX_DOCUMENT_SLOTS];
+    unsigned long      docSlotGeneration[AGB_MAX_DOCUMENT_SLOTS];
     int                docSlotCount;
     int                currentSlot;
+    unsigned long      generation;      /* id of the realm (see nextGeneration) */
 };
+
+/* Every realm (one document) gets a fresh id. Resources that can outlive
+ * their document - module downloads, XHR requests, pinned DOM nodes - carry
+ * the id of the realm they were created in, so the unload path can cancel
+ * exactly the ones that belong to the document that goes away.
+ *
+ * The counter is process wide: the module loader and the request queue are
+ * shared between views, and a per-view counter would let one view cancel
+ * another view's requests. */
+static unsigned long nextGeneration(void)
+{
+    static unsigned long counter = 0;
+
+    return ++counter;
+}
 
 static std::vector<RuntimeState*>* g_states = NULL;
 /* Never NULL: the mirrors below are dereferenced by code that can run before a
  * real state exists (isRunning(), teardown paths). */
 static RuntimeState  g_emptyState;
 static RuntimeState* g_currentState = &g_emptyState;
+
+/* The generation of the realm that is currently running (0 when there is
+ * none). */
+static unsigned long currentGeneration(void)
+{
+    if (!g_currentState || g_currentState == &g_emptyState)
+        return 0;
+
+    return g_currentState->generation;
+}
+
+/* DOM nodes are pinned (ref'd) so a freed node's address is never reused for
+ * a new node while a JS wrapper still points at it. The pins are grouped by
+ * realm: when a realm is gone, its nodes can be released instead of being
+ * pinned forever (a reload used to leak a whole document per navigation). */
+static std::map<unsigned long, std::set<WebCore::Node*>*>& pinnedNodes(void)
+{
+    static std::map<unsigned long, std::set<WebCore::Node*>*>* pins =
+        new std::map<unsigned long, std::set<WebCore::Node*>*>();
+
+    return *pins;
+}
+
+/* Releases the pins of a realm. The nodes are still owned by WebCore when the
+ * realm is torn down (the document is replaced, not deleted yet), so the
+ * release is deferred by one generation: unref'ing a node the outgoing
+ * document still uses would free it too early. */
+static void releasePinnedNodes(unsigned long generation)
+{
+    std::map<unsigned long, std::set<WebCore::Node*>*>& pins = pinnedNodes();
+    std::map<unsigned long, std::set<WebCore::Node*>*>::iterator it = pins.find(generation);
+
+    if (it == pins.end())
+        return;
+
+    std::set<WebCore::Node*>* nodes = it->second;
+
+    if (nodes) {
+        for (std::set<WebCore::Node*>::iterator n = nodes->begin(); n != nodes->end(); ++n)
+            (*n)->deref();
+
+        delete nodes;
+    }
+
+    pins.erase(it);
+}
 
 static std::vector<RuntimeState*>& runtimeStates()
 {
@@ -121,6 +184,10 @@ static RuntimeState* createRuntimeState(AntbEngine* engine)
     memset(state, 0, sizeof(RuntimeState));
     state->engine = engine;
     state->currentSlot = -1;
+
+    /* The first realm of this view gets an id too: its resources are
+     * cancelled by it when the first document is replaced. */
+    state->generation = nextGeneration();
 
     runtimeStates().push_back(state);
 
@@ -156,6 +223,7 @@ static void activateState(RuntimeState* state)
 #define g_docObj        (g_currentState->docObj)
 #define g_documentBound (g_currentState->documentBound)
 #define g_docSlots      (g_currentState->docSlots)
+#define g_docSlotGeneration (g_currentState->docSlotGeneration)
 #define g_docSlotCount  (g_currentState->docSlotCount)
 #define g_currentSlot   (g_currentState->currentSlot)
 
@@ -171,10 +239,22 @@ static int slotForDocument(WebCore::Document* document)
             return i;
     }
 
+    /* A slot of an older realm points at a document that is gone: reuse it
+     * instead of running out of slots (and instead of handing out a pointer
+     * to a freed document). */
+    for (i = 0; i < g_docSlotCount; ++i) {
+        if (g_docSlotGeneration[i] != currentGeneration()) {
+            g_docSlots[i] = document;
+            g_docSlotGeneration[i] = currentGeneration();
+            return i;
+        }
+    }
+
     if (g_docSlotCount >= AGB_MAX_DOCUMENT_SLOTS)
         return -1;
 
     g_docSlots[g_docSlotCount] = document;
+    g_docSlotGeneration[g_docSlotCount] = currentGeneration();
     return g_docSlotCount++;
 }
 
@@ -262,6 +342,7 @@ struct XhrJob : public WebCore::ResourceHandleClient {
         , m_startMs(0)
         , m_doneMs(0)
         , m_slot(g_currentSlot)
+        , m_generation(currentGeneration())
     {
     }
 
@@ -287,6 +368,22 @@ struct XhrJob : public WebCore::ResourceHandleClient {
 
 
         m_handle = WebCore::ResourceHandle::create(request, this, false, true, false);
+    }
+
+    /* Stops the request and drops the JS callback: the response must not
+     * reach a realm that is going away. */
+    void cancel()
+    {
+        if (m_handle)
+            m_handle->cancel();
+
+        if (m_callback) {
+            antb_value_release(m_callback);
+            m_callback = 0;
+        }
+
+        m_done = true;
+        m_failed = true;
     }
 
     virtual void didReceiveResponse(WebCore::ResourceHandle*, const WebCore::ResourceResponse& response)
@@ -384,12 +481,34 @@ struct XhrJob : public WebCore::ResourceHandleClient {
     double                          m_doneMs;
     bool                            m_done;
     bool                            m_failed;
+    unsigned long                   m_generation;  /* the realm that started it */
+
+    unsigned long generation() const { return m_generation; }
 };
 
 static Vector<XhrJob*>& xhrJobs()
 {
     static Vector<XhrJob*>* jobs = new Vector<XhrJob*>();
     return *jobs;
+}
+
+/* Cancels the requests that belong to a realm that is going away: their
+ * response must not be delivered into the realm that replaces it. */
+static void cancelXhrJobsForGeneration(unsigned long generation)
+{
+    Vector<XhrJob*>& jobs = xhrJobs();
+
+    for (unsigned i = 0; i < jobs.size(); ) {
+        XhrJob* job = jobs[i];
+
+        if (job && job->generation() <= generation) {
+            job->cancel();
+            delete job;
+            jobs.remove(i);
+        } else {
+            ++i;
+        }
+    }
 }
 
 /* Delivers finished responses and frees jobs. Called from the start of every
@@ -1651,13 +1770,14 @@ struct ModuleEntry {
     bool        done;
     bool        failed;
     long long   id;
+    unsigned long generation;   /* the realm that started the download */
 
-    ModuleEntry() : done(false), failed(false), id(0) {}
+    ModuleEntry() : done(false), failed(false), id(0), generation(0) {}
 };
 
 static std::map<std::string, ModuleEntry*>* g_moduleCache = NULL;
 static Net::Session* g_moduleSession = NULL;
-static std::vector<std::string>* g_modulePending = NULL;
+static std::vector<std::pair<std::string, unsigned long> >* g_modulePending = NULL;
 static int g_moduleInFlight = 0;
 static int moduleFetchLimit(void)
 {
@@ -1679,27 +1799,73 @@ static void modulePrefetchImports(const std::string& url, const std::string& bod
 /* Imports discovered while the fetch slots are full wait here; a finished
  * request immediately starts the next one, so the graph loads ~6 wide instead
  * of one file at a time. */
-static void moduleQueuePending(const std::string& url)
+static void moduleQueuePending(const std::string& url, unsigned long generation)
 {
     if (!g_modulePending)
-        g_modulePending = new std::vector<std::string>();
+        g_modulePending = new std::vector<std::pair<std::string, unsigned long> >();
 
     for (size_t i = 0; i < g_modulePending->size(); ++i) {
-        if ((*g_modulePending)[i] == url)
+        if ((*g_modulePending)[i].first == url)
             return;
     }
 
-    g_modulePending->push_back(url);
+    g_modulePending->push_back(std::make_pair(url, generation));
 }
 
 static void moduleDrainPending(void)
 {
     while (g_modulePending && !g_modulePending->empty()
             && g_moduleInFlight < moduleFetchLimit()) {
-        std::string url = g_modulePending->front();
+        std::string url = g_modulePending->front().first;
 
         g_modulePending->erase(g_modulePending->begin());
         moduleStart(url, true);
+    }
+}
+
+/* Cancels the module downloads that belong to a realm that is going away: the
+ * bodies they would deliver are of no use to the realm that replaces it, and
+ * the requests would keep the shared connection pool busy. */
+static void cancelModuleDownloadsForGeneration(unsigned long generation)
+{
+    if (g_moduleCache) {
+        std::map<std::string, ModuleEntry*>::iterator it = g_moduleCache->begin();
+
+        for (; it != g_moduleCache->end(); ++it) {
+            ModuleEntry* entry = it->second;
+
+            if (!entry || entry->generation > generation)
+                continue;
+
+            if (entry->id) {
+                if (g_moduleSession)
+                    g_moduleSession->cancel(entry->id);
+
+                entry->id = 0;
+
+                if (g_moduleInFlight > 0)
+                    --g_moduleInFlight;
+            }
+
+            /* A download that is still running is useless now. One that
+             * finished stays cached: its body is on disk anyway. */
+            if (!entry->done) {
+                entry->done = true;
+                entry->failed = true;
+            }
+        }
+    }
+
+    /* Imports that were queued for download but never started. */
+    if (g_modulePending) {
+        std::vector<std::pair<std::string, unsigned long> >::iterator it = g_modulePending->begin();
+
+        while (it != g_modulePending->end()) {
+            if (it->second <= generation)
+                it = g_modulePending->erase(it);
+            else
+                ++it;
+        }
     }
 }
 
@@ -2061,9 +2227,13 @@ static void moduleStart(const std::string& url, bool force)
     if (entry->done || entry->id)
         return;
 
+    /* The download belongs to the realm that asks for it: when that realm is
+     * gone, the download is cancelled with it. */
+    entry->generation = currentGeneration();
+
     if (g_moduleInFlight >= moduleFetchLimit()) {
         if (!force)
-            moduleQueuePending(url);
+            moduleQueuePending(url, entry->generation);
         if (!force)
             return;
     }
@@ -3010,6 +3180,7 @@ void setFilename(const char* name)
 struct DeferredModule {
     std::string url;
     std::string source;
+    unsigned long generation;   /* the realm that queued it */
 };
 
 static std::vector<DeferredModule>* g_deferredModules = NULL;
@@ -3041,6 +3212,7 @@ void queueModule(const char* url, const char* source)
 
     module.url = url ? url : "";
     module.source = source ? source : "";
+    module.generation = currentGeneration();
     g_deferredModules->push_back(module);
 
     /* Start downloading the import graph now, while the rest of the page is still
@@ -3063,6 +3235,11 @@ void flushDeferredModules(void)
     for (size_t i = 0; i < pending.size(); ++i) {
         char* err = NULL;
 
+        /* A module that another realm queued belongs to that realm: running
+         * it here would execute a document's code in the wrong realm. */
+        if (pending[i].generation != currentGeneration())
+            continue;
+
         evaluateModule(pending[i].source.c_str(), pending[i].source.size(),
                        pending[i].url.c_str(), NULL, &err);
 
@@ -3070,6 +3247,22 @@ void flushDeferredModules(void)
             fprintf(stderr, "[antjs] %s: %s\n", pending[i].url.c_str(), err);
             free(err);
         }
+    }
+}
+
+/* Drops the queued modules of a realm that is going away. */
+static void cancelDeferredModulesForGeneration(unsigned long generation)
+{
+    if (!g_deferredModules)
+        return;
+
+    std::vector<DeferredModule>::iterator it = g_deferredModules->begin();
+
+    while (it != g_deferredModules->end()) {
+        if (it->generation <= generation)
+            it = g_deferredModules->erase(it);
+        else
+            ++it;
     }
 }
 
@@ -3168,6 +3361,132 @@ static void loadPolyfills(void)
     fclose(file);
 }
 
+/* ------------------------------------------------------------------------- */
+/* Realm isolation: one realm per document                                     */
+/* ------------------------------------------------------------------------- */
+/* The Ant VM used to be one per VIEW, so a reload left the previous page's
+ * state in place: its globals (window.foo), its listeners and its module
+ * registry were all still there when the next document started running.
+ *
+ * Isolation instead gives every document its own realm: the old realm is
+ * stopped and unloaded (AntRuntime::documentWillUnload) and a fresh one is
+ * started for the next document (AntRuntime::beginNewRealm).
+ *
+ * The host keeps the context handle (the RuntimeState), so only the engine
+ * inside the state is replaced - the Page -> context mapping stays valid. */
+/* The generation whose pins are waiting to be released. The nodes of the
+ * outgoing document are still used by WebCore while the realm is torn down,
+ * so they are released one generation later. */
+static unsigned long g_pinsPendingRelease = 0;
+
+/* Cancels every resource that belongs to the given realm (inclusive) and is
+ * still in flight: XHR requests, module downloads and queued imports. Called
+ * before the realm that owns them goes away, so nothing that arrives later
+ * can reach the realm that replaces it. */
+static void cancelInFlightResources(unsigned long generation)
+{
+    if (!generation)
+        return;
+
+    cancelXhrJobsForGeneration(generation);
+    cancelModuleDownloadsForGeneration(generation);
+    cancelDeferredModulesForGeneration(generation);
+}
+
+/* Stops the current realm: the page's JS world goes away with its document.
+ * The VM is destroyed, so its globals, its module registry and its timers
+ * cannot be seen by the next document. */
+static void stopRealm(void)
+{
+    RuntimeState* state = g_currentState;
+
+    if (!state || state == &g_emptyState)
+        return;
+
+    /* Stop the realm's resources first: a response that arrives later must
+     * not be delivered into the realm that replaces this one. */
+    cancelInFlightResources(state->generation);
+
+    /* The nodes of the previous realm can be released now (their document
+     * was replaced a generation ago). */
+    if (g_pinsPendingRelease)
+        releasePinnedNodes(g_pinsPendingRelease);
+
+    g_pinsPendingRelease = state->generation;
+
+    /* Values owned by the old engine have to go before the engine does. */
+    if (g_docObj) {
+        antb_value_release(g_docObj);
+        g_docObj = 0;
+    }
+    if (g_locationObj) {
+        antb_value_release(g_locationObj);
+        g_locationObj = 0;
+    }
+
+    /* The old page's listeners close over its DOM. */
+    dropListenersForOldDocument();
+
+    /* ...and the JS wrappers of its nodes must not be handed out to the next
+     * document (the bridge keeps them in a process wide cache). */
+    if (state->engine && g_document)
+        antb_release_owner(state->engine, g_document);
+
+    /* The node class belongs to the old engine. */
+    g_nodeClass = 0;
+    g_documentBound = false;
+
+    /* The slots point at documents that are going away: keeping them would
+     * hand out pointers to freed documents. */
+    for (int i = 0; i < g_docSlotCount; ++i) {
+        g_docSlots[i] = 0;
+        g_docSlotGeneration[i] = 0;
+    }
+
+    g_docSlotCount = 0;
+    g_currentSlot = -1;
+
+    if (state->engine) {
+        antb_engine_destroy(state->engine);
+        state->engine = 0;
+    }
+
+    if (getenv("AGB_EVT_DEBUG"))
+        fprintf(stderr, "[evt] realm stopped (generation=%lu)\n", state->generation);
+}
+
+/* Starts a fresh realm (a new VM) for the next document. Called before the new
+ * document is parsed, so that its module graph is registered in the new realm
+ * and not in the one that is going away. */
+void beginNewRealm(void)
+{
+    RuntimeState* state = g_currentState;
+
+    if (!state || state == &g_emptyState)
+        return;
+
+    if (state->engine)
+        return;   /* a realm is already running */
+
+    /* Every realm gets a fresh id: the resources of the old one are
+     * cancelled by it, the new ones belong to the new id. */
+    state->generation = nextGeneration();
+
+    {
+        /* Ant bounds the JS stack with the address of a local in the calling
+         * thread - the same thread that creates the view. */
+        volatile char stack_anchor = 0;
+        state->engine = antb_engine_create((const void*)&stack_anchor);
+    }
+
+    if (state->engine)
+        antb_set_uncaught_nonfatal(state->engine, 1);
+
+    if (getenv("AGB_EVT_DEBUG"))
+        fprintf(stderr, "[evt] realm started (generation=%lu, engine=%p)\n",
+                state->generation, (void*)state->engine);
+}
+
 void bindDocument(void* document)
 {
     WebCore::Document* previous = g_document;
@@ -3182,6 +3501,7 @@ void bindDocument(void* document)
      * ran its whole suite several times over). */
     if (g_documentBound && previous == (WebCore::Document*)document && g_docObj)
         return;
+
     g_currentSlot = slotForDocument(g_document);
 
     if (getenv("AGB_EVT_DEBUG"))
@@ -5896,10 +6216,17 @@ AntbValue* wrapNode(AntbEngine* engine, WebCore::Node* node)
 
     /* The wrapper cache is keyed by the raw node pointer, so a node that gets
      * destroyed and a new one allocated at the same address would share a
-     * wrapper (use-after-free). Keep every wrapped node alive instead: bounded
-     * by the document lifetime, and test pages survive hundreds of wraps. */
+     * wrapper (use-after-free). Keep every wrapped node alive instead - but
+     * only for as long as the realm that wrapped it lives. */
     {
-        static std::set<WebCore::Node*>* pinned = new std::set<WebCore::Node*>();
+        unsigned long generation = currentGeneration();
+        std::map<unsigned long, std::set<WebCore::Node*>*>& pins = pinnedNodes();
+        std::set<WebCore::Node*>* pinned = pins[generation];
+
+        if (!pinned) {
+            pinned = new std::set<WebCore::Node*>();
+            pins[generation] = pinned;
+        }
 
         if (pinned->find(node) == pinned->end()) {
             node->ref();
@@ -5907,7 +6234,7 @@ AntbValue* wrapNode(AntbEngine* engine, WebCore::Node* node)
         }
     }
 
-    v = antb_wrap_native_as(engine, g_nodeClass, node, AGB_TAG_NODE);
+    v = antb_wrap_native_as_owner(engine, g_nodeClass, node, AGB_TAG_NODE, g_document);
     if (!v)
         return NULL;
 
@@ -6032,6 +6359,38 @@ void dispatchWindowEvent(const char* type)
         antb_value_release(snapshot[i]);
 
     antb_value_release(self);
+}
+
+/* The document is about to be replaced: the outgoing page gets its teardown
+ * events (pagehide, unload) while it is still the current document. Browsers
+ * fire them on every navigation, reload included; without them a page cannot
+ * clean up (timers, sockets, subscriptions) and the events simply never
+ * happen in this engine. */
+void documentWillUnload(void)
+{
+    if (!g_engine || !g_document)
+        return;
+
+    /* Browser order: pagehide, then unload. The listeners belong to the
+     * document that is going away - g_document still points at it. */
+    dispatchWindowEvent("pagehide");
+    dispatchWindowEvent("unload");
+
+    /* A teardown handler may have thrown: do not leave the exception
+     * pending, it would poison the next evaluation. */
+    if (char* pending = antb_take_pending_error(g_engine)) {
+        fprintf(stderr, "[antjs] (unload) %s\n", pending);
+        free(pending);
+    }
+
+    /* The old page's listeners close over its DOM and would fire against the
+     * next document. */
+    dropListenersForOldDocument();
+
+    /* Isolation: the old realm goes away with the old document. Its globals,
+     * its module registry and its timers must not be visible to the next
+     * document. */
+    stopRealm();
 }
 
 /* Builds the JS event object: the prelude adds the DOM methods (which only set

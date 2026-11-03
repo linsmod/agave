@@ -47,6 +47,13 @@ using namespace MaCross;
 
 namespace WebCore {
 
+/* True when this client belongs to the page's main frame. The Ant JS window is
+ * one object per engine, so only the main frame may deliver window events. */
+static bool isMainFrameClient(Frame* frame)
+{
+    return frame && frame->page() && frame->page()->mainFrame() == frame;
+}
+
 FrameLoaderClientMC::FrameLoaderClientMC()
     : m_frame(0)
     , m_firstData(false)
@@ -244,6 +251,18 @@ bool FrameLoaderClientMC::canShowMIMEType(const String& MIMEType) const
 void FrameLoaderClientMC::committedLoad(DocumentLoader* loader, const char* data, int length)
 {
     FrameLoader *fl = loader->frameLoader();
+
+#if ENABLE(ANTJS)
+    /* The new document is committed and about to be parsed: give it its own
+     * realm NOW. The previous document's realm (its globals, its module
+     * registry, its timers) was stopped with that document, and the new realm
+     * has to exist before the parser registers the page's module graph. */
+    if (isMainFrameClient(m_frame) && m_frame && m_frame->document()) {
+        AntRuntime::beginNewRealm();
+        AntRuntime::bindDocument(m_frame->document());
+    }
+#endif
+
     if (m_firstData) {
         String encoding = loader->overrideEncoding();
         bool userChosen = !encoding.isNull();
@@ -590,9 +609,15 @@ void FrameLoaderClientMC::dispatchDidChangeLocationWithinPage()
 
 void FrameLoaderClientMC::dispatchWillClose()
 {
+#if ENABLE(ANTJS)
+    /* The document that is going away gets its teardown events first
+     * (pagehide, unload). The Ant JS window is one object per engine, so
+     * only the main frame may deliver them. */
+    if (isMainFrameClient(m_frame))
+        AntRuntime::documentWillUnload();
+#endif
     notImplemented();
 }
-
 void FrameLoaderClientMC::dispatchDidReceiveIcon()
 {
     notImplemented();
@@ -608,13 +633,6 @@ void FrameLoaderClientMC::dispatchDidCommitLoad()
 {
     Net::logEvent("page.commit", "");
     notImplemented();
-}
-
-/* True when this client belongs to the page's main frame. The Ant JS window is
- * one object per engine, so only the main frame may deliver window events. */
-static bool isMainFrameClient(Frame* frame)
-{
-    return frame && frame->page() && frame->page()->mainFrame() == frame;
 }
 
 void FrameLoaderClientMC::dispatchDidFinishDocumentLoad()

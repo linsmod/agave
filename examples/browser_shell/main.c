@@ -1148,6 +1148,7 @@ static void shellExitTrace(void)
 #define PROBE_TIMER_EVAL    1
 #define PROBE_TIMER_SETTLE  2
 #define PROBE_TIMER_TIMEOUT 3
+#define PROBE_TIMER_POLL    4   /* repeating: poll new document after reload */
 
 /* Engine-thread callbacks post this to the probe window (main thread) to arm
  * the eval timer: window timers must be installed by the owning thread. */
@@ -1182,6 +1183,13 @@ static int g_probeGotExit;
 static int g_probeSawError;
 static int g_probeTimedOut;
 static int g_probeSanityFailed;
+static int g_probeReloadsLeft;
+static int g_probeReloadMode;    /* --reload was given                     */
+static int g_probeRound      = 1; /* current round (1 = first document)      */
+static int g_probeTotalRounds = 1; /* 1 + number of reloads                 */
+static int g_probePollCount;      /* readyState polls in the current round  */
+static int g_probeRoundsDone;     /* every round finished -> OK exit code   */
+static char g_probeToken[64];     /* per-reload marker for the NEW document */
 
 static void probePrint(const char* tag, const char* text)
 {
@@ -1245,7 +1253,7 @@ static void probeOnProgress(AgaveWebView* view, int percent, int finished, void*
      * request to the main loop instead; progress finished is only a FALLBACK
      * trigger with a longer delay - the real schedule comes from the page's
      * window load event. */
-    if (finished && !g_probeFinished) {
+    if (finished && !g_probeFinished && !g_probeReloadMode) {
         probePrint("[probe]", g_probeSawError ? "progress finished (with error)" : "progress finished");
         PostMessageA(g_probeWnd, AGW_PROBE_MSG, g_probeWaitMs + 10000, 0);
     }
@@ -1254,11 +1262,17 @@ static void probeOnProgress(AgaveWebView* view, int percent, int finished, void*
 static LRESULT CALLBACK probeWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
     if (message == AGW_PROBE_MSG) {
-        /* Engine thread asks for the eval timer; wParam carries the delay. */
+        /* Engine thread asks for the eval timer; wParam carries the delay.
+         * Also stops the post-reload readyState poll: the first
+         * __agb_loaded__ means the new document is done. */
+        KillTimer(g_probeWnd, PROBE_TIMER_POLL);
+
         if (!g_probeFinished) {
             g_probeFinished = 1;
-            fprintf(stderr, "[probe] arm eval delay=%lu ms\n", (unsigned long)wParam);
-            SetTimer(g_probeWnd, PROBE_TIMER_EVAL, (UINT)wParam, NULL);
+            /* Reload rounds: the document is already parsed, the extra
+             * wait only exists for pages that paint after load. */
+            SetTimer(g_probeWnd, PROBE_TIMER_EVAL,
+                     (UINT)(g_probeRound > 1 ? 150 : wParam), NULL);
         }
         return 0;
     }
@@ -1404,14 +1418,85 @@ static int probeRun(const char* url)
                     "  agavePostMessage('__agb_sanity__ skipped eval: ' + (result === undefined ? '' : String(result)));"
                     " };"
                     "}");
-                agave_webview_eval(g_probeView, g_probeScript);
+                /* Tag the document with the round number: the document itself
+                 * is replaced on reload, so nothing else survives to tell
+                 * the rounds apart. */
+                {
+                    char script[8300];
+
+                    snprintf(script, sizeof(script),
+                             "window.__agbRound=%d;window.__agbRounds=%d;%s",
+                             g_probeRound, g_probeTotalRounds, g_probeScript);
+                    agave_webview_eval(g_probeView, script);
+                }
                 SetTimer(g_probeWnd, PROBE_TIMER_SETTLE, g_probeSettleMs, NULL);
                 continue;
             }
 
             if (msg.wParam == PROBE_TIMER_SETTLE) {
                 KillTimer(g_probeWnd, PROBE_TIMER_SETTLE);
+
+                /* --reload: start the next round. The new document has no
+                 * load hook yet, so poll its readyState; each poll eval that
+                 * sees 'complete' posts __agb_loaded__, which stops the poll
+                 * (KillTimer in probeWndProc) and schedules the next eval. */
+                if (g_probeReloadsLeft > 0) {
+                    char mark[128];
+
+                    g_probeReloadsLeft--;
+                    g_probeRound++;
+                    g_probeFinished = 0;
+                    g_probeEvalDone = 0;
+                    g_probePollCount = 0;
+                    probePrint("[probe]", "reloading");
+
+                    /* Mark the CURRENT document. The poll only fires on a
+                     * document that does NOT carry the marker, i.e. on the
+                     * freshly loaded one. If a reload reuses the old
+                     * document, the poll never fires and the run says so
+                     * instead of silently testing the stale document. */
+                    snprintf(g_probeToken, sizeof(g_probeToken),
+                             "R%d_%lu", g_probeRound, (unsigned long)GetTickCount());
+                    snprintf(mark, sizeof(mark),
+                             "window.__agbPreReload='%s';", g_probeToken);
+                    agave_webview_eval(g_probeView, mark);
+
+                    SetTimer(g_probeWnd, PROBE_TIMER_POLL, 400, NULL);
+                    agave_webview_reload(g_probeView);
+                    continue;
+                }
+
+                if (g_probeReloadMode)
+                    g_probeRoundsDone = 1;
+
                 break;
+            }
+
+            if (msg.wParam == PROBE_TIMER_POLL) {
+                char poll[512];
+
+                g_probePollCount++;
+
+                /* Give up waiting for a new document: arm the eval anyway so
+                 * the round still reports what the frame holds. */
+                if (g_probePollCount > 30) {
+                    KillTimer(g_probeWnd, PROBE_TIMER_POLL);
+                    probePrint("[probe]", "poll exhausted, arming eval anyway");
+                    PostMessageA(g_probeWnd, AGW_PROBE_MSG, 0, 0);
+                    continue;
+                }
+
+                snprintf(poll, sizeof(poll),
+                         "var m = typeof window.__agbPreReload;"
+                         "if (document.readyState === 'complete' && m !== '%s') {"
+                         " agavePostMessage('__agb_loaded__' + location.href);"
+                         "} else {"
+                         " agavePostMessage('[poll] rs=' + document.readyState"
+                         " + ' marker=' + m + ' id=' + window.__docId);"
+                         "}",
+                         g_probeToken);
+                agave_webview_eval(g_probeView, poll);
+                continue;
             }
         }
 
@@ -1428,6 +1513,8 @@ static int probeRun(const char* url)
             code = PROBE_EXIT_SANITY;
         else if (g_probeGotExit)
             code = PROBE_EXIT_OK;
+        else if (g_probeReloadMode && g_probeRoundsDone)
+            code = PROBE_EXIT_OK;   /* every reload round ran to the end */
         else if (g_probeTimedOut && !g_probeFinished)
             code = PROBE_EXIT_TIMEOUT_LOAD;
         else if (g_probeTimedOut)
@@ -1455,7 +1542,9 @@ static void probeUsage(void)
             "            the script may call probeExit(result) to leave immediately\n"
             "  --wait    settle time after 'load finished' before eval (default 3000)\n"
             "  --settle  time after eval before exit (default 1000)\n"
-            "  --timeout hard cap from start (default 60000)\n");
+            "  --timeout hard cap from start (default 60000)\n"
+            "  --reload <n>  reload the page n times and run the eval after\n"
+            "                every round (page lifecycle comparison)\n");
 }
 
 /* Parses the raw command line into argv/argc in place, honoring double quotes.
@@ -1591,6 +1680,10 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
                 g_probeSettleMs = atoi(argv[++i]);
             } else if (!strcmp(argv[i], "--timeout") && i + 1 < argc) {
                 g_probeTimeoutMs = atoi(argv[++i]);
+            } else if (!strcmp(argv[i], "--reload") && i + 1 < argc) {
+                g_probeReloadsLeft = atoi(argv[++i]);
+                g_probeReloadMode = 1;
+                g_probeTotalRounds = g_probeReloadsLeft + 1;
             } else if (argv[i][0] != '-') {
                 urlArg = argv[i];
             }

@@ -84,6 +84,16 @@ void dispatchEvent(void* node, void* event);
  * DOMContentLoaded and load, which jQuery's ready queue waits for). */
 void dispatchWindowEvent(const char* type);
 
+/* The document is about to be replaced: fires the outgoing page's teardown
+ * events (pagehide, unload) at its own listeners and stops its realm. Call it
+ * while the old document is still the current one. */
+void documentWillUnload(void);
+
+/* Starts a fresh realm for the next document. Call it before the new document
+ * is parsed: every document gets its own JS world (globals, module registry,
+ * timers). */
+void beginNewRealm(void);
+
 } /* namespace AntRuntime */
 
 #endif /* ANT_RUNTIME_H */

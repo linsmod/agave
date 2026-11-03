@@ -163,6 +163,16 @@ AGB_API void antb_value_assign(AntbValue* out, const AntbValue* value);
  * registers it as a GC root, and attaches `ptr` via antb_set_native(). */
 AGB_API AntbValue* antb_wrap_native(AntbEngine* engine, void* ptr, unsigned tag);
 
+/* Same, but the wrapper is owned by `owner` (the document that owns the
+ * native object). When the owner goes away, antb_release_owner() drops the
+ * wrappers, so the next document never gets a wrapper of the old one. */
+AGB_API AntbValue* antb_wrap_native_owner(AntbEngine* engine, void* ptr, unsigned tag, void* owner);
+
+/* Releases the wrappers that belong to `owner`. The GC roots of those
+ * wrappers stay until the engine is destroyed (ant's GC cannot unpin), but
+ * the cache stops handing them out. */
+AGB_API void antb_release_owner(AntbEngine* engine, void* owner);
+
 /* Makes a copy of `value` that survives garbage collection (the handle leaks on
  * purpose; use it for stored callbacks such as DOM event listeners). */
 AGB_API AntbValue* antb_retain(const AntbValue* value);
@@ -190,6 +200,11 @@ AGB_API void antb_class_add_property(AntbEngine* engine, AntbClass* klass,
 /* Wraps a C object as an instance of `klass`, caching per (ptr, tag). */
 AGB_API AntbValue* antb_wrap_native_as(AntbEngine* engine, AntbClass* klass,
                                        void* ptr, unsigned tag);
+
+/* Same, but the wrapper is owned by `owner` (the document that owns the
+ * native object). */
+AGB_API AntbValue* antb_wrap_native_as_owner(AntbEngine* engine, AntbClass* klass,
+                                             void* ptr, unsigned tag, void* owner);
 
 /* Internal helpers (still exported so the C++ side can use them):
  * antb_class_set_property registers a getter in the class table,

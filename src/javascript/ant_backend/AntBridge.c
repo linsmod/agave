@@ -78,6 +78,11 @@ static void copy_cstr(AntbEngine* e, const char* what, ant_value_t v)
     }
 }
 
+/* The wrapper and class tables are process wide; an engine that goes away
+ * takes its entries with it (see antb_engine_destroy). */
+static void agbReleaseEngineWrappers(AntbEngine* engine);
+static void agbReleaseEngineClasses(AntbEngine* engine);
+
 AntbEngine* antb_engine_create(const void* stack_anchor)
 {
     AntbEngine* e = (AntbEngine*)calloc(1, sizeof(AntbEngine));
@@ -110,6 +115,14 @@ void antb_engine_destroy(AntbEngine* engine)
 {
     if (!engine)
         return;
+
+    /* The wrapper and class tables are process wide. An engine that goes away
+     * must take its entries with it: a stale js pointer, a wrapper that is
+     * handed out again, a table that runs out of slots (the class table had
+     * 128 entries and one class per engine - one engine per document). */
+    agbReleaseEngineWrappers(engine);
+    agbReleaseEngineClasses(engine);
+
     if (engine->js)
         js_destroy(engine->js);
     free(engine);
@@ -2031,16 +2044,19 @@ typedef struct {
     ant_t*      js;
     void*       ptr;
     unsigned    tag;
+    void*       owner;      /* the document that owns the native object */
     ant_value_t value;   /* GC root: registered with gc_register_root() */
     int         used;
     int         next;    /* hash chain index+1 */
+    int         freeNext;/* free list index+1 */
 } agb_wrapper_entry;
 
 static agb_wrapper_entry g_wrappers[AGB_MAX_WRAPPERS];
 #define AGB_WRAPPER_HASH_SIZE 65521   /* prime */
 
 static int                g_wrapperHash[AGB_WRAPPER_HASH_SIZE];   /* index+1 */
-static int                g_wrapper_count = 0;
+static int                g_wrapper_count = 0;   /* entries in use */
+static int                g_wrapper_free  = 0;    /* free list head (index+1) */
 
 static unsigned agbWrapperBucket(ant_t* js, void* ptr, unsigned tag)
 {
@@ -2051,9 +2067,9 @@ static unsigned agbWrapperBucket(ant_t* js, void* ptr, unsigned tag)
     return (unsigned)(h % AGB_WRAPPER_HASH_SIZE);
 }
 
-AntbValue* antb_wrap_native(AntbEngine* engine, void* ptr, unsigned tag)
+AntbValue* antb_wrap_native_owner(AntbEngine* engine, void* ptr, unsigned tag, void* owner)
 {
-    int i;
+    int idx;
 
     if (!engine || !engine->js || !ptr)
         return NULL;
@@ -2062,22 +2078,31 @@ AntbValue* antb_wrap_native(AntbEngine* engine, void* ptr, unsigned tag)
      * pages into O(n^2) (163.com spent minutes here). */
     {
         unsigned bucket = agbWrapperBucket(engine->js, ptr, tag);
-        int idx = g_wrapperHash[bucket];
+        int i = g_wrapperHash[bucket];
 
-        while (idx) {
-            agb_wrapper_entry* e = &g_wrappers[idx - 1];
+        while (i) {
+            agb_wrapper_entry* e = &g_wrappers[i - 1];
 
             if (e->used && e->js == engine->js && e->ptr == ptr && e->tag == tag)
                 return alloc_value(engine->js, e->value);
-            idx = e->next;
+            i = e->next;
         }
     }
 
-    if (g_wrapper_count >= AGB_MAX_WRAPPERS)
-        return NULL;
+    /* A free slot first: the table is process wide and an engine that died
+     * gave its slots back. */
+    if (g_wrapper_free) {
+        idx = g_wrapper_free - 1;
+        g_wrapper_free = g_wrappers[idx].freeNext;
+    } else {
+        if (g_wrapper_count >= AGB_MAX_WRAPPERS)
+            return NULL;
+
+        idx = g_wrapper_count++;
+    }
 
     {
-        agb_wrapper_entry* e = &g_wrappers[g_wrapper_count];
+        agb_wrapper_entry* e = &g_wrappers[idx];
         ant_value_t obj = mkobj(engine->js, 0);
 
         js_set_native(obj, ptr, (uint32_t)tag);
@@ -2085,8 +2110,10 @@ AntbValue* antb_wrap_native(AntbEngine* engine, void* ptr, unsigned tag)
         e->js    = engine->js;
         e->ptr   = ptr;
         e->tag   = tag;
+        e->owner = owner;
         e->value = obj;
         e->used  = 1;
+        e->freeNext = 0;
 
         /* keep the wrapper alive for the lifetime of the engine */
         gc_pin_permanent(e->js, e->value);
@@ -2095,12 +2122,16 @@ AntbValue* antb_wrap_native(AntbEngine* engine, void* ptr, unsigned tag)
             unsigned bucket = agbWrapperBucket(e->js, e->ptr, e->tag);
 
             e->next = g_wrapperHash[bucket];
-            g_wrapperHash[bucket] = g_wrapper_count + 1;
+            g_wrapperHash[bucket] = idx + 1;
         }
-        g_wrapper_count++;
 
         return alloc_value(engine->js, obj);
     }
+}
+
+AntbValue* antb_wrap_native(AntbEngine* engine, void* ptr, unsigned tag)
+{
+    return antb_wrap_native_owner(engine, ptr, tag, NULL);
 }
 
 AntbValue* antb_retain(const AntbValue* value)
@@ -2144,13 +2175,39 @@ struct AntbClass {
 static struct AntbClass* g_classes[AGB_MAX_CLASSES];
 static int               g_class_count = 0;
 
+/* The class property tables (one row per class index). Declared here because
+ * the class table is recycled when an engine dies. */
+typedef struct {
+    char         name[64];
+    AntbGetterFn fn;
+    void*        user;
+} agb_class_prop;
+
+#define AGB_MAX_CLASS_PROPS 32
+
+static agb_class_prop g_class_props[AGB_MAX_CLASSES][AGB_MAX_CLASS_PROPS];
+static int            g_class_prop_count[AGB_MAX_CLASSES];
+
 AntbClass* antb_class_create(AntbEngine* engine, const char* name)
 {
     struct AntbClass* k;
+    int slot = -1;
+    int i;
 
     if (!engine || !engine->js || !name)
         return NULL;
-    if (g_class_count >= AGB_MAX_CLASSES)
+
+    /* A free slot first: the table is process wide and an engine that died
+     * gave its slots back (one class per engine, and one engine per
+     * document - the table used to run out after 128 navigations). */
+    for (i = 0; i < AGB_MAX_CLASSES; ++i) {
+        if (!g_classes[i]) {
+            slot = i;
+            break;
+        }
+    }
+
+    if (slot < 0)
         return NULL;
 
     k = (struct AntbClass*)calloc(1, sizeof(struct AntbClass));
@@ -2165,8 +2222,31 @@ AntbClass* antb_class_create(AntbEngine* engine, const char* name)
     /* the prototype must outlive every instance */
     gc_pin_permanent(engine->js, k->proto);
 
-    g_classes[g_class_count++] = k;
+    g_classes[slot] = k;
+    g_class_prop_count[slot] = 0;
+    g_class_count++;
     return k;
+}
+
+/* Releases the classes of an engine: the table is process wide and an engine
+ * that goes away must not leave its classes behind. */
+static void agbReleaseEngineClasses(AntbEngine* engine)
+{
+    int i;
+
+    if (!engine || !engine->js)
+        return;
+
+    for (i = 0; i < AGB_MAX_CLASSES; ++i) {
+        if (g_classes[i] && g_classes[i]->js == engine->js) {
+            free(g_classes[i]);
+            g_classes[i] = NULL;
+            g_class_prop_count[i] = 0;
+
+            if (g_class_count > 0)
+                g_class_count--;
+        }
+    }
 }
 
 void antb_class_add_method(AntbEngine* engine, AntbClass* klass,
@@ -2189,15 +2269,86 @@ void antb_class_add_property(AntbEngine* engine, AntbClass* klass,
     antb_class_set_property(engine, klass, name, fn, user);
 }
 
-AntbValue* antb_wrap_native_as(AntbEngine* engine, AntbClass* klass,
-                               void* ptr, unsigned tag)
+/* Takes an entry out of its hash chain and puts it on the free list. The GC
+ * root of the entry stays: ant's GC has no unpin, so the root goes away with
+ * the engine that owns it. */
+static void agbWrapperRelease(int idx)
+{
+    agb_wrapper_entry* e = &g_wrappers[idx];
+    unsigned bucket;
+    int* link;
+
+    if (!e->used)
+        return;
+
+    bucket = agbWrapperBucket(e->js, e->ptr, e->tag);
+    link = &g_wrapperHash[bucket];
+
+    while (*link) {
+        int cur = *link - 1;
+
+        if (cur == idx) {
+            *link = g_wrappers[cur].next;
+            break;
+        }
+
+        link = &g_wrappers[cur].next;
+    }
+
+    e->used = 0;
+    e->next = 0;
+    e->freeNext = g_wrapper_free;
+    g_wrapper_free = idx + 1;
+
+    if (g_wrapper_count > 0)
+        g_wrapper_count--;
+}
+
+/* Releases the wrappers of one owner (the document that owned the native
+ * objects). Used when a document goes away: the cache must not hand out its
+ * wrappers to the next document. */
+void antb_release_owner(AntbEngine* engine, void* owner)
+{
+    int i;
+
+    if (!engine || !engine->js || !owner)
+        return;
+
+    for (i = 0; i < AGB_MAX_WRAPPERS; ++i) {
+        agb_wrapper_entry* e = &g_wrappers[i];
+
+        if (e->used && e->js == engine->js && e->owner == owner)
+            agbWrapperRelease(i);
+    }
+}
+
+/* Releases every wrapper of an engine: the tables are process wide, and an
+ * engine that goes away must not leave entries behind (a stale js pointer, a
+ * wrapper handed out again, a table that runs out of slots). */
+static void agbReleaseEngineWrappers(AntbEngine* engine)
+{
+    int i;
+
+    if (!engine || !engine->js)
+        return;
+
+    for (i = 0; i < AGB_MAX_WRAPPERS; ++i) {
+        agb_wrapper_entry* e = &g_wrappers[i];
+
+        if (e->used && e->js == engine->js)
+            agbWrapperRelease(i);
+    }
+}
+
+AntbValue* antb_wrap_native_as_owner(AntbEngine* engine, AntbClass* klass,
+                                    void* ptr, unsigned tag, void* owner)
 {
     AntbValue* v;
 
-    if (!engine || !klass || !ptr)
+    if (!engine || !engine->js || !klass || !ptr)
         return NULL;
 
-    v = antb_wrap_native(engine, ptr, tag);
+    v = antb_wrap_native_owner(engine, ptr, tag, owner);
     if (!v)
         return NULL;
 
@@ -2210,26 +2361,25 @@ AntbValue* antb_wrap_native_as(AntbEngine* engine, AntbClass* klass,
 
     return v;
 }
+
+AntbValue* antb_wrap_native_as(AntbEngine* engine, AntbClass* klass,
+                               void* ptr, unsigned tag)
+{
+    return antb_wrap_native_as_owner(engine, klass, ptr, tag, NULL);
+}
 /* --- class property tables ----------------------------------------------- *
  * ant does not run an object's exotic getter when the property is found on a
  * prototype, so class level properties are installed as one dispatching
  * getter per instance instead. */
 
-#define AGB_MAX_CLASS_PROPS 32
-
-typedef struct {
-    char         name[64];
-    AntbGetterFn fn;
-    void*        user;
-} agb_class_prop;
-
-static agb_class_prop g_class_props[AGB_MAX_CLASSES][AGB_MAX_CLASS_PROPS];
-static int            g_class_prop_count[AGB_MAX_CLASSES];
+#define AGB_MAX_CLASS_PROPS_UNUSED 0
 
 static int agb_class_index(AntbClass* k)
 {
     int i;
-    for (i = 0; i < g_class_count; i++)
+    /* The whole table, not just the first g_class_count entries: a slot can
+     * be reused after its class was released. */
+    for (i = 0; i < AGB_MAX_CLASSES; i++)
         if (g_classes[i] == k)
             return i;
     return -1;
