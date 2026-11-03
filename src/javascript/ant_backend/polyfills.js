@@ -181,6 +181,10 @@
 
             if (!name || !value) return false;
 
+            /* var() is valid at parse time regardless of whether the variable
+             * is defined at that point: support is about the syntax. */
+            if (/var\(/i.test(value)) return true;
+
             try {
                 if (el.style.setProperty) el.style.setProperty(name, value);
                 else el.style[name] = value;

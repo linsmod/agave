@@ -1000,13 +1000,29 @@ declaration:
         $$ = false;
         CSSParser* p = static_cast<CSSParser*>(parser);
         if ($1 && $4) {
-            p->valueList = p->sinkFloatingValueList($4);
-            int oldParsedProperties = p->numParsedProperties;
-            $$ = p->parseValue($1, $5);
-            if (!$$)
-                p->rollbackLastProperties(p->numParsedProperties - oldParsedProperties);
-            delete p->valueList;
-            p->valueList = 0;
+            if ($1 == CSS_PROP_CUSTOM_PROPERTY) {
+                /* '--x: value' defines a variable; the value stays text until
+                 * a var() reference is expanded. */
+                CSSParser::setCustomProperty(p->lastPropertyName, p->valueText($4));
+                $$ = true;
+            } else if (p->hasVarFunction($4)) {
+                String text = p->valueText($4);
+                /* Expand now: the value cannot be parsed while var() is in
+                 * it. A null result means an unknown variable without a
+                 * fallback, which invalidates the declaration. */
+                String expanded = p->expandVariables(text);
+
+                if (!expanded.isNull())
+                    $$ = p->parseExpandedValue($1, expanded, $5);
+            } else {
+                p->valueList = p->sinkFloatingValueList($4);
+                int oldParsedProperties = p->numParsedProperties;
+                $$ = p->parseValue($1, $5);
+                if (!$$)
+                    p->rollbackLastProperties(p->numParsedProperties - oldParsedProperties);
+                delete p->valueList;
+                p->valueList = 0;
+            }
         }
     }
     |
@@ -1038,7 +1054,10 @@ property:
         DeprecatedString str = deprecatedString($1);
         const char* s = str.ascii();
         int l = str.length();
-        $$ = getPropertyID(s, l);
+        CSSParser* p = static_cast<CSSParser*>(parser);
+        p->lastPropertyName = String(s);
+        /* Custom properties ('--x') have no generated id. */
+        $$ = (l > 5 && !strncmp(s, "-agb-", 5)) ? CSS_PROP_CUSTOM_PROPERTY : getPropertyID(s, l);
     }
   ;
 

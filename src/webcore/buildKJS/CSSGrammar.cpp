@@ -3123,13 +3123,28 @@ yyreduce:
         (yyval.ok) = false;
         CSSParser* p = static_cast<CSSParser*>(parser);
         if ((yyvsp[(1) - (5)].prop_id) && (yyvsp[(4) - (5)].valueList)) {
-            p->valueList = p->sinkFloatingValueList((yyvsp[(4) - (5)].valueList));
-            int oldParsedProperties = p->numParsedProperties;
-            (yyval.ok) = p->parseValue((yyvsp[(1) - (5)].prop_id), (yyvsp[(5) - (5)].b));
-            if (!(yyval.ok))
-                p->rollbackLastProperties(p->numParsedProperties - oldParsedProperties);
-            delete p->valueList;
-            p->valueList = 0;
+            if ((yyvsp[(1) - (5)].prop_id) == CSS_PROP_CUSTOM_PROPERTY) {
+                /* '--x: value' defines a variable; the value stays text until
+                 * a var() reference is expanded. */
+                CSSParser::setCustomProperty(p->lastPropertyName, p->valueText((yyvsp[(4) - (5)].valueList)));
+                (yyval.ok) = true;
+            } else if (p->hasVarFunction((yyvsp[(4) - (5)].valueList))) {
+                String text = p->valueText((yyvsp[(4) - (5)].valueList));
+                /* A null result means an unknown variable without a fallback,
+                 * which invalidates the declaration. */
+                String expanded = p->expandVariables(text);
+
+                if (!expanded.isNull())
+                    (yyval.ok) = p->parseExpandedValue((yyvsp[(1) - (5)].prop_id), expanded, (yyvsp[(5) - (5)].b));
+            } else {
+                p->valueList = p->sinkFloatingValueList((yyvsp[(4) - (5)].valueList));
+                int oldParsedProperties = p->numParsedProperties;
+                (yyval.ok) = p->parseValue((yyvsp[(1) - (5)].prop_id), (yyvsp[(5) - (5)].b));
+                if (!(yyval.ok))
+                    p->rollbackLastProperties(p->numParsedProperties - oldParsedProperties);
+                delete p->valueList;
+                p->valueList = 0;
+            }
         }
     }
     break;
@@ -3184,7 +3199,10 @@ yyreduce:
         DeprecatedString str = deprecatedString((yyvsp[(1) - (2)].string));
         const char* s = str.ascii();
         int l = str.length();
-        (yyval.prop_id) = getPropertyID(s, l);
+        CSSParser* p = static_cast<CSSParser*>(parser);
+        p->lastPropertyName = String(s);
+        /* Custom properties ('--x') have no generated id. */
+        (yyval.prop_id) = (l > 5 && !strncmp(s, "-agb-", 5)) ? CSS_PROP_CUSTOM_PROPERTY : getPropertyID(s, l);
     }
     break;
 

@@ -109,6 +109,11 @@ namespace WebCore {
         ~Function() { delete args; }
     };
 
+    /* Pseudo property id for a custom property declaration ('--x: value').
+     * Well above the generated ids, which stop at the last entry of
+     * CSSPropertyNames.in. */
+#define CSS_PROP_CUSTOM_PROPERTY 4095
+
     class CSSParser {
     public:
         CSSParser(bool strictParsing = true);
@@ -129,6 +134,35 @@ namespace WebCore {
         void addProperty(int propId, PassRefPtr<CSSValue>, bool important);
         void rollbackLastProperties(int num);
         bool hasProperties() const { return numParsedProperties > 0; }
+
+        /* --- CSS custom properties ('--x: value') and var() ---------------
+         * The table is process wide: var() is expanded while the sheet is
+         * parsed, i.e. before any element is known. Element scoping
+         * (`.theme { --x: ... }` overriding `:root { --x: ... }`) is therefore
+         * approximated by the last definition seen. */
+        static void setCustomProperty(const String& name, const String& value);
+        static String customPropertyValue(const String& name);
+        static void clearCustomProperties();
+
+        /* Serializes a parsed value list back to CSS text, and expands
+         * var(--x[, fallback]) in it. Returns a null String when a referenced
+         * variable is undefined and has no fallback (the declaration must be
+         * dropped, per spec). */
+        String valueText(ValueList*);
+        String expandVariables(const String& text);
+        /* True when the value list contains a var() call anywhere (cheap walk,
+         * so declarations without variables skip the text round trip). */
+        bool hasVarFunction(ValueList*);
+        /* Takes the properties another parser collected (the re-parse of an
+         * expanded value) into this one. */
+        void appendProperties(CSSParser& other);
+        /* Parses `text` as the value of propId and appends the result to this
+         * parser's output (used after var() expansion). */
+        bool parseExpandedValue(int propId, const String& text, bool important);
+
+        /* Name of the property the parser is handling (custom properties need
+         * it: '--x' has no generated id). */
+        String lastPropertyName;
 
         bool parseValue(int propId, bool important);
         bool parseShorthand(int propId, const int* properties, int numProperties, bool important);

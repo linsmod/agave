@@ -32,6 +32,8 @@
 #include "CSSGradientValue.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <vector>
+#include <utility>
 #include "CSSFontFaceRule.h"
 #include "CSSFontFaceSrcValue.h"
 #include "CSSImportRule.h"
@@ -203,12 +205,19 @@ void CSSParser::setupParser(const char* prefix, const String& string, const char
     yy_hold_char = *yy_c_buf_p;
 }
 
+static String rewriteCustomPropertyNames(const String& css);
+
 void CSSParser::parseSheet(CSSStyleSheet* sheet, const String& string)
 {
     styleElement = sheet;
     defaultNamespace = starAtom; // Reset the default namespace.
+
+    /* Custom properties are expanded while this sheet is parsed, so the table
+     * only has to outlive one sheet: clearing it here keeps a page (or the
+     * next one) from inheriting a previous sheet's values. */
+    clearCustomProperties();
     
-    setupParser("", string, "");
+    setupParser("", rewriteCustomPropertyNames(string), "");
 
     CSSParser* old = currentParser;
     currentParser = this;
@@ -232,11 +241,357 @@ PassRefPtr<CSSRule> CSSParser::parseRule(CSSStyleSheet *sheet, const String &str
     return rule.release();
 }
 
+/* ------------------------------------------------------------------------- */
+/* CSS custom properties ('--x: value') and var()                            */
+/* ------------------------------------------------------------------------- */
+/* A page defines a few dozen variables at most, and sheet parsing is not hot
+ * enough to justify a hash map here. */
+static std::vector<std::pair<String, String> >* customPropertyTable()
+{
+    static std::vector<std::pair<String, String> >* table = NULL;
+
+    if (!table)
+        table = new std::vector<std::pair<String, String> >();
+
+    return table;
+}
+
+void CSSParser::setCustomProperty(const String& name, const String& value)
+{
+    std::vector<std::pair<String, String> >* table = customPropertyTable();
+
+    if (getenv("AGB_CSS_DEBUG"))
+        fprintf(stderr, "[var] define %s = '%s'\n", name.utf8().data(), value.utf8().data());
+
+    for (size_t i = 0; i < table->size(); ++i) {
+        if ((*table)[i].first == name) {
+            /* First definition wins: declarations are expanded while the sheet
+             * is parsed, so letting a later rule overwrite the value would
+             * change what the rules above already resolved with. */
+            return;
+        }
+    }
+
+    table->push_back(std::make_pair(name, value));
+}
+
+String CSSParser::customPropertyValue(const String& name)
+{
+    std::vector<std::pair<String, String> >* table = customPropertyTable();
+
+    for (size_t i = 0; i < table->size(); ++i)
+        if ((*table)[i].first == name)
+            return (*table)[i].second;
+
+    return String();
+}
+
+void CSSParser::clearCustomProperties(void)
+{
+    customPropertyTable()->clear();
+}
+
+static String charToString(UChar c)
+{
+    return String(&c, 1);
+}
+
+
+static bool isCssIdentChar(UChar c)
+{
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+        || c == '_' || c == '-' || c >= 0x80;
+}
+
+/* The tokenizer only accepts one leading '-' in an identifier, so '--x' never
+ * arrives as a single IDENT and a custom property declaration cannot be
+ * parsed. Rename '--x' to '-agb-x' up front (comments and strings are left
+ * alone): definitions, var() references and the lookup table all agree on the
+ * rewritten name. */
+static String rewriteCustomPropertyNames(const String& css)
+{
+    String out;
+    unsigned i = 0;
+
+    if (!css.contains("--"))
+        return css;
+
+    while (i < css.length()) {
+        UChar c = css[i];
+
+        if (c == '/' && i + 1 < css.length() && css[i + 1] == '*') {
+            unsigned end = i + 2;
+
+            while (end + 1 < css.length() && !(css[end] == '*' && css[end + 1] == '/'))
+                ++end;
+            end = (end + 1 < css.length()) ? end + 2 : css.length();
+            out += css.substring(i, end - i);
+            i = end;
+            continue;
+        }
+
+        if (c == '"' || c == 39) {
+            UChar quote = c;
+            unsigned end = i + 1;
+
+            while (end < css.length() && css[end] != quote) {
+                if (css[end] == '\\')
+                    ++end;
+                ++end;
+            }
+            end = (end < css.length()) ? end + 1 : css.length();
+            out += css.substring(i, end - i);
+            i = end;
+            continue;
+        }
+
+        if (c == '-' && i + 2 < css.length() && css[i + 1] == '-' && isCssIdentChar(css[i + 2])) {
+            out += String("-agb-");
+            i += 2;
+            continue;
+        }
+
+        out += charToString(c);
+        ++i;
+    }
+
+    return out;
+}
+
+static void appendCssNumber(String& out, double value)
+{
+    char buffer[64];
+
+    if (value == (double)(long long)value)
+        snprintf(buffer, sizeof(buffer), "%lld", (long long)value);
+    else
+        snprintf(buffer, sizeof(buffer), "%g", value);
+
+    out += String(buffer);
+}
+
+static const char* cssUnitSuffix(int unit)
+{
+    switch (unit) {
+    case CSSPrimitiveValue::CSS_PERCENTAGE: return "%";
+    case CSSPrimitiveValue::CSS_EMS: return "em";
+    case CSSPrimitiveValue::CSS_EXS: return "ex";
+    case CSSPrimitiveValue::CSS_PX: return "px";
+    case CSSPrimitiveValue::CSS_CM: return "cm";
+    case CSSPrimitiveValue::CSS_MM: return "mm";
+    case CSSPrimitiveValue::CSS_IN: return "in";
+    case CSSPrimitiveValue::CSS_PT: return "pt";
+    case CSSPrimitiveValue::CSS_PC: return "pc";
+    case CSSPrimitiveValue::CSS_DEG: return "deg";
+    case CSSPrimitiveValue::CSS_RAD: return "rad";
+    case CSSPrimitiveValue::CSS_GRAD: return "grad";
+    case CSSPrimitiveValue::CSS_MS: return "ms";
+    case CSSPrimitiveValue::CSS_S: return "s";
+    case CSSPrimitiveValue::CSS_HZ: return "Hz";
+    case CSSPrimitiveValue::CSS_KHZ: return "kHz";
+    default: return "";
+    }
+}
+
+String CSSParser::valueText(ValueList* list)
+{
+    String out;
+
+    if (!list)
+        return out;
+
+    for (unsigned i = 0; i < list->size(); ++i) {
+        Value* v = list->valueAt(i);
+
+        if (!v)
+            continue;
+
+        if (i)
+            out += " ";
+
+        if (v->unit == Value::Operator) {
+            out += charToString((UChar)v->iValue);
+        } else if (v->unit == Value::QFunction && v->function) {
+            /* A function name already carries its '('. */
+            out += domString(v->function->name);
+            out += valueText(v->function->args);
+            out += ")";
+        } else if (v->unit == CSSPrimitiveValue::CSS_IDENT) {
+            out += domString(v->string);
+        } else if (v->unit == CSSPrimitiveValue::CSS_STRING) {
+            out += "\"";
+            out += domString(v->string);
+            out += "\"";
+        } else if (v->unit == CSSPrimitiveValue::CSS_URI) {
+            out += "url(";
+            out += domString(v->string);
+            out += ")";
+        } else if (v->unit == Value::Q_EMS) {
+            appendCssNumber(out, v->fValue);
+            out += "em";
+        } else {
+            appendCssNumber(out, v->fValue);
+            out += String(cssUnitSuffix(v->unit));
+        }
+    }
+
+    return out;
+}
+
+bool CSSParser::hasVarFunction(ValueList* list)
+{
+    if (!list)
+        return false;
+
+    for (unsigned i = 0; i < list->size(); ++i) {
+        Value* v = list->valueAt(i);
+
+        if (!v || v->unit != Value::QFunction || !v->function)
+            continue;
+
+        {
+            String name = domString(v->function->name).lower();
+
+            if (name.startsWith(String("var(")) || hasVarFunction(v->function->args))
+                return true;
+        }
+    }
+
+    return false;
+}
+
+static String trimCopy(const String& text)
+{
+    unsigned begin = 0;
+    unsigned end = text.length();
+
+    while (begin < end && (text[begin] == ' ' || text[begin] == '\t' || text[begin] == '\n' || text[begin] == '\r'))
+        ++begin;
+    while (end > begin && (text[end - 1] == ' ' || text[end - 1] == '\t' || text[end - 1] == '\n' || text[end - 1] == '\r'))
+        --end;
+
+    return text.substring(begin, end - begin);
+}
+
+/* Replaces var(--x[, fallback]) with the value of --x. Returns a null String
+ * when a variable is unknown and has no fallback: the declaration is invalid. */
+String CSSParser::expandVariables(const String& text)
+{
+    String out;
+    unsigned i = 0;
+
+    if (!text.contains("var("))
+        return text;
+
+    while (i < text.length()) {
+        if (text[i] == 'v' && i + 4 <= text.length() && text.substring(i, 4) == String("var(")) {
+            unsigned depth = 0;
+            unsigned j = i + 4;
+            unsigned comma = 0;
+            bool found = false;
+
+            for (; j < text.length(); ++j) {
+                if (text[j] == '(')
+                    ++depth;
+                else if (text[j] == ')') {
+                    if (!depth) {
+                        found = true;
+                        break;
+                    }
+                    --depth;
+                } else if (text[j] == ',' && !depth && !comma)
+                    comma = j;
+            }
+
+            if (!found)
+                return text;   /* malformed: let the value parser judge it */
+
+            {
+                String name = trimCopy(text.substring(i + 4, (comma ? comma : j) - (i + 4)));
+                String value = customPropertyValue(name);
+
+                if (value.isEmpty()) {
+                    if (!comma)
+                        return String();
+
+                    value = trimCopy(text.substring(comma + 1, j - comma - 1));
+                }
+
+                out += value;
+            }
+
+            i = j + 1;
+            continue;
+        }
+
+        out += charToString(text[i]);
+        ++i;
+    }
+
+    return out;
+}
+
+void CSSParser::appendProperties(CSSParser& other)
+{
+    for (int i = 0; i < other.numParsedProperties; ++i) {
+        CSSProperty* property = other.parsedProperties[i];
+
+        if (!property)
+            continue;
+
+        {
+            CSSValue* value = property->value();
+
+            /* addProperty adopts its PassRefPtr: take our own reference. */
+            if (value)
+                value->ref();
+
+            addProperty(property->id(), value, property->isImportant());
+        }
+    }
+
+    other.clearProperties();
+}
+
+bool CSSParser::parseExpandedValue(int propId, const String& text, bool important)
+{
+    CSSParser sub(strict);
+    CSSParser* old = currentParser;
+
+    sub.styleElement = styleElement;
+    sub.id = propId;
+    sub.important = important;
+    sub.setupParser("@-webkit-value{", text, "} ");
+
+    currentParser = &sub;
+    cssyyparse(&sub);
+    currentParser = old;
+
+    if (!sub.numParsedProperties)
+        return false;
+
+    appendProperties(sub);
+    return true;
+}
+
 bool CSSParser::parseValue(CSSMutableStyleDeclaration *declaration, int _id, const String &string, bool _important)
 {
     styleElement = declaration->stylesheet();
 
-    setupParser("@-webkit-value{", string, "} ");
+    {
+        String text = rewriteCustomPropertyNames(string);
+
+        if (text.contains("var(")) {
+            String expanded = expandVariables(text);
+
+            if (expanded.isNull())
+                return false;
+
+            text = expanded;
+        }
+
+        setupParser("@-webkit-value{", text, "} ");
+    }
 
     id = _id;
     important = _important;
@@ -307,7 +662,7 @@ bool CSSParser::parseDeclaration(CSSMutableStyleDeclaration *declaration, const 
 {
     styleElement = declaration->stylesheet();
 
-    setupParser("@-webkit-decls{", string, "} ");
+    setupParser("@-webkit-decls{", rewriteCustomPropertyNames(string), "} ");
 
     CSSParser* old = currentParser;
     currentParser = this;
