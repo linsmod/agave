@@ -436,3 +436,77 @@
     g.Worker.prototype.postMessage = function (msg) {};
     g.Worker.prototype.terminate = function () {};
 }());
+
+/* Event/DOM constructor surface. Scripts read `X.prototype` for feature
+ * detection long before they construct anything (React's event system,
+ * drag-and-drop and selection helpers all do), and an undefined constructor
+ * turns that into "Cannot read properties of undefined (reading 'prototype')".
+ * A bare constructor with a prototype is enough for those probes; the ones
+ * that carry data get a minimal no-op implementation. */
+(function () {
+    var g = typeof window !== 'undefined' ? window : this;
+    if (!g) return;
+
+    var base = (typeof g.Event === 'function') ? g.Event.prototype : null;
+    var names = ['UIEvent', 'FocusEvent', 'PointerEvent', 'WheelEvent', 'InputEvent',
+        'CompositionEvent', 'TouchEvent', 'DragEvent', 'ClipboardEvent', 'AnimationEvent',
+        'TransitionEvent', 'ProgressEvent', 'StorageEvent', 'PopStateEvent',
+        'HashChangeEvent', 'TextEvent', 'PageTransitionEvent', 'CloseEvent',
+        'Selection', 'ShadowRoot', 'HTMLSlotElement', 'HTMLContentElement'];
+
+    for (var i = 0; i < names.length; i++) {
+        var name = names[i];
+        if (typeof g[name] !== 'undefined')
+            continue;
+        var C = function () {};
+        try {
+            C.prototype = base && Object.create ? Object.create(base) : { constructor: C };
+            C.prototype.constructor = C;
+            Object.defineProperty(C, 'name', { value: name, configurable: true });
+        } catch (e) { C.prototype = {}; C.prototype.constructor = C; }
+        g[name] = C;
+    }
+
+    if (typeof g.Range === 'undefined') {
+        function Range() {
+            this.startContainer = null; this.endContainer = null;
+            this.startOffset = 0; this.endOffset = 0; this.collapsed = true;
+        }
+        Range.prototype.setStart = function () {};
+        Range.prototype.setEnd = function () {};
+        Range.prototype.selectNode = function () {};
+        Range.prototype.selectNodeContents = function () {};
+        Range.prototype.collapse = function () {};
+        Range.prototype.detach = function () {};
+        Range.prototype.getBoundingClientRect = function () {
+            return { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0 };
+        };
+        Range.prototype.getClientRects = function () { return []; };
+        Range.prototype.cloneContents = function () { return null; };
+        Range.prototype.deleteContents = function () {};
+        Range.prototype.insertNode = function () {};
+        Range.prototype.surroundContents = function () {};
+        g.Range = Range;
+    }
+
+    if (typeof g.DataTransfer === 'undefined') {
+        function DataTransfer() { this.dropEffect = 'none'; this.effectAllowed = 'all'; this.files = []; this.items = []; this.types = []; }
+        DataTransfer.prototype._data = null;
+        DataTransfer.prototype.getData = function (type) {
+            var d = this._data;
+            return d && d[type] ? d[type] : '';
+        };
+        DataTransfer.prototype.setData = function (type, value) {
+            if (!this._data) this._data = {};
+            this._data[type] = String(value);
+            if (this.types.indexOf(type) < 0) this.types.push(type);
+        };
+        DataTransfer.prototype.clearData = function (type) {
+            if (!this._data) return;
+            if (type) delete this._data[type];
+            else this._data = null;
+        };
+        DataTransfer.prototype.setDragImage = function () {};
+        g.DataTransfer = DataTransfer;
+    }
+}());

@@ -51,6 +51,8 @@
 #include "NodeList.h"
 #include "DocumentFragment.h"
 #include "ResourceHandle.h"
+#include "FormData.h"
+#include "TextEncoding.h"
 #include "ResourceHandleClient.h"
 #include "ResourceError.h"
 #include "ResourceRequest.h"
@@ -324,12 +326,15 @@ enum CanvasCtxOp {
     CV_FILL, CV_STROKE, CV_CLIP, CV_DRAW_IMAGE,
     CV_CREATE_LINEAR, CV_CREATE_RADIAL, CV_CREATE_PATTERN,
     CV_MEASURE_TEXT, CV_SET_TRANSFORM, CV_SET_LINE_DASH, CV_GET_LINE_DASH,
-    CV_GET_IMAGE_DATA, CV_PUT_IMAGE_DATA, CV_IS_POINT_IN_PATH
+    CV_GET_IMAGE_DATA, CV_PUT_IMAGE_DATA, CV_IS_POINT_IN_PATH,
+    CV_FILL_TEXT, CV_STROKE_TEXT
 };
 static int canvasCtxMethod(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 static int canvasCtxGetter(AntbEngine*, AntbValue*, const char*, AntbValue*, void*);
 static int canvasCtxSetter(AntbEngine*, AntbValue*, const char*, const AntbValue*, void*);
 AntbValue* wrapCanvasCtx(AntbEngine*, WebCore::CanvasRenderingContext2D*);
+static AntbValue* expandoFor(AntbEngine*, WebCore::Node*, bool);
+static void clearExpandoObjects();
 static int nodeClassList(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 static int classListAdd(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 static int classListRemove(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
@@ -405,13 +410,18 @@ static std::string base64Encode(const char* data, size_t len)
 }
 
 struct XhrJob : public WebCore::ResourceHandleClient {
-    XhrJob(AntbEngine* engine, AntbValue* callback, bool binary = false)
+    XhrJob(AntbEngine* engine, AntbValue* callback, bool binary = false,
+           const char* method = NULL, const char* contentType = NULL,
+           const char* body = NULL)
         : m_engine(engine)
         , m_callback(antb_retain(callback))
         , m_status(0)
         , m_done(false)
         , m_failed(false)
         , m_binary(binary)
+        , m_method(method ? method : "GET")
+        , m_contentType(contentType ? contentType : "")
+        , m_postBody(body ? body : "")
         , m_startMs(0)
         , m_doneMs(0)
         , m_slot(g_currentSlot)
@@ -434,6 +444,28 @@ struct XhrJob : public WebCore::ResourceHandleClient {
         WebCore::KURL kurl((const char*)url);
         WebCore::ResourceRequest request(kurl);
         std::string cookies = cookieHeaderForCurrentDocument();
+
+        /* Page code posts JSON everywhere (device fingerprinting, auth, RPC):
+         * sending GET without a body made those endpoints fail and the SDKs
+         * retried in a loop, which pinned a core. */
+        if (!m_method.empty() && m_method != "GET")
+            request.setHTTPMethod(WebCore::String(m_method.c_str()));
+
+        if (!m_postBody.empty() && m_method != "GET" && m_method != "HEAD") {
+            WebCore::TextEncoding encoding("UTF-8");
+
+            if (!encoding.isValid())
+                encoding = WebCore::UTF8Encoding();
+
+            WebCore::String bodyString = WebCore::String::fromUTF8(m_postBody.c_str());
+
+            request.setHTTPBody(PassRefPtr<WebCore::FormData>(
+                new WebCore::FormData(encoding.encode(bodyString.characters(), bodyString.length()))));
+        }
+
+        if (!m_contentType.empty())
+            request.addHTTPHeaderField(WebCore::String("Content-Type"),
+                                       WebCore::String::fromUTF8(m_contentType.c_str()));
 
         if (!cookies.empty())
             request.addHTTPHeaderField(WebCore::String("Cookie"),
@@ -561,6 +593,9 @@ struct XhrJob : public WebCore::ResourceHandleClient {
     bool                            m_done;
     bool                            m_failed;
     bool                            m_binary;      /* deliver base64 instead of text */
+    std::string                     m_method;      /* GET/POST/... */
+    std::string                     m_contentType;
+    std::string                     m_postBody;    /* request body (text) */
     unsigned long                   m_generation;  /* the realm that started it */
 
     unsigned long generation() const { return m_generation; }
@@ -655,11 +690,53 @@ int globalHttpRequestBin(AntbEngine* engine, AntbValue*, AntbValue** args, int a
     return 1;
 }
 
+/* Full request: (url, method, contentType, body, callback), always binary.
+ * POST bodies are JSON/form text; the body is copied into the job, so the
+ * temporaries can go right after start(). */
+int globalHttpRequestEx(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
+                        AntbValue* out, void*)
+{
+    char* urlText;
+    char* methodText = NULL;
+    char* typeText = NULL;
+    char* bodyText = NULL;
+    XhrJob* job;
+
+    (void)out;
+
+    if (argc < 5)
+        return 1;
+
+    urlText = antb_to_utf8(args[0]);
+    if (!urlText)
+        return 1;
+
+    if (args[1])
+        methodText = antb_to_utf8(args[1]);
+
+    if (args[2])
+        typeText = antb_to_utf8(args[2]);
+
+    if (args[3])
+        bodyText = antb_to_utf8(args[3]);
+
+    job = new XhrJob(engine, args[4], true, methodText, typeText, bodyText);
+    xhrJobs().append(job);
+    job->start(urlText);
+
+    antb_free(urlText);
+    antb_free(methodText);
+    antb_free(typeText);
+    antb_free(bodyText);
+    return 1;
+}
+
 int globalHttpGet(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalHttpGetBin(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalClassOp(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalHttpRequest(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalHttpRequestBin(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int globalHttpRequestEx(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeSetter(AntbEngine*, AntbValue*, const char*, const AntbValue*, void*);
 int docCreateElement(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int docCreateElementNS(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
@@ -3605,10 +3682,14 @@ static const char kPrelude[] =
 "      else this._fire('load');"
 "      this._fire('loadend');"
 "    };"
-"    XHR.prototype.send = function () {"
+"    XHR.prototype.send = function (body) {"
 "      var self = this;"
 "      var target = g.__agbResolveUrl(this._url);"
 "      this.responseURL = target;"
+"      if (body !== undefined && body !== null) this._body = body;"
+"      var payload = (this._body === undefined || this._body === null) ? '' : String(this._body);"
+"      var ctype = this._headers['Content-Type'] || this._headers['content-type'] || '';"
+"      var method = String(this._method || 'GET').toUpperCase();"
 "      var wantBinary = this.responseType === 'arraybuffer' || this.responseType === 'blob';"
 "      if (!this._async) {"
 "        if (wantBinary) {"
@@ -3624,10 +3705,12 @@ static const char kPrelude[] =
 "      }"
 "      /* Async: the C side owns the request and delivers (status, body) on a"
 "       * later frame, so the UI keeps running. */"
-"      if (wantBinary)"
-"        __agbHttpRequestBin(target, function (status, b64) { self._finish(status, b64, true); });"
-"      else"
-"        __agbHttpRequest(target, function (status, text) { self._finish(status, text, false); });"
+"      /* Everything goes through the full request entry: pages POST JSON to"
+"         auth/RPC/fingerprint endpoints, and a GET without body made those"
+"         fail and retry in a loop. */"
+"      __agbHttpRequestEx(target, method, ctype, payload, function (status, b64) {"
+"        self._finish(status, b64, true);"
+"      });"
 "    };"
 "    g.XMLHttpRequest = XHR;"
 "  }"
@@ -3639,8 +3722,18 @@ static const char kPrelude[] =
 "    g.fetch = function (input, init) {"
 "      var url = g.__agbResolveUrl((typeof input === 'string') ? input : (input && input.url));"
 "      var opts = init || {};"
+"      var method = String(opts.method || 'GET').toUpperCase();"
+"      var ctype = '';"
+"      if (opts.headers) {"
+"        if (typeof opts.headers.get === 'function') {"
+"          ctype = opts.headers.get('content-type') || '';"
+"        } else {"
+"          ctype = opts.headers['Content-Type'] || opts.headers['content-type'] || '';"
+"        }"
+"      }"
+"      var payload = (opts.body === undefined || opts.body === null) ? '' : String(opts.body);"
 "      return new Promise(function (resolve, reject) {"
-"        __agbHttpRequestBin(url, function (status, b64) {"
+"        __agbHttpRequestEx(url, method, ctype, payload, function (status, b64) {"
 "          if (!status) { reject(new Error('network error: ' + url)); return; }"
 "          var buffer = g.__agbB64ToBuffer(b64);"
 "          var response = {"
@@ -4161,6 +4254,7 @@ static void stopRealm(void)
     /* The node class belongs to the old engine. */
     g_nodeClass = 0;
     g_canvasCtxClass = 0;
+    clearExpandoObjects();
     g_documentBound = false;
 
     /* The slots point at documents that are going away: keeping them would
@@ -4342,6 +4436,8 @@ void bindDocument(void* document)
                 antb_class_add_method(g_engine, g_canvasCtxClass, "createRadialGradient", canvasCtxMethod, (void*)(intptr_t)CV_CREATE_RADIAL);
                 antb_class_add_method(g_engine, g_canvasCtxClass, "createPattern", canvasCtxMethod, (void*)(intptr_t)CV_CREATE_PATTERN);
                 antb_class_add_method(g_engine, g_canvasCtxClass, "measureText", canvasCtxMethod, (void*)(intptr_t)CV_MEASURE_TEXT);
+                antb_class_add_method(g_engine, g_canvasCtxClass, "fillText", canvasCtxMethod, (void*)(intptr_t)CV_FILL_TEXT);
+                antb_class_add_method(g_engine, g_canvasCtxClass, "strokeText", canvasCtxMethod, (void*)(intptr_t)CV_STROKE_TEXT);
                 antb_class_add_method(g_engine, g_canvasCtxClass, "setTransform", canvasCtxMethod, (void*)(intptr_t)CV_SET_TRANSFORM);
                 antb_class_add_method(g_engine, g_canvasCtxClass, "transform", canvasCtxMethod, (void*)(intptr_t)CV_SET_TRANSFORM);
                 antb_class_add_method(g_engine, g_canvasCtxClass, "setLineDash", canvasCtxMethod, (void*)(intptr_t)CV_SET_LINE_DASH);
@@ -4408,6 +4504,8 @@ void bindDocument(void* document)
          * fetch().arrayBuffer() (wasm, zip, images). */
         antb_define_method(g_engine, global, "__agbHttpGetBin", globalHttpGetBin, NULL);
         antb_define_method(g_engine, global, "__agbHttpRequestBin", globalHttpRequestBin, NULL);
+        /* (url, method, contentType, body, cb) - POST/PUT with a text body. */
+        antb_define_method(g_engine, global, "__agbHttpRequestEx", globalHttpRequestEx, NULL);
         antb_define_method(g_engine, global, "__agbClassOp", globalClassOp, NULL);
         antb_define_method(g_engine, global, "__agbFrameSlot", globalFrameSlot, NULL);
         antb_define_method(g_engine, global, "__agbActivateSlot", globalActivateSlot, NULL);
@@ -4976,6 +5074,63 @@ int attrsGetter(AntbEngine* engine, AntbValue*, const char* name, AntbValue* out
     return 1;
 }
 
+/* Per-node expando object (el._vnode, el._assign, input._wrapperState, jQuery
+ * data...). It is owned here instead of on the wrapper because every property
+ * read on a wrapper goes through nodeGetter: a `__agbExpando` field stored on
+ * the wrapper itself comes back undefined from inside that hook, so the old
+ * scheme built a fresh side object on every write and silently dropped all of
+ * its fields (React lost input._wrapperState -> "reading 'initialChecked'").
+ * Entries die with the realm (clearExpandoObjects), like the wrapper cache. */
+static std::map<WebCore::Node*, AntbValue*>* g_expandoObjects = NULL;
+
+static AntbValue* expandoFor(AntbEngine* engine, WebCore::Node* node, bool create)
+{
+    if (!engine || !node)
+        return NULL;
+
+    if (!g_expandoObjects)
+        g_expandoObjects = new std::map<WebCore::Node*, AntbValue*>();
+
+    {
+        std::map<WebCore::Node*, AntbValue*>::iterator it = g_expandoObjects->find(node);
+
+        if (it != g_expandoObjects->end())
+            return it->second;
+    }
+
+    if (!create)
+        return NULL;
+
+    {
+        AntbValue* obj = antb_make_object(engine);
+        AntbValue* kept;
+
+        if (!obj)
+            return NULL;
+
+        kept = antb_retain(obj);   /* pinned for the realm's lifetime */
+        antb_value_release(obj);
+
+        if (!kept)
+            return NULL;
+
+        (*g_expandoObjects)[node] = kept;
+        return kept;
+    }
+}
+
+static void clearExpandoObjects()
+{
+    if (!g_expandoObjects)
+        return;
+
+    for (std::map<WebCore::Node*, AntbValue*>::iterator it = g_expandoObjects->begin();
+         it != g_expandoObjects->end(); ++it)
+        antb_value_release(it->second);
+
+    g_expandoObjects->clear();
+}
+
 int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue* out, void*)
 {
     /* Internal bookkeeping names must not go back through the bridge: reading
@@ -5007,6 +5162,87 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
             antb_value_release(global);
         }
         return 1;
+    }
+
+    /* node.constructor: React's input value tracker runs
+     * Object.getOwnPropertyDescriptor(node.constructor.prototype, 'value')
+     * before it installs itself; an undefined constructor throws inside the
+     * tracker and takes the whole render down. Answer with the DOM interface
+     * for the tag (the constructors exist on the global from the engine's
+     * interface objects, and a plain prototype is all the tracker needs). */
+    if (!strcmp(name, "constructor")) {
+        const char* ctorName = "HTMLElement";
+
+        if (n->isDocumentNode()) {
+            ctorName = "HTMLDocument";
+        } else if (n->isElementNode()) {
+            WebCore::Element* el = static_cast<WebCore::Element*>(n);
+
+            if (el->hasTagName(WebCore::HTMLNames::inputTag))         ctorName = "HTMLInputElement";
+            else if (el->hasTagName(WebCore::HTMLNames::textareaTag))  ctorName = "HTMLTextAreaElement";
+            else if (el->hasTagName(WebCore::HTMLNames::selectTag))    ctorName = "HTMLSelectElement";
+            else if (el->hasTagName(WebCore::HTMLNames::formTag))      ctorName = "HTMLFormElement";
+            else if (el->hasTagName(WebCore::HTMLNames::buttonTag))    ctorName = "HTMLButtonElement";
+            else if (el->hasTagName(WebCore::HTMLNames::canvasTag))    ctorName = "HTMLCanvasElement";
+            else if (el->hasTagName(WebCore::HTMLNames::imgTag))       ctorName = "HTMLImageElement";
+            else if (el->hasTagName(WebCore::HTMLNames::aTag))         ctorName = "HTMLAnchorElement";
+        }
+
+        {
+            AntbValue* global = antb_global(engine);
+
+            if (global) {
+                AntbValue* ctor = antb_get_prop(engine, global, ctorName);
+
+                if (!ctor && strcmp(ctorName, "HTMLElement"))
+                    ctor = antb_get_prop(engine, global, "HTMLElement");
+
+                if (!ctor)
+                    ctor = antb_get_prop(engine, global, "Node");
+
+                antb_value_release(global);
+
+                if (ctor) {
+                    antb_value_assign(out, ctor);
+                    antb_value_release(ctor);
+                    return 1;
+                }
+            }
+        }
+
+        return 0;
+    }
+
+    /* Object.prototype helpers: the catch-all getter answers every name, so the
+     * wrappers never reach their prototype chain and `node.hasOwnProperty(...)`
+     * came back undefined (React's value tracker calls it on the node). Hand
+     * back the real functions; `this` is still the wrapper at call time. */
+    if (!strcmp(name, "hasOwnProperty") || !strcmp(name, "isPrototypeOf")
+            || !strcmp(name, "propertyIsEnumerable")) {
+        AntbValue* global = antb_global(engine);
+        AntbValue* fn = NULL;
+
+        if (global) {
+            AntbValue* objectCtor = antb_get_prop(engine, global, "Object");
+
+            if (objectCtor) {
+                AntbValue* proto = antb_get_prop(engine, objectCtor, "prototype");
+
+                if (proto) {
+                    fn = antb_get_prop(engine, proto, name);
+                    antb_value_release(proto);
+                }
+                antb_value_release(objectCtor);
+            }
+            antb_value_release(global);
+        }
+
+        if (fn) {
+            antb_value_assign(out, fn);
+            antb_value_release(fn);
+            return 1;
+        }
+        return 0;
     }
 
     if (!strcmp(name, "textContent")) {
@@ -5286,18 +5522,19 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
             WebCore::String s = static_cast<WebCore::Element*>(n)->getAttribute(attrName);
             v = antb_make_string(engine, s.utf8().data());
         }
-    } else {
-        return 0;
     }
 
+    /* Unknown name (or a branch that produced nothing): fall through to the
+     * expando fields written by nodeSetter (el._vnode, el._assign,
+     * input._wrapperState, jQuery data...). These used to be stored on the
+     * wrapper itself, which this hook cannot read back - every write built a
+     * fresh side object and dropped its fields, so React lost
+     * input._wrapperState and reported "reading 'initialChecked'". */
     if (!v) {
-        /* Expando fields stored by nodeSetter (el._assign, el.__vnode, ...). */
-        AntbValue* expando = antb_get_prop(engine, self, "__agbExpando");
+        AntbValue* expando = expandoFor(engine, n, false);
 
         if (expando) {
             AntbValue* field = antb_get_prop(engine, expando, name);
-
-            antb_value_release(expando);
 
             if (field) {
                 antb_value_assign(out, field);
@@ -5455,20 +5692,14 @@ int nodeSetter(AntbEngine* engine, AntbValue* self, const char* name, const Antb
      * normal object (it has no shape), so writing them on it makes Ant throw
      * "invalid object" - Vue's v-model directives do exactly this on every
      * render. Keep them on a side object. */
+    /* The side object is owned by C++ (see expandoFor): reading one of these
+     * fields back goes through the generic property hook, which cannot read a
+     * `__agbExpando` field stored on the wrapper itself. */
     {
-        AntbValue* expando = antb_get_prop(g_engine, self, "__agbExpando");
+        AntbValue* expando = expandoFor(g_engine, n, true);
 
-        if (!expando) {
-            expando = antb_make_object(g_engine);
-
-            if (!expando)
-                return 0;
-
-            antb_set_prop(g_engine, self, "__agbExpando", expando);
-        }
-
-        antb_set_prop(g_engine, expando, name, value);
-        antb_value_release(expando);
+        if (expando)
+            antb_set_prop(g_engine, expando, name, value);
     }
 
     return 1;
@@ -7404,6 +7635,12 @@ static int canvasCtxMethod(AntbEngine* engine, AntbValue* self, AntbValue** args
         break;
     case CV_IS_POINT_IN_PATH:
         canvasReturnNumber(engine, out, 0);
+        break;
+    case CV_FILL_TEXT:
+    case CV_STROKE_TEXT:
+        /* This rasteriser generation has no glyph rendering yet. The methods
+         * must exist: lottie's renderer probes canvas text support by calling
+         * fillText, and an absent method kills the whole feature detect. */
         break;
     case CV_SET_TRANSFORM:
     case CV_SET_LINE_DASH:

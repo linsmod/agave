@@ -36,6 +36,12 @@ WHEN USER REPLY A DOT[.] ONLY, MEANS OK/DONE/DO_AS_YOU_SAY/YES/GO_ON/ACCEPT/...
 - 宿主窗口消息循环处理 WM_TIMER 必须按 `msg.hwnd` 过滤——webview 控件内部有自己的 id=1 帧泵定时器，wParam 相同会串；引擎线程回调里禁止 SetTimer（窗口属主线程，跨线程未定义行为），走 PostMessage 到主线程
 
 **定位手段**
+- **未捕获/被页面吞掉的错误定位**：`AGB_ERR_SNIPPET=1`（ant `src/errors.c`）。引擎创建内部错误（`js_mkerr_typed`）时，若消息含 `length` 或 `not a function`，直接往 stderr 打一行
+  `[snippet] line=<行> col=<列> msg=<消息> | <出错点前 60 字符起的 130 字符源码>`
+  —— 不用栈就能把错误对回 bundle 的某个偏移（React/lottie 这类把异常吞进 console.error 的代码里特别有用）。注意：
+  ①行号恒为 2（页面脚本被 `try{\n…\n}catch` 包过），列号才是真偏移，可直接在对应 `.js` 里切字符串；
+  ②两半标记之间是**出错前的上下文**，真正的 callee 在片段末尾附近；
+  ③core-js/modernizr 的特性探测（`Object.defineProperty([],"length",{writable:!1}).length=1`、`openDatabase`、`fillText` 等）会故意抛错并被自己 catch，这些 `[snippet]` 是**正常噪音**，不代表缺陷
 - DOM 节点属性读出 undefined：查 AntBridge 桥接链路（wrapNode / 类属性表 / catch-all），先于怀疑页面
 - Vue "missing template or render function" ≈ `container.innerHTML` 拿到 undefined
 - `<template>` 内容惰性（HTML5）：Node::createRendererIfNeeded 对 localName=="template" 返回，子树无 renderer 不渲染；children 留在 DOM（innerHTML/script 访问不变）。别删
