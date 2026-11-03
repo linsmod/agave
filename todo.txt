@@ -1,0 +1,68 @@
+盘点完了，`Worker` 只是冰山一角。按“在哪一层绕的”分四类：
+
+## 一、prelude 注入的 JS shim（`AntRuntime.cpp:3133` 起，`kPrelude`）
+
+**真实现（走桥，但语义简化）**
+
+| API | 实际行为 |
+|---|---|
+| `localStorage` | 桥磁盘存储，key 前缀 origin（`:3163`） |
+| `sessionStorage` | **纯内存对象**，不跨文档（`:3172`） |
+| `XMLHttpRequest` / `fetch` | 走 `__agbHttpGet/__agbHttpRequest`，但无响应头（`getAllResponseHeaders()` 恒 `''`）、无 `responseType`/二进制、无 timeout、无上传（`:3427`/`:3478`） |
+| `alert/confirm/prompt` | 宿主对话框 `__agbDialog`（真） |
+| `open/close` | 宿主 `__agbOpenWindow/__agbCloseWindow` |
+| `setTimeout/setInterval` | 包装成 `__agbBind`（realm/文档归属，非绕过） |
+| `getComputedStyle` | JS 包装 `__Computed` 读桥（真，但有未实现属性，见 `unimplemented propertyID`） |
+| `scrollTo/scrollBy`、`history`、`location` | 真 |
+
+**假实现 / no-op**
+
+| API | 实际行为 | 锚点 |
+|---|---|---|
+| `matchMedia` | **恒 `matches:false`**，监听器全空 | `:3197`、`polyfills.js:153` |
+| `requestIdleCallback` | 直接 `return 1`，**回调永不执行**（探测 `idleCbCalled=0`） | `:3181` |
+| `createImageBitmap` | 恒 `null` | `:3182` |
+| `MutationObserver` | 接受 API，**永不触发回调** | `:3417` |
+| `self/top/parent/frames` | 全部 `= window`；`frameElement = null`（无 iframe 语义） | `:3406` |
+| `window.open` | 返回假窗口对象（`closed/focus/blur/close/postMessage` 全假，与真实窗口无通信） | `:3348` |
+| `performance.timing` | 全 0；`now()` = `Date.now()`；`getEntriesByType()` = `[]` | `:3379` |
+| `CSS.escape` | **原样返回不转义**（探测 `"a b#c"` 原样） | `:3196` |
+| `Image()` | `document.createElement('img')` | `:3136` |
+| 事件对象 | `__agbMakeEvent` 纯 JS 对象，非原生 `Event` 实例 | `:3387` |
+| `classList` | 只有 `add/remove/contains/toggle`（无 `length/item/value/forEach`） | `:3398` |
+| `define/require` | 极简 AMD：同步执行、无路径解析、无循环依赖、`mods` 只认名字 | `:3499` |
+| `Worker` | 空构造 + `postMessage/terminate` no-op | `polyfills.js:423` |
+| `SharedWorker`/`ServiceWorker` | 直接置 `undefined`（`kHideWorkers`） | `:4302` |
+
+## 二、polyfills.js（可热改，每次文档绑定重放）
+
+- `Element.prototype.append/prepend/before/after/remove/replaceWith/matches/closest` —— 桥没暴露，全是 JS 拼的 DOM 操作
+- **`instanceof Node/Element/Text/...` 用 `Symbol.hasInstance` 伪造**（`Node` 只是空壳构造器）
+- `style.sheet` —— 假 CSSOM（`cssRules: []`、`insertRule` 返回 0），专为骗特性探测
+- `CSS.supports` —— 用探针元素真判定（优点：`display:grid` 降级时不会误报 true）
+- `URLSearchParams` —— **整类重写**（ant 原生是 branded class，`class X extends URLSearchParams` 会炸）
+- `console` guard（去重+限速）、`onunhandledrejection`（防 ant 直接 `process.exit`）
+
+## 三、C++ 桥层的假实现
+
+- **canvas 2D**（`getContext` 是真接 picasso，但很多方法假）：`toDataURL()` → `"data:,"`；`measureText` 按 6px/字估算；`getImageData` 返回空数组；`putImageData/setTransform/transform/setLineDash` no-op；`createLinearGradient/createRadialGradient` 返回只有 `addColorStop` 的空壳；`fillText/strokeText` **根本不存在**（探测 `fillText=undefined`）；WebGL/webgl2 返回 `undefined`（`AntRuntime.cpp:6978-7310`）
+- `element.attributes[任意名字]` → 返回空对象（`attrsGetter`，为了 jQuery 不炸，`:4771`）
+- `document.scripts` → 空数组（探测 `scripts=0`）
+- `<template>` 子树不建 renderer（惰性渲染，`innerHTML`/`textContent` 仍可见）
+
+## 四、连 shim 都没有（feature detect 会走 fallback）
+
+`ResizeObserver`、`IntersectionObserver`、`PerformanceObserver`、`indexedDB`、`caches`、`Notification`、`geolocation`、`FileReader`、`customElements`、`ShadowRoot`/`attachShadow`、`OffscreenCanvas`、`Audio`/`AudioContext`/`speechSynthesis`、`devicePixelRatio`、`print`、`Temporal`、`WebGL`
+另外 `WebSocket`/`EventSource`/`BroadcastChannel` 存在（ant 原生，走 libuv），但浏览器里没有对应的 socket 事件泵，实测构造不抛错、**连接行为未验证**，很可能是静默失败——比 `undefined` 更危险。
+
+## 建议按“静默坑”优先级修
+
+1. `requestIdleCallback` 不回调 → 改成 `setTimeout(cb({didTimeout:false,timeRemaining:()=>50}), 1)`，否则依赖它调度的懒加载/埋点永远不跑
+2. `CSS.escape` 不转义 → 选择器拼接会出错，实现 CSSOM 转义规则即可
+3. `MutationObserver` 永久静默 → 框架的自动尺寸/懒加载失效（需要引擎 DOM mutation 钩子，成本高，可先标记）
+4. `window.open` 假窗口 + `postMessage` no-op → OAuth 弹窗类流程会挂
+5. `document.scripts` 空 → 脚本扫描型库（如动态找 chunk 的 webpack runtime 兜底）会误判
+6. canvas `fillText`/`measureText` → 图表/文字渲染库会画不出字或排版错位
+7. `WebSocket/EventSource` 存在但不可用 → 建议要么接通，要么显式 `undefined`，避免“探测通过但连不上”
+
+要我先动手哪一类？我建议先做 1+2+5（都是十几行的低风险改动），7 需要先确认 socket 事件泵状态。

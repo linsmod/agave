@@ -360,13 +360,58 @@ int imageConstructor(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void
 /* One in-flight request. The handle is ref'd by this object, so it stays alive
  * until the job is collected; the JS callback is retained and released when the
  * response has been delivered. */
+/* Binary responses cannot travel as WebCore::String (NUL and non-UTF-8 bytes
+ * are destroyed on the way through), so they are handed to JS as base64 and
+ * decoded there. This is the transport behind XHR responseType=arraybuffer and
+ * fetch().arrayBuffer(); without it wasm/zip/image bytes arrive empty. */
+static std::string base64Encode(const char* data, size_t len)
+{
+    static const char table[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+
+    out.reserve(((len + 2) / 3) * 4);
+
+    {
+        size_t i = 0;
+
+        while (i + 2 < len) {
+            unsigned v = ((unsigned char)data[i] << 16)
+                       | ((unsigned char)data[i + 1] << 8)
+                       |  (unsigned char)data[i + 2];
+
+            out += table[(v >> 18) & 63];
+            out += table[(v >> 12) & 63];
+            out += table[(v >> 6) & 63];
+            out += table[v & 63];
+            i += 3;
+        }
+
+        if (i < len) {
+            unsigned v = (unsigned char)data[i] << 16;
+            bool two = (i + 1 < len);
+
+            if (two)
+                v |= (unsigned char)data[i + 1] << 8;
+
+            out += table[(v >> 18) & 63];
+            out += table[(v >> 12) & 63];
+            out += two ? table[(v >> 6) & 63] : '=';
+            out += '=';
+        }
+    }
+
+    return out;
+}
+
 struct XhrJob : public WebCore::ResourceHandleClient {
-    XhrJob(AntbEngine* engine, AntbValue* callback)
+    XhrJob(AntbEngine* engine, AntbValue* callback, bool binary = false)
         : m_engine(engine)
         , m_callback(antb_retain(callback))
         , m_status(0)
         , m_done(false)
         , m_failed(false)
+        , m_binary(binary)
         , m_startMs(0)
         , m_doneMs(0)
         , m_slot(g_currentSlot)
@@ -461,8 +506,14 @@ struct XhrJob : public WebCore::ResourceHandleClient {
             return;
 
         {
-            WebCore::String text(m_body.data(), m_body.size());
-            AntbValue* textValue = antb_make_string(m_engine, text.utf8().data());
+            std::string payloadText;
+
+            if (m_binary)
+                payloadText = base64Encode(m_body.data(), m_body.size());
+            else
+                payloadText = WebCore::String(m_body.data(), m_body.size()).utf8().data();
+
+            AntbValue* textValue = antb_make_string(m_engine, payloadText.c_str());
             AntbValue* statusValue = antb_make_number(m_engine, m_failed ? 0.0 : (double)m_status);
             AntbValue* argArray[2];
             AntbValue* result;
@@ -509,6 +560,7 @@ struct XhrJob : public WebCore::ResourceHandleClient {
     double                          m_doneMs;
     bool                            m_done;
     bool                            m_failed;
+    bool                            m_binary;      /* deliver base64 instead of text */
     unsigned long                   m_generation;  /* the realm that started it */
 
     unsigned long generation() const { return m_generation; }
@@ -579,9 +631,35 @@ int globalHttpRequest(AntbEngine* engine, AntbValue*, AntbValue** args, int argc
     return 1;
 }
 
+/* Same request, but the callback receives (status, base64-bytes). */
+int globalHttpRequestBin(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
+                         AntbValue* out, void*)
+{
+    char* urlText;
+    XhrJob* job;
+
+    (void)out;
+
+    if (argc < 2)
+        return 1;
+
+    urlText = antb_to_utf8(args[0]);
+    if (!urlText)
+        return 1;
+
+    job = new XhrJob(engine, args[1], true);
+    xhrJobs().append(job);
+    job->start(urlText);
+
+    antb_free(urlText);
+    return 1;
+}
+
 int globalHttpGet(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int globalHttpGetBin(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalClassOp(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalHttpRequest(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int globalHttpRequestBin(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeSetter(AntbEngine*, AntbValue*, const char*, const AntbValue*, void*);
 int docCreateElement(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int docCreateElementNS(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
@@ -3424,11 +3502,63 @@ static const char kPrelude[] =
 "      if (typeof g[_ctors[_ci]] === 'undefined') g[_ctors[_ci]] = function () { return null; };"
 "    }"
 "  }"
+"  /* base64 -> ArrayBuffer. Binary bodies cross the bridge as base64 because"
+"     WebCore::String cannot carry NUL or non-UTF-8 bytes (wasm/zip/images). */"
+"  if (typeof g.__agbB64ToBuffer !== 'function') {"
+"    g.__agbB64ToBuffer = function (b64) {"
+"      var s = String(b64 == null ? '' : b64), len = s.length, i, n = 0, v = 0, bits = 0;"
+"      var table = g.__agbB64Table;"
+"      if (!table) {"
+"        var chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';"
+"        table = g.__agbB64Table = {};"
+"        for (i = 0; i < chars.length; i++) table[chars.charCodeAt(i)] = i;"
+"      }"
+"      while (len > 0 && s.charCodeAt(len - 1) === 61) len--;   /* strip padding */"
+"      var out = new Uint8Array((len * 3) >> 2);"
+"      for (i = 0; i < len; i++) {"
+"        v = (v << 6) | (table[s.charCodeAt(i)] | 0);"
+"        bits += 6;"
+"        if (bits >= 8) { bits -= 8; out[n++] = (v >> bits) & 0xff; }"
+"      }"
+"      return out.buffer;"
+"    };"
+"  }"
+"  if (typeof g.__agbDecodeUtf8 !== 'function') {"
+"    g.__agbDecodeUtf8 = function (buffer) {"
+"      if (!buffer) return '';"
+"      try { return new TextDecoder('utf-8').decode(new Uint8Array(buffer)); } catch (e) {}"
+"      var b = new Uint8Array(buffer), s = '', i = 0;"
+"      while (i < b.length) {"
+"        var c = b[i++];"
+"        if (c < 0x80) { s += String.fromCharCode(c); continue; }"
+"        if (c >= 0xc0 && c < 0xe0 && i < b.length) { s += String.fromCharCode(((c & 0x1f) << 6) | (b[i++] & 0x3f)); continue; }"
+"        if (c >= 0xe0 && c < 0xf0 && i + 1 < b.length) { s += String.fromCharCode(((c & 0x0f) << 12) | ((b[i] & 0x3f) << 6) | (b[i + 1] & 0x3f)); i += 2; continue; }"
+"        s += '\\ufffd';"
+"      }"
+"      return s;"
+"    };"
+"  }"
+"  if (typeof g.__agbResolveUrl !== 'function') {"
+"    g.__agbResolveUrl = function (u) {"
+"      var s = String(u == null ? '' : u);"
+"      if (!s || /^[a-zA-Z][a-zA-Z0-9+.\\-]*:/.test(s)) return s;"
+"      var base = (g.document && g.document.baseURI) ? String(g.document.baseURI)"
+"               : (g.location && g.location.href ? String(g.location.href) : '');"
+"      if (!base || !/^[a-zA-Z][a-zA-Z0-9+.\\-]*:\\/\\//.test(base)) return s;"
+"      var origin = base.replace(/^([a-zA-Z][a-zA-Z0-9+.\\-]*:\\/\\/[^\\/]*).*$/, '$1');"
+"      if (s.charAt(0) === '#') return base.split('#')[0] + s;"
+"      if (s.charAt(0) === '/') return origin + s;"
+"      var path = base.split('#')[0].split('?')[0];"
+"      path = path.substring(0, path.lastIndexOf('/') + 1);"
+"      return path + s;"
+"    };"
+"  }"
 "  if (typeof g.XMLHttpRequest === 'undefined') {"
 "    var XHR = function XMLHttpRequest() {"
 "      this.readyState = 0; this.status = 0; this.statusText = ''; this.responseText = ''; this.response = '';"
-"      this.onreadystatechange = null; this.onload = null; this.onerror = null; this.onloadend = null; this.onabort = null;"
-"      this._url = null; this._method = 'GET'; this._async = true; this._headers = {};"
+"      this.responseType = ''; this.responseURL = ''; this.timeout = 0;"
+"      this.onreadystatechange = null; this.onload = null; this.onerror = null; this.onloadend = null; this.onabort = null; this.onprogress = null;"
+"      this._url = null; this._method = 'GET'; this._async = true; this._headers = {}; this._buffer = null;"
 "    };"
 "    XHR.prototype.open = function (method, url, async) {"
 "      this._method = method || 'GET'; this._url = url; this._async = (async !== false);"
@@ -3448,10 +3578,27 @@ static const char kPrelude[] =
 "        if (h) h.call(this, this);"
 "      }"
 "    };"
-"    XHR.prototype._finish = function (status, text) {"
+"    XHR.prototype._finish = function (status, payload, binary) {"
 "      this.status = status;"
-"      this.responseText = (text === undefined || text === null) ? '' : String(text);"
-"      this.response = this.responseText;"
+"      this.statusText = status ? 'OK' : '';"
+"      if (binary) {"
+"        this._buffer = g.__agbB64ToBuffer(payload);"
+"        this.responseText = '';"
+"        if (this.responseType === 'blob') {"
+"          try { this.response = new Blob([this._buffer]); } catch (e) { this.response = this._buffer; }"
+"        } else {"
+"          this.response = this._buffer;"
+"        }"
+"      } else {"
+"        this.responseText = (payload === undefined || payload === null) ? '' : String(payload);"
+"        if (this.responseType === 'json') {"
+"          try { this.response = JSON.parse(this.responseText); } catch (e) { this.response = null; }"
+"        } else if (this.responseType === 'blob') {"
+"          try { this.response = new Blob([this.responseText]); } catch (e) { this.response = this.responseText; }"
+"        } else {"
+"          this.response = this.responseText;"
+"        }"
+"      }"
 "      this.readyState = 4;"
 "      this._fire();"
 "      if (!status) this._fire('error');"
@@ -3460,39 +3607,81 @@ static const char kPrelude[] =
 "    };"
 "    XHR.prototype.send = function () {"
 "      var self = this;"
+"      var target = g.__agbResolveUrl(this._url);"
+"      this.responseURL = target;"
+"      var wantBinary = this.responseType === 'arraybuffer' || this.responseType === 'blob';"
 "      if (!this._async) {"
-"        var text = null;"
-"        try { text = __agbHttpGet(this._url); } catch (e) { text = null; }"
-"        this._finish((text === undefined || text === null) ? 0 : 200, text);"
+"        if (wantBinary) {"
+"          var b64 = null;"
+"          try { b64 = __agbHttpGetBin(target); } catch (e) { b64 = null; }"
+"          this._finish((b64 === undefined || b64 === null) ? 0 : 200, b64, true);"
+"        } else {"
+"          var text = null;"
+"          try { text = __agbHttpGet(target); } catch (e) { text = null; }"
+"          this._finish((text === undefined || text === null) ? 0 : 200, text, false);"
+"        }"
 "        return;"
 "      }"
 "      /* Async: the C side owns the request and delivers (status, body) on a"
 "       * later frame, so the UI keeps running. */"
-"      __agbHttpRequest(this._url, function (status, text) { self._finish(status, text); });"
+"      if (wantBinary)"
+"        __agbHttpRequestBin(target, function (status, b64) { self._finish(status, b64, true); });"
+"      else"
+"        __agbHttpRequest(target, function (status, text) { self._finish(status, text, false); });"
 "    };"
 "    g.XMLHttpRequest = XHR;"
 "  }"
 "  /* fetch(): ant's own implementation expects its CLI network stack, so back it"
-"   * with our async XHR instead. */"
+"   * with our async binary request; a buffered Response answers arrayBuffer()"
+"   * and blob() which wasm/zip loaders need. Relative URLs resolve against the"
+"   * document base (fetch('app.wasm') used to hit the network verbatim). */"
 "  if (typeof Promise === 'function') {"
 "    g.fetch = function (input, init) {"
-"      var url = (typeof input === 'string') ? input : (input && input.url);"
+"      var url = g.__agbResolveUrl((typeof input === 'string') ? input : (input && input.url));"
 "      var opts = init || {};"
 "      return new Promise(function (resolve, reject) {"
-"        var x = new XMLHttpRequest();"
-"        x.open(opts.method || 'GET', url, true);"
-"        if (opts.headers) { for (var k in opts.headers) x.setRequestHeader(k, opts.headers[k]); }"
-"        x.onload = function () {"
-"          resolve({"
-"            ok: x.status >= 200 && x.status < 300,"
-"            status: x.status, statusText: x.statusText, url: url,"
-"            headers: { get: function (n) { return x.getResponseHeader(n); } },"
-"            text: function () { return Promise.resolve(x.responseText); },"
-"            json: function () { try { return Promise.resolve(JSON.parse(x.responseText)); } catch (e) { return Promise.reject(e); } }"
-"          });"
-"        };"
-"        x.onerror = function () { reject(new Error('network error: ' + url)); };"
-"        x.send(opts.body || null);"
+"        __agbHttpRequestBin(url, function (status, b64) {"
+"          if (!status) { reject(new Error('network error: ' + url)); return; }"
+"          var buffer = g.__agbB64ToBuffer(b64);"
+"          var response = {"
+"            ok: status >= 200 && status < 300,"
+"            status: status,"
+"            statusText: (status >= 200 && status < 300) ? 'OK' : '',"
+"            url: url, redirected: false, type: 'basic',"
+"            headers: {"
+"              get: function () { return null; },"
+"              has: function () { return false; },"
+"              forEach: function () {},"
+"              entries: function () { return []; }"
+"            },"
+"            arrayBuffer: function () { return Promise.resolve(buffer); },"
+"            blob: function () {"
+"              try { return Promise.resolve(new Blob([buffer])); } catch (e) { return Promise.resolve(buffer); }"
+"            },"
+"            text: function () { return Promise.resolve(g.__agbDecodeUtf8(buffer)); },"
+"            json: function () { return response.text().then(function (t) { return JSON.parse(t); }); },"
+"            clone: function () { return response; }"
+"          };"
+"          resolve(response);"
+"        });"
+"      });"
+"    };"
+"  }"
+"  /* instantiateStreaming/compileStreaming expect a streamed Response; ours is"
+"   * buffered, so wrap them: fetch -> arrayBuffer -> instantiate. */"
+"  if (typeof WebAssembly === 'object' && WebAssembly) {"
+"    WebAssembly.instantiateStreaming = function (source, imports) {"
+"      return Promise.resolve(source).then(function (r) {"
+"        return (r && typeof r.arrayBuffer === 'function') ? r.arrayBuffer() : r;"
+"      }).then(function (buf) {"
+"        return Promise.resolve(WebAssembly.instantiate(buf, imports));"
+"      });"
+"    };"
+"    WebAssembly.compileStreaming = function (source) {"
+"      return Promise.resolve(source).then(function (r) {"
+"        return (r && typeof r.arrayBuffer === 'function') ? r.arrayBuffer() : r;"
+"      }).then(function (buf) {"
+"        return Promise.resolve(WebAssembly.compile(buf));"
 "      });"
 "    };"
 "  }"
@@ -4215,6 +4404,10 @@ void bindDocument(void* document)
         antb_set_prop(g_engine, window, "document", docObj);
         antb_define_method(g_engine, global, "__agbHttpGet", globalHttpGet, NULL);
         antb_define_method(g_engine, global, "__agbHttpRequest", globalHttpRequest, NULL);
+        /* Binary variants: base64 payloads for XHR responseType=arraybuffer and
+         * fetch().arrayBuffer() (wasm, zip, images). */
+        antb_define_method(g_engine, global, "__agbHttpGetBin", globalHttpGetBin, NULL);
+        antb_define_method(g_engine, global, "__agbHttpRequestBin", globalHttpRequestBin, NULL);
         antb_define_method(g_engine, global, "__agbClassOp", globalClassOp, NULL);
         antb_define_method(g_engine, global, "__agbFrameSlot", globalFrameSlot, NULL);
         antb_define_method(g_engine, global, "__agbActivateSlot", globalActivateSlot, NULL);
@@ -6053,6 +6246,46 @@ int globalHttpGet(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
             AntbValue* v = antb_make_string(engine, body.utf8().data());
             if (!v)
                 return 1;
+            antb_value_assign(out, v);
+            antb_value_release(v);
+        }
+    }
+    return 1;
+}
+
+/* Synchronous binary GET: base64 string, or undefined on network failure. */
+int globalHttpGetBin(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
+                     AntbValue* out, void*)
+{
+    char* urlText;
+
+    if (argc < 1)
+        return 1;
+
+    urlText = antb_to_utf8(args[0]);
+    if (!urlText)
+        return 1;
+
+    {
+        WebCore::KURL url((const char*)urlText);
+        WebCore::ResourceRequest request(url);
+        WebCore::ResourceError error;
+        WebCore::ResourceResponse response;
+        Vector<char> data;
+
+        antb_free(urlText);
+
+        WebCore::ResourceHandle::loadResourceSynchronously(request, error, response, data);
+        if (!error.isNull())
+            return 1;
+
+        {
+            std::string encoded = base64Encode(data.data(), data.size());
+            AntbValue* v = antb_make_string(engine, encoded.c_str());
+
+            if (!v)
+                return 1;
+
             antb_value_assign(out, v);
             antb_value_release(v);
         }
