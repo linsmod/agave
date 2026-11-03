@@ -310,22 +310,30 @@ static bool isCssIdentChar(UChar c)
  * rewritten name. */
 static String rewriteCustomPropertyNames(const String& css)
 {
-    String out;
+    /* One growing buffer, then a single String: `out += String(c)` per character
+     * made this quadratic, which turned a multi-megabyte stylesheet into tens
+     * of seconds of memcpy (a real page hit 100% CPU for ~30s in parseSheet). */
+    std::vector<UChar> out;
+    const UChar* text = css.characters();
     unsigned i = 0;
+    unsigned length = css.length();
 
     if (!css.contains("--"))
         return css;
 
-    while (i < css.length()) {
-        UChar c = css[i];
+    out.reserve(length + 16);
 
-        if (c == '/' && i + 1 < css.length() && css[i + 1] == '*') {
+    while (i < length) {
+        UChar c = text[i];
+
+        if (c == '/' && i + 1 < length && text[i + 1] == '*') {
             unsigned end = i + 2;
 
-            while (end + 1 < css.length() && !(css[end] == '*' && css[end + 1] == '/'))
+            while (end + 1 < length && !(text[end] == '*' && text[end + 1] == '/'))
                 ++end;
-            end = (end + 1 < css.length()) ? end + 2 : css.length();
-            out += css.substring(i, end - i);
+            end = (end + 1 < length) ? end + 2 : length;
+
+            out.insert(out.end(), text + i, text + end);
             i = end;
             continue;
         }
@@ -334,28 +342,33 @@ static String rewriteCustomPropertyNames(const String& css)
             UChar quote = c;
             unsigned end = i + 1;
 
-            while (end < css.length() && css[end] != quote) {
-                if (css[end] == '\\')
+            while (end < length && text[end] != quote) {
+                if (text[end] == '\\')
                     ++end;
                 ++end;
             }
-            end = (end < css.length()) ? end + 1 : css.length();
-            out += css.substring(i, end - i);
+            end = (end < length) ? end + 1 : length;
+
+            out.insert(out.end(), text + i, text + end);
             i = end;
             continue;
         }
 
-        if (c == '-' && i + 2 < css.length() && css[i + 1] == '-' && isCssIdentChar(css[i + 2])) {
-            out += String("-agb-");
+        if (c == '-' && i + 2 < length && text[i + 1] == '-' && isCssIdentChar(text[i + 2])) {
+            out.push_back('-');
+            out.push_back('a');
+            out.push_back('g');
+            out.push_back('b');
+            out.push_back('-');
             i += 2;
             continue;
         }
 
-        out += charToString(c);
+        out.push_back(c);
         ++i;
     }
 
-    return out;
+    return out.empty() ? css : String(&out[0], (unsigned)out.size());
 }
 
 static void appendCssNumber(String& out, double value)

@@ -536,7 +536,11 @@ bool HTMLElement::isContentEditable() const
     if (document()->frame() && document()->frame()->isContentEditable())
         return true;
 
-    document()->updateRendering();
+    /* Reading the editable state must not start a style recalc: these are
+     * called from layout (RenderBlock::hasLineIfEmpty), and re-entering
+     * recalcStyle there detaches renderers mid-layout - assertion in
+     * RenderFlow::absoluteClippedOverflowRect on real pages, e.g. the
+     * baidu search results. The next style pass settles it anyway. */
 
     if (!renderer()) {
         if (parentNode())
@@ -553,7 +557,11 @@ bool HTMLElement::isContentRichlyEditable() const
     if (document()->frame() && document()->frame()->isContentEditable())
         return true;
 
-    document()->updateRendering();
+    /* Reading the editable state must not start a style recalc: these are
+     * called from layout (RenderBlock::hasLineIfEmpty), and re-entering
+     * recalcStyle there detaches renderers mid-layout - assertion in
+     * RenderFlow::absoluteClippedOverflowRect on real pages, e.g. the
+     * baidu search results. The next style pass settles it anyway. */
 
     if (!renderer()) {
         if (parentNode())
@@ -567,7 +575,11 @@ bool HTMLElement::isContentRichlyEditable() const
 
 String HTMLElement::contentEditable() const 
 {
-    document()->updateRendering();
+    /* Reading the editable state must not start a style recalc: these are
+     * called from layout (RenderBlock::hasLineIfEmpty), and re-entering
+     * recalcStyle there detaches renderers mid-layout - assertion in
+     * RenderFlow::absoluteClippedOverflowRect on real pages, e.g. the
+     * baidu search results. The next style pass settles it anyway. */
 
     if (!renderer())
         return "false";
