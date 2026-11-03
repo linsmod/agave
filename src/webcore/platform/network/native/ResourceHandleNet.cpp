@@ -30,6 +30,13 @@ namespace WebCore {
 
 namespace {
 
+/* set AGB_FONT_LOG=1 to trace the resource delivery callbacks */
+bool handleLogOn(void)
+{
+    static bool on = getenv("AGB_FONT_LOG") != 0;
+    return on;
+}
+
 std::string toUtf8(const String& s)
 {
     return std::string(s.utf8().data());
@@ -145,6 +152,9 @@ private:
 
 void ResourceHandleInternal::onResponse(const Net::Response& netResponse)
 {
+    if (handleLogOn())
+        fprintf(stderr, "[handlecb] onResponse url=%s cancelled=%d client=%p\n",
+                m_request.url().url().ascii(), (int)m_cancelled, (void*)m_client);
     if (m_cancelled || !m_client)
         return;
 
@@ -160,6 +170,8 @@ void ResourceHandleInternal::onResponse(const Net::Response& netResponse)
 
 void ResourceHandleInternal::onData(const char* data, unsigned int length)
 {
+    if (handleLogOn())
+        fprintf(stderr, "[handlecb] onData len=%u cancelled=%d client=%p\n", length, (int)m_cancelled, (void*)m_client);
     if (m_cancelled || !m_client || !length)
         return;
 
@@ -176,6 +188,8 @@ void ResourceHandleInternal::onData(const char* data, unsigned int length)
 
 void ResourceHandleInternal::onComplete()
 {
+    if (handleLogOn())
+        fprintf(stderr, "[handlecb] onComplete cancelled=%d client=%p\n", (int)m_cancelled, (void*)m_client);
     if (m_cancelled)
         return;
 
@@ -229,6 +243,8 @@ ResourceHandle::~ResourceHandle()
 
 bool ResourceHandle::start()
 {
+    if (handleLogOn())
+        fprintf(stderr, "[handle] start\n");
     ResourceHandleManager::sharedInstance()->add(this);
     return true;
 }

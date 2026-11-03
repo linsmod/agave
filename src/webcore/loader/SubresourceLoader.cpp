@@ -41,6 +41,15 @@
 
 namespace WebCore {
 
+/* set AGB_FONT_LOG=1 to trace the subresource load path */
+static bool subresLogOn(void)
+{
+    static int on = -1;
+    if (on < 0)
+        on = getenv("AGB_FONT_LOG") ? 1 : 0;
+    return on;
+}
+
 #ifndef NDEBUG
 WTFLogChannel LogWebCoreSubresourceLoaderLeaks =  { 0x00000000, "", WTFLogChannelOn };
 
@@ -88,14 +97,17 @@ PassRefPtr<SubresourceLoader> SubresourceLoader::create(Frame* frame, Subresourc
         return 0;
 
     FrameLoader* fl = frame->loader();
-    if (!skipCanLoadCheck && fl->state() == FrameStateProvisional)
+    if (!skipCanLoadCheck && fl->state() == FrameStateProvisional) {
+        if (subresLogOn()) fprintf(stderr, "[subres] drop: provisional %s\n", request.url().url().utf8().data());
         return 0;
+    }
 
     ResourceRequest newRequest = request;
 
     if (!skipCanLoadCheck
             && FrameLoader::restrictAccessToLocal()
             && !FrameLoader::canLoad(request.url(), frame->document())) {
+        if (subresLogOn()) fprintf(stderr, "[subres] drop: canLoad %s\n", request.url().url().utf8().data());
         FrameLoader::reportLocalLoadFailed(frame->page(), request.url().url());
         return 0;
     }

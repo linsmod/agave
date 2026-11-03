@@ -41,6 +41,8 @@ WHEN USER REPLY A DOT[.] ONLY, MEANS OK/DONE/DO_AS_YOU_SAY/YES/GO_ON/ACCEPT/...
 - `on_progress finished=1` 不代表加载成功；host 侧用 `agave_webview_url` 比对请求 host 判定是否真提交（加载卡死时 FrameLoader 会以 about:blank 提交）
 - 抓挂起线程栈：`tools/cdb.exe -p <pid> -c '~*k 30; qd'`（探针有超时会秒退，attach 要趁早）
 - 网络卡点：`AGB_NET_LOG=1` 看 `net.stage` 打点（crack/connected/openrequest/sending/sent）；WinHTTP SendRequest 偶发长滞是 WPAD/PAC 环境抖动，同刻 GUI 正常≠代码回归，先重试
+- 字体（@font-face）：`AGB_FONT_LOG=1` 看 `[fontsel] src[i] ... supported=0/1` 与 `[font] beginLoad/data`；
+  回归页 `tools/pages/iconfont_render.html`（真实多格式 src），`agave_view_host.exe <file-url> out.bmp` 出图核对字形。链路与坑见 `docs/web-font.md`
 
 **构建规则（不守则静默无效）**
 - 改 `AntBridge.c`：必须先 `tools/build_antbridge.ps1 -Force` 再 relink libagave（antbridge.dll 是预编译产物，CMake 只拷贝）

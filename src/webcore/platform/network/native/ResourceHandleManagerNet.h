@@ -38,6 +38,11 @@ private:
 
     void downloadTimerCallback(Timer<ResourceHandleManager>*);
 
+    /* Makes sure the download timer is queued in the timer heap. isActive()
+     * is not enough: it is also true while the timer only sits in the
+     * ready-to-fire set, and that state does not guarantee another tick. */
+    void ensureDownloadTimerArmed();
+
     Net::Session*                m_session;
     Timer<ResourceHandleManager> m_downloadTimer;
     Vector<ResourceHandle*>      m_handles;

@@ -46,6 +46,17 @@
 
 namespace WebCore {
 
+/* set AGB_FONT_LOG=1 to trace @font-face registration and lookup */
+static bool fontLogOn(void)
+{
+    static int on = -1;
+    if (on < 0)
+        on = getenv("AGB_FONT_LOG") ? 1 : 0;
+    return on;
+}
+
+#define FONTLOG(...) do { if (fontLogOn()) fprintf(stderr, "[fontsel] " __VA_ARGS__); } while (0)
+
 CSSFontSelector::CSSFontSelector(Document* document)
 : m_document(document)
 {
@@ -80,9 +91,11 @@ void CSSFontSelector::addFontFaceRule(const CSSFontFaceRule* fontFaceRule)
     // Obtain the font-family property and the src property.  Both must be defined.
     const CSSMutableStyleDeclaration* style = fontFaceRule->style();
     RefPtr<CSSValue> fontFamily = style->getPropertyCSSValue(CSS_PROP_FONT_FAMILY);
-    RefPtr<CSSValue> src = style->getPropertyCSSValue(CSS_PROP_SRC);    
-    if (!fontFamily || !src || !fontFamily->isValueList() || !src->isValueList())
+    RefPtr<CSSValue> src = style->getPropertyCSSValue(CSS_PROP_SRC);
+    if (!fontFamily || !src || !fontFamily->isValueList() || !src->isValueList()) {
+        FONTLOG("addFontFaceRule: incomplete rule (family=%p src=%p)\n", fontFamily.get(), src.get());
         return;
+    }
 
     CSSValueList* familyList = static_cast<CSSValueList*>(fontFamily.get());
     if (!familyList->length())
@@ -126,8 +139,13 @@ void CSSFontSelector::addFontFaceRule(const CSSFontFaceRule* fontFaceRule)
         if (!item->isLocal()) {
             if (item->isSupportedFormat()) {
                 CachedFont* cachedFont = m_document->docLoader()->requestFont(item->resource());
+                FONTLOG("src[%d] format='%s' url='%s' supported=1 font=%p\n",
+                        i, item->format().utf8().data(), item->resource().utf8().data(), (void*)cachedFont);
                 if (cachedFont)
                     source = new CSSFontFaceSource(item->resource(), cachedFont);
+            } else {
+                FONTLOG("src[%d] format='%s' url='%s' supported=0\n",
+                        i, item->format().utf8().data(), item->resource().utf8().data());
             }
         } else {
             // Test the validity of the local font now.  We don't want to include this font if it does not exist
@@ -148,6 +166,7 @@ void CSSFontSelector::addFontFaceRule(const CSSFontFaceRule* fontFaceRule)
     }
     
     if (!fontFace->isValid()) {
+        FONTLOG("addFontFaceRule: face invalid after sources\n");
         delete fontFace;
         return;
     }
@@ -184,8 +203,12 @@ void CSSFontSelector::addFontFaceRule(const CSSFontFaceRule* fontFaceRule)
             }
         }
         
-        if (!familyName.isEmpty())
+        if (!familyName.isEmpty()) {
+            FONTLOG("addFontFaceRule: register '%s' bold=%d italic=%d\n", familyName.utf8().data(), fontDescription.bold(), fontDescription.italic());
             m_fonts.set(hashForFont(familyName.lower(), fontDescription.bold(), fontDescription.italic()), fontFace);
+        } else {
+            FONTLOG("addFontFaceRule: family empty, face dropped\n");
+        }
     }
 }
 
@@ -256,6 +279,7 @@ FontData* CSSFontSelector::getFontData(const FontDescription& fontDescription, c
     }
 
     // We have a face.  Ask it for a font data.  If it cannot produce one, it will fail, and the OS will take over.
+    FONTLOG("getFontData family='%s' loaded=%d\n", family.utf8().data(), face->isLoaded());
     return face->getFontData(fontDescription, syntheticBold, syntheticItalic);
 }
 

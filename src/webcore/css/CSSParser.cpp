@@ -3225,6 +3225,11 @@ bool CSSParser::parseFontFaceSrc()
             parsedValue = new CSSFontFaceSrcValue(String(KURL(styleElement->baseURL().deprecatedString(), value.deprecatedString()).url()), false);
             uriValue = parsedValue;
             allowFormat = true;
+            /* One item was consumed: a comma may follow before the next url()
+             * or local(). Without this the comma below would not be consumed
+             * and the whole src list (e.g. "url(a) format('truetype'),
+             * url(b)") was rejected as invalid. */
+            expectComma = true;
         } else if (val->unit == Value::QFunction) {
             // There are two allowed functions: local() and format().             
             String fname = domString(val->function->name).lower();

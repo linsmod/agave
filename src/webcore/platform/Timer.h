@@ -48,6 +48,12 @@ public:
     void stop();
     bool isActive() const;
 
+    /* True while the timer sits in the timer heap, i.e. it is queued to fire.
+     * isActive() is also true while a timer only sits in the ready-to-fire
+     * set (collected but not fired yet), which does not guarantee another
+     * tick, so use this when asking "will this timer fire again?". */
+    bool isScheduled() const { return inHeap(); }
+
     double nextFireInterval() const;
     double repeatInterval() const { return m_repeatInterval; }
 

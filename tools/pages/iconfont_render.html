@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+/* 真实站点的写法（百度 superman iconfont）：一串 src，浏览器应挑自己支持的格式。
+ * 本引擎只支持 truetype/opentype，所以最终应落到 iconfont-4530e108b6.ttf。
+ * 回归要点：① 多 item src 必须全部解析出来；② ttf 加载后字形要真的渲染。 */
+@font-face {
+    font-family: cIconfont;
+    src: url(https://pss.bdstatic.com/static/superman/font/iconfont-cdfecb8456.eot);
+    src: url(https://pss.bdstatic.com/static/superman/font/iconfont-cdfecb8456.eot?#iefix) format('embedded-opentype'), url(https://pss.bdstatic.com/static/superman/font/iconfont-fa013548a9.woff2) format('woff2'), url(https://pss.bdstatic.com/static/superman/font/iconfont-840387fb42.woff) format('woff'), url(https://pss.bdstatic.com/static/superman/font/iconfont-4530e108b6.ttf) format('truetype'), url(https://pss.bdstatic.com/static/superman/font/iconfont-74fcdd51ab.svg#iconfont) format('svg');
+}
+
+body { font-family: "Microsoft YaHei", Arial, sans-serif; background:#fff; color:#111; margin:10px; }
+h1 { font-size:16px; margin:0 0 3px; font-weight:bold; }
+.sub { color:#666; font-size:11px; margin-bottom:8px; line-height:15px; }
+h2 { font-size:12px; color:#333; margin:8px 0 3px; font-weight:bold; }
+.grid { border:1px solid #ddd; padding:4px; background:#fcfcfc; }
+.cell { display:inline-block; width:34px; height:34px; line-height:34px; text-align:center;
+        border:1px solid #e8e8e8; background:#fff; margin:1px; font-size:22px; }
+.ic { font-family: cIconfont, Arial, sans-serif; color:#1a1a1a; }
+.fb { font-family: Arial, sans-serif; color:#d0d0d0; }
+.plain { font-family: cIconfont, Arial, sans-serif; font-size:26px; border:1px solid #ddd;
+        padding:4px 8px; background:#fafafa; }
+code { background:#f0f0f0; padding:1px 3px; }
+#st { font-size:11px; line-height:15px; }
+</style>
+</head>
+<body>
+
+<h1>@font-face 多格式 src 渲染测试</h1>
+<div class="sub">
+  族名 <code>cIconfont</code>；src 依次 eot / eot?#iefix / woff2 / woff / <b>ttf</b> / svg#iconfont —— 引擎只支持 truetype，应跳过前 5 个、最终加载 <code>iconfont-4530e108b6.ttf</code>。
+</div>
+
+<h2>① cIconfont 图标（U+E600 起 64 个码点）</h2>
+<div class="grid" id="g1"></div>
+
+<h2>② 同批码点的 Arial fallback 对照（灰色豆腐块）</h2>
+<div class="grid" id="g2"></div>
+
+<h2>③ cIconfont 渲染拉丁文本（该字体无拉丁字形 → 空白，说明字体真正生效）</h2>
+<div class="plain" id="s3">Agave ABC 123 gjpq</div>
+
+<h2>④ 检测状态</h2>
+<div id="st">measuring...</div>
+
+<script>
+function mk(cls, cp) {
+    var d = document.createElement('span');
+    d.className = 'cell ' + cls;
+    d.innerHTML = '&#x' + cp.toString(16) + ';';
+    return d;
+}
+
+function widthOf(cp, family) {
+    var s = document.createElement('span');
+    s.style.cssText = 'position:absolute;white-space:pre;font-size:32px;font-family:' + family + ';';
+    s.innerHTML = '&#x' + cp.toString(16) + ';';
+    document.body.appendChild(s);
+    var w = s.offsetWidth;
+    document.body.removeChild(s);
+    return w;
+}
+
+var hits = [];
+var fallback = [];
+
+function measure() {
+    hits = [];
+    fallback = [];
+    for (var cp = 0xE600; cp < 0xE640; cp++) {
+        if (widthOf(cp, 'cIconfont, Arial') !== widthOf(cp, 'Arial'))
+            hits.push(cp);
+        else
+            fallback.push(cp);
+    }
+
+    var status = [];
+    status.push('码点 U+E600–U+E63F 共 64 个：与 fallback 宽度不同（字体生效）= <b>' + hits.length + '</b> 个');
+    status.push('与 fallback 宽度相同（字体未生效）= ' + fallback.length + ' 个');
+    if (fallback.length)
+        status.push('未生效码点：' + fallback.map(function (c) { return 'U+' + c.toString(16).toUpperCase(); }).join(' '));
+    try {
+        if (document.fonts && document.fonts.check)
+            status.push('document.fonts.check("22px cIconfont") = ' + document.fonts.check('22px cIconfont'));
+    } catch (e) {
+        status.push('document.fonts 不可用');
+    }
+    document.getElementById('st').innerHTML = status.join(' ｜ ');
+
+    window.__iconfont = {
+        hits: hits.length,
+        fallback: fallback.length,
+        sample: hits.slice(0, 8).map(function (c) { return c.toString(16); }).join(','),
+        iconWidth: hits.length ? widthOf(hits[0], 'cIconfont, Arial') : 0,
+        fallbackWidth: hits.length ? widthOf(hits[0], 'Arial') : 0
+    };
+}
+
+for (var cp = 0xE600; cp < 0xE640; cp++) {
+    document.getElementById('g1').appendChild(mk('ic', cp));
+    document.getElementById('g2').appendChild(mk('fb', cp));
+}
+
+/* First pass runs while the font is still downloading, so re-measure a few
+ * times: the numbers only mean something once the font data has arrived. */
+measure();
+setTimeout(measure, 800);
+setTimeout(measure, 2000);
+setTimeout(measure, 5000);
+</script>
+
+</body>
+</html>

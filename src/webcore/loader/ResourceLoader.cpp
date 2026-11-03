@@ -41,6 +41,15 @@
 
 namespace WebCore {
 
+/* set AGB_FONT_LOG=1 to trace the subresource load path */
+static bool subresLogOn(void)
+{
+    static int on = -1;
+    if (on < 0)
+        on = getenv("AGB_FONT_LOG") ? 1 : 0;
+    return on;
+}
+
 PassRefPtr<SharedBuffer> ResourceLoader::resourceData()
 {
     if (m_resourceData)
@@ -120,10 +129,12 @@ bool ResourceLoader::load(const ResourceRequest& r)
         return true;
     
     if (m_defersLoading) {
+        if (subresLogOn()) fprintf(stderr, "[subres] deferred %s\n", clientRequest.url().url().utf8().data());
         m_deferredRequest = clientRequest;
         return true;
     }
-    
+
+    if (subresLogOn()) fprintf(stderr, "[subres] handle create %s\n", clientRequest.url().url().utf8().data());
     m_handle = ResourceHandle::create(clientRequest, this, m_defersLoading, m_shouldContentSniff, false);
 
     return true;

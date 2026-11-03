@@ -41,6 +41,15 @@
 
 namespace WebCore {
 
+/* set AGB_FONT_LOG=1 to trace the resource load path */
+static bool loaderLogOn(void)
+{
+    static int on = -1;
+    if (on < 0)
+        on = getenv("AGB_FONT_LOG") ? 1 : 0;
+    return on;
+}
+
 Loader::Loader()
 {
     m_requestsPending.setAutoDelete(true);
@@ -69,6 +78,9 @@ void Loader::servePendingRequests()
         dl->decrementRequestCount();
 
         ResourceRequest request(req->cachedResource()->url());
+
+        if (loaderLogOn())
+            fprintf(stderr, "[loader] serve url=%s type=%d\n", request.url().url().utf8().data(), (int)req->cachedResource()->type());
 
         if (!req->cachedResource()->accept().isEmpty())
             request.setHTTPAccept(req->cachedResource()->accept());

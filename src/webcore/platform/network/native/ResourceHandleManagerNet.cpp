@@ -20,6 +20,13 @@
 
 namespace WebCore {
 
+/* set AGB_FONT_LOG=1 to trace the network manager (cache hits, deliveries) */
+static bool netLogOn(void)
+{
+    static bool on = getenv("AGB_FONT_LOG") != 0;
+    return on;
+}
+
 /* --- file:// support ------------------------------------------------------ */
 
 static void percentDecode(std::string* text)
@@ -169,9 +176,21 @@ ResourceHandleManager::~ResourceHandleManager()
     }
 }
 
+void ResourceHandleManager::ensureDownloadTimerArmed()
+{
+    /* isActive() is true while the timer sits in the ready-to-fire set too
+     * (collected but not fired yet); that does not mean it will fire again,
+     * so check the heap membership instead. */
+    if (!m_downloadTimer.isScheduled())
+        m_downloadTimer.startRepeating(0.01);
+}
+
 void ResourceHandleManager::add(ResourceHandle* job)
 {
     ResourceHandleInternal* d = job->getInternal();
+
+    if (netLogOn())
+        fprintf(stderr, "[netmgr] add url=%s\n", d ? d->m_request.url().url().ascii() : "(null d)");
 
     if (!m_session || !d) {
         job->cancel();
@@ -185,11 +204,12 @@ void ResourceHandleManager::add(ResourceHandle* job)
         DeprecatedString urlText = d->m_request.url().url();
 
         if (Net::isSkippedResource(std::string(urlText.ascii()))) {
+            if (netLogOn())
+                fprintf(stderr, "[netmgr] skipped by list\n");
             job->ref();
             m_skipped.append(job);
 
-            if (!m_downloadTimer.isActive())
-                m_downloadTimer.startRepeating(0.01);
+            ensureDownloadTimerArmed();
             return;
         }
     }
@@ -202,6 +222,8 @@ void ResourceHandleManager::add(ResourceHandle* job)
         std::string path;
 
         if (localPathForFileUrl(urlText.ascii(), &path)) {
+            if (netLogOn())
+                fprintf(stderr, "[netmgr] local file path\n");
             Net::HttpCache::Entry entry;
             std::string body;
             bool ok = readWholeFile(path, &body);
@@ -219,8 +241,7 @@ void ResourceHandleManager::add(ResourceHandle* job)
             delivery.entry = entry;
             m_cached.push_back(delivery);
 
-            if (!m_downloadTimer.isActive())
-                m_downloadTimer.startRepeating(0.01);
+            ensureDownloadTimerArmed();
             return;
         }
     }
@@ -250,6 +271,8 @@ void ResourceHandleManager::add(ResourceHandle* job)
             Net::HttpCache::Entry cached;
 
             if (Net::HttpCache::instance().lookup(req, &cached)) {
+                if (netLogOn())
+                    fprintf(stderr, "[netmgr] cache hit status=%d body=%u\n", cached.response.status, (unsigned)cached.body.size());
                 CachedDelivery delivery;
 
                 delivery.handle = job;
@@ -258,11 +281,13 @@ void ResourceHandleManager::add(ResourceHandle* job)
 
                 job->ref();
 
-                if (!m_downloadTimer.isActive())
-                    m_downloadTimer.startRepeating(0.01);
+                ensureDownloadTimerArmed();
                 return;
             }
         }
+
+        if (netLogOn())
+            fprintf(stderr, "[netmgr] session start url=%s\n", req.url.c_str());
 
         d->m_requestId = m_session->start(req, d);
         if (d->m_requestId == 0) {
@@ -275,8 +300,7 @@ void ResourceHandleManager::add(ResourceHandle* job)
         }
     }
 
-    if (!m_downloadTimer.isActive())
-        m_downloadTimer.startRepeating(0.01);
+    ensureDownloadTimerArmed();
 }
 
 void ResourceHandleManager::cancel(ResourceHandle* job)
@@ -325,6 +349,9 @@ void ResourceHandleManager::downloadTimerCallback(Timer<ResourceHandleManager>*)
     LARGE_INTEGER freq, t0, t1;
     QueryPerformanceFrequency(&freq);
     QueryPerformanceCounter(&t0);
+    if (netLogOn())
+        fprintf(stderr, "[netmgr] tick cached=%u skipped=%u pending=%d\n",
+                (unsigned)m_cached.size(), (unsigned)m_skipped.size(), m_session ? m_session->pending() : -1);
     /* Cached responses are delivered first, like completed network jobs. */
     if (!m_cached.empty()) {
         std::vector<CachedDelivery> hits;
@@ -375,9 +402,14 @@ void ResourceHandleManager::downloadTimerCallback(Timer<ResourceHandleManager>*)
             fprintf(stderr, "[perf] net.pump %.0fms pending=%d\n", ms, m_session ? m_session->pending() : -1);
     }
 
-    /* Nothing to prune: handles deregister themselves through cancel() (also
-     * from their destructor), so the manager never touches a stale pointer. */
-    if (!m_session || m_session->pending() == 0)
+    /* Stop the repeating timer only when there is really nothing left to do.
+     * New work can arrive *while this callback runs*: delivering a document
+     * finishes the load, which runs layout, which requests fonts and other
+     * sub-resources. Those land in m_cached/m_skipped after the swap above,
+     * so stopping the timer here would strand them with no pump left to
+     * deliver them and the resource would stay pending forever (a font stuck
+     * in "loading" forever is what that looked like). */
+    if ((!m_session || m_session->pending() == 0) && m_cached.empty() && m_skipped.isEmpty())
         m_downloadTimer.stop();
 }
 

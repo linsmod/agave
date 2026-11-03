@@ -33,7 +33,6 @@ namespace WebCore {
 
 class DocLoader;
 class Cache;
-class FontCustomPlatformData;
 class FontPlatformData;
 
 class CachedFont : public CachedResource {
@@ -57,7 +56,12 @@ public:
     FontPlatformData platformDataFromCustomData(int size, bool bold, bool italic);
 
 private:
-    FontCustomPlatformData* m_fontData;
+    /* Windows @font-face: the downloaded sfnt is registered as a process
+     * private font (AddFontMemResourceEx) and addressed by its internal
+     * family name, because the CSS-declared family usually differs. */
+    bool m_customFontDataCreated;
+    char m_familyName[64];
+    void* m_fontMemHandle;
     bool m_loadInitiated;
 
     friend class Cache;
