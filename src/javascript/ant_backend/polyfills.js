@@ -231,3 +231,88 @@
 
     g.URLSearchParams = URLSearchParams;
 }());
+
+/* Console guard: a page that logs in a render loop (Vue warnings, debug
+ * leftovers) can flood the console with deep object dumps, which makes the
+ * terminal unusable and burns time formatting. Rate limit to 200 messages per
+ * second, print how many were dropped, and shorten object arguments.
+ *
+ * console may not exist yet when the polyfills run, so install on a timer
+ * until it appears. */
+(function () {
+    var g = typeof window !== 'undefined' ? window : this;
+    var tries = 0;
+
+    if (g.__agbConsoleGuard)
+        return;
+
+    function install() {
+        if (g.__agbConsoleGuard)
+            return;
+
+        if (!g.console || typeof g.console.log !== 'function') {
+            if (tries++ < 200) setTimeout(install, 10);
+            return;
+        }
+
+        g.__agbConsoleGuard = true;
+
+        var perSecond = 200;
+        var bucket = 0;
+        var dropped = 0;
+        var lastSecond = 0;
+
+        function shorten(value) {
+            if (value === null || typeof value !== 'object')
+                return value;
+            try {
+                return Object.prototype.toString.call(value) === '[object Array]'
+                    ? '[Array(' + value.length + ')]'
+                    : '[Object ' + (value.constructor && value.constructor.name || '') + ']';
+            } catch (e) {
+                return '[Object]';
+            }
+        }
+
+        function wrap(level) {
+            var original = g.console[level];
+
+            if (typeof original !== 'function')
+                return;
+
+            g.console[level] = function () {
+                var now = Date.now();
+                var args = [];
+                var i;
+
+                if (now !== lastSecond) {
+                    lastSecond = now;
+                    bucket = 0;
+
+                    if (dropped > 0) {
+                        original.call(g.console, '[console] ' + dropped + ' message(s) dropped');
+                        dropped = 0;
+                    }
+                }
+
+                if (++bucket > perSecond) {
+                    dropped++;
+                    return;
+                }
+
+                for (i = 0; i < arguments.length; i++)
+                    args.push(shorten(arguments[i]));
+
+                return original.apply(g.console, args);
+            };
+        }
+
+        wrap('log');
+        wrap('info');
+        wrap('warn');
+        wrap('error');
+        wrap('debug');
+    }
+
+    install();
+}());

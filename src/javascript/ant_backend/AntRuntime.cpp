@@ -3869,6 +3869,13 @@ int attrsGetter(AntbEngine* engine, AntbValue*, const char* name, AntbValue* out
 
 int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue* out, void*)
 {
+    /* Internal bookkeeping names must not go back through the bridge: reading
+     * __agbExpando from the setter's own object would re-enter this getter and
+     * recurse until the stack overflows. */
+    if (name && name[0] == '_' && !strncmp(name, "__agb", 5))
+        return 0;
+
+
     ProfScope prof(PROF_NODE_GET);
 
     installCrashFilter();
@@ -4161,7 +4168,24 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
     }
 
     if (!v)
-        return 0;
+        /* Expando fields stored by nodeSetter (el._assign, el.__vnode, ...). */
+    {
+        AntbValue* expando = antb_get_prop(engine, self, "__agbExpando");
+
+        if (expando) {
+            AntbValue* field = antb_get_prop(engine, expando, name);
+
+            antb_value_release(expando);
+
+            if (field) {
+                antb_value_assign(out, field);
+                antb_value_release(field);
+                return 1;
+            }
+        }
+    }
+
+    return 0;
 
     antb_value_assign(out, v);
     antb_value_release(v);
@@ -4170,6 +4194,13 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
 
 int nodeSetter(AntbEngine* engine, AntbValue* self, const char* name, const AntbValue* value, void*)
 {
+    /* Internal bookkeeping names must not go back through the bridge: reading
+     * __agbExpando from the setter's own object would re-enter this getter and
+     * recurse until the stack overflows. */
+    if (name && name[0] == '_' && !strncmp(name, "__agb", 5))
+        return 0;
+
+
     ProfScope prof(PROF_NODE_SET);
 
     installCrashFilter();
@@ -4297,7 +4328,28 @@ int nodeSetter(AntbEngine* engine, AntbValue* self, const char* name, const Antb
         }
     }
 
-    return 0;
+    /* Expando fields: l._assign = fn, l.__vnode = ..., jQuery data...
+     * are plain JS properties on the element object. The node wrapper is not a
+     * normal object (it has no shape), so writing them on it makes Ant throw
+     * "invalid object" - Vue's v-model directives do exactly this on every
+     * render. Keep them on a side object. */
+    {
+        AntbValue* expando = antb_get_prop(g_engine, self, "__agbExpando");
+
+        if (!expando) {
+            expando = antb_make_object(g_engine);
+
+            if (!expando)
+                return 0;
+
+            antb_set_prop(g_engine, self, "__agbExpando", expando);
+        }
+
+        antb_set_prop(g_engine, expando, name, value);
+        antb_value_release(expando);
+    }
+
+    return 1;
 }
 
 int nodeGetAttribute(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
