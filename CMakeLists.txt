@@ -189,3 +189,25 @@ if (EXISTS ${AGB_POLYFILLS})
 else()
     message(WARNING "polyfills.js not found at ${AGB_POLYFILLS}; pages will run without the DOM polyfills")
 endif()
+
+# prelude.js: the window bootstrap shims (window/document helpers, network and
+# storage shims, event plumbing). Same deal as polyfills.js - loaded at runtime
+# by loadPrelude(), so it can be edited without relinking. Missing file leaves
+# pages without their globals, so it is copied next to every binary.
+set(AGB_PRELUDE ${PROJ_ROOT}/src/javascript/ant_backend/prelude.js)
+if (EXISTS ${AGB_PRELUDE})
+    add_custom_command(
+        OUTPUT ${PROJ_OUT}/prelude.js
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${AGB_PRELUDE} ${PROJ_OUT}/prelude.js
+        DEPENDS ${AGB_PRELUDE}
+        COMMENT "Copying prelude.js next to the binaries"
+        VERBATIM)
+    add_custom_target(prelude ALL DEPENDS ${PROJ_OUT}/prelude.js)
+    foreach (agb_target agave_shell agave_embed agave_view_host touchweb)
+        if (TARGET ${agb_target})
+            add_dependencies(${agb_target} prelude)
+        endif()
+    endforeach()
+else()
+    message(WARNING "prelude.js not found at ${AGB_PRELUDE}; pages will run without the window shims")
+endif()

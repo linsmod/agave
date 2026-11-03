@@ -122,6 +122,10 @@ tools\cdb.exe -p <pid> -c '~*k 30; qd'
 # 本地页面测试：直接 file://（模块管线对 file: URL 本地直读，无需起服务）
 # 如需 http 语义：Start-Process -WindowStyle Hidden python -ArgumentList '-m','http.server','8971','--directory','e:\mybrowsers\agave\debug'
 
-# polyfills.js 直接改即可生效（引擎每次文档绑定时从 exe 旁加载，无需重链）
+# prelude.js / polyfills.js 直接改即可生效（引擎每次文档绑定时从 exe 旁加载，无需重链/重编）
+#   prelude.js  = window 引导 shim（window/document 辅助、XHR/fetch/storage/matchMedia、事件派发）
+#   polyfills.js= DOM/构造函数补丁（append/prepend、classList、构造器 stub、Worker stub、console guard）
+#   改源文件后记得让构建把它拷到输出目录（add_custom_target prelude/polyfills），或直接改
+#   build-zig-native\prelude.js 临时验证；$AGB_PRELUDE / $AGB_POLYFILLS 可指向别处的副本
 Copy-Item src\javascript\ant_backend\polyfills.js build-zig-native\polyfills.js -Force
 ```
