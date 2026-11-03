@@ -564,9 +564,19 @@ static std::string unescapeStorage(const std::string& text)
     return out;
 }
 
-static void saveStorage()
+/* localStorage is written lazily: setItem() used to rewrite the whole file
+ * every call, which showed up as ~11% of a page load in the sampler
+ * (ntdll!NtWriteFile). Mark dirty here, flush from the frame pump. */
+static int           g_storageDirty = 0;
+static unsigned long g_storageSavedAt = 0;
+
+static void saveStorageNow()
 {
     FILE* file;
+    std::vector<std::pair<std::string, std::string> >& entries = storage();
+
+    g_storageDirty = 0;
+    g_storageSavedAt = GetTickCount();
 
     if (g_storageFile.empty())
         return;
@@ -576,17 +586,28 @@ static void saveStorage()
     if (!file)
         return;
 
-    {
-        std::vector<std::pair<std::string, std::string> >& entries = storage();
-
-        for (size_t i = 0; i < entries.size(); ++i) {
-            fprintf(file, "%s\t%s\n",
-                    escapeStorage(entries[i].first).c_str(),
-                    escapeStorage(entries[i].second).c_str());
-        }
+    for (size_t i = 0; i < entries.size(); ++i) {
+        fprintf(file, "%s\t%s\n", escapeStorage(entries[i].first).c_str(), escapeStorage(entries[i].second).c_str());
     }
 
     fclose(file);
+}
+
+static void saveStorage()
+{
+    g_storageDirty = 1;
+}
+
+void flushStorageIfDirty(void)
+{
+    if (!g_storageDirty)
+        return;
+
+    /* throttle: at most one write per 100ms */
+    if (g_storageSavedAt && GetTickCount() - g_storageSavedAt < 100)
+        return;
+
+    saveStorageNow();
 }
 
 static void loadStorage()
@@ -2449,6 +2470,7 @@ int evaluate(const char* src, size_t len, char** out, char** err)
     }
 
     collectXhrJobs();
+    flushStorageIfDirty();
 
     /* Page scripts are wrapped in try/catch so engine-thrown errors come with a
      * stack: the engine's own TypeErrors carry no position information. `var`
