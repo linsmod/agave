@@ -91,6 +91,9 @@ void HTMLScriptElement::parseMappedAttribute(MappedAttribute *attr)
     
         const AtomicString& url = attr->value();
         if (!url.isEmpty()) {
+            /* Dynamically inserted entries keep the CachedScript path: the
+             * unified module-fetcher route needs a waiting tokenizer, which
+             * only the parser-driven flow provides. */
             m_cachedScript = document()->docLoader()->requestScript(url, getAttribute(charsetAttr));
             if (m_cachedScript)
                 m_cachedScript->ref(this);
@@ -129,6 +132,7 @@ void HTMLScriptElement::insertedIntoDocument()
     
     const AtomicString& url = getAttribute(srcAttr);
     if (!url.isEmpty()) {
+        /* Same as parseMappedAttribute: dynamic entries keep CachedScript. */
         m_cachedScript = document()->docLoader()->requestScript(url, getAttribute(charsetAttr));
         if (m_cachedScript)
             m_cachedScript->ref(this);

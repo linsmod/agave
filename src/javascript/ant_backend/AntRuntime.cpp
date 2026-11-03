@@ -1797,6 +1797,28 @@ static bool moduleOffline(void)
 
     return g_moduleOffline != 0;
 }
+
+/* External <script type="module" src> entries routed through the module
+ * fetcher: URL -> the generation that asked for it. When the body arrives it
+ * is handed to the WebCore notify hook (the waiting tokenizer), so the module
+ * runs in the parse flow - never from inside a network pump. */
+static std::map<std::string, unsigned long>* g_moduleEntryScripts = NULL;
+static ModuleEntryNotifyHook g_moduleEntryNotifyHook = NULL;
+
+void setModuleEntryNotifyHook(ModuleEntryNotifyHook hook)
+{
+    g_moduleEntryNotifyHook = hook;
+}
+
+static void notifyModuleEntry(const std::string& url, const std::string* source, bool failed)
+{
+    if (!g_moduleEntryNotifyHook)
+        return;
+
+    g_moduleEntryNotifyHook(url.c_str(),
+                            (source && !source->empty() && !failed) ? source->c_str() : NULL,
+                            failed ? 1 : 0);
+}
 static int moduleFetchLimit(void)
 {
     static int cached = -1;
@@ -1905,6 +1927,185 @@ static ModuleEntry* moduleEntryFor(const std::string& url)
 
 static void moduleCacheStore(const std::string& url, const std::string& body);
 static bool moduleCacheLoad(const std::string& url, std::string* body);
+static void modulePrefetchImports(const std::string& url, const std::string& body);
+
+static int hexVal(char c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+/* The engine only joins module specifiers against http(s) URL bases
+ * (esm_is_url), so file:// module filenames are masqueraded as
+ * "http://file.ant/<path>" when handed to it. The engine resolves imports in
+ * that space and fetches through the host fetcher (moduleFetch), which maps
+ * back to the real file:// URL and reads from disk. import.meta.url shows
+ * the masqueraded form. */
+static const char kEngineFileUrlPrefix[] = "http://file.ant/";
+static const size_t kEngineFileUrlPrefixLen = 16;
+
+static bool isFileUrl(const std::string& u)
+{
+    return u.compare(0, 7, "file://") == 0;
+}
+
+static bool isEngineFileUrl(const std::string& u)
+{
+    return u.compare(0, kEngineFileUrlPrefixLen, kEngineFileUrlPrefix) == 0;
+}
+
+static std::string engineUrlForFile(const std::string& fileUrl)
+{
+    const char* rest = fileUrl.c_str();
+    size_t skip = 0;
+
+    if (fileUrl.compare(0, 8, "file:///") == 0)
+        skip = 8;
+    else if (fileUrl.compare(0, 7, "file://") == 0)
+        skip = 7;
+    else
+        return fileUrl;
+
+    /* file://localhost/... */
+    if (fileUrl.compare(skip, 10, "localhost/") == 0)
+        skip += 10;
+
+    return std::string(kEngineFileUrlPrefix) + (rest + skip);
+}
+
+static std::string fileUrlForEngine(const std::string& engineUrl)
+{
+    return "file:///" + engineUrl.substr(kEngineFileUrlPrefixLen);
+}
+
+/* file:// module URLs are read straight from disk - the same direct-read
+ * treatment the document loader gives them. No network session, no fetch
+ * slots, works offline. */
+static bool moduleReadLocalFile(const std::string& url, std::string* body)
+{
+    std::string path;
+    FILE* file;
+    long size;
+
+    if (url.compare(0, 8, "file:///") == 0)
+        path = url.substr(8);
+    else if (url.compare(0, 7, "file://") == 0)
+        path = url.substr(7);
+    else
+        return false;
+
+    if (path.compare(0, 11, "localhost/") == 0)
+        path.erase(0, 10);
+
+    /* "/e:/dir/file" form (the slash before the drive letter). */
+    if (path.size() > 2 && path[0] == '/' && path[2] == ':')
+        path.erase(0, 1);
+
+    /* Percent escapes (%20 and friends). */
+    {
+        std::string out;
+        size_t i = 0;
+
+        while (i < path.size()) {
+            int hi, lo;
+
+            if (path[i] == '%' && i + 2 < path.size()
+                    && (hi = hexVal(path[i + 1])) >= 0 && (lo = hexVal(path[i + 2])) >= 0) {
+                out += (char)((hi << 4) | lo);
+                i += 3;
+            } else
+                out += path[i++];
+        }
+
+        path.swap(out);
+    }
+
+    file = fopen(path.c_str(), "rb");
+
+    if (!file)
+        return false;
+
+    fseek(file, 0, SEEK_END);
+    size = ftell(file);
+    fseek(file, 0, SEEK_SET);
+
+    if (size <= 0) {
+        fclose(file);
+        return false;
+    }
+
+    body->resize((size_t)size);
+    fread(&(*body)[0], 1, (size_t)size, file);
+    fclose(file);
+    return true;
+}
+
+/* Bodies of routed entry scripts that arrived inside a network pump callback.
+ * JS must not run there (see pumpAsyncRequests): the body is deposited here
+ * and handed to the WebCore notify hook after the pump, so the waiting
+ * tokenizer resumes and runs the module in the parse flow. */
+struct ArrivedEntryBody {
+    std::string url;
+    std::string source;
+    bool failed;
+};
+
+static std::vector<ArrivedEntryBody>* g_arrivedEntryBodies = NULL;
+
+/* A routed entry script finished (or failed): deposit the result for the
+ * frame loop, or report the failure. Dropped when another realm owns the
+ * page now. */
+static void moduleEntryScriptArrived(const std::string& url, const ModuleEntry* entry)
+{
+    std::map<std::string, unsigned long>::iterator it;
+    unsigned long generation;
+
+    if (!g_moduleEntryScripts)
+        return;
+
+    it = g_moduleEntryScripts->find(url);
+
+    if (it == g_moduleEntryScripts->end())
+        return;
+
+    generation = it->second;
+    g_moduleEntryScripts->erase(it);
+
+    if (currentGeneration() != generation) {
+        if (getenv("AGB_MODULE_DEBUG"))
+            fprintf(stderr, "[modentry] stale %s (gen %lu)\n", url.c_str(), generation);
+        return;
+    }
+
+    if (getenv("AGB_MODULE_DEBUG"))
+        fprintf(stderr, "[modentry] arrived %s gen=%lu failed=%d\n",
+                url.c_str(), generation, (entry && entry->failed) ? 1 : 0);
+
+    if (entry && !entry->failed) {
+        ArrivedEntryBody body;
+
+        body.url = url;
+        body.source = entry->body;
+        body.failed = false;
+
+        if (!g_arrivedEntryBodies)
+            g_arrivedEntryBodies = new std::vector<ArrivedEntryBody>();
+
+        g_arrivedEntryBodies->push_back(body);
+    } else {
+        ArrivedEntryBody body;
+
+        body.url = url;
+        body.failed = true;
+
+        if (!g_arrivedEntryBodies)
+            g_arrivedEntryBodies = new std::vector<ArrivedEntryBody>();
+
+        g_arrivedEntryBodies->push_back(body);
+    }
+}
 
 struct ModuleFetchClient : public Net::Client {
     std::string url;
@@ -1950,6 +2151,8 @@ struct ModuleFetchClient : public Net::Client {
             modulePrefetchImports(url, entry->body);
 
             moduleDrainPending();
+
+            moduleEntryScriptArrived(url, entry);
         }
     }
 
@@ -1966,6 +2169,8 @@ struct ModuleFetchClient : public Net::Client {
                 --g_moduleInFlight;
 
             moduleDrainPending();
+
+            moduleEntryScriptArrived(url, entry);
         }
     }
 };
@@ -2247,6 +2452,18 @@ static void moduleStart(const std::string& url, bool force)
     if (entry->done || entry->id)
         return;
 
+    /* file:// modules read straight from disk and complete synchronously;
+     * their imports fan out here too. */
+    if (url.compare(0, 7, "file://") == 0) {
+        entry->done = true;
+        entry->failed = !moduleReadLocalFile(url, &entry->body);
+
+        if (!entry->failed)
+            modulePrefetchImports(url, entry->body);
+
+        return;
+    }
+
     if (moduleOffline()) {
         /* No network in offline mode. Serve from the disk cache right here:
          * prefetch runs before evaluation, and marking the entry failed
@@ -2296,6 +2513,41 @@ static void moduleStart(const std::string& url, bool force)
     }
 }
 
+/* Entry point for external <script type="module" src>: load the body through
+ * the module fetcher (the tokenizer and HTMLScriptElement call this instead
+ * of CachedScript, so the entry script and its imports share one cache and
+ * one cancel owner). Cache hits notify synchronously - the caller guards
+ * against reentrancy the same way the CachedScript ref() path does. */
+void fetchAndQueueModuleScript(const char* url)
+{
+    std::string u(url ? url : "");
+    ModuleEntry* entry;
+
+    if (u.empty())
+        return;
+
+    entry = moduleEntryFor(u);
+
+    if (entry->done) {
+        notifyModuleEntry(u, &entry->body, entry->failed);
+        return;
+    }
+
+    if (!g_moduleEntryScripts)
+        g_moduleEntryScripts = new std::map<std::string, unsigned long>();
+
+    (*g_moduleEntryScripts)[u] = currentGeneration();
+    moduleStart(u, false);
+
+    /* file:// entries (and offline-gated ones) complete synchronously inside
+     * moduleStart: notify right away. The caller guards reentrancy, and this
+     * still runs in the parse flow. */
+    entry = moduleEntryFor(u);
+
+    if (entry->done)
+        notifyModuleEntry(u, &entry->body, entry->failed);
+}
+
 /* Queues the static imports of a freshly received module. */
 static void modulePrefetchImports(const std::string& url, const std::string& body)
 {
@@ -2339,6 +2591,11 @@ static char* moduleFetch(const char* urlText, unsigned long* outSize)
     ModuleEntry* entry;
     unsigned long began;
     int attempt;
+
+    /* Engine-space masqueraded file URLs map back to real file:// URLs
+     * (local read; keys of the module caches stay real). */
+    if (isEngineFileUrl(url))
+        url = fileUrlForEngine(url);
 
     if (outSize)
         *outSize = 0;
@@ -3187,6 +3444,28 @@ void pumpAsyncRequests(void)
      * the network pump. */
     collectXhrJobs();
 
+    /* The module session has no driver of its own: prefetches and routed
+     * entry scripts only complete when someone pumps. The frame loop is the
+     * natural place (moduleFetch's wait loop covers the evaluation path). */
+    if (g_moduleSession) {
+        g_moduleSession->pump();
+
+        moduleDrainPending();
+    }
+
+    /* Entry bodies that arrived during the pump above: outside the network
+     * pump now. Hand them to the waiting tokenizer - the module itself runs
+     * later, in the parse flow (see HTMLTokenizer::notifyModuleEntry). */
+    if (g_arrivedEntryBodies && !g_arrivedEntryBodies->empty()) {
+        std::vector<ArrivedEntryBody> arrived;
+
+        arrived.swap(*g_arrivedEntryBodies);
+
+        for (size_t i = 0; i < arrived.size(); ++i)
+            notifyModuleEntry(arrived[i].url, arrived[i].failed ? NULL : &arrived[i].source,
+                              arrived[i].failed);
+    }
+
     if (g_engine) {
         antb_pump(g_engine);
 
@@ -3320,7 +3599,17 @@ int evaluateModule(const char* src, size_t len, const char* filename, char** out
     {
         unsigned long began = GetTickCount();
 
-        value = antb_eval_module(g_engine, src, (int)len, filename, err);
+        /* file:// filenames masquerade as http://file.ant/... for the engine
+         * (see the masquerade note by kEngineFileUrlPrefix). */
+        std::string masqueraded;
+        const char* engineFilename = filename;
+
+        if (filename && isFileUrl(filename)) {
+            masqueraded = engineUrlForFile(filename);
+            engineFilename = masqueraded.c_str();
+        }
+
+        value = antb_eval_module(g_engine, src, (int)len, engineFilename, err);
 
         if (getenv("AGB_MODULE_DEBUG"))
             fprintf(stderr, "[modeval] %s %u bytes %s in %u ms\n",
@@ -3428,6 +3717,21 @@ static void cancelInFlightResources(unsigned long generation)
     cancelXhrJobsForGeneration(generation);
     cancelModuleDownloadsForGeneration(generation);
     cancelDeferredModulesForGeneration(generation);
+
+    /* Routed entry scripts of the dying realm: their arrival would queue code
+     * into a page that is going away. Notify failed so a tokenizer that is
+     * blocked waiting for one of them can resume (no JS runs in this notify). */
+    if (g_moduleEntryScripts) {
+        std::map<std::string, unsigned long>::iterator it = g_moduleEntryScripts->begin();
+
+        while (it != g_moduleEntryScripts->end()) {
+            if (it->second == generation) {
+                notifyModuleEntry(it->first, NULL, true);
+                g_moduleEntryScripts->erase(it++);
+            } else
+                ++it;
+        }
+    }
 }
 
 /* Stops the current realm: the page's JS world goes away with its document.

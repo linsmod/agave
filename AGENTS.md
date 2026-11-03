@@ -77,8 +77,8 @@ $env:AGB_NET_LOG = '1'      # 关闭置 $null；偶发挂起先重试
 # 挂起进程抓全线程栈
 tools\cdb.exe -p <pid> -c '~*k 30; qd'
 
-# 本地页面测试：起 http 服务替代 file://（file: 走本地直读分支）
-Start-Process -WindowStyle Hidden python -ArgumentList '-m','http.server','8971','--directory','e:\mybrowsers\agave\debug'
+# 本地页面测试：直接 file://（模块管线对 file: URL 本地直读，无需起服务）
+# 如需 http 语义：Start-Process -WindowStyle Hidden python -ArgumentList '-m','http.server','8971','--directory','e:\mybrowsers\agave\debug'
 
 # polyfills.js 直接改即可生效（引擎每次文档绑定时从 exe 旁加载，无需重链）
 Copy-Item src\javascript\ant_backend\polyfills.js build-zig-native\polyfills.js -Force

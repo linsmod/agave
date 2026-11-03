@@ -28,6 +28,9 @@ agave 的页面刷新路径存在**四类结构性缺陷**：旧文档没有拆�
 2. **realm 隔离**：每文档一个 VM（旧 realm 的 globals / module registry / timers 不再泄漏到新文档）。
 3. **generation 归档**：session/state 绑定递增 id；卸载前按 id 取消在途资源（XHR / 模块下载 / 待下载队列 / 待执行模块队列）。
 4. **桥接层释放**：wrapper 表与 class 表改为可回收（空闲链表 / 空槽复用），engine 销毁时按 engine 清理；wrapper 支持 owner（文档）归属，文档卸载时按 owner 释放。
+5. **入口模块管线合一**（方案 A）：`<script type="module" src>`（非 async）改走模块 fetcher——与 import 同一缓存、同一 generation 取消归属；tokenizer 单槽等待位（复用 CachedScript 的阻塞/恢复机制）保证模块在**解析流程内**执行、DCL 按规范落后于模块执行。
+6. **file:// 模块直读**：file: URL 模块本地读盘、同步完成；交给引擎前伪装成 `http://file.ant/<path>`（引擎 esm_is_url 只认 http(s)，fetcher 端还原），import.meta.url 显示伪装形态。
+7. **错误栈冒泡**（P1-b）+ **`--offline` 确定性重放**：见提交 `4efdef6`。
 
 ---
 
@@ -164,7 +167,7 @@ ant 源码树在 `H:\ant-v16`（`include/` + `build-zig/libant.a`），桥接产
 
 ### 4.2 无头探针
 ```powershell
-# 本地页必须走 http（file:// 直读分支不稳）
+# 本地页直接用 file://（模块管线对 file: URL 本地直读，无需起服务）
 Start-Process -WindowStyle Hidden python -ArgumentList '-m','http.server','8971','--directory','e:\mybrowsers\agave\debug'
 
 $ev = "probeExit('kids='+document.body.children.length)"   # ⚠️ 不能含空格，见 §4.4
@@ -206,6 +209,7 @@ $p = Start-Process -FilePath 'e:\mybrowsers\agave\build-zig-native\agave_shell.e
 | R4 wrapper 的 GC root 只能到 engine 边界 | ant 的 GC 无 unpin（`H:\ant-v16\include\gc\roots.h` 只有 `gc_pin_permanent` / 栈式 `gc_push_root`） | 同 engine 内换文档只能回收 cache，root 仍在；隔离模式下等价于每文档释放 ✓ |
 | R5 旧页面长定时器 | 实测刷新后**不再触发**（引擎按文档丢弃定时器） | 符合浏览器语义，无需处理 |
 | R6 `g_moduleCache`（内存 body + 磁盘缓存） | 仍按 URL 全局共享，只有"在途"部分按代取消 | 磁盘缓存是内容寻址，与 realm 无关，可保持全局 ✓ |
+| R7 入口模块管线合一（方案 A） | 已落地并验证：file:// 直读 + http 大图 offline 重放 + reload×2 三轮（realm 隔离下逐轮 modeval ok）均通过 | 已知限制：①动态插入的入口和 async 入口仍走 CachedScript（需要等待位之外的语义，风险优先）；②入口 script 元素的 load/error 事件暂不派发（避免在帧循环上下文跑页面 JS）；③import.meta.url 对 file: 模块显示伪装 URL（http://file.ant/...）；④DCL 后才到达的 inline 模块排队后不再执行（回到改造前行为）；⑤frame 嵌套时等待位单槽，iframe 的模块入口回退 CachedScript |
 | R1 定位详情（--offline 实验，2026-11-03） | 暖缓存 + `--offline` 确定性重放：214/214 模块全部磁盘缓存零网络供给，Vue 自身求值成功（打出 dev build 横幅），`app.js` 求值 100% 失败 "undefined is not a function"（1047ms，4/4 稳定）。**M2 网络时序交错被排除**；基线"通过"疑似旧架构共享 VM 的假象（上次运行的模块实例残留使 import 非 undefined）。症状与 ant 自家 tech-debt 逐字吻合（`H:\ant-v16\docs\exec-plans\tech-debt.md` §ESM loader linking：re-export 复制值不转发 live binding、`export default` 非 binding、循环图 → "undefined is not a function"，backlog 2026-10-22）。引擎侧 registry 确认 per-engine（`js->modules.state`，`loader.c:1657`），M1 假设不成立 | 修复：ant 侧按 spec 修 Link/Evaluate（上游 backlog 有完整验收标准），或 agave 侧"图就绪硬前置再统一求值"绕过（与 P0-b 合并做）。下一步：先做 P1-b 错误冒泡拿到失败 import 链 |
 
 ---

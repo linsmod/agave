@@ -65,6 +65,15 @@ void queueModule(const char* url, const char* source);
 void prefetchModuleGraph(const char* url, const char* source);
 void flushDeferredModules(void);
 
+/* External <script type="module" src>: loads the body through the module
+ * fetcher (the same cache and cancel owner as its imports) and hands it to
+ * the notifier below when it arrives - the tokenizer keeps parsing blocked
+ * until then and runs the module in the parse flow, so DOMContentLoaded
+ * stays behind module execution, per spec. */
+typedef void (*ModuleEntryNotifyHook)(const char* url, const char* source, int failed);
+void setModuleEntryNotifyHook(ModuleEntryNotifyHook hook);
+void fetchAndQueueModuleScript(const char* url);
+
 /* Binds the page's document to the JS `document` object (task 2 acceptance):
  * `document.title` reads/writes WebCore::Document::title(). `document` is a
  * pointer to a WebCore::Document. Safe to call on every script evaluation. */

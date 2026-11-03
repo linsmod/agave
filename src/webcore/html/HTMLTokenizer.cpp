@@ -77,6 +77,21 @@ namespace WebCore {
 using namespace HTMLNames;
 using namespace EventNames;
 
+#if ENABLE(ANTJS)
+/* The tokenizer waiting for a routed entry module's body (single slot:
+ * blocking external scripts are serialized by the tokenizer state machine).
+ * The Ant runtime notifies it from the frame loop, OUTSIDE its network pump -
+ * the module then runs in the parse flow (scriptExecution), never inside a
+ * network callback. */
+static HTMLTokenizer* s_moduleEntryWaiter = 0;
+
+static void moduleEntryNotifyTrampoline(const char* url, const char* source, int failed)
+{
+    if (s_moduleEntryWaiter && s_moduleEntryWaiter->waitsForModuleEntry(url))
+        s_moduleEntryWaiter->notifyModuleEntry(source, failed != 0);
+}
+#endif
+
 #if MOBILE
 // As the chunks are smaller (above), the tokenizer should not yield for as long a period, otherwise
 // it will take way to long to load a page.
@@ -161,6 +176,7 @@ HTMLTokenizer::HTMLTokenizer(HTMLDocument* doc, bool reportErrors)
     , scriptCodeResync(0)
     , m_executingScript(0)
     , m_requestingScript(false)
+    , m_awaitingModuleEntry(false)
     , m_hasScriptsWaitingForStylesheets(false)
     , m_timer(this, &HTMLTokenizer::timerFired)
     , m_doc(doc)
@@ -180,6 +196,7 @@ HTMLTokenizer::HTMLTokenizer(HTMLViewSourceDocument* doc)
     , scriptCodeResync(0)
     , m_executingScript(0)
     , m_requestingScript(false)
+    , m_awaitingModuleEntry(false)
     , m_hasScriptsWaitingForStylesheets(false)
     , m_timer(this, &HTMLTokenizer::timerFired)
     , m_doc(doc)
@@ -198,6 +215,7 @@ HTMLTokenizer::HTMLTokenizer(DocumentFragment* frag)
     , scriptCodeResync(0)
     , m_executingScript(0)
     , m_requestingScript(false)
+    , m_awaitingModuleEntry(false)
     , m_hasScriptsWaitingForStylesheets(false)
     , m_timer(this, &HTMLTokenizer::timerFired)
     , m_doc(frag->document())
@@ -411,11 +429,49 @@ HTMLTokenizer::State HTMLTokenizer::scriptHandler(State state)
                 bool asyncScript = scriptNode
                     && static_cast<Element*>(scriptNode.get())->hasAttribute(AtomicString("async"));
 
-                if (getenv("AGB_SCRIPT_DEBUG"))
-                    fprintf(stderr, "[script] src=%s async=%d\n",
-                            scriptSrc.utf8().data(), asyncScript ? 1 : 0);
+#if ENABLE(ANTJS)
+                /* Entry module scripts (non-async) load through the module
+                 * fetcher - same cache and cancel owner as their imports.
+                 * The tokenizer waits like it does for CachedScript: parsing
+                 * is blocked until the body arrives (notifyModuleEntry), so
+                 * the module runs in the parse flow and DOMContentLoaded
+                 * stays behind module execution, per spec. Async module
+                 * entries keep the CachedScript path. */
+                bool moduleEntryScript = scriptNode && !asyncScript && !m_parserStopped
+                    && AntRuntime::isRunning()
+                    && static_cast<HTMLScriptElement*>(scriptNode.get())->isModuleScript()
+                    && (!s_moduleEntryWaiter || s_moduleEntryWaiter == this);
+#else
+                bool moduleEntryScript = false;
+#endif
 
-                if (asyncScript && !m_parserStopped
+                if (getenv("AGB_SCRIPT_DEBUG"))
+                    fprintf(stderr, "[script] src=%s async=%d module=%d\n",
+                            scriptSrc.utf8().data(), asyncScript ? 1 : 0,
+                            moduleEntryScript ? 1 : 0);
+
+                if (moduleEntryScript) {
+#if ENABLE(ANTJS)
+                    static bool s_hookRegistered = false;
+
+                    if (!s_hookRegistered) {
+                        AntRuntime::setModuleEntryNotifyHook(moduleEntryNotifyTrampoline);
+                        s_hookRegistered = true;
+                    }
+
+                    s_moduleEntryWaiter = this;
+                    m_awaitingModuleEntry = true;
+                    m_pendingModuleUrl = scriptSrc.deprecatedString();
+
+                    /* A cache hit notifies synchronously (like a CachedScript
+                     * ref() that executes right away); m_requestingScript
+                     * keeps that reentrant resume from touching src. */
+                    bool savedRequestingScript = m_requestingScript;
+                    m_requestingScript = true;
+                    AntRuntime::fetchAndQueueModuleScript(scriptSrc.utf8().data());
+                    m_requestingScript = savedRequestingScript;
+#endif
+                } else if (asyncScript && !m_parserStopped
                         && (cs = m_doc->docLoader()->requestScript(scriptSrc, scriptSrcCharset))) {
                     cs->ref(static_cast<HTMLScriptElement*>(scriptNode.get()));
                     scriptNode = 0;
@@ -487,6 +543,17 @@ HTMLTokenizer::State HTMLTokenizer::scriptHandler(State state)
             // will be 0 if script was already loaded and ref() executed it
             if (!pendingScripts.isEmpty())
                 state.setLoadingExtScript(true);
+        } else if (m_awaitingModuleEntry) {
+            /* Routed entry module still downloading: block the parser exactly
+             * like the CachedScript path above. The body comes back through
+             * notifyModuleEntry, which runs the module in this (parse flow)
+             * context and re-feeds the stashed source. */
+            if (savedPrependingSrc)
+                savedPrependingSrc->append(src);
+            else
+                pendingSrc.prepend(src);
+            setSrc(SegmentedString());
+            state.setLoadingExtScript(true);
         } else if (!m_fragment && doScriptExec) {
             if (!m_executingScript)
                 pendingSrc.prepend(src);
@@ -1534,6 +1601,15 @@ void HTMLTokenizer::stopParsing()
     Tokenizer::stopParsing();
     m_timer.stop();
 
+    /* A waiting routed entry would never resume: give the wait slot up (the
+     * Ant runtime also fails pending entries on realm teardown, which lands
+     * here as a no-op once the waiter is cleared). */
+    if (s_moduleEntryWaiter == this)
+        s_moduleEntryWaiter = 0;
+    m_awaitingModuleEntry = false;
+    m_pendingModuleUrl = DeprecatedString();
+    scriptNode.release();
+
     // The part needs to know that the tokenizer has finished with its data,
     // regardless of whether it happened naturally or due to manual intervention.
     if (!m_fragment && m_doc->frame())
@@ -1722,6 +1798,9 @@ HTMLTokenizer::~HTMLTokenizer()
     ASSERT(!inWrite);
     reset();
     delete parser;
+
+    if (s_moduleEntryWaiter == this)
+        s_moduleEntryWaiter = 0;
 }
 
 
@@ -1747,6 +1826,50 @@ void HTMLTokenizer::executeScriptsWaitingForStylesheets()
 
     if (m_hasScriptsWaitingForStylesheets)
         notifyFinished(0);
+}
+
+bool HTMLTokenizer::waitsForModuleEntry(const char* url) const
+{
+    return m_awaitingModuleEntry && url && m_pendingModuleUrl == url;
+}
+
+/* Called from the frame loop when a routed entry module's body arrives (never
+ * inside a network pump). Runs the module in the parse flow - scriptExecution
+ * queues it like an inline module and DOMContentLoaded's flush evaluates it -
+ * then resumes parsing, mirroring the tail of notifyFinished. */
+void HTMLTokenizer::notifyModuleEntry(const char* source, bool failed)
+{
+    RefPtr<Node> n = scriptNode.release();
+    DeprecatedString url(m_pendingModuleUrl);
+
+    if (s_moduleEntryWaiter == this)
+        s_moduleEntryWaiter = 0;
+    m_pendingModuleUrl = DeprecatedString();
+    m_awaitingModuleEntry = false;
+
+    if (m_parserStopped)
+        return;
+
+    if (getenv("AGB_SCRIPT_DEBUG"))
+        fprintf(stderr, "[script] module entry %s (%s)\n", url.utf8().data(),
+                failed ? "failed" : "arrived");
+
+    if (!failed && n) {
+        if (static_cast<HTMLScriptElement*>(n.get())->shouldExecuteAsJavaScript())
+            m_state = scriptExecution(DeprecatedString(source), m_state, url);
+        /* No load/error event for now: dispatching here would run page JS in
+         * the frame-loop context. The module itself runs at the deferred
+         * flush, in the parse flow. */
+    }
+
+    m_state.setLoadingExtScript(false);
+
+    if (!m_requestingScript) {
+        SegmentedString rest = pendingSrc;
+        pendingSrc.clear();
+        write(rest, false);
+        // we might be deleted at this point, do not access any members.
+    }
 }
 
 void HTMLTokenizer::notifyFinished(CachedResource*)

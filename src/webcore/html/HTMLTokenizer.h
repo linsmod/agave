@@ -100,6 +100,14 @@ public:
     virtual bool processingData() const;
     virtual int executingScript() const { return m_executingScript; }
 
+    /* Entry module scripts routed through the module fetcher: the tokenizer
+     * waits for one (like it does for CachedScript), and the module body is
+     * handed back here to run in the parse flow - never from inside a
+     * network pump. */
+    void notifyModuleEntry(const char* source, bool failed);
+    bool isAwaitingModuleEntry() const { return m_awaitingModuleEntry; }
+    bool waitsForModuleEntry(const char* url) const;
+
     virtual int lineNumber() const { return lineno; }
     virtual int columnNumber() const { return 1; }
 
@@ -282,6 +290,12 @@ private:
     };
 
     State m_state;
+
+    /* Routed entry module the tokenizer is waiting for (single slot: blocking
+     * external scripts are serialized by the tokenizer state machine). */
+    bool m_awaitingModuleEntry;
+    DeprecatedString m_pendingModuleUrl;
+    RefPtr<Node> m_pendingModuleNode;
 
     bool brokenServer;
 
