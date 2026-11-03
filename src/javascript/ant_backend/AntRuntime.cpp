@@ -89,6 +89,7 @@ struct RuntimeState {
     int                docSlotCount;
     int                currentSlot;
     unsigned long      generation;      /* id of the realm (see nextGeneration) */
+    unsigned long      polyfillsGeneration; /* realm whose VM already got polyfills.js */
 };
 
 /* Every realm (one document) gets a fresh id. Resources that can outlive
@@ -3708,17 +3709,24 @@ int evaluateModule(const char* src, size_t len, const char* filename, char** out
  * the engine. */
 static void loadPolyfills(void)
 {
-    static int loaded = 0;
     char path[AGB_PATH_CHARS];
     char* buffer = NULL;
     FILE* file = NULL;
     long size = 0;
     const char* env = getenv("AGB_POLYFILLS");
 
-    if (loaded)
+    /* Polyfills patch the VM, not the process: they have to run once per realm.
+     * They used to run once per process, so the realm created by a reload
+     * started without them - the page's `class X extends URLSearchParams` then
+     * lost its own methods (the native class is branded and the wrapper that
+     * makes subclassing work lives in polyfills.js). */
+    if (!g_currentState || g_currentState == &g_emptyState || !g_engine)
         return;
 
-    loaded = 1;
+    if (g_currentState->polyfillsGeneration == g_currentState->generation)
+        return;
+
+    g_currentState->polyfillsGeneration = g_currentState->generation;
 
     if (env && env[0])
         file = fopen(env, "rb");
