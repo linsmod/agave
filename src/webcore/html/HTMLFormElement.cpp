@@ -153,7 +153,12 @@ void HTMLFormElement::submitClick(Event* event)
 
 static DeprecatedCString encodeCString(const CString& cstr)
 {
-    DeprecatedCString e(cstr.data(), cstr.length());
+    /* DeprecatedCString(const char*, unsigned) takes the size of the buffer
+     * *including* the terminating NUL, not the length of the string: passing
+     * the length dropped the last character (and a one character name
+     * vanished completely), so a GET form submitted "?=hell" instead of
+     * "?q=hello". */
+    DeprecatedCString e(cstr.data(), cstr.length() + 1);
 
     // http://www.w3.org/TR/html4/interact/forms.html#h-17.13.4.1
     // same safe characters as Netscape for compatibility

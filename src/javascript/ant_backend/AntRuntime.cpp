@@ -560,6 +560,7 @@ int docCreateElement(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void
 int docCreateElementNS(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeFocus(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeBlur(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeClick(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int docCreateTextNode(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int docCreateComment(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeAppendChild(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
@@ -3974,6 +3975,7 @@ void bindDocument(void* document)
                 antb_class_add_method(g_engine, g_nodeClass, "querySelector", nodeQuerySelector, NULL);
                 antb_class_add_method(g_engine, g_nodeClass, "focus", nodeFocus, NULL);
                 antb_class_add_method(g_engine, g_nodeClass, "blur", nodeBlur, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "click", nodeClick, NULL);
                 antb_class_add_method(g_engine, g_nodeClass, "removeAttribute", nodeRemoveAttribute, NULL);
                 antb_class_add_method(g_engine, g_nodeClass, "remove", nodeRemove, NULL);
                 antb_class_add_method(g_engine, g_nodeClass, "getBoundingClientRect", nodeGetBoundingClientRect, NULL);
@@ -5529,6 +5531,22 @@ int nodeBlur(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
     return 1;
 }
 
+/* HTMLElement.click(): dispatches a click event, which runs the default
+ * action - that is what activates a link (and what submits a button). Pages
+ * call it directly all the time, and without it "open in a new tab" links
+ * could not be triggered from a script at all. */
+int nodeClick(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+              AntbValue* out, void*)
+{
+    WebCore::Node* n = nodeOf(self);
+
+    (void)engine; (void)args; (void)argc; (void)out;
+
+    if (n && n->isHTMLElement())
+        static_cast<WebCore::HTMLElement*>(n)->click();
+    return 1;
+}
+
 int docCreateDocumentFragment(AntbEngine* engine, AntbValue* self, AntbValue**, int,
                               AntbValue* out, void*)
 {
@@ -6306,9 +6324,21 @@ int globalOpenWindow(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
     char* url = (argc > 0) ? antb_to_utf8(args[0]) : NULL;
     int created = 0;
     AntbValue* v;
+    std::string resolved;
+
+    /* A relative URL is resolved against the document, like in a browser:
+     * window.open('page.html') opens the page next to the current one, not
+     * "http://page.html/". */
+    if (url && url[0] && g_document) {
+        WebCore::KURL base(g_document->URL());
+        WebCore::KURL target(base, WebCore::DeprecatedString(url));
+
+        if (target.isValid())
+            resolved = target.url().utf8().data();
+    }
 
     if (g_openWindowHook)
-        created = g_openWindowHook(url ? url : "");
+        created = g_openWindowHook(resolved.empty() ? (url ? url : "") : resolved.c_str());
 
     antb_free(url);
 

@@ -150,8 +150,18 @@ static void agwRelease(AgaveWebView* item)
         return;
 
     agwLock();
-    if (--item->refs <= 0 && item->destroyed)
+    if (--item->refs <= 0 && item->destroyed) {
+        /* Last reference dropped and the host already asked for the control
+         * to go away: the engine view can be destroyed here. This runs on the
+         * engine thread, which is the only place it may be freed - the host
+         * thread can be inside macross_view_update() on it. */
+        if (item->view) {
+            macross_view_destroy(item->view);
+            item->view = NULL;
+        }
+        agwDestroySurface(item);
         shouldFree = 1;
+    }
     agwUnlock();
 
     if (shouldFree)
@@ -1041,7 +1051,46 @@ static char* agwOnUserAgent(const char* url)
     return buffer;
 }
 
-/* window.open(): create a sibling control and ask the host whether to keep it. */
+/* Creates the popup control (no navigation).
+ *
+ * The control is a child of the same host window as `from` and is sized like
+ * it; the host decides what to do with it (a tab, a window, ...). */
+static AgaveWebView* agwCreatePopupControl(AgaveWebView* from)
+{
+    HWND parent;
+    RECT rect;
+    AgaveWebView* created;
+
+    if (!from || !from->hwnd)
+        return NULL;
+
+    parent = GetParent(from->hwnd);
+
+    if (!parent)
+        return NULL;
+
+    GetWindowRect(from->hwnd, &rect);
+    MapWindowPoints(HWND_DESKTOP, parent, (POINT*)&rect, 2);
+
+    created = agave_webview_create(parent,
+                                   rect.left, rect.top,
+                                   rect.right - rect.left,
+                                   rect.bottom - rect.top,
+                                   &from->callbacks, from->user);
+
+    return created;
+}
+
+/* The engine asks for a new window (a link with target=_blank).
+ *
+ * It needs a live _mc_view* back: the engine loads the URL into the frame it
+ * gets (FrameLoaderClientMC::dispatchCreatePage asks for "about:blank" and
+ * then loads the real URL itself). Creating the engine view is queued work,
+ * so without doing it here the callback returned a NULL view, the engine
+ * gave up on the new window and the tab stayed blank.
+ *
+ * We are on the engine thread here, so creating the view right away is the
+ * same work the queued resize command would do, only in time. */
 static MaCrossView* agwOnOpenWindow(const char* url, unsigned int flags, const MC_RECT* rect)
 {
     AgaveWebView* origin = NULL;
@@ -1063,10 +1112,27 @@ static MaCrossView* agwOnOpenWindow(const char* url, unsigned int flags, const M
     if (!origin)
         return NULL;
 
-    created = agave_webview_create_popup(origin, url ? url : "about:blank");
+    created = agwCreatePopupControl(origin);
 
     if (!created)
         return NULL;
+
+    /* Create the engine view now - the caller loads the URL into it. */
+    agwEnsureSurface(created, created->wantWidth, created->wantHeight);
+
+    if (!created->view) {
+        agave_webview_destroy(created);
+        return NULL;
+    }
+
+    /* Host side navigation: only when the engine does not load the URL
+     * itself. The engine's new-window path always asks for "about:blank" and
+     * loads the real URL into the frame it gets back; navigating the popup to
+     * about:blank as well would cancel that load. The context menu path
+     * (ChromeClient::createWindow) passes the real URL and nobody loads it
+     * for us, so we do it here. */
+    if (url && url[0] && strcmp(url, "about:blank") != 0)
+        agave_webview_navigate(created, url);
 
     if (origin->callbacks.on_new_window) {
         if (!origin->callbacks.on_new_window(origin, created, url ? url : "", origin->user)) {
@@ -1111,6 +1177,103 @@ int agave_control_open_window(const char* url)
     return 1;
 }
 
+/* ------------------------------------------------------------------------- */
+/* clipboard (engine thread)                                                 */
+/* ------------------------------------------------------------------------- */
+/* The engine hands over UTF-8, Windows wants UTF-16. Without these callbacks
+ * the engine's copy/paste (Editor -> Pasteboard) had nowhere to go, so
+ * ctrl+c / ctrl+v in a page did nothing. */
+
+static void agwOnClipboardSetData(void* data, unsigned int len)
+{
+    const char* text = (const char*)data;
+    int chars;
+    HGLOBAL memory;
+    wchar_t* target;
+
+    if (!text || !len)
+        return;
+
+    chars = MultiByteToWideChar(CP_UTF8, 0, text, (int)len, NULL, 0);
+    if (chars <= 0)
+        return;
+
+    memory = GlobalAlloc(GMEM_MOVEABLE, (chars + 1) * sizeof(wchar_t));
+    if (!memory)
+        return;
+
+    target = (wchar_t*)GlobalLock(memory);
+    if (!target) {
+        GlobalFree(memory);
+        return;
+    }
+
+    MultiByteToWideChar(CP_UTF8, 0, text, (int)len, target, chars);
+    target[chars] = 0;
+    GlobalUnlock(memory);
+
+    if (!OpenClipboard(NULL)) {
+        GlobalFree(memory);
+        return;
+    }
+
+    EmptyClipboard();
+    if (!SetClipboardData(CF_UNICODETEXT, memory))
+        GlobalFree(memory);
+    CloseClipboard();
+}
+
+static unsigned int agwOnClipboardDataLen(void)
+{
+    HANDLE handle;
+    wchar_t* text;
+    int bytes = 0;
+
+    if (!OpenClipboard(NULL))
+        return 0;
+
+    handle = GetClipboardData(CF_UNICODETEXT);
+    if (handle) {
+        text = (wchar_t*)GlobalLock(handle);
+        if (text) {
+            bytes = WideCharToMultiByte(CP_UTF8, 0, text, -1, NULL, 0, NULL, NULL);
+            if (bytes > 0)
+                --bytes;   /* the terminating NUL is not part of the text */
+            GlobalUnlock(handle);
+        }
+    }
+
+    CloseClipboard();
+    return bytes > 0 ? (unsigned int)bytes : 0;
+}
+
+static unsigned int agwOnClipboardGetData(void* buffer, unsigned int len)
+{
+    HANDLE handle;
+    wchar_t* text;
+    int bytes = 0;
+
+    if (!buffer || !len)
+        return 0;
+
+    if (!OpenClipboard(NULL))
+        return 0;
+
+    handle = GetClipboardData(CF_UNICODETEXT);
+    if (handle) {
+        text = (wchar_t*)GlobalLock(handle);
+        if (text) {
+            int size = WideCharToMultiByte(CP_UTF8, 0, text, -1, (char*)buffer, (int)len, NULL, NULL);
+
+            bytes = size > 0 ? (unsigned int)(size - 1) : 0;
+            GlobalUnlock(handle);
+        }
+    }
+
+    CloseClipboard();
+    return bytes;
+}
+
 static void agwInstallCallbacks(void)
 {
     static int installed = 0;
@@ -1137,6 +1300,9 @@ static void agwInstallCallbacks(void)
     info.cb_write_file_data  = agwOnWriteFile;
     info.cb_user_agent_custom = agwOnUserAgent;
     info.cb_open_window      = agwOnOpenWindow;
+    info.cb_clipboard_set_data = agwOnClipboardSetData;
+    info.cb_clipboard_data_len = agwOnClipboardDataLen;
+    info.cb_clipboard_get_data = agwOnClipboardGetData;
 
     macross_set_callback(&info);
 }
@@ -1212,19 +1378,21 @@ void agave_webview_destroy(AgaveWebView* item)
     item->destroyed = 1;
 
     index = agwIndexOf(item);
-    if (index >= 0) {
+    if (index >= 0)
+        g_views[index] = g_views[--g_viewCount];
+
+    /* The engine thread may be inside macross_view_update() on this view
+     * right now (it holds a reference while it does), and freeing the view
+     * under it crashes the engine. With a reference in flight the view is
+     * destroyed by the engine thread instead (agwRelease). */
+    if (item->refs <= 0) {
         if (item->view) {
             macross_view_destroy(item->view);
             item->view = NULL;
         }
         agwDestroySurface(item);
-        g_views[index] = g_views[--g_viewCount];
-    }
-
-    /* The engine thread may still be inside macross_view_update() on this
-     * item; it frees the control when it drops its reference. */
-    if (item->refs <= 0)
         shouldFree = 1;
+    }
     agwUnlock();
 
     if (item->hwnd) {
@@ -1239,26 +1407,9 @@ void agave_webview_destroy(AgaveWebView* item)
 
 AgaveWebView* agave_webview_create_popup(AgaveWebView* from, const char* url)
 {
-    HWND parent;
-    RECT rect;
     AgaveWebView* created;
 
-    if (!from || !from->hwnd)
-        return NULL;
-
-    parent = GetParent(from->hwnd);
-
-    if (!parent)
-        return NULL;
-
-    GetWindowRect(from->hwnd, &rect);
-    MapWindowPoints(HWND_DESKTOP, parent, (POINT*)&rect, 2);
-
-    created = agave_webview_create(parent,
-                                   rect.left, rect.top,
-                                   rect.right - rect.left,
-                                   rect.bottom - rect.top,
-                                   &from->callbacks, from->user);
+    created = agwCreatePopupControl(from);
 
     if (!created)
         return NULL;
@@ -1267,6 +1418,19 @@ AgaveWebView* agave_webview_create_popup(AgaveWebView* from, const char* url)
         agave_webview_navigate(created, url);
 
     return created;
+}
+
+/* Points the control's callbacks at a new owner. A popup inherits the
+ * callbacks and the user pointer of the view it was opened from, but it ends
+ * up in a different tab - the host uses this to re-attach it. */
+void agave_webview_set_user(AgaveWebView* item, void* user)
+{
+    if (!item)
+        return;
+
+    agwLock();
+    item->user = user;
+    agwUnlock();
 }
 
 void agave_webview_set_rect(AgaveWebView* item, int x, int y, int width, int height)

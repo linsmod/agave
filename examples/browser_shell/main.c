@@ -613,10 +613,16 @@ static int onNewWindow(AgaveWebView* from, AgaveWebView* popup,
     strncpy(g_tabs[index].url, url, MAX_PATH_CHARS - 1);
     strncpy(g_tabs[index].title, url, sizeof(g_tabs[index].title) - 1);
 
+    /* The popup inherited the callbacks and the state pointer of the view it
+     * was opened from: without this the new tab's title/url/progress would be
+     * written into the old tab. */
+    agave_webview_set_user(popup, &g_tabs[index]);
+
     /* Re-parent into the shell so it behaves like a tab, not a floating popup. */
     SetParent(g_tabs[index].hwnd, g_hwnd);
     ShowWindow(g_tabs[index].hwnd, SW_HIDE);
 
+    agave_webview_set_zoom(popup, g_zoom);
     setActiveTab(index);
     return 1;
 }
@@ -1172,6 +1178,7 @@ static void shellExitTrace(void)
 
 static HWND          g_probeWnd;
 static AgaveWebView* g_probeView;
+static AgaveWebView* g_probeNewView;   /* window opened by the page (target=_blank) */
 static char          g_probeScript[8192] =
     "agavePostMessage('[dump] ' + document.documentElement.outerHTML)";
 static int g_probeWaitMs    = 3000;   /* after load finished, before eval   */
@@ -1243,6 +1250,20 @@ static void probeOnError(AgaveWebView* view, int code, const char* url, void* us
     fprintf(stderr, "[probe] load error code=%d url=%s\n", code, url ? url : "");
 }
 
+static int probeOnNewWindow(AgaveWebView* view, AgaveWebView* newView,
+                            const char* url, void* user)
+{
+    (void)view;
+    (void)user;
+
+    /* Keep it: the probe reports the URL the new window ended up on, which is
+     * what tells a working new-window path from a blank one. */
+    g_probeNewView = newView;
+    fprintf(stderr, "[probe] new window requested url=%s\n", url ? url : "");
+    fflush(stderr);
+    return 1;
+}
+
 static void probeOnProgress(AgaveWebView* view, int percent, int finished, void* user)
 {
     (void)view;
@@ -1310,6 +1331,7 @@ static int probeRun(const char* url)
     callbacks.on_message = probeOnMessage;
     callbacks.on_progress = probeOnProgress;
     callbacks.on_error = probeOnError;
+    callbacks.on_new_window = probeOnNewWindow;
 
     g_probeView = agave_webview_create(g_probeWnd, 0, 0, 1100, 800, &callbacks, NULL);
     if (!g_probeView) {
@@ -1502,6 +1524,24 @@ static int probeRun(const char* url)
 
         TranslateMessage(&msg);
         DispatchMessageA(&msg);
+    }
+
+    if (g_probeNewView) {
+        const char* u = agave_webview_url(g_probeNewView);
+        const char* t = agave_webview_title(g_probeNewView);
+
+        printf("[probe] new window url=%s title=%s\n",
+               u && u[0] ? u : "(none)", t && t[0] ? t : "(none)");
+        fflush(stdout);
+        agave_webview_destroy(g_probeNewView);
+        g_probeNewView = NULL;
+    }
+
+    {
+        const char* u = agave_webview_url(g_probeView);
+
+        printf("[probe] main url=%s\n", u && u[0] ? u : "(none)");
+        fflush(stdout);
     }
 
     agave_webview_destroy(g_probeView);
@@ -1747,6 +1787,8 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
                 if (msg.wParam == 'D') { addBookmarkCurrent(); continue; }
                 if (msg.wParam == 'F') { toggleFind(); continue; }
                 if (msg.wParam == 'T') { navigateActive("about:blank", 1); continue; }
+                if (msg.wParam == 'W') { closeTab(g_activeTab); continue; }
+                if (msg.wParam == 'R') { if (g_tabs[g_activeTab].used) agave_webview_reload(g_tabs[g_activeTab].view); continue; }
                 if (msg.wParam == 'L') { SetFocus(g_address); continue; }
                 if (msg.wParam == VK_ADD || msg.wParam == 0xBB) {
                     g_zoom = g_zoom < 400 ? g_zoom + 25 : g_zoom;

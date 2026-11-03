@@ -211,7 +211,14 @@ void HTMLAnchorElement::defaultEventHandler(Event* evt)
         }
 
 		if (!evt->defaultPrevented() && document()->frame()) {
-            document()->frame()->loader()->urlSelected(document()->completeURL(url), getAttribute(targetAttr), evt, false, true);
+            /* Middle click and ctrl/cmd click open the link in a new tab, like
+             * every other browser does. */
+            String target = getAttribute(targetAttr);
+
+            if (e && (e->button() == MiddleButton || e->ctrlKey() || e->metaKey()))
+                target = "_blank";
+
+            document()->frame()->loader()->urlSelected(document()->completeURL(url), target, evt, false, true);
 		}
 
         evt->setDefaultHandled();

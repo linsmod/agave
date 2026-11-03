@@ -83,6 +83,12 @@ AGW_API void agave_webview_destroy(AgaveWebView* view);
  * like `from`. Used to implement window.open(); hosts may also call it. */
 AGW_API AgaveWebView* agave_webview_create_popup(AgaveWebView* from, const char* url);
 
+/* Re-points the control's callbacks at another owner (the `user` pointer
+ * passed to the callbacks). A popup inherits it from the view it was opened
+ * from; when the host puts the popup in its own tab it calls this with the
+ * new tab's state. */
+AGW_API void agave_webview_set_user(AgaveWebView* view, void* user);
+
 /* Moves / resizes the control. */
 AGW_API void agave_webview_set_rect(AgaveWebView* view, int x, int y, int width, int height);
 

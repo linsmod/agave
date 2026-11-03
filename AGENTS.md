@@ -31,6 +31,7 @@ WHEN USER REPLY A DOT[.] ONLY, MEANS OK/DONE/DO_AS_YOU_SAY/YES/GO_ON/ACCEPT/...
 - eval 时机 = 页面 window load 事件 + `--wait`；progress finished 只是长延迟兜底（失败加载也报 finished）
 - 页面 JS 调 `probeExit(result)` 带结果退出；页面 console/warn 进 stderr（console guard 自动节流重复警告）
 - 退出码：0=OK / 1=usage / 2=timeout未加载 / 3=timeout无exit / 4=无exit（重页面把 --settle 调大）/ 5=加载错误 / 6=空文档（body 无子节点=从未真正解析）。先看退出码再翻日志
+- 探针窗口默认**隐藏**（引擎照常渲染进缓冲区，但没人看得见）；`AGB_PROBE_SHOW=1` 才 ShowWindow，能肉眼看绘制。要看真实 GUI 用 `agave_shell.exe <url>`（不带 --probe）
 - PowerShell 传 `--eval` 时 `&&` 会被搅成 `;`，脚本里用嵌套三元/逗号表达式替代
 - 宿主窗口消息循环处理 WM_TIMER 必须按 `msg.hwnd` 过滤——webview 控件内部有自己的 id=1 帧泵定时器，wParam 相同会串；引擎线程回调里禁止 SetTimer（窗口属主线程，跨线程未定义行为），走 PostMessage 到主线程
 
