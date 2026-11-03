@@ -1274,6 +1274,16 @@ static unsigned int agwOnClipboardGetData(void* buffer, unsigned int len)
     return bytes;
 }
 
+/* window.close(): the engine asked for its view to go away. Runs on the
+ * engine thread; the host decides what "close" means (a tab, a window). */
+static void agwOnCloseWindow(MaCrossView* view)
+{
+    AgaveWebView* item = agwByView(view);
+
+    if (item && item->callbacks.on_close_window)
+        item->callbacks.on_close_window(item, item->user);
+}
+
 static void agwInstallCallbacks(void)
 {
     static int installed = 0;
@@ -1300,6 +1310,7 @@ static void agwInstallCallbacks(void)
     info.cb_write_file_data  = agwOnWriteFile;
     info.cb_user_agent_custom = agwOnUserAgent;
     info.cb_open_window      = agwOnOpenWindow;
+    info.cb_close_window     = agwOnCloseWindow;
     info.cb_clipboard_set_data = agwOnClipboardSetData;
     info.cb_clipboard_data_len = agwOnClipboardDataLen;
     info.cb_clipboard_get_data = agwOnClipboardGetData;

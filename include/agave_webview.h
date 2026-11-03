@@ -70,6 +70,9 @@ typedef struct AgaveWebViewCallback {
     void (*on_context_menu)(AgaveWebView* view, int x, int y,
                             const char* link_url, const char* image_url,
                             const char* text, void* user);
+    /* The page called window.close(); runs on the engine thread, so keep the
+     * work short (post to your own thread if you touch GUI state). */
+    void (*on_close_window)(AgaveWebView* view, void* user);
 } AgaveWebViewCallback;
 
 /* Creates the control as a child of `parent`. Returns NULL on failure. */

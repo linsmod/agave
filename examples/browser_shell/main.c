@@ -420,6 +420,7 @@ static void applyZoomToActive(void)
 
 static void setActiveTab(int index);
 static void createTab(const char* url);
+static void onCloseWindow(AgaveWebView* view, void* user);
 
 static void setActiveTab(int index)
 {
@@ -837,6 +838,7 @@ static void createTab(const char* url)
     callbacks.on_error = onError;
     callbacks.on_dialog = onDialog;
     callbacks.on_new_window = onNewWindow;
+    callbacks.on_close_window = onCloseWindow;
     callbacks.on_download = onDownload;
     callbacks.on_context_menu = onContextMenu;
 
@@ -1077,9 +1079,33 @@ static void paintStatus(HDC hdc, int width, int height)
 /* window procedure                                                          */
 /* ------------------------------------------------------------------------- */
 
+/* window.close(): the engine thread asks for a tab to go away. The tab table
+ * is main-thread state, so the actual close happens on the main thread. */
+#define AGW_SHELL_CLOSE_TAB (WM_APP + 21)
+
+static void onCloseWindow(AgaveWebView* view, void* user)
+{
+    (void)user;
+
+    if (g_hwnd)
+        PostMessageA(g_hwnd, AGW_SHELL_CLOSE_TAB, (WPARAM)view, 0);
+}
+
 static LRESULT CALLBACK shellProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
     switch (message) {
+    case AGW_SHELL_CLOSE_TAB: {
+        int i;
+
+        for (i = 0; i < MAX_TABS; ++i) {
+            if (g_tabs[i].used && g_tabs[i].view == (AgaveWebView*)wParam) {
+                closeTab(i);
+                break;
+            }
+        }
+        return 0;
+    }
+
     case WM_CREATE:
         g_hwnd = hwnd;
         return 0;
@@ -1257,6 +1283,7 @@ static int g_probeFinished;
 static int g_probeEvalDone;
 static int g_probeGotExit;
 static int g_probeSawError;
+static int g_probeClosed;        /* window.close() reached the host */
 static int g_probeTimedOut;
 static int g_probeSanityFailed;
 static int g_probeReloadsLeft;
@@ -1333,9 +1360,23 @@ static int probeOnNewWindow(AgaveWebView* view, AgaveWebView* newView,
     return 1;
 }
 
+static void probeOnCloseWindow(AgaveWebView* view, void* user)
+{
+    (void)view;
+    (void)user;
+
+    /* window.close() reached the host: report and leave (a success exit, so
+     * a script can assert the whole chain worked). */
+    g_probeClosed = 1;
+    g_probeGotExit = 1;
+    probePrint("[close]", "window.close() reached the host");
+    PostMessageA(g_probeWnd, WM_CLOSE, 0, 0);
+}
+
 static void probeOnProgress(AgaveWebView* view, int percent, int finished, void* user)
 {
     (void)view;
+    (void)percent;
     (void)user;
 
     /* Engine-thread callback: never SetTimer here (the probe window is owned
@@ -1401,6 +1442,7 @@ static int probeRun(const char* url)
     callbacks.on_progress = probeOnProgress;
     callbacks.on_error = probeOnError;
     callbacks.on_new_window = probeOnNewWindow;
+    callbacks.on_close_window = probeOnCloseWindow;
 
     g_probeView = agave_webview_create(g_probeWnd, 0, 0, 1100, 800, &callbacks, NULL);
     if (!g_probeView) {

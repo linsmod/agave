@@ -316,6 +316,7 @@ int globalFrameSlot(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*
 int globalOpenWindow(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalPostMessage(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalDialog(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int globalCloseWindow(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalStorageGet(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalStorageHas(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalStorageSet(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
@@ -1170,6 +1171,14 @@ int locationReload(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*)
 {
     if (g_document && g_document->frame())
         g_document->frame()->loader()->reload();
+    return 1;
+}
+/* window.close(): the engine asks the host to close the view (ChromeClientMC
+ * -> cb_close_window), which the shell maps to closing the tab. */
+int globalCloseWindow(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*)
+{
+    if (g_document && g_document->frame() && g_document->frame()->page())
+        g_document->frame()->page()->chrome()->closeWindowSoon();
     return 1;
 }
 /* document.implementation.hasFeature(): always true, like modern browsers. */
@@ -3315,7 +3324,7 @@ static const char kPrelude[] =
 "    return { closed: false, focus: function () {}, blur: function () {},"
 "      close: function () { this.closed = true; }, postMessage: function () {} };"
 "  };"
-"  g.close = function () {};"
+"  g.close = function () { try { __agbCloseWindow(); } catch (e) {} };"
 "  g.agavePostMessage = function (message) {"
 "    try { __agbPostMessage(message == null ? '' : String(message)); } catch (e) {}"
 "  };"
@@ -4049,6 +4058,7 @@ void bindDocument(void* document)
         antb_define_method(g_engine, global, "__agbOpenWindow", globalOpenWindow, NULL);
         antb_define_method(g_engine, global, "__agbPostMessage", globalPostMessage, NULL);
         antb_define_method(g_engine, global, "__agbDialog", globalDialog, NULL);
+        antb_define_method(g_engine, global, "__agbCloseWindow", globalCloseWindow, NULL);
         antb_define_method(g_engine, global, "__agbStorageGet", globalStorageGet, NULL);
         antb_define_method(g_engine, global, "__agbStorageHas", globalStorageHas, NULL);
         antb_define_method(g_engine, global, "__agbStorageSet", globalStorageSet, NULL);
