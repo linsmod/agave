@@ -1417,6 +1417,24 @@ void HTMLParser::finished()
     if (current && current->isDocumentNode() && !document->documentElement())
         insertNode(new HTMLHtmlElement(document));
 
+    // Browsers always synthesize the <head>/<body> skeleton for HTML documents,
+    // even when the source is empty (about:blank, empty responses). Without it
+    // document.body is undefined, CSS never attaches and scripts that expect a
+    // body (Vue's mount(), most layout code) fail on an empty page. Only for a
+    // really empty <html>: pages parsed normally already carry head/body, and
+    // frameset documents must keep their frameset child.
+    {
+        Element* root = document->documentElement();
+
+        if (document->isHTMLDocument() && root && !root->firstChild() && !document->body()) {
+            createHead();
+
+            ExceptionCode ec = 0;
+            RefPtr<Element> body = new HTMLBodyElement(document);
+            root->appendChild(body.get(), ec);
+        }
+    }
+
     // This ensures that "current" is not left pointing to a node when the document is destroyed.
     freeBlock();
     setCurrent(0);

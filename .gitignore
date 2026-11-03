@@ -28,3 +28,5 @@ build-touch/
 
 # standalone Ant replay test (tools/build_ant_replay.ps1)
 build-ant-replay/
+3rdparty/ant/lib/antbridge.dll
+3rdparty/ant/lib/antbridge.dll

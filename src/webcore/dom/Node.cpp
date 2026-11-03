@@ -1024,7 +1024,15 @@ void Node::createRendererIfNeeded()
     
     Node *parent = parentNode();    
     ASSERT(parent);
-    
+
+    /* HTML5 <template>: content is inert. The children stay in the DOM
+     * (innerHTML, script access and in-DOM template compilation all work),
+     * but the element gets no renderer, which hides the whole subtree -
+     * children find no parent renderer and are never painted. Without this,
+     * in-DOM component templates (Vue apps) show their raw mustaches. */
+    if (isElementNode() && static_cast<Element *>(this)->localName() == AtomicString("template"))
+        return;
+
     RenderObject *parentRenderer = parent->renderer();
     if (parentRenderer && parentRenderer->canHaveChildren()
 #if ENABLE(SVG)

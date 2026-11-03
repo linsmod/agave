@@ -593,11 +593,19 @@ void WinHttpSession::run(Job* job)
         path = L"/";
     secure = (uc.nScheme == INTERNET_SCHEME_HTTPS);
 
+    if (Net::logEnabled())
+        Net::logLine("net.stage   cracked host=%ls port=%d secure=%d", host.c_str(), (int)uc.nPort, (int)secure);
+
     connect = poolAcquire(host, uc.nPort, timeout, &err);
     if (!connect) {
         if (!err) err = GetLastError();
+        if (Net::logEnabled())
+            Net::logLine("net.stage   poolAcquire FAILED err=%lu", (unsigned long)err);
         goto cleanup;
     }
+
+    if (Net::logEnabled())
+        Net::logLine("net.stage   connected");
 
     {
         std::wstring verb = widen(job->request.method.empty() ? "GET" : job->request.method);
@@ -606,6 +614,9 @@ void WinHttpSession::run(Job* job)
         request = WinHttpOpenRequest(connect, verb.c_str(), path.c_str(), NULL,
                                      WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
         if (!request) { err = GetLastError(); goto cleanup; }
+
+        if (Net::logEnabled())
+            Net::logLine("net.stage   openrequest ok");
 
         /* Servers (baidu CDNs among them) answer with gzip; let WinHTTP
          * decompress transparently, otherwise the script arrives as binary. */
@@ -630,10 +641,18 @@ void WinHttpSession::run(Job* job)
         LPCWSTR hdr = headers.empty() ? WINHTTP_NO_ADDITIONAL_HEADERS : headers.c_str();
         DWORD hdrLen = headers.empty() ? 0 : (DWORD)headers.size();
 
+        if (Net::logEnabled())
+            Net::logLine("net.stage   sending");
+
         if (!WinHttpSendRequest(request, hdr, hdrLen, (LPVOID)bodyPtr, bodyLen, bodyLen, 0)) {
             err = GetLastError();
+            if (Net::logEnabled())
+                Net::logLine("net.stage   send FAILED err=%lu", (unsigned long)err);
             goto cleanup;
         }
+
+        if (Net::logEnabled())
+            Net::logLine("net.stage   sent");
     }
 
     if (!WinHttpReceiveResponse(request, NULL)) {

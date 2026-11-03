@@ -210,6 +210,11 @@ static void agwOnPostMessage(const char* message)
 {
     AgaveWebView* item = g_lastActive;
 
+    /* Headless hosts (probe mode) never focus the control, so g_lastActive
+     * stays NULL; with a single view there is no ambiguity. */
+    if (!item && g_viewCount == 1)
+        item = g_views[0];
+
     if (!item)
         return;
 

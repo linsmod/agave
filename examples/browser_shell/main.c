@@ -1141,6 +1141,359 @@ static void shellExitTrace(void)
     fflush(stderr);
 }
 
+/* ------------------------------------------------------------------------- */
+/* probe mode: headless load + JS evaluation, for page debugging             */
+/* ------------------------------------------------------------------------- */
+
+#define PROBE_TIMER_EVAL    1
+#define PROBE_TIMER_SETTLE  2
+#define PROBE_TIMER_TIMEOUT 3
+
+/* Engine-thread callbacks post this to the probe window (main thread) to arm
+ * the eval timer: window timers must be installed by the owning thread. */
+#define AGW_PROBE_MSG (WM_APP + 77)
+
+/* Probe exit codes (process exit status): scripts and CI can tell failure
+ * classes apart without parsing the log.
+ *   0  eval ran and the page called probeExit()
+ *   1  usage error (missing URL etc.)
+ *   2  timeout: the load never finished
+ *   3  timeout: load finished but no [exit] arrived
+ *   4  load finished and eval ran, but no [exit] arrived (script error?)
+ *   5  the navigation itself failed (on_error), no [exit]            */
+#define PROBE_EXIT_OK       0
+#define PROBE_EXIT_USAGE    1
+#define PROBE_EXIT_TIMEOUT_LOAD  2
+#define PROBE_EXIT_TIMEOUT_NOEXIT 3
+#define PROBE_EXIT_NOEXIT   4
+#define PROBE_EXIT_LOADERROR 5
+#define PROBE_EXIT_SANITY   6   /* eval ran against an empty document */
+
+static HWND          g_probeWnd;
+static AgaveWebView* g_probeView;
+static char          g_probeScript[8192] =
+    "agavePostMessage('[dump] ' + document.documentElement.outerHTML)";
+static int g_probeWaitMs    = 3000;   /* after load finished, before eval   */
+static int g_probeSettleMs  = 1000;   /* after eval, before exit            */
+static int g_probeTimeoutMs = 60000;  /* hard cap from start                */
+static int g_probeFinished;
+static int g_probeEvalDone;
+static int g_probeGotExit;
+static int g_probeSawError;
+static int g_probeTimedOut;
+static int g_probeSanityFailed;
+
+static void probePrint(const char* tag, const char* text)
+{
+    printf("[%7.1fs] %s %s\n",
+           (double)GetTickCount() / 1000.0, tag, text ? text : "");
+    fflush(stdout);
+}
+
+static void probeOnMessage(AgaveWebView* view, const char* message, void* user)
+{
+    (void)view;
+    (void)user;
+
+    /* probeExit(result) sends this sentinel: print the payload and leave at
+     * once instead of waiting for the settle timer. */
+    if (message && !strncmp(message, "__agb_exit__", 12)) {
+        g_probeGotExit = 1;
+        probePrint("[exit]", message + 12);
+        PostMessageA(g_probeWnd, WM_CLOSE, 0, 0);
+        return;
+    }
+
+    /* Empty-document sanity failure: report and leave with the SANITY code. */
+    if (message && !strncmp(message, "__agb_sanity__", 14)) {
+        g_probeSanityFailed = 1;
+        probePrint("[sanity]", message + 14);
+        PostMessageA(g_probeWnd, WM_CLOSE, 0, 0);
+        return;
+    }
+
+    /* The page's own window load event: the proper moment to run --eval.
+     * Route through the main thread (PostMessage) - never SetTimer from the
+     * engine thread. */
+    if (message && !strncmp(message, "__agb_loaded__", 14)) {
+        if (!g_probeFinished) {
+            probePrint("[probe]", "window load event");
+            PostMessageA(g_probeWnd, AGW_PROBE_MSG, g_probeWaitMs, 0);
+        }
+        return;
+    }
+
+    probePrint("[msg]", message);
+}
+
+static void probeOnError(AgaveWebView* view, int code, const char* url, void* user)
+{
+    (void)view;
+    (void)user;
+
+    g_probeSawError = 1;
+    fprintf(stderr, "[probe] load error code=%d url=%s\n", code, url ? url : "");
+}
+
+static void probeOnProgress(AgaveWebView* view, int percent, int finished, void* user)
+{
+    (void)view;
+    (void)user;
+
+    /* Engine-thread callback: never SetTimer here (the probe window is owned
+     * by the main thread; cross-thread window timers are undefined). Post the
+     * request to the main loop instead; progress finished is only a FALLBACK
+     * trigger with a longer delay - the real schedule comes from the page's
+     * window load event. */
+    if (finished && !g_probeFinished) {
+        probePrint("[probe]", g_probeSawError ? "progress finished (with error)" : "progress finished");
+        PostMessageA(g_probeWnd, AGW_PROBE_MSG, g_probeWaitMs + 10000, 0);
+    }
+}
+
+static LRESULT CALLBACK probeWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    if (message == AGW_PROBE_MSG) {
+        /* Engine thread asks for the eval timer; wParam carries the delay. */
+        if (!g_probeFinished) {
+            g_probeFinished = 1;
+            fprintf(stderr, "[probe] arm eval delay=%lu ms\n", (unsigned long)wParam);
+            SetTimer(g_probeWnd, PROBE_TIMER_EVAL, (UINT)wParam, NULL);
+        }
+        return 0;
+    }
+
+    /* The message loop must end when the window goes away: GetMessage(NULL)
+     * only returns 0 on WM_QUIT, never because the last window was destroyed. */
+    if (message == WM_DESTROY)
+        PostQuitMessage(0);
+
+    return DefWindowProcA(hwnd, message, wParam, lParam);
+}
+
+static int probeRun(const char* url)
+{
+    WNDCLASSA wc;
+    AgaveWebViewCallback callbacks;
+    MSG msg;
+
+    memset(&wc, 0, sizeof(wc));
+    wc.lpfnWndProc = probeWndProc;
+    wc.hInstance = g_instance;
+    wc.lpszClassName = "AgaveProbeWindow";
+    RegisterClassA(&wc);
+
+    /* Hidden top-level window: the control only needs a parent HWND. */
+    g_probeWnd = CreateWindowExA(0, "AgaveProbeWindow", "agave probe",
+                                 WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
+                                 1100, 800, NULL, NULL, g_instance, NULL);
+    if (!g_probeWnd) {
+        fprintf(stderr, "[probe] CreateWindowEx failed: %lu\n", (unsigned long)GetLastError());
+        return PROBE_EXIT_USAGE;
+    }
+
+    memset(&callbacks, 0, sizeof(callbacks));
+    callbacks.on_message = probeOnMessage;
+    callbacks.on_progress = probeOnProgress;
+    callbacks.on_error = probeOnError;
+
+    g_probeView = agave_webview_create(g_probeWnd, 0, 0, 1100, 800, &callbacks, NULL);
+    if (!g_probeView) {
+        fprintf(stderr, "[probe] agave_webview_create failed\n");
+        return PROBE_EXIT_USAGE;
+    }
+
+    /* AGB_PROBE_SHOW=1 shows the window; debugging aid for load paths that
+     * behave differently when the control is never visible. */
+    if (getenv("AGB_PROBE_SHOW"))
+        ShowWindow(g_probeWnd, SW_SHOWNOACTIVATE);
+
+    SetTimer(g_probeWnd, PROBE_TIMER_TIMEOUT, g_probeTimeoutMs, NULL);
+    agave_webview_set_focus(g_probeView);
+    agave_webview_navigate(g_probeView, url);
+
+    /* Load hook: the page reports its own window load event; --eval runs on
+     * that (plus --wait), not on the network-layer progress callback. */
+    agave_webview_eval(g_probeView,
+        "(function () {"
+        " var f = function () { agavePostMessage('__agb_loaded__' + location.href); };"
+        " if (document.readyState === 'complete') { f(); return; }"
+        " window.addEventListener('load', f);"
+        "})();");
+
+    while (GetMessageA(&msg, NULL, 0, 0)) {
+        /* Only our own window's timers: the webview control runs internal
+         * SetTimer(id=1, ~10ms) frame-pump timers on its own child window,
+         * and their WM_TIMER (same message, same wParam=1) used to fire the
+         * EVAL branch instantly. Filter by hwnd. */
+        if (msg.message == WM_TIMER && msg.hwnd == g_probeWnd) {
+            if (msg.wParam == PROBE_TIMER_TIMEOUT) {
+                g_probeTimedOut = 1;
+                probePrint("[probe]", g_probeFinished ? "timeout, exiting" : "timeout, load never finished");
+                break;
+            }
+
+            if (msg.wParam == PROBE_TIMER_EVAL) {
+                KillTimer(g_probeWnd, PROBE_TIMER_EVAL);
+
+                /* agave_webview_eval pumps the control's queue, which can
+                 * re-enter this message loop while the EVAL timer message is
+                 * still pending; without the flag the branch re-runs and the
+                 * script gets evaluated once per nesting level. */
+                if (g_probeEvalDone)
+                    continue;
+
+                g_probeEvalDone = 1;
+
+                /* Commit check first: a failed/stalled navigation still
+                 * reports progress finished=1, and the eval would then run
+                 * against the initial about:blank document. Require the
+                 * control's current URL to carry the requested host before
+                 * trusting the document. */
+                {
+                    char host[256] = "";
+                    const char* hs = strstr(url, "://");
+
+                    if (hs) {
+                        const char* he;
+                        size_t n;
+
+                        hs += 3;
+                        he = strchr(hs, '/');
+                        n = he ? (size_t)(he - hs) : strlen(hs);
+                        if (n >= sizeof(host))
+                            n = sizeof(host) - 1;
+                        memcpy(host, hs, n);
+                    }
+
+                    if (host[0]) {
+                        const char* cur = agave_webview_url(g_probeView);
+
+                        if (!cur || !strstr(cur, host)) {
+                            g_probeSanityFailed = 1;
+                            printf("[sanity] load never committed: document url=%s, wanted host %s\n",
+                                   cur && cur[0] ? cur : "(none)", host);
+                            fflush(stdout);
+                            PostMessageA(g_probeWnd, WM_CLOSE, 0, 0);
+                            continue;
+                        }
+                    }
+                }
+
+                probePrint("[probe]", "running eval");
+                /* Sanity first: a failed navigation still reports progress
+                 * finished=1, and the eval would then run against an empty
+                 * document. Install probeExit() only when the document really
+                 * exists; otherwise probeExit() becomes a sanity reporter and
+                 * the run ends with the SANITY exit code instead of a
+                 * misleading OK. */
+                agave_webview_eval(g_probeView,
+                    /* A failed navigation can commit an empty document under
+                     * the requested URL (host check alone can't catch that);
+                     * a parsed page always has children under <body>. */
+                    "window.__agbDocOk = ((typeof document.body === 'object') "
+                    "&& (document.body !== null) "
+                    "&& (document.body.children.length > 0));"
+                    "if (window.__agbDocOk) {"
+                    " window.probeExit = function (result) {"
+                    "  agavePostMessage('__agb_exit__' + (result === undefined ? '' : String(result)));"
+                    " };"
+                    "} else {"
+                    " agavePostMessage('__agb_sanity__ document is empty (page never parsed?)');"
+                    " window.probeExit = function (result) {"
+                    "  agavePostMessage('__agb_sanity__ skipped eval: ' + (result === undefined ? '' : String(result)));"
+                    " };"
+                    "}");
+                agave_webview_eval(g_probeView, g_probeScript);
+                SetTimer(g_probeWnd, PROBE_TIMER_SETTLE, g_probeSettleMs, NULL);
+                continue;
+            }
+
+            if (msg.wParam == PROBE_TIMER_SETTLE) {
+                KillTimer(g_probeWnd, PROBE_TIMER_SETTLE);
+                break;
+            }
+        }
+
+        TranslateMessage(&msg);
+        DispatchMessageA(&msg);
+    }
+
+    agave_webview_destroy(g_probeView);
+
+    {
+        int code;
+
+        if (g_probeSanityFailed)
+            code = PROBE_EXIT_SANITY;
+        else if (g_probeGotExit)
+            code = PROBE_EXIT_OK;
+        else if (g_probeTimedOut && !g_probeFinished)
+            code = PROBE_EXIT_TIMEOUT_LOAD;
+        else if (g_probeTimedOut)
+            code = PROBE_EXIT_TIMEOUT_NOEXIT;
+        else if (g_probeSawError)
+            code = PROBE_EXIT_LOADERROR;
+        else
+            code = PROBE_EXIT_NOEXIT;
+
+        fprintf(stderr, "[probe] exit code %d\n", code);
+        fflush(stderr);
+        return code;
+    }
+}
+
+static void probeUsage(void)
+{
+    fprintf(stderr,
+            "usage:\n"
+            "  agave_shell.exe [url]\n"
+            "  agave_shell.exe --probe <url> [--eval <js>] [--wait <ms>]\n"
+            "                  [--settle <ms>] [--timeout <ms>]\n"
+            "  --eval    script to run after the load finished (default dumps outerHTML\n"
+            "            via agavePostMessage; page console goes to stderr)\n"
+            "            the script may call probeExit(result) to leave immediately\n"
+            "  --wait    settle time after 'load finished' before eval (default 3000)\n"
+            "  --settle  time after eval before exit (default 1000)\n"
+            "  --timeout hard cap from start (default 60000)\n");
+}
+
+/* Parses the raw command line into argv/argc in place, honoring double quotes.
+ * GetCommandLineA keeps the executable name quoting, so the old single-token
+ * skipper swallowed a quoted URL argument whenever the exe path was quoted
+ * (Start-Process, drag&drop, Explorer) and silently fell back to the session. */
+static int parseCommandLine(char* cmdline, char** argv, int maxArgs)
+{
+    int argc = 0;
+    char* p = cmdline;
+
+    while (*p && argc < maxArgs) {
+        while (*p == ' ' || *p == '\t')
+            ++p;
+
+        if (!*p)
+            break;
+
+        if (*p == '"') {
+            ++p;
+            argv[argc++] = p;
+
+            while (*p && *p != '"')
+                ++p;
+        } else {
+            argv[argc++] = p;
+
+            while (*p && *p != ' ' && *p != '\t')
+                ++p;
+        }
+
+        if (*p)
+            *p++ = 0;
+    }
+
+    return argc;
+}
+
 int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, int show)
 {
     atexit(shellExitTrace);
@@ -1206,30 +1559,55 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
     ShowWindow(g_hwnd, SW_SHOW);
     UpdateWindow(g_hwnd);
 
-    /* Initial tabs: command line URL wins, otherwise restore the session. */
+    /* Command line: flags first (--probe / --eval / ...), then an optional
+     * URL that wins over the restored session. */
     {
-        const char* cmd = GetCommandLineA();
-        const char* arg = NULL;
+        static char cmdlineBuf[8192];
+        char* argv[40];
+        int argc = 0;
+        const char* urlArg = NULL;
+        int probe = 0;
+        int i;
+        const char* raw = GetCommandLineA();
 
-        if (cmd) {
-            if (*cmd == '"') {
-                cmd = strchr(cmd + 1, '"');
-                if (cmd)
-                    ++cmd;
-            } else {
-                cmd = strchr(cmd, ' ');
-            }
-
-            while (cmd && *cmd == ' ')
-                ++cmd;
-
-            if (cmd && *cmd)
-                arg = cmd;
+        if (raw && *raw) {
+            strncpy(cmdlineBuf, raw, sizeof(cmdlineBuf) - 1);
+            cmdlineBuf[sizeof(cmdlineBuf) - 1] = 0;
+            argc = parseCommandLine(cmdlineBuf, argv, 40);
         }
 
-        if (arg && arg[0] && arg[0] != '"') {
-            strncpy(initial, arg, sizeof(initial) - 1);
-            initial[sizeof(initial) - 1] = 0;
+        for (i = 1; i < argc; ++i) {
+            if (!strcmp(argv[i], "--probe")) {
+                probe = 1;
+            } else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
+                probeUsage();
+                return 0;
+            } else if (!strcmp(argv[i], "--eval") && i + 1 < argc) {
+                strncpy(g_probeScript, argv[++i], sizeof(g_probeScript) - 1);
+                g_probeScript[sizeof(g_probeScript) - 1] = 0;
+            } else if (!strcmp(argv[i], "--wait") && i + 1 < argc) {
+                g_probeWaitMs = atoi(argv[++i]);
+            } else if (!strcmp(argv[i], "--settle") && i + 1 < argc) {
+                g_probeSettleMs = atoi(argv[++i]);
+            } else if (!strcmp(argv[i], "--timeout") && i + 1 < argc) {
+                g_probeTimeoutMs = atoi(argv[++i]);
+            } else if (argv[i][0] != '-') {
+                urlArg = argv[i];
+            }
+        }
+
+        if (probe) {
+            if (!urlArg) {
+                fprintf(stderr, "[probe] missing URL\n");
+                probeUsage();
+                return 1;
+            }
+
+            return probeRun(urlArg);
+        }
+
+        if (urlArg && urlArg[0]) {
+            normalizeUrl(urlArg, initial, sizeof(initial));
         } else {
             restored = loadSession(session, 8);
             strcpy(initial, restored > 0 ? session[0] : "http://www.163.com");

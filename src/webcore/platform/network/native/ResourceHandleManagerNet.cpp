@@ -20,6 +20,131 @@
 
 namespace WebCore {
 
+/* --- file:// support ------------------------------------------------------ */
+
+static void percentDecode(std::string* text)
+{
+    std::string out;
+    out.reserve(text->size());
+
+    for (size_t i = 0; i < text->size(); ++i) {
+        if ((*text)[i] == '%' && i + 2 < text->size()) {
+            char hex[3] = { (*text)[i + 1], (*text)[i + 2], 0 };
+            char* end = 0;
+            long value = strtol(hex, &end, 16);
+
+            if (end == hex + 2) {
+                out.push_back((char)value);
+                i += 2;
+                continue;
+            }
+        }
+
+        out.push_back((*text)[i]);
+    }
+
+    text->swap(out);
+}
+
+static std::string mimeForLocalFile(const std::string& path)
+{
+    size_t dot = path.rfind('.');
+    std::string ext = (dot == std::string::npos) ? std::string() : path.substr(dot + 1);
+
+    /* lowercase */
+    for (size_t i = 0; i < ext.size(); ++i)
+        ext[i] = (char)tolower((unsigned char)ext[i]);
+
+    if (ext == "html" || ext == "htm")   return "text/html";
+    if (ext == "js" || ext == "mjs")     return "application/javascript";
+    if (ext == "css")                    return "text/css";
+    if (ext == "json")                   return "application/json";
+    if (ext == "png")                    return "image/png";
+    if (ext == "jpg" || ext == "jpeg")   return "image/jpeg";
+    if (ext == "gif")                    return "image/gif";
+    if (ext == "webp")                   return "image/webp";
+    if (ext == "svg")                    return "image/svg+xml";
+    if (ext == "ico")                    return "image/x-icon";
+    if (ext == "bmp")                    return "image/bmp";
+    if (ext == "txt")                    return "text/plain";
+    if (ext == "xml")                    return "text/xml";
+    if (ext == "pdf")                    return "application/pdf";
+    if (ext == "wasm")                   return "application/wasm";
+    if (ext == "ttf")                    return "font/ttf";
+    if (ext == "otf")                    return "font/otf";
+    if (ext == "woff")                   return "font/woff";
+    if (ext == "woff2")                  return "font/woff2";
+    if (ext == "mp3")                    return "audio/mpeg";
+    if (ext == "wav")                    return "audio/wav";
+    if (ext == "ogg")                    return "audio/ogg";
+    if (ext == "mp4")                    return "video/mp4";
+    if (ext == "webm")                   return "video/webm";
+
+    return "application/octet-stream";
+}
+
+/* Converts a file: URL to a local path (percent decoded, query/fragment
+ * stripped). "file:///E:/x/y.html" -> "E:/x/y.html",
+ * "file://server/share/x" -> "//server/share/x" (UNC). */
+static bool localPathForFileUrl(const char* url, std::string* out)
+{
+    if (!url || !out || strncasecmp(url, "file:", 5) != 0)
+        return false;
+
+    const char* rest = url + 5;
+
+    if (!strncmp(rest, "//", 2))
+        rest += 2;
+    else
+        return false;                    /* malformed: file:/x or file:x */
+
+    std::string path(rest);
+
+    size_t cut = path.find_first_of("?#");
+    if (cut != std::string::npos)
+        path.resize(cut);
+
+    percentDecode(&path);
+
+    if (path.empty())
+        return false;
+
+    if (path[0] == '/' && path.size() > 2 && isalpha((unsigned char)path[1]) && path[2] == ':')
+        path.erase(0, 1);                /* "/E:/..." -> "E:/..." */
+
+    *out = path;
+    return true;
+}
+
+static bool readWholeFile(const std::string& path, std::string* body)
+{
+    FILE* file = fopen(path.c_str(), "rb");
+
+    if (!file)
+        return false;
+
+    fseek(file, 0, SEEK_END);
+    long size = ftell(file);
+    fseek(file, 0, SEEK_SET);
+
+    if (size < 0) {
+        fclose(file);
+        return false;
+    }
+
+    body->resize((size_t)size);
+
+    size_t got = size ? fread(&(*body)[0], 1, (size_t)size, file) : 0;
+    fclose(file);
+
+    if (got != (size_t)size) {
+        body->clear();
+        return false;
+    }
+
+    return true;
+}
+
 ResourceHandleManager* ResourceHandleManager::sharedInstance()
 {
     static ResourceHandleManager* manager = 0;
@@ -62,6 +187,37 @@ void ResourceHandleManager::add(ResourceHandle* job)
         if (Net::isSkippedResource(std::string(urlText.ascii()))) {
             job->ref();
             m_skipped.append(job);
+
+            if (!m_downloadTimer.isActive())
+                m_downloadTimer.startRepeating(0.01);
+            return;
+        }
+    }
+
+    /* file:// never reaches the network backend: serve it from disk through the
+     * same asynchronous path the cache hits use (timer delivered, so the loader
+     * keeps its async contract). */
+    {
+        DeprecatedString urlText = d->m_request.url().url();
+        std::string path;
+
+        if (localPathForFileUrl(urlText.ascii(), &path)) {
+            Net::HttpCache::Entry entry;
+            std::string body;
+            bool ok = readWholeFile(path, &body);
+
+            entry.response.status = ok ? 200 : 404;
+            entry.response.statusText = ok ? "OK" : "Not Found";
+            entry.response.headers.push_back(std::make_pair(std::string("Content-Type"),
+                                                            mimeForLocalFile(path)));
+            entry.body.swap(body);
+
+            job->ref();
+
+            CachedDelivery delivery;
+            delivery.handle = job;
+            delivery.entry = entry;
+            m_cached.push_back(delivery);
 
             if (!m_downloadTimer.isActive())
                 m_downloadTimer.startRepeating(0.01);

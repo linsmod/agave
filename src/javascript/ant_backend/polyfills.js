@@ -266,6 +266,8 @@
             if (value === null || typeof value !== 'object')
                 return value;
             try {
+                if (value instanceof Error || (value.constructor && value.constructor.name === 'Error'))
+                    return value.name + ': ' + value.message;
                 return Object.prototype.toString.call(value) === '[object Array]'
                     ? '[Array(' + value.length + ')]'
                     : '[Object ' + (value.constructor && value.constructor.name || '') + ']';
@@ -276,6 +278,10 @@
 
         function wrap(level) {
             var original = g.console[level];
+            var lastKey = null;    /* fast-path key of the previous message */
+            var counts = { };      /* suppressed repeats per first-line key */
+            var seen = { };        /* keys that already printed once */
+            var seenCount = 0;
 
             if (typeof original !== 'function')
                 return;
@@ -283,11 +289,61 @@
             g.console[level] = function () {
                 var now = Date.now();
                 var args = [];
+                var key;
                 var i;
 
+                /* Consecutive-duplicate throttle first: libraries log the
+                 * same warning once per DOM node (a Vue dev build produced
+                 * 1600+ identical warns on one page). The key is the FIRST
+                 * LINE of the first string argument only - the message body
+                 * - because the trailing component trace differs on every
+                 * call and would break dedup. Repeats accumulate in counts[]
+                 * and are summarized once per second. */
+                key = '';
+                for (i = 0; i < arguments.length; i++) {
+                    if (i === 0 && typeof arguments[i] === 'string') {
+                        key = arguments[i].split('\n')[0].slice(0, 200);
+                        break;
+                    }
+                }
+
+                /* Seen-registry: the first sighting of a warning prints;
+                 * every later occurrence (even minutes apart, non-consecutively)
+                 * only increments the per-second suppression counter. The
+                 * registry is capped so unique-but-noisy pages can't grow it
+                 * without bound. */
+                if (seen[key] || seenCount >= 128) {
+                    counts[key] = (counts[key] || 0) + 1;
+                    lastKey = key;
+                    return;
+                }
+                seen[key] = 1;
+                seenCount++;
+                lastKey = key;
+
                 if (now !== lastSecond) {
+                    var total = 0;
+                    var worst = null;
+                    var worstCount = 0;
+
+                    for (var k in counts) {
+                        total += counts[k];
+                        if (counts[k] > worstCount) {
+                            worstCount = counts[k];
+                            worst = k;
+                        }
+                    }
+
                     lastSecond = now;
                     bucket = 0;
+
+                    if (total > 0) {
+                        original.call(g.console, '[console] ' + total
+                            + ' duplicate message(s) suppressed; top: '
+                            + (worst ? worst.slice(0, 120) : '?') + ' x' + worstCount);
+                        counts = { };
+                        lastKey = null;
+                    }
 
                     if (dropped > 0) {
                         original.call(g.console, '[console] ' + dropped + ' message(s) dropped');

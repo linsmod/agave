@@ -4,8 +4,10 @@
 A fast, lightweight and full featured web browser
 
 # 编译输出
-shell 浏览器外壳
-host  方便截图
+[text](build-zig-native/agave_view_host.exe) 
+[text](build-zig-native/agave_shell.exe)
+agave_shell 浏览器外壳，用户界面
+agave_view_host 方便截图
 
 # Tools
 [text](tools)

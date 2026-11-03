@@ -28,7 +28,8 @@
 #
 # Targets built: libagave.dll / libagave_webview.dll / agave_shell.exe /
 # agave_embed.exe / agave_view_host.exe (headless test host) / touchweb.exe
-# (phone-style browser UI, examples/touchweb; -NoTouchWeb skips it).
+# (built when OPT_TOUCHWEB was ON at configure time; this script never flips
+# cached options - do that by hand with -Fresh if you really need to).
 #
 # Typical output:
 #   build ok   1320/1320 targets in 120.1s (0 errors, 915 warnings)
@@ -46,7 +47,6 @@ param(
     [string]$ZigPath = '',          # zig.exe; default: $env:AGB_ZIG, winget, PATH
     [string]$MinGWRoot = '',        # default: C:\msys64\mingw64
     [string]$Deploy = '',           # copy libagave*.dll / agave_*.exe here afterwards
-    [switch]$NoTouchWeb,            # skip the touchweb mobile example (built by default)
     [switch]$StopLockingProcesses,  # -Fresh: stop processes running from the build dir if they block the delete
     [string]$Log = '',              # default: <repo>\build-native.log
     [switch]$NoLog                  # do not write a log file, just stream
@@ -80,8 +80,12 @@ if (-not $ZigPath) {
 }
 if (-not $ZigPath) {
     $candidates = @(
-        (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links\zig.exe'),
-        'C:\zig\zig.exe'
+        (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.16.0\zig.exe'),
+        'C:\zig\zig.exe',
+        # Last resort: the winget Links shim is a symlink; some sandboxed hosts
+        # (agent shells with untrusted-reparse-point / signature policies) refuse
+        # to execute it even though it works fine in a normal terminal.
+        (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links\zig.exe')
     )
     foreach ($c in $candidates) {
         if (Test-Path $c) { $ZigPath = $c; break }
@@ -181,19 +185,10 @@ if ($Fresh -and (Test-Path $build)) {
     if (Test-Path $build) { Fail "cannot delete $build" }
 }
 
-# The touchweb example (phone-style browser UI) is part of "the project builds
-# everything"; -NoTouchWeb keeps a desktop-only build lean.
-$wantTouchWeb = -not $NoTouchWeb
-$haveTouchWeb = $false
-if (Test-Path $cacheFile) {
-    foreach ($line in Get-Content $cacheFile) {
-        if ($line -match '^OPT_TOUCHWEB:BOOL=(ON|OFF)') { $haveTouchWeb = ($Matches[1] -eq 'ON') }
-    }
-}
-
-# Reconfigure when the cache is missing or when the touchweb choice differs from
-# what the cache was configured with (option changes need a configure pass).
-$mustConfigure = $Fresh -or -not (Test-Path $cacheFile) -or ($haveTouchWeb -ne $wantTouchWeb)
+# Reconfigure only when the cache is missing. Never flip cached options here:
+# toggling one (e.g. OPT_TOUCHWEB) re-adds/removes whole target sets and makes
+# ninja recompile everything under them.
+$mustConfigure = $Fresh -or -not (Test-Path $cacheFile)
 if ($mustConfigure) {
     $cmakeArgs = @(
         '-S', $root,
@@ -207,8 +202,7 @@ if ($mustConfigure) {
         "-DCMAKE_RANLIB=$env:RANLIB",
         '-DOPT_NET_BACKEND=native',
         '-DOPT_JS_ANT=ON',
-        '-DOPT_SHELL=ON',
-        ('-DOPT_TOUCHWEB=' + $(if ($wantTouchWeb) { 'ON' } else { 'OFF' }))
+        '-DOPT_SHELL=ON'
     )
     Write-Host ("cmake {0}" -f ($cmakeArgs -join ' '))
     & (Join-Path $mingwBin 'cmake.exe') @cmakeArgs

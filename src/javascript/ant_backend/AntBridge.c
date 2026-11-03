@@ -2251,6 +2251,16 @@ static int agb_class_lookup_prop(AntbClass* k, const char* name,
             return 1;
         }
     }
+
+    /* catch-all entry (registered under the empty name) handles every name
+     * the class does not list explicitly; the getter itself dispatches */
+    for (i = 0; i < g_class_prop_count[idx]; i++) {
+        if (g_class_props[idx][i].name[0] == '\0') {
+            *fn   = g_class_props[idx][i].fn;
+            *user = g_class_props[idx][i].user;
+            return 1;
+        }
+    }
     return 0;
 }
 

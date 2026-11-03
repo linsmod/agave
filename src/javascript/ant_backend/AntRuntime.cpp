@@ -3249,6 +3249,15 @@ void bindDocument(void* document)
                 antb_class_add_method(g_engine, g_nodeClass, "removeAttribute", nodeRemoveAttribute, NULL);
                 antb_class_add_method(g_engine, g_nodeClass, "remove", nodeRemove, NULL);
                 antb_class_add_method(g_engine, g_nodeClass, "getBoundingClientRect", nodeGetBoundingClientRect, NULL);
+
+                /* Catch-all property: the class dispatching getter only serves
+                 * names present in this table and returns undefined for
+                 * everything else, so without this entry every node property
+                 * (tagName/innerHTML/nodeType/...) read as undefined - Vue's
+                 * mount() got an undefined container.innerHTML and gave up
+                 * with "Component is missing template or render function".
+                 * nodeGetter dispatches on the name itself. */
+                antb_class_set_property(g_engine, g_nodeClass, "", nodeGetter, NULL);
             }
         }
 
@@ -4171,9 +4180,8 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
         return 0;
     }
 
-    if (!v)
+    if (!v) {
         /* Expando fields stored by nodeSetter (el._assign, el.__vnode, ...). */
-    {
         AntbValue* expando = antb_get_prop(engine, self, "__agbExpando");
 
         if (expando) {
@@ -4187,9 +4195,9 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
                 return 1;
             }
         }
-    }
 
-    return 0;
+        return 0;
+    }
 
     antb_value_assign(out, v);
     antb_value_release(v);
