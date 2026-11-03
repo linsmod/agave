@@ -1109,8 +1109,41 @@ static HWND makeButton(const char* text, int id)
                          0, 0, 0, 0, g_hwnd, (HMENU)(INT_PTR)id, g_instance, NULL);
 }
 
+/* Exit forensics: if some library calls exit() from inside a callback, the
+ * message loop never returns and we never see why. This handler runs on exit()
+ * and prints who did it. */
+static void shellExitTrace(void)
+{
+    void* frames[32];
+    unsigned short count = CaptureStackBackTrace(0, 32, frames, NULL);
+    int i;
+
+    {
+        unsigned long long exe = (unsigned long long)GetModuleHandleA(NULL);
+        unsigned long long av  = (unsigned long long)GetModuleHandleA("libagave.dll");
+        unsigned long long ab  = (unsigned long long)GetModuleHandleA("antbridge.dll");
+
+        fprintf(stderr, "[shell] atexit fired, bases exe=%llx agave=%llx ant=%llx\n", exe, av, ab);
+
+        for (i = 0; i < (int)count; ++i) {
+            unsigned long long a = (unsigned long long)frames[i];
+            const char* mod = "?";
+            unsigned long long off = a;
+
+            if (av && a >= av && a < av + 0x2000000ULL) { mod = "libagave"; off = a - av; }
+            else if (ab && a >= ab && a < ab + 0x2000000ULL) { mod = "antbridge"; off = a - ab; }
+            else if (exe && a >= exe && a < exe + 0x100000ULL) { mod = "exe"; off = a - exe; }
+
+            fprintf(stderr, "  #%02d %s+0x%llx\n", i, mod, off);
+        }
+    }
+
+    fflush(stderr);
+}
+
 int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, int show)
 {
+    atexit(shellExitTrace);
     WNDCLASSA wc;
     MSG msg;
     char initial[MAX_PATH_CHARS];
@@ -1136,8 +1169,12 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
                              WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
                              1100, 800, NULL, NULL, instance, NULL);
 
-    if (!g_hwnd)
+    if (!g_hwnd) {
+        fprintf(stderr, "[shell] CreateWindowEx failed: %lu\n", (unsigned long)GetLastError());
         return 1;
+    }
+
+    fprintf(stderr, "[shell] window ready hwnd=%p\n", (void*)g_hwnd);
 
     dataDirInit();
     loadBookmarks();
@@ -1210,6 +1247,8 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
         createTab(initial);
     }
 
+    fprintf(stderr, "[shell] entering message loop\n");
+
     while (GetMessageA(&msg, NULL, 0, 0)) {
         if (msg.message == WM_KEYDOWN) {
             if (msg.hwnd == g_address && msg.wParam == VK_RETURN) {
@@ -1259,6 +1298,8 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
         TranslateMessage(&msg);
         DispatchMessageA(&msg);
     }
+
+    fprintf(stderr, "[shell] message loop ended\n");
 
     return 0;
 }

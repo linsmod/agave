@@ -196,6 +196,18 @@ AntbValue* antb_eval_module(AntbEngine* engine, const char* src, int len,
     }
 }
 
+/* A browser must not die on an unhandled promise rejection: Ant's default is
+ * Node's "unhandled rejection is fatal" (process_exit_with(EXIT_FAILURE) in
+ * report_unhandled_rejection), which closes the whole browser when one page
+ * promise goes unhandled. */
+void antb_set_uncaught_nonfatal(AntbEngine* engine, int on)
+{
+    if (engine && engine->js) {
+        engine->js->uncaught_nonfatal = on ? true : false;
+        fprintf(stderr, "[flag] set js=%p on=%d -> %d\n", (void*)engine->js, on, (int)engine->js->uncaught_nonfatal);
+    }
+}
+
 void antb_set_module_fetcher(AntbModuleFetcher fn)
 {
     esm_set_http_fetch((esm_http_fetch_fn)fn);

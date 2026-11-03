@@ -65,6 +65,7 @@ AGB_API AntbValue* antb_eval(AntbEngine* engine, const char* src, int len, char*
 typedef char* (*AntbModuleFetcher)(const char* url, unsigned long* out_size);
 AGB_API AntbValue* antb_eval_module(AntbEngine* engine, const char* src, int len,
                                     const char* filename, char** err);
+AGB_API void antb_set_uncaught_nonfatal(AntbEngine* engine, int on);
 AGB_API void antb_set_module_fetcher(AntbModuleFetcher fn);
 
 /* Name used in stack traces for the next evaluations (usually the script URL). */

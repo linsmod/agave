@@ -2234,6 +2234,10 @@ bool start()
     antb_set_context_activate(contextActivate);
     antb_set_module_fetcher(moduleFetch);
 
+    /* Unhandled promise rejections must be logged, not fatal: one bad page
+     * promise used to call process_exit_with(EXIT_FAILURE) and close the browser. */
+    antb_set_uncaught_nonfatal(g_engine, 1);
+
     return true;
 }
 
