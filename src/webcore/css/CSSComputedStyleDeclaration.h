@@ -37,6 +37,9 @@ enum EUpdateLayout { DoNotUpdateLayout = false, UpdateLayout = true };
 class CSSComputedStyleDeclaration : public CSSStyleDeclaration {
 public:
     CSSComputedStyleDeclaration(PassRefPtr<Node>);
+    /* Pseudo element (::before/::after/::first-line/::selection): reports the
+     * style the renderer generated for the pseudo box. */
+    CSSComputedStyleDeclaration(PassRefPtr<Node>, RenderStyle* pseudoStyle);
     virtual ~CSSComputedStyleDeclaration();
 
     virtual String cssText() const;
@@ -69,6 +72,7 @@ private:
     virtual void setProperty(int propertyId, const String& value, bool important, ExceptionCode&);
 
     RefPtr<Node> m_node;
+    RenderStyle*  m_pseudoStyle;   /* borrowed: owned by the renderer */
 };
 
 PassRefPtr<CSSComputedStyleDeclaration> computedStyle(Node*);

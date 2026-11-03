@@ -467,6 +467,15 @@ static IntRect sizingBox(RenderObject* renderer)
 
 CSSComputedStyleDeclaration::CSSComputedStyleDeclaration(PassRefPtr<Node> n)
     : m_node(n)
+    , m_pseudoStyle(0)
+{
+}
+
+/* A pseudo element has no DOM node: its computed style is the RenderStyle the
+ * renderer generated for it (getComputedStyle(el, '::before')). */
+CSSComputedStyleDeclaration::CSSComputedStyleDeclaration(PassRefPtr<Node> n, RenderStyle* pseudoStyle)
+    : m_node(n)
+    , m_pseudoStyle(pseudoStyle)
 {
 }
 
@@ -538,7 +547,7 @@ PassRefPtr<CSSValue> CSSComputedStyleDeclaration::getPropertyCSSValue(int proper
 
     RenderObject* renderer = node->renderer();
 
-    RenderStyle* style = node->computedStyle();
+    RenderStyle* style = m_pseudoStyle ? m_pseudoStyle : node->computedStyle();
     if (!style)
         return 0;
 
@@ -1666,7 +1675,19 @@ PassRefPtr<CSSValue> CSSComputedStyleDeclaration::getPropertyCSSValue(int proper
         case CSS_PROP_BORDER_TOP:
         case CSS_PROP_BORDER_WIDTH:
         case CSS_PROP_CLIP:
-        case CSS_PROP_CONTENT:
+        case CSS_PROP_CONTENT: {
+            /* The generated text of ::before/::after lives in the ContentData
+             * list; only the leading text item is reported. */
+            const ContentData* content = style->contentData();
+
+            if (!content)
+                return new CSSPrimitiveValue(CSS_VAL_NORMAL);
+
+            if (content->m_type == CONTENT_TEXT && content->m_content.m_text)
+                return new CSSPrimitiveValue(String(content->m_content.m_text), CSSPrimitiveValue::CSS_STRING);
+
+            return new CSSPrimitiveValue(String(""), CSSPrimitiveValue::CSS_STRING);
+        }
         case CSS_PROP_COUNTER_INCREMENT:
         case CSS_PROP_COUNTER_RESET:
         case CSS_PROP_FONT:

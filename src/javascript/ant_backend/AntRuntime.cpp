@@ -3217,7 +3217,7 @@ static const char kPrelude[] =
 "    /* Accessors live on one shared prototype: defining 40 properties per call"
 "     * made every getComputedStyle() cost ~0.57ms; css3test calls it thousands"
 "     * of times, which is what pinned a core. The raw bridge is ~0.003ms. */"
-"    g.__Computed = function (el) { this.__el = el; };"
+"    g.__Computed = function (el, pseudo) { this.__el = el; this.__pseudo = pseudo ? String(pseudo) : ''; };"
 "    (function (proto) {"
 "      function camel(n) { return String(n).replace(/-([a-z])/g, function (m, c) { return c.toUpperCase(); }); }"
 "      function dash(n) { return String(n).replace(/[A-Z]/g, function (c) { return '-' + c.toLowerCase(); }); }"
@@ -3225,10 +3225,13 @@ static const char kPrelude[] =
 "      function camelOf(n) { var c = camelCache[n]; if (c === undefined) { c = camel(n); camelCache[n] = c; } return c; }"
 "      proto.getPropertyValue = function (n) {"
 "        var el = this.__el;"
+"        var pseudo = this.__pseudo;"
 "        var name = String(n);"
 "        var v = '';"
-"        try { v = __agbComputedStyle(el, name); } catch (e) { v = ''; }"
+"        try { v = __agbComputedStyle(el, name, pseudo); } catch (e) { v = ''; }"
 "        if (v) return String(v);"
+"        /* A pseudo box has no inline style to fall back on. */"
+"        if (pseudo) return '';"
 "        var st = (el && el.style) ? el.style : null;"
 "        v = st ? st[camelOf(name)] : undefined;"
 "        if (v === undefined || v === null || v === '') {"
@@ -3271,7 +3274,7 @@ static const char kPrelude[] =
 "        })(g.__computedCamel[i]);"
 "      }"
 "    })(g.__Computed.prototype);"
-"    g.getComputedStyle = function (el) { return new g.__Computed(el); };"
+"    g.getComputedStyle = function (el, pseudo) { return new g.__Computed(el, pseudo); };"
 "  }"
 "  {"
 "    var _ctors = ['Document','HTMLDocument','Element','HTMLElement','HTMLDivElement','Node','NodeList','HTMLCollection','Event','CustomEvent','MouseEvent','KeyboardEvent','DocumentFragment','Text','Comment','Attr','DOMParser','XMLSerializer','MutationObserver','Storage','Location','Navigator','Screen','History','Window','Performance','CSSStyleDeclaration','HTMLUnknownElement','HTMLAnchorElement','HTMLAreaElement','HTMLAudioElement','HTMLBRElement','HTMLBaseElement','HTMLBodyElement','HTMLButtonElement','HTMLCanvasElement','HTMLDListElement','HTMLDataElement','HTMLDataListElement','HTMLDetailsElement','HTMLDialogElement','HTMLEmbedElement','HTMLFieldSetElement','HTMLFontElement','HTMLFormElement','HTMLFrameElement','HTMLFrameSetElement','HTMLHRElement','HTMLHeadElement','HTMLHeadingElement','HTMLHtmlElement','HTMLIFrameElement','HTMLImageElement','HTMLInputElement','HTMLLIElement','HTMLLabelElement','HTMLLegendElement','HTMLLinkElement','HTMLMapElement','HTMLMediaElement','HTMLMenuElement','HTMLMetaElement','HTMLMeterElement','HTMLModElement','HTMLOListElement','HTMLObjectElement','HTMLOptGroupElement','HTMLOptionElement','HTMLOutputElement','HTMLParagraphElement','HTMLParamElement','HTMLPictureElement','HTMLPreElement','HTMLProgressElement','HTMLQuoteElement','HTMLScriptElement','HTMLSelectElement','HTMLSlotElement','HTMLSourceElement','HTMLSpanElement','HTMLStyleElement','HTMLTableCaptionElement','HTMLTableCellElement','HTMLTableColElement','HTMLTableElement','HTMLTableRowElement','HTMLTableSectionElement','HTMLTemplateElement','HTMLTextAreaElement','HTMLTimeElement','HTMLTitleElement','HTMLTrackElement','HTMLUListElement','HTMLVideoElement','SVGElement','SVGSVGElement'];"
@@ -6209,15 +6212,38 @@ int globalStorageCount(AntbEngine* engine, AntbValue*, AntbValue** args, int arg
 }
 
 
+/* '::before' / ':before' / 'before' -> PseudoId (NOPSEUDO when unknown). */
+static WebCore::RenderStyle::PseudoId pseudoIdFromName(const char* text)
+{
+    std::string name(text ? text : "");
+
+    while (!name.empty() && name[0] == ':')
+        name.erase(0, 1);
+
+    for (size_t i = 0; i < name.size(); ++i)
+        if (name[i] >= 'A' && name[i] <= 'Z')
+            name[i] = (char)(name[i] - 'A' + 'a');
+
+    if (name == "before") return WebCore::RenderStyle::BEFORE;
+    if (name == "after") return WebCore::RenderStyle::AFTER;
+    if (name == "first-line") return WebCore::RenderStyle::FIRST_LINE;
+    if (name == "first-letter") return WebCore::RenderStyle::FIRST_LETTER;
+    if (name == "selection") return WebCore::RenderStyle::SELECTION;
+
+    return WebCore::RenderStyle::NOPSEUDO;
+}
+
 /* getComputedStyle(el).getPropertyValue(name) -> computed value as a string.
  * Goes through WebCore's CSSComputedStyleDeclaration, so every property the
- * layout engine knows about comes back with a real value. */
+ * layout engine knows about comes back with a real value. A third argument is
+ * the pseudo element ('::before'), whose style only exists on the renderer. */
 int globalComputedStyle(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
                         AntbValue* out, void*)
 {
     ProfScope prof(PROF_COMPUTED);
     WebCore::Node* node = (argc > 0) ? nodeOf(args[0]) : NULL;
     char* property = (argc > 1) ? antb_to_utf8(args[1]) : NULL;
+    char* pseudo = (argc > 2) ? antb_to_utf8(args[2]) : NULL;
     std::string value;
     static int calls = 0;
     static unsigned long totalUs = 0;
@@ -6233,8 +6259,22 @@ int globalComputedStyle(AntbEngine* engine, AntbValue*, AntbValue** args, int ar
          * a style recalc in every real browser too). */
         node->document()->updateStyleIfNeeded();
 
+        WebCore::RenderStyle* pseudoStyle = NULL;
+
+        if (pseudo && pseudo[0] && node->isElementNode()) {
+            WebCore::RenderStyle::PseudoId id = pseudoIdFromName(pseudo);
+
+            if (id != WebCore::RenderStyle::NOPSEUDO) {
+                WebCore::RenderObject* renderer = node->renderer();
+
+                if (renderer)
+                    pseudoStyle = renderer->getPseudoStyle(id);
+            }
+        }
+
         RefPtr<WebCore::CSSComputedStyleDeclaration> declaration =
-            new WebCore::CSSComputedStyleDeclaration(node);
+            pseudoStyle ? new WebCore::CSSComputedStyleDeclaration(node, pseudoStyle)
+                        : new WebCore::CSSComputedStyleDeclaration(node);
 
         if (declaration) {
             /* CSSComputedStyleDeclaration hides the name-based overload with its
@@ -6256,6 +6296,7 @@ int globalComputedStyle(AntbEngine* engine, AntbValue*, AntbValue** args, int ar
     }
 
     antb_free(property);
+    antb_free(pseudo);
     return makeStringResult(engine, out, value.c_str()) ? 1 : 0;
 }
 

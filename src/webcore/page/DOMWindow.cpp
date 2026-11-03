@@ -513,12 +513,42 @@ Document* DOMWindow::document() const
     return m_frame->document();
 }
 
-PassRefPtr<CSSStyleDeclaration> DOMWindow::getComputedStyle(Element* elt, const String&) const
+PassRefPtr<CSSStyleDeclaration> DOMWindow::getComputedStyle(Element* elt, const String& pseudoElt) const
 {
     if (!elt)
         return 0;
 
-    // FIXME: This needs to work with pseudo elements.
+    /* getComputedStyle(el, '::before') describes the generated box, not the
+     * element: its style only exists on the renderer. */
+    if (!pseudoElt.isEmpty()) {
+        String pseudo = pseudoElt;
+
+        while (pseudo.length() && pseudo[0] == ':')
+            pseudo = pseudo.substring(1);
+        pseudo = pseudo.lower();
+
+        RenderStyle::PseudoId id = RenderStyle::NOPSEUDO;
+
+        if (pseudo == "before")
+            id = RenderStyle::BEFORE;
+        else if (pseudo == "after")
+            id = RenderStyle::AFTER;
+        else if (pseudo == "first-line")
+            id = RenderStyle::FIRST_LINE;
+        else if (pseudo == "first-letter")
+            id = RenderStyle::FIRST_LETTER;
+        else if (pseudo == "selection")
+            id = RenderStyle::SELECTION;
+
+        if (id != RenderStyle::NOPSEUDO) {
+            elt->document()->updateLayoutIgnorePendingStylesheets();
+
+            if (RenderObject* renderer = elt->renderer())
+                if (RenderStyle* pseudoStyle = renderer->getPseudoStyle(id))
+                    return new CSSComputedStyleDeclaration(elt, pseudoStyle);
+        }
+    }
+
     return new CSSComputedStyleDeclaration(elt);
 }
 
