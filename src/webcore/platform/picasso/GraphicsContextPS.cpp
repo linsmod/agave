@@ -448,7 +448,15 @@ void GraphicsContext::clip(const IntRect& r)
     ps_world_to_viewport(m_data->context, &p2);
 
 	ps_rect rt = {p1.x, p1.y, p2.x - p1.x, p2.y - p1.y};
-    ps_scissor_rect(m_data->context, &rt);
+
+    /* clip() must intersect with the clip already in effect. ps_scissor_rect
+     * REPLACES the clip (clip.type = clip_device), so every nested clip threw
+     * the parent's overflow clip away: children painted outside their box
+     * (background leaking into the neighbouring row) and a repaint region set
+     * by the layer was lost as soon as an element clipped itself. ps_clip_rect
+     * goes through picasso's clip intersection, and ps_save/ps_restore already
+     * restore it. */
+    ps_clip_rect(m_data->context, &rt);
 }
 
 void GraphicsContext::drawFocusRing(const Color& color)

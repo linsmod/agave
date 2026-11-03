@@ -478,12 +478,29 @@ IntRect RenderFlow::absoluteClippedOverflowRect()
         if (!firstLineBox() && !continuation())
             return IntRect();
 
-        // Find our leftmost position.
-        int left = 0;
+        /* The box of every line box. An inline flow never gets a width/height
+         * of its own (nothing calls setWidth()/setHeight() on a RenderFlow), so
+         * the old width()/height() based rect was 0x0: a :hover colour change
+         * on an inline element invalidated nothing and the text kept its old
+         * pixels (or the background repaint wiped it and nothing was drawn
+         * back - "content disappears under a flat colour"). */
+        int left = firstLineBox() ? firstLineBox()->xPos() : 0;
         int top = firstLineBox() ? firstLineBox()->yPos() : 0;
+        int right = left;
+        int bottom = top;
+
         for (InlineRunBox* curr = firstLineBox(); curr; curr = curr->nextLineBox()) {
-            if (curr == firstLineBox() || curr->xPos() < left)
-                left = curr->xPos();
+            int x = curr->xPos();
+            int y = curr->yPos();
+
+            if (x < left)
+                left = x;
+            if (y < top)
+                top = y;
+            if (x + curr->width() > right)
+                right = x + curr->width();
+            if (y + curr->height() > bottom)
+                bottom = y + curr->height();
         }
 
         // Now invalidate a rectangle.
@@ -500,7 +517,7 @@ IntRect RenderFlow::absoluteClippedOverflowRect()
                 inlineFlow->layer()->relativePositionOffset(left, top);
         }
 
-        IntRect r(-ow + left, -ow + top, width() + ow * 2, height() + ow * 2);
+        IntRect r(-ow + left, -ow + top, (right - left) + ow * 2, (bottom - top) + ow * 2);
         if (cb->hasColumns())
             cb->adjustRectForColumns(r);
 
