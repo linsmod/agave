@@ -46,9 +46,33 @@ WHEN USER REPLY A DOT[.] ONLY, MEANS OK/DONE/DO_AS_YOU_SAY/YES/GO_ON/ACCEPT/...
   回归页 `tools/pages/iconfont_render.html`（真实多格式 src），`agave_view_host.exe <file-url> out.bmp` 出图核对字形。链路与坑见 `docs/web-font.md`
 
 **构建规则（不守则静默无效）**
-- 改 `AntBridge.c`：必须先 `tools/build_antbridge.ps1 -Force` 再 relink libagave（antbridge.dll 是预编译产物，CMake 只拷贝）
+- 改 `AntBridge.c`：**改本仓库 `src/javascript/ant_backend/` 那份**，再 `tools/build_antbridge.ps1 -Force` 重编 dll、最后 relink libagave（antbridge.dll 是预编译产物，CMake 只拷贝）。
+  不要改 `H:\ant-v16\bridge\AntBridge.c`——脚本每次都会用本仓库的版本覆盖它，改了白改（2026-11-04 踩过）
 - 宿主窗口消息循环要自退：WM_DESTROY 里 PostQuitMessage（GetMessage 只认 WM_QUIT）；调 `agave_webview_eval` 的分支要防重入
 - 代理会话沙箱拒绝执行 winget symlink 的 zig.exe；包装器（.zig-toolchain、zigspike）已直指 WinGet\Packages 真实 exe，zig 升级需同步路径
+
+**ant 引擎 / 桥接：哪份是真的**（2026-11-04 核实）
+
+两套 git 仓库互不相干，同名文件各有拷贝，改错地方会被静默覆盖：
+
+| 对象 | 真源（改这里） | 其它拷贝 |
+|---|---|---|
+| ant 内核 `libant.a` / `src/silver/*` / `include/*` | `H:\ant-v16`（分支 `agave-bridge`） | 本仓库没有引擎源码 |
+| `AntBridge.c` / `AntBridge.h` | **本仓库** `src/javascript/ant_backend/` | `H:\ant-v16\bridge\`（构建时被覆盖） |
+| `antbridge.dll` | `H:\ant-v16\bridge\`（链接产物） | `3rdparty/ant/bin`、`3rdparty/ant/lib`、`build-zig-native`、ws host；**运行时只加载 exe 同目录 `build-zig-native\antbridge.dll`** |
+| git 远端 | agave → GitHub `linsmod/agave`；ant 上游 → `theMackabu/ant`，本地镜像 `H:\ant-upstream`，推送 fork `fork` → `linsmod/ant` | 两套历史无关 |
+
+- ant 的工作分支 `agave-bridge` 已推到 fork：`https://github.com/linsmod/ant/tree/agave-bridge`（`git push fork agave-bridge` 即可更新）。向上游 `theMackabu/ant` 提 PR 之前必须先 rebase 到它的 master（当前落后 54 个 commit）。
+
+- ant 的 `agave-bridge` 基线 = tag `v16.5.c41757b4.0`（**冻结的基线**），落后 `origin/master` 54 个 commit；本地补丁叠在上面（`c1e00842` + 桥接/性能 2 个）。要跟上游同步只能 rebase，别直接 merge。
+- `H:\ant-v16` 历史上是 detached HEAD 检出 tag 的用法：**提交后立刻 `git switch -c <name>` 挂分支**，否则切走就丢。
+- 一致性自检（两边应完全相同）：
+  ```powershell
+  (Get-FileHash e:\mybrowsers\agave\src\javascript\ant_backend\AntBridge.c -Algorithm MD5).Hash
+  (Get-FileHash H:\ant-v16\bridge\AntBridge.c -Algorithm MD5).Hash
+  # dll 四处应同 hash：3rdparty\ant\bin = 3rdparty\ant\lib = build-zig-native = H:\ant-v16\bridge
+  ```
+- 改引擎内核（ant 侧）的完整链路：`ninja -C H:\ant-v16\build-zig libant.a` → `pwsh -File tools\build_antbridge.ps1 -Force`（重链并同步四处 dll）→ 只有改了本仓库 C++ 才需要再 `cmake --build build-zig-native`。
 
 **常用命令**
 
