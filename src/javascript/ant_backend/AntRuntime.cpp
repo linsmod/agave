@@ -1366,6 +1366,213 @@ static void installCrashFilter(void)
     fprintf(stderr, "[trace] crash filter installed\n");
 }
 
+/* ------------------------------------------------------------------------- */
+/* Binding profiler (AGB_PROFILE=1)                                          */
+/* ------------------------------------------------------------------------- */
+/* Counts and times the bridge entry points the engine spends its time in.   */
+/* Cheap enough to leave compiled in: disabled it is one getenv check.       */
+enum {
+    PROF_NODE_GET = 0,
+    PROF_NODE_SET,
+    PROF_STYLE_GET,
+    PROF_STYLE_SET,
+    PROF_COMPUTED,
+    PROF_CREATE_ELEMENT,
+    PROF_APPEND,
+    PROF_SLOTS
+};
+
+struct ProfSlot {
+    const char*        name;
+    unsigned long long calls;
+    unsigned long long ticks;
+};
+
+static ProfSlot g_prof[PROF_SLOTS] = {
+    { "node.get", 0, 0 },
+    { "node.set", 0, 0 },
+    { "style.get", 0, 0 },
+    { "style.set", 0, 0 },
+    { "computedStyle", 0, 0 },
+    { "createElement", 0, 0 },
+    { "appendChild", 0, 0 }
+};
+
+static int g_profEnabled = -1;
+static double g_profFreq = 0.0;
+
+static void dumpProfile(void)
+{
+    int i;
+
+    if (!g_profFreq || g_profFreq <= 0.0)
+        g_profFreq = 1000000.0;
+
+    fprintf(stderr, "\n[prof] binding calls ms\n");
+
+    for (i = 0; i < PROF_SLOTS; ++i)
+        fprintf(stderr, "[prof] %-14s %9llu %9.1f\n", g_prof[i].name, g_prof[i].calls,
+                (double)g_prof[i].ticks * 1000.0 / g_profFreq);
+
+    fflush(stderr);
+}
+
+static int profEnabled(void)
+{
+    if (g_profEnabled < 0) {
+        if (getenv("AGB_PROFILE")) {
+            LARGE_INTEGER freq;
+
+            QueryPerformanceFrequency(&freq);
+            g_profFreq = (double)freq.QuadPart;
+            g_profEnabled = 1;
+            atexit(dumpProfile);
+        } else {
+            g_profEnabled = 0;
+        }
+    }
+
+    return g_profEnabled;
+}
+
+struct ProfScope {
+    int                slot;
+    unsigned long long started;
+    bool               on;
+
+    explicit ProfScope(int s) : slot(s), started(0), on(profEnabled() != 0)
+    {
+        if (on) {
+            LARGE_INTEGER now;
+
+            QueryPerformanceCounter(&now);
+            started = (unsigned long long)now.QuadPart;
+        }
+    }
+
+    ~ProfScope()
+    {
+        if (!on)
+            return;
+
+        {
+            LARGE_INTEGER now;
+
+            QueryPerformanceCounter(&now);
+            g_prof[slot].calls++;
+            g_prof[slot].ticks += (unsigned long long)now.QuadPart - started;
+        }
+    }
+};
+
+/* ------------------------------------------------------------------------- */
+/* Sampling profiler (AGB_PROFILE=1)                                         */
+/* ------------------------------------------------------------------------- */
+/* A watchdog thread samples the JS thread's instruction pointer a few times a
+ * second; the histogram points at the function that actually burns the time
+ * when the JS engine itself is the bottleneck (the bridge counters only add
+ * up to a couple of seconds on browserscore, so the cost is inside the VM). */
+#define PROF_SAMPLES 8192
+
+static unsigned long long g_profSamples[PROF_SAMPLES];
+static volatile LONG      g_profSampleCount = 0;
+static volatile LONG      g_profStop = 0;
+static DWORD              g_profThreadId = 0;
+static HANDLE             g_profWatcher = NULL;
+static int                g_profSamplerOn = -1;
+
+static DWORD WINAPI profilerWatcher(LPVOID)
+{
+    HANDLE thread = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT, FALSE, g_profThreadId);
+
+    if (!thread)
+        return 0;
+
+    while (!g_profStop) {
+        CONTEXT context;
+
+        Sleep(2);
+
+        if (SuspendThread(thread) == (DWORD)-1)
+            continue;
+
+        context.ContextFlags = CONTEXT_CONTROL;
+
+        if (GetThreadContext(thread, &context)) {
+            LONG at = InterlockedIncrement(&g_profSampleCount) - 1;
+
+            if (at < PROF_SAMPLES)
+                g_profSamples[at] = (unsigned long long)context.Rip;
+        }
+
+        ResumeThread(thread);
+    }
+
+    CloseHandle(thread);
+    return 0;
+}
+
+static const char* moduleNameFor(unsigned long long address, unsigned long long* offset)
+{
+    static const char* names[] = { "libagave.dll", "antbridge.dll", NULL };
+    static unsigned long long bases[3] = { 0, 0, 0 };
+    int i;
+
+    if (!bases[0]) {
+        bases[0] = (unsigned long long)GetModuleHandleA("libagave.dll");
+        bases[1] = (unsigned long long)GetModuleHandleA("antbridge.dll");
+        bases[2] = (unsigned long long)GetModuleHandleA(NULL);
+    }
+
+    for (i = 0; i < 3; ++i) {
+        if (!bases[i])
+            continue;
+
+        if (address >= bases[i] && address < bases[i] + 0x8000000ULL) {
+            *offset = address - bases[i];
+            return names[i] ? names[i] : "host.exe";
+        }
+    }
+
+    *offset = address;
+    return "other";
+}
+
+static void dumpSampleProfile(void)
+{
+    int i;
+    LONG count = g_profSampleCount;
+
+    if (count > PROF_SAMPLES)
+        count = PROF_SAMPLES;
+
+    fprintf(stderr, "\n[profjs] samples=%ld\n", (long)count);
+
+    for (i = 0; i < count; ++i) {
+        unsigned long long offset = 0;
+        const char* module = moduleNameFor(g_profSamples[i], &offset);
+
+        fprintf(stderr, "[profjs] %s+0x%llx\n", module, offset);
+    }
+
+    fflush(stderr);
+}
+
+static void startSampler(void)
+{
+    if (g_profSamplerOn >= 0)
+        return;
+
+    g_profSamplerOn = getenv("AGB_PROFILE") ? 1 : 0;
+
+    if (!g_profSamplerOn)
+        return;
+
+    g_profThreadId = GetCurrentThreadId();
+    g_profWatcher = CreateThread(NULL, 0, profilerWatcher, NULL, 0, NULL);
+    atexit(dumpSampleProfile);
+}
+
 namespace AntRuntime {
 
 static void initCookieStorage()
@@ -1988,6 +2195,7 @@ static char* moduleFetch(const char* urlText, unsigned long* outSize)
 
 bool start()
 {
+    startSampler();
     AntbEngine* engine;
 
     if (g_engine)
@@ -3348,6 +3556,8 @@ static std::string stylePropertyText(WebCore::StyledElement* element, const char
 /* Dispatcher for every property read on a style object. */
 static int styleGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue* out, void*)
 {
+    ProfScope prof(PROF_STYLE_GET);
+
     WebCore::StyledElement* element = styledElementOf(self);
 
     if (getenv("AGB_STYLE_DEBUG")) {
@@ -3430,6 +3640,8 @@ static int styleGetter(AntbEngine* engine, AntbValue* self, const char* name, An
 /* Dispatcher for every property write on a style object. */
 static int styleSetter(AntbEngine* engine, AntbValue* self, const char* name, const AntbValue* value, void*)
 {
+    ProfScope prof(PROF_STYLE_SET);
+
     traceOp("style %s", name ? name : "?");
     WebCore::StyledElement* element = styledElementOf(self);
     WebCore::ExceptionCode ec = 0;
@@ -3482,6 +3694,8 @@ int attrsGetter(AntbEngine* engine, AntbValue*, const char* name, AntbValue* out
 
 int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue* out, void*)
 {
+    ProfScope prof(PROF_NODE_GET);
+
     installCrashFilter();
     /* getters are too hot to trace */
     WebCore::Node* n = nodeOf(self);
@@ -3753,6 +3967,8 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
 
 int nodeSetter(AntbEngine* engine, AntbValue* self, const char* name, const AntbValue* value, void*)
 {
+    ProfScope prof(PROF_NODE_SET);
+
     installCrashFilter();
     traceOp("set %s", name ? name : "?");
     WebCore::Node* n = nodeOf(self);
@@ -4076,6 +4292,7 @@ int nodeDispatchEvent(AntbEngine* engine, AntbValue* self, AntbValue** args, int
 int docCreateElement(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
                      AntbValue* out, void*)
 {
+    ProfScope prof(PROF_CREATE_ELEMENT);
     char* tag;
     WebCore::ExceptionCode ec = 0;
     RefPtr<WebCore::Element> element;
@@ -4211,6 +4428,7 @@ int docCreateComment(AntbEngine* engine, AntbValue* self, AntbValue** args, int 
 int nodeAppendChild(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
                     AntbValue* out, void*)
 {
+    ProfScope prof(PROF_APPEND);
     WebCore::Node* parent = nodeOf(self);
     WebCore::Node* child  = (argc > 0) ? nodeOf(args[0]) : 0;
     WebCore::ExceptionCode ec = 0;
@@ -5005,6 +5223,7 @@ int globalStorageCount(AntbEngine* engine, AntbValue*, AntbValue** args, int arg
 int globalComputedStyle(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
                         AntbValue* out, void*)
 {
+    ProfScope prof(PROF_COMPUTED);
     WebCore::Node* node = (argc > 0) ? nodeOf(args[0]) : NULL;
     char* property = (argc > 1) ? antb_to_utf8(args[1]) : NULL;
     std::string value;
