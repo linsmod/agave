@@ -10,6 +10,10 @@
  *
  * Usage:  agave_view_host.exe <url> [out.bmp] [--eval script] [--click x y]
  *                              [--type text] [--keys keys] [--repaint]
+ *                              [--wheel n] [--wheelup n]
+ *           --wheel n   n wheel-down events (the engine's wheel sign is
+ *                       inverted, so this scrolls the document UP)
+ *           --wheelup n n wheel-up events (scrolls the document DOWN)
  * Env:    AGB_MAX_FRAMES  settle-loop frame budget (default 800)
  *         AGB_IDLE_FRAMES consecutive repaint-less frames that count as
  *                         "settled" once the load reached 100% (default 60);
@@ -153,6 +157,8 @@ int main(int argc, char** argv)
     {
         int clickX = -1, clickY = -1;
         int click2X = -1, click2Y = -1;
+        int wheelClicks = 0;
+        int wheelUpClicks = 0;
         const char* typeText = 0;
         const char* evalScript = 0;
         const char* keysText = 0;
@@ -175,6 +181,12 @@ int main(int argc, char** argv)
                 i += 2;
             } else if (!strcmp(argv[i], "--repaint")) {
                 forceRect = true;
+            } else if (!strcmp(argv[i], "--wheel") && i + 1 < argc) {
+                wheelClicks = atoi(argv[i + 1]);
+                ++i;
+            } else if (!strcmp(argv[i], "--wheelup") && i + 1 < argc) {
+                wheelUpClicks = atoi(argv[i + 1]);
+                ++i;
             } else if (!strcmp(argv[i], "--keys") && i + 1 < argc) {
                 keysText = argv[i + 1];
                 ++i;
@@ -184,7 +196,7 @@ int main(int argc, char** argv)
             }
         }
 
-        if (clickX >= 0 || typeText || keysText || evalScript || pressEnter || forceRect) {
+        if (clickX >= 0 || typeText || keysText || evalScript || pressEnter || forceRect || wheelClicks > 0 || wheelUpClicks > 0) {
             /* let the page settle first */
             for (int i = 0; i < 120; ++i) {
                 MSG msg;
@@ -244,6 +256,35 @@ int main(int argc, char** argv)
                 ev.type = EVT_MOUSE_UP;
                 macross_mouse_event(view, &ev);
                 printf("clicked2 (%d,%d)\n", click2X, click2Y);
+            }
+
+            if (wheelClicks > 0 || wheelUpClicks > 0) {
+                /* Wheel events drive the real document scroll (ScrollView ->
+                 * scrollBackingStore), the same path a scrollbar drag takes.
+                 *
+                 * NOTE: the engine's wheel sign is inverted right now -
+                 * WebView::mouseWheel() maps MOUSE_WHEEL_UP to delta -10 and
+                 * ScrollView::wheelEvent() scrolls by -deltaY * LINE_STEP, so
+                 * MOUSE_WHEEL_UP moves the document DOWN. */
+                MC_MOUSE_EVENT ev;
+                memset(&ev, 0, sizeof(ev));
+                ev.type   = EVT_MOUSE_WHEEL;
+                ev.button = wheelClicks > 0 ? MOUSE_WHEEL_DOWN : MOUSE_WHEEL_UP;
+                ev.point.x = W / 2;
+                ev.point.y = H / 2;
+                int clicks = wheelClicks > 0 ? wheelClicks : wheelUpClicks;
+                for (int i = 0; i < clicks; ++i) {
+                    macross_mouse_event(view, &ev);
+                    MSG msg;
+                    while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
+                        TranslateMessage(&msg);
+                        DispatchMessage(&msg);
+                    }
+                    macross_event_dispatch();
+                    macross_view_update(view, NULL);
+                    Sleep(20);
+                }
+                printf("wheel x%d (button=%d)\n", clicks, (int)ev.button);
             }
 
             if (forceRect) {

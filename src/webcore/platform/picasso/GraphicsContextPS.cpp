@@ -24,7 +24,20 @@ public:
     GraphicsContextPlatformPrivate();
     ~GraphicsContextPlatformPrivate();
 
+    /* The clip that is currently in effect, in device space.
+     *
+     * picasso keeps its clip in the context state, but that state is shared
+     * with the owner of the ps_context (the view), so the rectangle that is
+     * really in effect is tracked here: clip() has to intersect with it, and
+     * the intersection has to happen in device space (see clip()). */
+    struct ClipState {
+        IntRect rect;
+        bool valid;
+    };
+
     Vector<AffineTransform> stack;
+    ClipState clip;
+    Vector<ClipState> clipStack;
 
     AffineTransform matrix;
     ps_context* context;
@@ -34,7 +47,8 @@ public:
 GraphicsContextPlatformPrivate::GraphicsContextPlatformPrivate()
     :  context(0)
 {
-
+    clip.valid = false;
+    clip.rect = IntRect();
 }
 
 GraphicsContextPlatformPrivate::~GraphicsContextPlatformPrivate()
@@ -65,12 +79,17 @@ void GraphicsContext::savePlatformState()
 {
 	ps_save(m_data->context);
     m_data->stack.append(m_data->matrix);
+    m_data->clipStack.append(m_data->clip);
 }
 
 void GraphicsContext::restorePlatformState()
 {
     m_data->matrix = m_data->stack.last();
     m_data->stack.removeLast();
+    if (!m_data->clipStack.isEmpty()) {
+        m_data->clip = m_data->clipStack.last();
+        m_data->clipStack.removeLast();
+    }
 	ps_restore(m_data->context);
 }
 
@@ -441,22 +460,38 @@ void GraphicsContext::clip(const IntRect& r)
     if (paintingDisabled())
         return;	
 
+    /* The rect is given in user space, the clip is applied in device space.
+     *
+     * ps_clip_rect() takes a rect in *world* space (it builds a path and
+     * lets picasso transform it), so handing it device coordinates would
+     * transform the rect twice: with the scroll offset in the matrix the
+     * clip ended up shifted by that offset and the part of the viewport
+     * outside of it was never repainted (a "curtain" of stale rows while
+     * scrolling). ps_scissor_rect() takes device coordinates, which is what
+     * we compute here.
+     *
+     * ps_scissor_rect() REPLACES the clip, so the intersection with the clip
+     * already in effect is done here: a child inside an overflow:hidden
+     * parent must not paint over the parent's box, and a repaint region set
+     * by the layer must survive a nested clip. The intersection is computed
+     * in device space, so it stays correct even when the world matrix
+     * changed between the two clips. */
     ps_point p1 = {r.x(), r.y()};
     ps_point p2 = {r.x() + r.width(), r.y() + r.height()};
     
     ps_world_to_viewport(m_data->context, &p1);
     ps_world_to_viewport(m_data->context, &p2);
 
-	ps_rect rt = {p1.x, p1.y, p2.x - p1.x, p2.y - p1.y};
+    IntRect deviceRect(p1.x, p1.y, p2.x - p1.x, p2.y - p1.y);
 
-    /* clip() must intersect with the clip already in effect. ps_scissor_rect
-     * REPLACES the clip (clip.type = clip_device), so every nested clip threw
-     * the parent's overflow clip away: children painted outside their box
-     * (background leaking into the neighbouring row) and a repaint region set
-     * by the layer was lost as soon as an element clipped itself. ps_clip_rect
-     * goes through picasso's clip intersection, and ps_save/ps_restore already
-     * restore it. */
-    ps_clip_rect(m_data->context, &rt);
+    if (m_data->clip.valid)
+        deviceRect.intersect(m_data->clip.rect);
+
+	ps_rect rt = {deviceRect.x(), deviceRect.y(), deviceRect.width(), deviceRect.height()};
+    ps_scissor_rect(m_data->context, &rt);
+
+    m_data->clip.rect = deviceRect;
+    m_data->clip.valid = true;
 }
 
 void GraphicsContext::drawFocusRing(const Color& color)
