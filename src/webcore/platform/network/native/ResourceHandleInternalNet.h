@@ -68,6 +68,10 @@ public:
     bool                  m_forSavingResource;
     int                   m_totalReceived;   /* bytes received so far (didReceiveData) */
 
+    /* Filled so the completed response can go into the HTTP cache. */
+    Net::Response         m_netResponse;
+    std::string           m_body;
+
     bool needsDownloadClient() { return m_mightDownloadFromHandle && !m_hasDownloadClient; }
     bool needsResourceHandleForDownloading() { return m_mightDownloadFromHandle && !m_forSavingResource; }
 };

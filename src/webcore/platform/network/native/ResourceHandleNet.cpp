@@ -9,6 +9,7 @@
 #include "ResourceHandleClient.h"
 #include "ResourceHandleInternal.h"
 #include "ResourceHandleManagerNet.h"
+#include "HttpCache.h"
 
 #include "ResourceError.h"
 #include "ResourceRequest.h"
@@ -152,6 +153,8 @@ void ResourceHandleInternal::onResponse(const Net::Response& netResponse)
 
     m_hasResponse = true;
     m_response = response;
+    m_netResponse = netResponse;
+    m_body.clear();
     m_client->didReceiveResponse(m_handle, response);
 }
 
@@ -163,6 +166,11 @@ void ResourceHandleInternal::onData(const char* data, unsigned int length)
     /* The last argument is the number of bytes received *so far*, not the size
      * of this chunk: WebCore sizes its buffers from it. */
     m_totalReceived += (int)length;
+
+    /* Bodies are kept for the HTTP cache; 16 MB is the same cap the cache uses. */
+    if (m_body.size() + length <= 16u * 1024u * 1024u)
+        m_body.append(data, length);
+
     m_client->didReceiveData(m_handle, data, (int)length, m_totalReceived);
 }
 
@@ -172,6 +180,20 @@ void ResourceHandleInternal::onComplete()
         return;
 
     m_finished = true;
+
+    /* Store cacheable responses (GET + 200 without no-store/set-cookie) for the
+     * next load; the body was accumulated in onData(). */
+    if (m_hasResponse) {
+        Net::Request cacheRequest;
+
+        cacheRequest.url = std::string(m_request.url().url().ascii());
+        cacheRequest.method = std::string(m_request.httpMethod().utf8().data());
+
+        if (cacheRequest.method.empty())
+            cacheRequest.method = "GET";
+
+        Net::HttpCache::instance().store(cacheRequest, m_netResponse, m_body);
+    }
 
     if (m_client)
         m_client->didFinishLoading(m_handle);

@@ -9,6 +9,8 @@
 #include "Timer.h"
 #include "Vector.h"
 #include "NetworkSession.h"
+#include "HttpCache.h"
+#include <vector>
 
 namespace WebCore {
 
@@ -40,6 +42,14 @@ private:
     Timer<ResourceHandleManager> m_downloadTimer;
     Vector<ResourceHandle*>      m_handles;
     Vector<ResourceHandle*>      m_skipped;
+
+    /* Handles whose response came from the HTTP cache: delivered from the timer
+     * so the loader still sees an asynchronous response. */
+    struct CachedDelivery {
+        ResourceHandle*        handle;
+        Net::HttpCache::Entry  entry;
+    };
+    std::vector<CachedDelivery>  m_cached;
 };
 
 } /* namespace WebCore */

@@ -1491,6 +1491,9 @@ static ModuleEntry* moduleEntryFor(const std::string& url)
     return entry;
 }
 
+static void moduleCacheStore(const std::string& url, const std::string& body);
+static bool moduleCacheLoad(const std::string& url, std::string* body);
+
 struct ModuleFetchClient : public Net::Client {
     std::string url;
 
@@ -1527,6 +1530,8 @@ struct ModuleFetchClient : public Net::Client {
             if (g_moduleInFlight > 0)
                 --g_moduleInFlight;
 
+            moduleCacheStore(url, entry->body);
+
             /* Fan out: scan a *prefetched* body for its imports too, otherwise the
              * graph is only ever one import list deep and the ESM loader ends up
              * fetching module after module with ~150ms of RTT each. */
@@ -1559,7 +1564,8 @@ static std::string moduleUrlJoin(const std::string& baseUrl, const std::string& 
     std::string out;
     std::string host;
     size_t schemeEnd;
-    size_t slash;
+    size_t hostSlash;
+    size_t dirSlash;
     size_t i;
 
     if (specifier.empty())
@@ -1573,13 +1579,22 @@ static std::string moduleUrlJoin(const std::string& baseUrl, const std::string& 
     if (schemeEnd == std::string::npos)
         return specifier;
 
-    slash = baseUrl.find('/', schemeEnd + 3);
-    host = (slash == std::string::npos) ? baseUrl : baseUrl.substr(0, slash);
+    hostSlash = baseUrl.find('/', schemeEnd + 3);
 
-    if (!specifier.empty() && specifier[0] == '/')
+    if (hostSlash == std::string::npos)
+        return specifier;
+
+    host = baseUrl.substr(0, hostSlash);
+
+    if (specifier[0] == '/')
         return host + specifier;
 
-    out = (slash == std::string::npos) ? host + "/" : baseUrl.substr(0, slash + 1);
+    /* Relative to the *directory* of the base module: `./x.js` imported from
+     * /src/app.js is /src/x.js, not /x.js. Using find() here resolved every
+     * relative import against the site root, so browserscore.dev asked for
+     * 217 files that do not exist (404s) next to the 225 real ones. */
+    dirSlash = baseUrl.rfind('/');
+    out = (dirSlash == std::string::npos || dirSlash < hostSlash) ? host + "/" : baseUrl.substr(0, dirSlash + 1);
 
     for (i = 0; i < specifier.size(); ++i) {
         if (specifier.compare(i, 3, "../") == 0) {
@@ -1587,7 +1602,7 @@ static std::string moduleUrlJoin(const std::string& baseUrl, const std::string& 
 
             if (cut > host.size() + 1) {
                 cut -= 1;
-                while (cut > host.size() && out[cut - 1] != '/')
+                while (cut > host.size() + 1 && out[cut - 1] != '/')
                     --cut;
                 out.erase(cut);
             }
@@ -1602,6 +1617,213 @@ static std::string moduleUrlJoin(const std::string& baseUrl, const std::string& 
     }
 
     return out;
+}
+
+/* -------------------------------------------------------------------------
+ * Module disk cache
+ * -------------------------------------------------------------------------
+ * The module graph is 200+ small files; with ~150ms of proxy RTT that is most
+ * of the load time. Keep fetched bodies on disk so a second run measures the
+ * engine instead of the network. AGB_MODULE_CACHE=0 disables it,
+ * AGB_MODULE_CACHE_TTL=<seconds> expires entries (default 3600).
+ */
+static bool moduleCacheEnabled(void)
+{
+    static int on = -1;
+
+    if (on < 0) {
+        const char* env = getenv("AGB_MODULE_CACHE");
+        on = (!env || atoi(env) != 0) ? 1 : 0;
+    }
+
+    return on != 0;
+}
+
+/* Returns a writable cache directory called 
+ame. The data dir under
+ * %APPDATA% is preferred, but it is not always creatable (the earlier
+ * CreateDirectoryA silently failed and every store got ERROR_PATH_NOT_FOUND),
+ * so fall back to <exe>\cache and then to .\cache. */
+static std::string ensureCacheDir(const char* name)
+{
+    static std::string resolved;
+
+    if (!resolved.empty())
+        return resolved;
+
+    {
+        std::string dir = std::string(dataDir()) + "\\" + name;
+
+        if (CreateDirectoryA(dir.c_str(), NULL) || GetFileAttributesA(dir.c_str()) != INVALID_FILE_ATTRIBUTES) {
+            resolved = dir;
+            return resolved;
+        }
+    }
+
+    {
+        char module[AGB_PATH_CHARS];
+
+        if (GetModuleFileNameA(NULL, module, sizeof(module))) {
+            char* slash = strrchr(module, '\\');
+
+            if (slash)
+                *(slash + 1) = 0;
+
+            {
+                std::string base = std::string(module) + "cache";
+                std::string dir = base + "\\" + name;
+
+                CreateDirectoryA(base.c_str(), NULL);
+
+                if (CreateDirectoryA(dir.c_str(), NULL) || GetFileAttributesA(dir.c_str()) != INVALID_FILE_ATTRIBUTES) {
+                    resolved = dir;
+                    return resolved;
+                }
+            }
+        }
+    }
+
+    resolved = ".\\cache";
+
+    if (CreateDirectoryA(resolved.c_str(), NULL) || GetFileAttributesA(resolved.c_str()) != INVALID_FILE_ATTRIBUTES)
+        return resolved;
+
+    return resolved;
+}
+
+static std::string moduleCachePath(const std::string& url)
+{
+    std::string dir = ensureCacheDir("module-cache");
+    unsigned long hash = 2166136261u;
+    char name[64];
+
+    for (size_t i = 0; i < url.size(); ++i) {
+        hash ^= (unsigned char)url[i];
+        hash *= 16777619u;
+    }
+
+    snprintf(name, sizeof(name), "\\%08lx.mjs", hash);
+    return dir + name;
+}
+
+static bool moduleCacheLoad(const std::string& url, std::string* body)
+{
+    std::string path;
+    FILE* file;
+    char buffer[4096];
+    size_t got;
+    long size;
+    const char* ttlText;
+    int ttl = 3600;
+
+    if (!moduleCacheEnabled() || !body)
+        return false;
+
+    path = moduleCachePath(url);
+
+    ttlText = getenv("AGB_MODULE_CACHE_TTL");
+
+    if (ttlText)
+        ttl = atoi(ttlText);
+
+    if (ttl > 0) {
+        WIN32_FILE_ATTRIBUTE_DATA info;
+
+        if (!GetFileAttributesExA(path.c_str(), GetFileExInfoStandard, &info))
+            return false;
+
+        {
+            ULARGE_INTEGER written;
+            unsigned long long writtenSec;
+            unsigned long long now = (unsigned long long)time(NULL);
+
+            written.LowPart = info.ftLastWriteTime.dwLowDateTime;
+            written.HighPart = info.ftLastWriteTime.dwHighDateTime;
+            writtenSec = written.QuadPart / 10000000ULL;
+
+            if (writtenSec > 11644473600ULL)
+                writtenSec -= 11644473600ULL;
+            else
+                writtenSec = 0;
+
+            if (now > writtenSec && (now - writtenSec) > (unsigned long long)ttl)
+                return false;
+        }
+    }
+
+    file = fopen(path.c_str(), "rb");
+
+    if (!file)
+        return false;
+
+    fseek(file, 0, SEEK_END);
+    size = ftell(file);
+    fseek(file, 0, SEEK_SET);
+
+    if (size <= 0) {
+        fclose(file);
+        return false;
+    }
+
+    /* first line is the URL, so a hash collision is detected instead of served */
+    got = fread(buffer, 1, sizeof(buffer) - 1, file);
+    buffer[got] = 0;
+
+    {
+        char* newline = strchr(buffer, '\n');
+
+        if (!newline) {
+            fclose(file);
+            return false;
+        }
+
+        /* compare only the URL line: the buffer also holds the body after it */
+        *newline = 0;
+
+        if (url != buffer) {
+            fclose(file);
+            return false;
+        }
+
+        *newline = '\n';
+        body->assign(newline + 1, got - (size_t)(newline + 1 - buffer));
+    }
+
+    for (;;) {
+        char chunk[4096];
+        size_t n = fread(chunk, 1, sizeof(chunk), file);
+
+        if (n == 0)
+            break;
+
+        body->append(chunk, n);
+    }
+
+    fclose(file);
+    return true;
+}
+
+static void moduleCacheStore(const std::string& url, const std::string& body)
+{
+    std::string path;
+    FILE* file;
+
+    if (!moduleCacheEnabled() || body.empty())
+        return;
+
+    path = moduleCachePath(url);
+    file = fopen(path.c_str(), "wb");
+
+    if (getenv("AGB_MODULE_DEBUG"))
+        fprintf(stderr, "[modcache] store %s -> %s (%s, err=%lu)\n", url.c_str(), path.c_str(),
+                file ? "ok" : "FAILED", file ? 0UL : (unsigned long)GetLastError());
+
+    if (!file)
+        return;
+
+    fprintf(file, "%s\n", url.c_str());
+    fwrite(body.data(), 1, body.size(), file);
+    fclose(file);
 }
 
 static void moduleStart(const std::string& url, bool force)
@@ -1697,6 +1919,13 @@ static char* moduleFetch(const char* urlText, unsigned long* outSize)
         return NULL;
 
     entry = moduleEntryFor(url);
+
+    if (!entry->done && moduleCacheLoad(url, &entry->body)) {
+        entry->done = true;
+
+        if (getenv("AGB_MODULE_DEBUG"))
+            fprintf(stderr, "[modcache] hit %s\n", url.c_str());
+    }
 
     for (attempt = 0; attempt < 2; ++attempt) {
         if (!entry->done)

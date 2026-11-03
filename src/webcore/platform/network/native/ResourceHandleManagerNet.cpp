@@ -9,6 +9,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "SkipList.h"
+#include "HttpCache.h"
+#include <vector>
 
 #include "ResourceHandle.h"
 #include "ResourceHandleInternal.h"
@@ -85,6 +87,27 @@ void ResourceHandleManager::add(ResourceHandle* job)
             req.headers.push_back(std::make_pair(std::string(it->first.utf8().data()),
                                                  std::string(it->second.utf8().data())));
 
+        /* Cache first: a repeated load of a big module graph would otherwise be
+         * hundreds of round trips again. The hit is delivered from the timer so
+         * the loader still sees an asynchronous response. */
+        {
+            Net::HttpCache::Entry cached;
+
+            if (Net::HttpCache::instance().lookup(req, &cached)) {
+                CachedDelivery delivery;
+
+                delivery.handle = job;
+                delivery.entry = cached;
+                m_cached.push_back(delivery);
+
+                job->ref();
+
+                if (!m_downloadTimer.isActive())
+                    m_downloadTimer.startRepeating(0.01);
+                return;
+            }
+        }
+
         d->m_requestId = m_session->start(req, d);
         if (d->m_requestId == 0) {
             /* report asynchronously to match the loader contract */
@@ -146,6 +169,28 @@ void ResourceHandleManager::downloadTimerCallback(Timer<ResourceHandleManager>*)
     LARGE_INTEGER freq, t0, t1;
     QueryPerformanceFrequency(&freq);
     QueryPerformanceCounter(&t0);
+    /* Cached responses are delivered first, like completed network jobs. */
+    if (!m_cached.empty()) {
+        std::vector<CachedDelivery> hits;
+
+        hits.swap(m_cached);
+
+        for (size_t i = 0; i < hits.size(); ++i) {
+            ResourceHandleInternal* d = hits[i].handle->getInternal();
+
+            if (d && !d->m_cancelled) {
+                d->onResponse(hits[i].entry.response);
+
+                if (!hits[i].entry.body.empty())
+                    d->onData(hits[i].entry.body.data(), (unsigned int)hits[i].entry.body.size());
+
+                d->onComplete();
+            }
+
+            hits[i].handle->deref();
+        }
+    }
+
     /* Fail blocklisted requests first, then pump the real session. */
     if (!m_skipped.isEmpty()) {
         Vector<ResourceHandle*> failed;
