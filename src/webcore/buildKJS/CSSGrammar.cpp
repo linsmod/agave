@@ -159,8 +159,9 @@ int getPropertyID(const char* tagStr, int len)
 
     /* The property table only carries the -webkit- spellings of the
      * background-size/clip/origin trio, so standard pages that use the
-     * unprefixed names lost these declarations entirely. */
-    if (len > 0 && tagStr[0] == 'b') {
+     * unprefixed names lost these declarations entirely. The table also maps
+     * the modern flex spellings onto the -webkit-box vocabulary. */
+    {
         static const struct {
             const char* name;
             const char* webkit;
@@ -172,7 +173,15 @@ int getPropertyID(const char* tagStr, int len)
             { "border-top-left-radius", "-webkit-border-top-left-radius" },
             { "border-top-right-radius", "-webkit-border-top-right-radius" },
             { "border-bottom-left-radius", "-webkit-border-bottom-left-radius" },
-            { "border-bottom-right-radius", "-webkit-border-bottom-right-radius" }
+            { "border-bottom-right-radius", "-webkit-border-bottom-right-radius" },
+            { "box-shadow", "-webkit-box-shadow" },
+            { "flex", "-webkit-box-flex" },
+            { "flex-grow", "-webkit-box-flex" },
+            { "flex-direction", "-webkit-box-orient" },
+            { "flex-wrap", "-webkit-box-lines" },
+            { "justify-content", "-webkit-box-pack" },
+            { "align-items", "-webkit-box-align" },
+            { "order", "-webkit-box-ordinal-group" }
         };
 
         for (size_t i = 0; i < sizeof(aliases) / sizeof(aliases[0]); ++i) {

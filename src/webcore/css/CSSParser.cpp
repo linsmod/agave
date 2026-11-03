@@ -507,6 +507,53 @@ void CSSParser::checkForOrphanedUnits()
     }
 }
 
+/* Modern flex/grid keywords spelled the way the flexbox module words them do
+ * not exist in the generated keyword table, and adding them globally would
+ * break properties that reuse the same words (white-space: nowrap,
+ * border-collapse: ...). They are translated here, scoped to the property
+ * being parsed; the property *names* are aliased onto the -webkit-box
+ * vocabulary in CSSGrammar (getPropertyID). */
+static int modernKeywordID(int propId, const Value* value)
+{
+    String word;
+
+    if (!value || value->unit != CSSPrimitiveValue::CSS_IDENT)
+        return 0;
+
+    word = domString(value->string).lower();
+
+    switch (propId) {
+    case CSS_PROP_DISPLAY:
+        if (word == "flex") return CSS_VAL__WEBKIT_BOX;
+        if (word == "inline-flex") return CSS_VAL__WEBKIT_INLINE_BOX;
+        /* Grid is not implemented: the container degrades to a block so the
+         * declaration is not dropped (children stack instead of vanishing). */
+        if (word == "grid") return CSS_VAL_BLOCK;
+        if (word == "inline-grid") return CSS_VAL_INLINE_BLOCK;
+        break;
+    case CSS_PROP__WEBKIT_BOX_ORIENT:   /* flex-direction */
+        if (word == "row") return CSS_VAL_HORIZONTAL;
+        if (word == "column") return CSS_VAL_VERTICAL;
+        break;
+    case CSS_PROP__WEBKIT_BOX_PACK:     /* justify-content */
+        if (word == "flex-start") return CSS_VAL_START;
+        if (word == "flex-end") return CSS_VAL_END;
+        if (word == "space-between") return CSS_VAL_JUSTIFY;
+        if (word == "space-around") return CSS_VAL_JUSTIFY;
+        break;
+    case CSS_PROP__WEBKIT_BOX_ALIGN:    /* align-items */
+        if (word == "flex-start") return CSS_VAL_START;
+        if (word == "flex-end") return CSS_VAL_END;
+        break;
+    case CSS_PROP__WEBKIT_BOX_LINES:    /* flex-wrap */
+        if (word == "wrap") return CSS_VAL_MULTIPLE;
+        if (word == "nowrap") return CSS_VAL_SINGLE;
+        break;
+    }
+
+    return 0;
+}
+
 bool CSSParser::parseValue(int propId, bool important)
 {
     if (!valueList)
@@ -518,6 +565,15 @@ bool CSSParser::parseValue(int propId, bool important)
         return false;
 
     int id = value->id;
+
+    /* flex / grid spellings translated to the box vocabulary this engine
+     * renders (see modernKeywordID). */
+    if (!id) {
+        int modern = modernKeywordID(propId, value);
+
+        if (modern)
+            id = modern;
+    }
 
     int num = inShorthand() ? 1 : valueList->size();
 

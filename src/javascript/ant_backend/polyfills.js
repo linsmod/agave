@@ -189,7 +189,28 @@
             }
 
             var got = el.style.getPropertyValue ? el.style.getPropertyValue(name) : el.style[name];
-            return !!(got && String(got).length);
+
+            if (!got) return false;
+
+            function norm(s) {
+                return String(s).toLowerCase().replace(/\s+/g, ' ').replace(/^\s+|\s+$/g, '');
+            }
+
+            var want = norm(value), actual = norm(got);
+
+            /* Grid is not implemented: CSSParser degrades display:grid to
+             * block so the declaration survives, and the style object may hand
+             * the original text back. Report it as unsupported. */
+            if (norm(name) === 'display' && (want === 'grid' || want === 'inline-grid')) return false;
+
+            if (want === actual) return true;
+
+            if (norm(name) === 'display') {
+                if (want === 'flex' && actual === '-webkit-box') return true;
+                if (want === 'inline-flex' && actual === '-webkit-inline-box') return true;
+            }
+
+            return false;
         };
     }
 
