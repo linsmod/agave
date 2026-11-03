@@ -1,8 +1,15 @@
+# 目标
+
+根据用户提供的测试场景完善浏览器引擎对齐现代浏览器特性和表现
+
 [script engine](tools/build_antbridge.ps1)
 
-[proj](tools/build_project.ps1)
+[build proj](tools/build_project.ps1)
 
 [cdb](tools/cdb.exe)
+
+
+# rules
 
 DON'T CLEAN THE BUILD UNLESS YOU MUST.
 
@@ -12,7 +19,7 @@ WHEN A BUG IS DEEP, DIG DEEP.
 
 FOR SOME BUGS OR REQUIREMENTS THAT REQUIRE INFRASTRUCTURE ADJUSTMENTS, MAKE A DESIGN, RESPOND WITH A PLAN, AND IMPLEMENT IT.
 
-MAKE SCRIPTS REUSABLE; WHEN A SCRIPT IS HIGH-FREQUENCY, PLACE IT IN THE PROJECT.
+MAKE HELPER SCRIPTS REUSABLE; WHEN A SCRIPT IS HIGH-FREQUENCY USED, PLACE IT IN THE PROJECT.
 
 任务中经历的本该优化的阻塞点，可以临时用脚本方式绕过，但需要记录并提示延后处置。
 
