@@ -85,6 +85,8 @@ ant 原生构造器；http(s) 走异步桥取源码 + preamble 后包成 `data:`
    （`[evt]`：commit/realm/bindDocument/DCL/load/teardown）、导航动作日志
    （`[nav]`：open/request/submit/client-redirect/popup）与 GUI 输入日志（`[ui]`），
    关掉用 `AGB_EVT_LOG=0` / `AGB_NAV_LOG=0` / `AGB_UI_LOG=0`（详见 [docs/debugging.md](docs/debugging.md)）。
+   这三类日志（以及 `[shell]`/`[probe]`/`[flag]`）统一经 `src/webview/AgbLog.h` 输出，行首是
+   `[<进程内相对ms>]` 时间戳，跨 DLL 共享同一个原点，所以 stderr 直接就是一条时间线。
 2. **多轮/生命周期**：加 `--reload n`（每轮 eval 一次）；`AGB_EVT_DEBUG=1` + `AGB_NET_LOG=1` 拼时间线。
 3. **回归清单**（`debug/` 下的页面，全部可 `--probe` 直接跑）：
    `life.html`（生命周期）、`evalenv_test.html`（eval 语义）、`expando_test.html`（元素 expando）、
@@ -190,7 +192,8 @@ ant 原生构造器；http(s) 走异步桥取源码 + preamble 后包成 `data:`
 | 入口模块时序（三条泳道图） | [`docs/architecture/module-pipeline.md`](docs/architecture/module-pipeline.md) |
 | 桥接释放 | `AntBridge.c`：`antb_wrap_native_owner` / `antb_release_owner` / `agbReleaseEngineWrappers` / `agbReleaseEngineClasses` / `antb_engine_destroy` |
 | 页面时序挂点 | `FrameLoaderClientMC.cpp`：`dispatchWillClose` / `committedLoad` / `dispatchDidFinishDocumentLoad` / `dispatchDidFinishLoad` |
-| `[nav]` 导航日志 | `src/webview/NavLog.h`（通道与 `AGB_NAV_LOG`）；钩子在 `FrameLoaderClientMC.cpp`（request/new-window/submit/redirect/fail/blocked）、`WebEngine.cpp`（`macross_view_open_url/back/forward/reload/stop`）、`AgaveWebView.c`（popup/download） |
+| 默认日志收口 | `src/webview/AgbLog.h`：`agbLog(channel, fmt, ...)` + `agbLogElapsedMs()`；通道 `evt/nav/ui/shell/probe/flag`，时间原点跨 DLL 共享；格式 `[<ms>ms] [tag] 正文` |
+| `[nav]` 导航日志 | 钩子在 `FrameLoaderClientMC.cpp`（request/new-window/submit/redirect/fail/blocked）、`WebEngine.cpp`（`macross_view_open_url/back/forward/reload/stop`）、`AgaveWebView.c`（popup/download）；开关 `AGB_NAV_LOG=0` |
 | `[nav]` 回归 | `tools/run_nav_tests.ps1` + `tools/pages/navcheck_*.html` + `tools/nav_redirect_server.py` |
 | WebCore 侧限制 | `src/webcore/loader/FrameLoader.cpp`（unload 门禁）、`src/webcore/dom/EventTargetNode.cpp`（事件转发边界）、`src/webcore/dom/Document.cpp`（`finishedParsing` 的 DCL） |
 | 地址栏输入 → URL | `examples/browser_shell/main.c`：`parseShellArgv()` / `normalizeUrl()` / `fileUrlFromLocalPath()`；`file:` URL 只允许单次转义 → `KURL::encode_string()`（幂等） |

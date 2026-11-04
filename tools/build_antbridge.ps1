@@ -38,7 +38,8 @@ $vendorDir = Join-Path $antRoot 'build-zig\vendor'
 $includeDirs = @(
     (Join-Path $antRoot 'include'),
     (Join-Path $antRoot 'vendor\uthash-2.3.0\src'),
-    (Join-Path $antRoot 'vendor\libuv-v1.53.0\include')
+    (Join-Path $antRoot 'vendor\libuv-v1.53.0\include'),
+    (Join-Path $root 'src\webview')
 )
 
 $systemLibs = @(

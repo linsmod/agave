@@ -102,10 +102,10 @@ void setFilename(const char* name);
 void dispatchEvent(void* node, void* event);
 
 /* Page lifecycle events (commit, realm start/stop, bindDocument, pagehide/
- * unload/DOMContentLoaded/load) print to stderr by default so one run
- * explains its own timeline; AGB_EVT_LOG=0 silences them. Verbose plumbing
- * (evaluate depth, listener bookkeeping) stays behind AGB_EVT_DEBUG. */
-bool lifecycleLogEnabled(void);
+ * unload/DOMContentLoaded/load) are emitted through agbLog() on the
+ * AGB_LOG_EVT channel (AgbLog.h) so one run explains its own timeline;
+ * AGB_EVT_LOG=0 silences them. Verbose plumbing (evaluate depth, listener
+ * bookkeeping) stays behind AGB_EVT_DEBUG. */
 
 /* Fires a synthetic event on the window/document listeners (used for
  * DOMContentLoaded and load, which jQuery's ready queue waits for). */

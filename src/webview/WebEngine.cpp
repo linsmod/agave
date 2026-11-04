@@ -39,7 +39,7 @@
 #include "CertificateMC.h"
 #include "GCController.h"
 #include "Cache.h"
-#include "NavLog.h"
+#include "AgbLog.h"
 
 #if ENABLE(ANTJS)
 #include "AntRuntime.h"
@@ -425,7 +425,7 @@ MC_STATUS macross_view_open_url(MaCrossView* view, const char* url)
 	if (!view || !url)
 		return MC_STATUS_FAILED;
 
-	agbNavLog("open url=%s", url);
+	agbLog(AGB_LOG_NAV, "open url=%s", url);
 	AntRuntime::activateContext(view->jscontext);
 	view->view->loadUrl(url, false);
 	return MC_STATUS_SUCCESS;
@@ -455,7 +455,7 @@ MC_STATUS macross_view_forward(MaCrossView* view)
 	if (!view)
 		return MC_STATUS_FAILED;
 
-	agbNavLog("forward");
+	agbLog(AGB_LOG_NAV, "forward");
 	view->view->forward();
 	return MC_STATUS_SUCCESS;
 }
@@ -465,7 +465,7 @@ MC_STATUS macross_view_backward(MaCrossView* view)
 	if (!view)
 		return MC_STATUS_FAILED;
 
-	agbNavLog("back");
+	agbLog(AGB_LOG_NAV, "back");
 	view->view->backward();
 	return MC_STATUS_SUCCESS;
 }
@@ -475,7 +475,7 @@ MC_STATUS macross_view_stop(MaCrossView* view)
 	if (!view)
 		return MC_STATUS_FAILED;
 
-	agbNavLog("stop");
+	agbLog(AGB_LOG_NAV, "stop");
 	view->view->stop();
 	return MC_STATUS_SUCCESS;
 }
@@ -485,7 +485,7 @@ MC_STATUS macross_view_reload(MaCrossView* view)
 	if (!view)
 		return MC_STATUS_FAILED;
 
-	agbNavLog("reload");
+	agbLog(AGB_LOG_NAV, "reload");
 	view->view->reload();
 	return MC_STATUS_SUCCESS;
 }

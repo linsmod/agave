@@ -65,7 +65,7 @@ function Run-Case {
     } else {
         $script:failures++
         "FAIL  $Label   exit=$code expected /$Expect/"
-        ($text -split "`n" | Where-Object { $_ -match '^\[nav\]|^\[exit\]|exit code' }) -join "`n"
+        ($text -split "`n" | Where-Object { $_ -match '\[nav\]|\[exit\]|exit code' }) -join "`n"
     }
 }
 

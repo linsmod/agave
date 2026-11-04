@@ -18,7 +18,7 @@
 
 #include "macross.h"
 #include "agave_webview.h"
-#include "../webview/NavLog.h"
+#include "../webview/AgbLog.h"
 
 #define AGW_CLASS_NAME "AgaveWebViewControl"
 #define AGW_MAX_VIEWS  32
@@ -491,7 +491,7 @@ static MC_BOOL agwOnWriteFile(int id, const char* url, const void* data,
         if (file) {
             int i2;
 
-            agbNavLog("download url=%s path=%s", url ? url : "", path);
+            agbLog(AGB_LOG_NAV, "download url=%s path=%s", url ? url : "", path);
 
             for (i2 = 0; i2 < g_viewCount; ++i2) {
                 AgaveWebView* item = g_views[i2];
@@ -875,19 +875,6 @@ static void agwEnsureEngine(void)
  * they answer "what did the user do, and what did the page do about it" from
  * one stderr capture. AGB_UI_LOG=0 silences them; AGB_UI_DEBUG=1 adds
  * mousemove chatter (otherwise too noisy to be useful). */
-static int agwUiLog(void)
-{
-    static int enabled = -1;
-
-    if (enabled < 0) {
-        const char* value = getenv("AGB_UI_LOG");
-
-        enabled = (value && value[0] == '0' && value[1] == 0) ? 0 : 1;
-    }
-
-    return enabled;
-}
-
 static int agwUiLogVerbose(void)
 {
     static int verbose = -1;
@@ -950,9 +937,8 @@ static LRESULT CALLBACK agwProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
         return 0;
 
     case WM_SIZE:
-        if (agwUiLog())
-            fprintf(stderr, "[ui] resize %dx%d\n",
-                    (int)LOWORD(lParam), (int)HIWORD(lParam));
+        agbLog(AGB_LOG_UI, "resize %dx%d",
+               (int)LOWORD(lParam), (int)HIWORD(lParam));
         if (item) {
             item->wantWidth = LOWORD(lParam);
             item->wantHeight = HIWORD(lParam);
@@ -961,15 +947,13 @@ static LRESULT CALLBACK agwProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
         return 0;
 
     case WM_SETFOCUS:
-        if (agwUiLog())
-            fprintf(stderr, "[ui] focus\n");
+        agbLog(AGB_LOG_UI, "focus");
         if (item)
             agwPost(AGW_CMD_FOCUS, item, NULL, 0, 0, 0, 0);
         return 0;
 
     case WM_KILLFOCUS:
-        if (agwUiLog())
-            fprintf(stderr, "[ui] blur\n");
+        agbLog(AGB_LOG_UI, "blur");
         return 0;
 
     case WM_MOUSEMOVE:
@@ -1002,11 +986,11 @@ static LRESULT CALLBACK agwProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
         if (message == WM_LBUTTONDOWN)
             SetFocus(hwnd);
 
-        if (agwUiLog() && (type != EVT_MOUSE_MOVE || agwUiLogVerbose()))
-            fprintf(stderr, "[ui] mouse %s %s at %d,%d\n",
-                    type == EVT_MOUSE_DOWN ? "down" :
-                    type == EVT_MOUSE_UP ? "up" : "move",
-                    agwButtonName(button), x, y);
+        if (type != EVT_MOUSE_MOVE || agwUiLogVerbose())
+            agbLog(AGB_LOG_UI, "mouse %s %s at %d,%d",
+                   type == EVT_MOUSE_DOWN ? "down" :
+                   type == EVT_MOUSE_UP ? "up" : "move",
+                   agwButtonName(button), x, y);
 
         agwPost(AGW_CMD_MOUSE, item, NULL, x, y, type, button);
 
@@ -1028,9 +1012,8 @@ static LRESULT CALLBACK agwProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
         point.y = (short)HIWORD(lParam);
         ScreenToClient(hwnd, &point);
 
-        if (agwUiLog())
-            fprintf(stderr, "[ui] wheel %s at %d,%d\n",
-                    delta > 0 ? "up" : "down", point.x, point.y);
+        agbLog(AGB_LOG_UI, "wheel %s at %d,%d",
+               delta > 0 ? "up" : "down", point.x, point.y);
 
         agwPost(AGW_CMD_MOUSE, item, NULL, point.x, point.y, EVT_MOUSE_WHEEL,
                 delta > 0 ? MOUSE_WHEEL_UP : MOUSE_WHEEL_DOWN);
@@ -1039,9 +1022,8 @@ static LRESULT CALLBACK agwProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
 
     case WM_KEYDOWN:
     case WM_KEYUP:
-        if (agwUiLog())
-            fprintf(stderr, "[ui] key %s vk=0x%02x\n",
-                    message == WM_KEYDOWN ? "down" : "up", (unsigned)wParam);
+        agbLog(AGB_LOG_UI, "key %s vk=0x%02x",
+               message == WM_KEYDOWN ? "down" : "up", (unsigned)wParam);
         if (item)
             agwPost(AGW_CMD_KEY, item, NULL, (int)wParam, 0,
                     (message == WM_KEYDOWN) ? EVT_KEY_DOWN : EVT_KEY_UP, 0);
@@ -1067,8 +1049,7 @@ static LRESULT CALLBACK agwProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
         }
         utf8[length] = 0;
 
-        if (agwUiLog())
-            fprintf(stderr, "[ui] char '%s'\n", utf8);
+        agbLog(AGB_LOG_UI, "char '%s'", utf8);
 
         agwPost(AGW_CMD_CHAR, item, utf8, 0, 0, 0, 0);
         return 0;
@@ -1202,7 +1183,7 @@ static MaCrossView* agwOnOpenWindow(const char* url, unsigned int flags, const M
 
     if (origin->callbacks.on_new_window) {
         if (!origin->callbacks.on_new_window(origin, created, url ? url : "", origin->user)) {
-            agbNavLog("popup blocked by host");
+            agbLog(AGB_LOG_NAV, "popup blocked by host");
             agave_webview_destroy(created);
             return NULL;
         }
@@ -1236,7 +1217,7 @@ int agave_control_open_window(const char* url)
 
     if (origin->callbacks.on_new_window) {
         if (!origin->callbacks.on_new_window(origin, created, url ? url : "", origin->user)) {
-            agbNavLog("popup blocked by host");
+            agbLog(AGB_LOG_NAV, "popup blocked by host");
             agave_webview_destroy(created);
             return 0;
         }
@@ -1488,7 +1469,7 @@ AgaveWebView* agave_webview_create_popup(AgaveWebView* from, const char* url)
 {
     AgaveWebView* created;
 
-    agbNavLog("popup create url=%s", (url && url[0]) ? url : "about:blank");
+    agbLog(AGB_LOG_NAV, "popup create url=%s", (url && url[0]) ? url : "about:blank");
 
     created = agwCreatePopupControl(from);
 

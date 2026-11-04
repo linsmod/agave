@@ -17,6 +17,7 @@
 #include <string.h>
 #include <map>
 
+#include "AgbLog.h"
 #include "AntBridge.h"
 #include "../../webcore/platform/network/native/NetworkSession.h"
 #include "../platform/network/native/NetLog.h"
@@ -3032,18 +3033,16 @@ void* createContext()
          * registered before any script runs. */
         antb_set_context_activate(contextActivate);
         activateState(createRuntimeState(engine));
-        if (lifecycleLogEnabled())
-            fprintf(stderr, "[evt] realm start gen=%lu engine=%p (view context)\n",
-                    g_currentState ? g_currentState->generation : 0UL, (void*)engine);
+        agbLog(AGB_LOG_EVT, "realm start gen=%lu engine=%p (view context)",
+               g_currentState ? g_currentState->generation : 0UL, (void*)engine);
         return g_currentState;
     }
 
     {
         RuntimeState* state = createRuntimeState(engine);
 
-        if (lifecycleLogEnabled())
-            fprintf(stderr, "[evt] realm start gen=%lu engine=%p (view context)\n",
-                    state->generation, (void*)engine);
+        agbLog(AGB_LOG_EVT, "realm start gen=%lu engine=%p (view context)",
+               state->generation, (void*)engine);
         return state;
     }
 }
@@ -3226,13 +3225,13 @@ int evaluate(const char* src, size_t len, char** out, char** err)
         explicit DepthGuard(int* d) : depth(d) { ++*d; }
         ~DepthGuard() {
             if (getenv("AGB_EVT_DEBUG"))
-                fprintf(stderr, "[evt] evaluate leave depth=%d\n", *depth);
+                agbLog(AGB_LOG_EVT, "evaluate leave depth=%d", *depth);
             --*depth;
         }
     } guard(&g_evalDepth);
 
     if (getenv("AGB_EVT_DEBUG"))
-        fprintf(stderr, "[evt] evaluate enter depth=%d len=%d\n", g_evalDepth, (int)len);
+        agbLog(AGB_LOG_EVT, "evaluate enter depth=%d len=%d", g_evalDepth, (int)len);
 
     if (out)
         *out = NULL;
@@ -3793,24 +3792,6 @@ static void cancelInFlightResources(unsigned long generation)
     }
 }
 
-/* Page lifecycle events are on by default: a run should explain itself
- * (commit -> realm start -> bind -> DCL -> load -> willClose -> realm stop)
- * without any environment variable. AGB_EVT_LOG=0 turns them off; the
- * verbose plumbing (evaluate depth, listener bookkeeping) stays under
- * AGB_EVT_DEBUG. */
-bool lifecycleLogEnabled(void)
-{
-    static int enabled = -1;
-
-    if (enabled < 0) {
-        const char* value = getenv("AGB_EVT_LOG");
-
-        enabled = (value && value[0] == '0' && value[1] == 0) ? 0 : 1;
-    }
-
-    return enabled != 0;
-}
-
 /* Stops the current realm: the page's JS world goes away with its document.
  * The VM is destroyed, so its globals, its module registry and its timers
  * cannot be seen by the next document. */
@@ -3821,10 +3802,9 @@ static void stopRealm(void)
     if (!state || state == &g_emptyState)
         return;
 
-    if (lifecycleLogEnabled())
-        fprintf(stderr, "[evt] realm stop gen=%lu url=%s\n",
-                state->generation,
-                (g_document && !g_document->URL().isEmpty()) ? g_document->URL().utf8().data() : "(none)");
+    agbLog(AGB_LOG_EVT, "realm stop gen=%lu url=%s",
+           state->generation,
+           (g_document && !g_document->URL().isEmpty()) ? g_document->URL().utf8().data() : "(none)");
 
     /* Stop the realm's resources first: a response that arrives later must
      * not be delivered into the realm that replaces this one. */
@@ -3877,7 +3857,7 @@ static void stopRealm(void)
     }
 
     if (getenv("AGB_EVT_DEBUG"))
-        fprintf(stderr, "[evt] realm stopped (generation=%lu)\n", state->generation);
+        agbLog(AGB_LOG_EVT, "realm stopped (generation=%lu)", state->generation);
 }
 
 /* Starts a fresh realm (a new VM) for the next document. Called before the new
@@ -3907,9 +3887,8 @@ void beginNewRealm(void)
     if (state->engine)
         antb_set_uncaught_nonfatal(state->engine, 1);
 
-    if (lifecycleLogEnabled())
-        fprintf(stderr, "[evt] realm start gen=%lu engine=%p\n",
-                state->generation, (void*)state->engine);
+    agbLog(AGB_LOG_EVT, "realm start gen=%lu engine=%p",
+           state->generation, (void*)state->engine);
 }
 
 void bindDocument(void* document)
@@ -3929,9 +3908,8 @@ void bindDocument(void* document)
 
     g_currentSlot = slotForDocument(g_document);
 
-    if (lifecycleLogEnabled())
-        fprintf(stderr, "[evt] bindDocument %p (bound=%d) url=%s\n", document, (int)g_documentBound,
-                g_document ? g_document->URL().utf8().data() : "?");
+    agbLog(AGB_LOG_EVT, "bindDocument %p (bound=%d) url=%s", document, (int)g_documentBound,
+           g_document ? g_document->URL().utf8().data() : "?");
 
     if (!g_engine || !g_document)
         return;
@@ -5364,7 +5342,7 @@ int nodeAddEventListener(AntbEngine* engine, AntbValue* self, AntbValue** args, 
         if (l.fn) {
             g_listeners->push_back(l);
             if (getenv("AGB_EVT_DEBUG"))
-                fprintf(stderr, "[evt] add %s node=%p listeners=%d\n", type, (void*)n, (int)g_listeners->size());
+                agbLog(AGB_LOG_EVT, "add %s node=%p listeners=%d", type, (void*)n, (int)g_listeners->size());
         }
     }
 
@@ -5444,7 +5422,7 @@ int nodeDispatchEvent(AntbEngine* engine, AntbValue* self, AntbValue** args, int
     }
 
     if (getenv("AGB_EVT_DEBUG"))
-        fprintf(stderr, "[evt] JS dispatchEvent(%s) on node=%p\n", type, (void*)n);
+        agbLog(AGB_LOG_EVT, "JS dispatchEvent(%s) on node=%p", type, (void*)n);
 
     if (g_listeners) {
         for (size_t i = 0; i < g_listeners->size(); ++i) {
@@ -7489,9 +7467,8 @@ void dispatchWindowEvent(const char* type)
     if (!g_engine || !g_document || !type)
         return;
 
-    if (lifecycleLogEnabled())
-        fprintf(stderr, "[evt] window event %s listeners=%d\n", type,
-                g_listeners ? (int)g_listeners->size() : 0);
+    agbLog(AGB_LOG_EVT, "window event %s listeners=%d", type,
+           g_listeners ? (int)g_listeners->size() : 0);
 
     if (!g_listeners)
         return;
@@ -7531,8 +7508,8 @@ void dispatchWindowEvent(const char* type)
         }
 
         if (getenv("AGB_EVT_DEBUG"))
-            fprintf(stderr, "[evt] dispatch %s -> %d listener(s) (eval depth %d)\n",
-                    type, (int)snapshot.size(), g_evalDepth);
+            agbLog(AGB_LOG_EVT, "dispatch %s -> %d listener(s) (eval depth %d)",
+                   type, (int)snapshot.size(), g_evalDepth);
 
         antb_value_release(evt);
     }
@@ -7572,9 +7549,8 @@ void documentWillUnload(void)
     if (!g_engine || !g_document)
         return;
 
-    if (lifecycleLogEnabled())
-        fprintf(stderr, "[evt] documentWillUnload doc=%p listeners=%d\n",
-                g_document, g_listeners ? (int)g_listeners->size() : 0);
+    agbLog(AGB_LOG_EVT, "documentWillUnload doc=%p listeners=%d",
+           g_document, g_listeners ? (int)g_listeners->size() : 0);
 
     /* Browser order: pagehide, then unload. The listeners belong to the
      * document that is going away - g_document still points at it. */
@@ -7741,7 +7717,7 @@ void dispatchEvent(void* nodePtr, void* eventPtr)
         AntbValue* evt = makeEventObject(type, node, event);
 
         if (getenv("AGB_EVT_DEBUG") && (type == "load" || type == "DOMContentLoaded"))
-            fprintf(stderr, "[evt] WebCore event %s on node=%p\n", type.c_str(), (void*)node);
+            agbLog(AGB_LOG_EVT, "WebCore event %s on node=%p", type.c_str(), (void*)node);
         bool stopped = false;
         bool stoppedImmediate = false;
         if (!evt)

@@ -15,6 +15,7 @@
 #include <string.h>
 
 #include "agave_webview.h"
+#include "../../src/webview/AgbLog.h"
 
 #define MAX_TABS        16
 #define MAX_PATH_CHARS  1024
@@ -190,7 +191,7 @@ static void probeUserDataInit(void)
         g_dataDir[sizeof(g_dataDir) - 1] = 0;
     }
 
-    fprintf(stderr, "[probe] userdata=%s\n", dir[0] ? dir : "(default: not isolated!)");
+    agbLog(AGB_LOG_PROBE, "userdata=%s", dir[0] ? dir : "(default: not isolated!)");
     fflush(stderr);
 }
 
@@ -1567,7 +1568,7 @@ static void shellExitTrace(void)
         unsigned long long av  = (unsigned long long)GetModuleHandleA("libagave.dll");
         unsigned long long ab  = (unsigned long long)GetModuleHandleA("antbridge.dll");
 
-        fprintf(stderr, "[shell] atexit fired, bases exe=%llx agave=%llx ant=%llx\n", exe, av, ab);
+        agbLog(AGB_LOG_SHELL, "atexit fired, bases exe=%llx agave=%llx ant=%llx", exe, av, ab);
 
         for (i = 0; i < (int)count; ++i) {
             unsigned long long a = (unsigned long long)frames[i];
@@ -1648,8 +1649,7 @@ static char g_startupUrl[MAX_PATH_CHARS];       /* normalized, may be empty   */
 
 static void probePrint(const char* tag, const char* text)
 {
-    printf("[%7.1fs] %s %s\n",
-           (double)GetTickCount() / 1000.0, tag, text ? text : "");
+    printf("[%9.1fms] %s %s\n", agbLogElapsedMs(), tag, text ? text : "");
     fflush(stdout);
 }
 
@@ -1695,7 +1695,7 @@ static void probeOnError(AgaveWebView* view, int code, const char* url, void* us
     (void)user;
 
     g_probeSawError = 1;
-    fprintf(stderr, "[probe] load error code=%d url=%s\n", code, url ? url : "");
+    agbLog(AGB_LOG_PROBE, "load error code=%d url=%s", code, url ? url : "");
 }
 
 static int probeOnNewWindow(AgaveWebView* view, AgaveWebView* newView,
@@ -1707,7 +1707,7 @@ static int probeOnNewWindow(AgaveWebView* view, AgaveWebView* newView,
     /* Keep it: the probe reports the URL the new window ended up on, which is
      * what tells a working new-window path from a blank one. */
     g_probeNewView = newView;
-    fprintf(stderr, "[probe] new window requested url=%s\n", url ? url : "");
+    agbLog(AGB_LOG_PROBE, "new window requested url=%s", url ? url : "");
     fflush(stderr);
     return 1;
 }
@@ -1726,7 +1726,7 @@ static int probeOnDialog(AgaveWebView* view, int type, const char* message,
     /* A beforeunload guard blocks the navigation; everything else (page
      * alert/confirm in other tests) auto-accepts. AGB_PROBE_ALLOW_UNLOAD=1
      * flips the guard answer, to check that allowing really does navigate. */
-    fprintf(stderr, "[probe] dialog type=%d msg=%s\n", type, message ? message : "");
+    agbLog(AGB_LOG_PROBE, "dialog type=%d msg=%s", type, message ? message : "");
     fflush(stderr);
 
     if (message && strstr(message, "LEAVE-GUARD")) {
@@ -1816,7 +1816,7 @@ static int probeRun(const char* url)
                                  WS_POPUP, CW_USEDEFAULT, CW_USEDEFAULT,
                                  1100, 800, NULL, NULL, g_instance, NULL);
     if (!g_probeWnd) {
-        fprintf(stderr, "[probe] CreateWindowEx failed: %lu\n", (unsigned long)GetLastError());
+        agbLog(AGB_LOG_PROBE, "CreateWindowEx failed: %lu", (unsigned long)GetLastError());
         return PROBE_EXIT_USAGE;
     }
 
@@ -1830,7 +1830,7 @@ static int probeRun(const char* url)
 
     g_probeView = agave_webview_create(g_probeWnd, 0, 0, 1100, 800, &callbacks, NULL);
     if (!g_probeView) {
-        fprintf(stderr, "[probe] agave_webview_create failed\n");
+        agbLog(AGB_LOG_PROBE, "agave_webview_create failed");
         return PROBE_EXIT_USAGE;
     }
 
@@ -1841,9 +1841,9 @@ static int probeRun(const char* url)
     if (g_probeVisible)
         ShowWindow(g_probeWnd, SW_SHOWNOACTIVATE);
 
-    fprintf(stderr, "[probe] headless %s (pid %lu)\n",
-            g_probeVisible ? "window shown (AGB_PROBE_SHOW)" : "window hidden, AGB_PROBE_SHOW=1 to show",
-            (unsigned long)GetCurrentProcessId());
+    agbLog(AGB_LOG_PROBE, "headless %s (pid %lu)",
+           g_probeVisible ? "window shown (AGB_PROBE_SHOW)" : "window hidden, AGB_PROBE_SHOW=1 to show",
+           (unsigned long)GetCurrentProcessId());
 
     SetTimer(g_probeWnd, PROBE_TIMER_TIMEOUT, g_probeTimeoutMs, NULL);
 
@@ -2036,7 +2036,7 @@ static int probeRun(const char* url)
         const char* u = agave_webview_url(g_probeNewView);
         const char* t = agave_webview_title(g_probeNewView);
 
-        printf("[probe] new window url=%s title=%s\n",
+        printf("[%9.1fms] [probe] new window url=%s title=%s\n", agbLogElapsedMs(),
                u && u[0] ? u : "(none)", t && t[0] ? t : "(none)");
         fflush(stdout);
         agave_webview_destroy(g_probeNewView);
@@ -2046,7 +2046,7 @@ static int probeRun(const char* url)
     {
         const char* u = agave_webview_url(g_probeView);
 
-        printf("[probe] main url=%s\n", u && u[0] ? u : "(none)");
+        printf("[%9.1fms] [probe] main url=%s\n", agbLogElapsedMs(), u && u[0] ? u : "(none)");
         fflush(stdout);
     }
 
@@ -2070,7 +2070,7 @@ static int probeRun(const char* url)
         else
             code = PROBE_EXIT_NOEXIT;
 
-        fprintf(stderr, "[probe] exit code %d\n", code);
+        agbLog(AGB_LOG_PROBE, "exit code %d", code);
         fflush(stderr);
         return code;
     }
@@ -2198,7 +2198,7 @@ static void parseShellArgv(void)
     }
 
     if (g_probeMode && !g_startupUrl[0] && !g_showUsage) {
-        fprintf(stderr, "[probe] missing URL\n");
+        agbLog(AGB_LOG_PROBE, "missing URL");
         probeUsage();
         g_argError = 1;
     }
@@ -2247,11 +2247,11 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
                              1100, 800, NULL, NULL, instance, NULL);
 
     if (!g_hwnd) {
-        fprintf(stderr, "[shell] CreateWindowEx failed: %lu\n", (unsigned long)GetLastError());
+        agbLog(AGB_LOG_SHELL, "CreateWindowEx failed: %lu", (unsigned long)GetLastError());
         return 1;
     }
 
-    fprintf(stderr, "[shell] window ready hwnd=%p\n", (void*)g_hwnd);
+    agbLog(AGB_LOG_SHELL, "window ready hwnd=%p", (void*)g_hwnd);
 
     dataDirInit();
     loadBookmarks();
@@ -2306,7 +2306,7 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
         createTab(initial);
     }
 
-    fprintf(stderr, "[shell] entering message loop\n");
+    agbLog(AGB_LOG_SHELL, "entering message loop");
 
     while (GetMessageA(&msg, NULL, 0, 0)) {
         if (msg.message == WM_KEYDOWN) {
@@ -2397,7 +2397,7 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
         DispatchMessageA(&msg);
     }
 
-    fprintf(stderr, "[shell] message loop ended\n");
+    agbLog(AGB_LOG_SHELL, "message loop ended");
 
     return 0;
 }

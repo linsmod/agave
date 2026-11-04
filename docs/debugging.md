@@ -49,46 +49,64 @@ agave_shell.exe --probe <url> --userdata E:\tmp\probe-a ...   # 也可用环境�
 Start-Process -WindowStyle Hidden python -ArgumentList '-m','http.server','8971','--directory','e:\mybrowsers\agave\debug'
 ```
 
-## 2. 默认打开的日志（页面生命周期 + 导航动作 + 用户输入）
+## 2. 默认打开的日志（`[evt]` / `[nav]` / `[ui]` / `[shell]` / `[probe]` / `[flag]`）
 
-这三类日志**不需要任何环境变量**：一次运行应该能自己解释发生了什么。
+这些日志**不需要任何环境变量**：一次运行应该能自己解释发生了什么。全部经由
+[`src/webview/AgbLog.h`](../src/webview/AgbLog.h) 的同一个收口函数输出，格式统一为
 
 ```
-[ui] resize 1084x677
-[ui] focus
-[evt] realm start gen=2 engine=... (view context)
-[nav] open url=https://chat.deepseek.com/
-[nav] request main type=other method=GET url=https://chat.deepseek.com/
-[evt] bindDocument ... (bound=0) url=about:blank
-[evt] documentWillUnload doc=... listeners=0
-[evt] window event pagehide listeners=0
-[evt] window event unload listeners=0
-[evt] realm stop gen=2 url=about:blank
-[evt] realm start gen=3 engine=...
-[evt] commit https://chat.deepseek.com/
-[evt] bindDocument ... (bound=1) url=https://chat.deepseek.com/
-[evt] window event DOMContentLoaded listeners=3
-[evt] window event load listeners=5
-[nav] request main type=link method=GET url=https://chat.deepseek.com/sign_in
-[nav] popup create url=https://example.com/login
-[ui] mouse down left at 320,180
-[ui] mouse up left at 320,180
-[ui] wheel up at 320,180
-[ui] key down vk=0x41
-[ui] char 'a'
-[ui] blur
+[<进程内相对时间>ms] [通道] 正文
+```
+
+时间 = 距**本进程第一条日志**的毫秒数；原点放在按 pid 命名的共享内存区里，所以 libagave、
+antbridge.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上（各 TU 自己取原点会差 ~15ms，
+把相邻事件排反）。
+
+```
+[      0.0ms] [shell] window ready hwnd=00000000005C157E
+[      0.3ms] [flag] set js=000001EA69D93CD0 on=1 -> 1
+[      0.9ms] [ui] resize 800x400
+[      1.1ms] [ui] resize 1084x677
+[      1.2ms] [ui] focus
+[      1.3ms] [shell] entering message loop
+[    312.4ms] [nav] open url=https://chat.deepseek.com/
+[    312.6ms] [evt] realm start gen=2 engine=... (view context)
+[    312.9ms] [nav] request main type=other method=GET url=https://chat.deepseek.com/
+[    313.1ms] [evt] bindDocument ... (bound=0) url=about:blank
+[    313.4ms] [evt] documentWillUnload doc=... listeners=0
+[    313.5ms] [evt] window event pagehide listeners=0
+[    313.6ms] [evt] window event unload listeners=0
+[    313.8ms] [evt] realm stop gen=2 url=about:blank
+[    314.1ms] [evt] realm start gen=3 engine=...
+[    400.2ms] [evt] commit https://chat.deepseek.com/
+[    401.0ms] [evt] bindDocument ... (bound=1) url=https://chat.deepseek.com/
+[    402.3ms] [evt] window event DOMContentLoaded listeners=3
+[    455.7ms] [evt] window event load listeners=5
+[    900.0ms] [nav] request main type=link method=GET url=https://chat.deepseek.com/sign_in
+[    901.2ms] [ui] mouse down left at 320,180
+[    901.3ms] [ui] mouse up left at 320,180
+[    901.4ms] [ui] wheel up at 320,180
+[    901.5ms] [ui] key down vk=0x41
+[    901.5ms] [ui] char 'a'
+[    901.6ms] [ui] blur
 ```
 
 | 通道 | 内容 | 关掉 | 更详细 |
 |---|---|---|---|
 | `[evt]` 生命周期 | commit → realm start/stop → bindDocument → pagehide/unload → DOMContentLoaded → load | `AGB_EVT_LOG=0` | `AGB_EVT_DEBUG=1`（evaluate 深度、listener 记账、JS `dispatchEvent`） |
 | `[nav]` 导航动作 | 宿主 `open`/`back`/`forward`/`reload`/`stop`；`request`（type=link/form/back-forward/reload/other + method + URL）；`submit`；`new-window`/`popup create`；`client-redirect`（meta refresh、JS 定时跳转）；`fail`/`blocked` | `AGB_NAV_LOG=0` | 无（每条只有一行） |
-| `[ui]` 用户输入 | resize / focus / blur / mouse down/up / wheel / key down/up / char | `AGB_UI_LOG=0` | `AGB_UI_DEBUG=1` 连 `mouse move` 也打（默认不打，太吵） |
+| `[ui]` 界面事件 | resize / focus / blur / mouse down/up / wheel / key down/up / char | `AGB_UI_LOG=0` | `AGB_UI_DEBUG=1` 连 `mouse move` 也打（默认不打，太吵） |
+| `[shell]` 宿主 | window ready / 进入与退出消息循环 / `CreateWindowEx` 失败 / `atexit` 模块基址 | — | — |
+| `[probe]` 探针 | userdata、headless 状态、加载错误、对话框、退出码 | — | — |
+| `[flag]` 引擎开关 | 桥接开关（`uncaught_nonfatal` 等），来自 antbridge.dll | — | — |
 
 注意：
-- `[ui]` 只覆盖 **GUI 模式**（`agave_shell.exe <url>`）：输入事件在控件窗口过程里产生；
-  `--probe` 无窗口、`agave_view_host` 直接调 macross，都不会有 `[ui]` 行。
+- `[ui]` 主要是 GUI 模式的输入（focus/blur/mouse/wheel/key/char）：输入事件在控件窗口过程里产生。
+  `--probe` 也会打**控件创建时的 `[ui] resize`**（控件窗口真实存在，只是父窗口 `WS_POPUP` 隐藏）；
+  `agave_view_host` 不走控件，所以完全没有 `[ui]`。
 - `[evt]` / `[nav]` 在 `--probe` 里照样有（与窗口无关）。
+- **探针的 stdout**（`[probe] running eval`、`[exit] ...`、`[probe] main url=`）也改用同一个时间格式
+  （`[ 1234.5ms]`），但它走 stdout，和上面的 stderr 时间线分开重定向。
 - `[nav] request` 的 `type=` 来自 `NavigationAction`：`link`=链接默认动作、`form`=表单提交、
   `back-forward`=历史前进/后退、`reload`=重载、`other`=脚本 `location`/meta refresh/宿主打开。
   **重载时 `type=` 可能仍是上一次动作的类型**（WebCore 复用 `triggeringAction`），宿主发起的重载以
@@ -98,7 +116,10 @@ Start-Process -WindowStyle Hidden python -ArgumentList '-m','http.server','8971'
   [handover.md §4 P1-e](../handover.md) 与 §5 限制。
 - `[nav] download` 只在会走 `cb_write_file_data` 的后端出现：native 后端目前没有下载链路
   （`FrameLoaderClientMC::startDownload` 仍是 `notImplemented()`），所以看不到这行。
-- 这三组日志是**正常输出**，不是错误（见 §6 噪音对照）。
+- 这些日志是**正常输出**，不是错误（见 §6 噪音对照）。
+- 可选调试通道（`[netlog]`、`[modfetch]`、`[snippet]`、`[call]`、`[ctx]`、`[loop]` …）**没有**走这个
+  收口：它们各自有开关，`[netlog]` 还有自己的文件 sink 和时间原点。要拼总时间线时以 `[evt]`/`[nav]`
+  为准。
 
 ## 3. 环境变量全表
 

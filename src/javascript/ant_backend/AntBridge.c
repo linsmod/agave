@@ -20,6 +20,10 @@
 #include "gc/roots.h"   /* gc_register_root: keep wrapper objects alive */
 #include "gc.h"         /* gc_run: forced collection in tests */
 
+/* Sink for the bridge's few diagnostics. Kept after ant's headers because it
+ * pulls in windows.h, whose macros must not leak into them. */
+#include "AgbLog.h"
+
 struct AntbFilename {
     struct AntbFilename* next;
     char                 text[];
@@ -264,7 +268,7 @@ void antb_set_uncaught_nonfatal(AntbEngine* engine, int on)
 {
     if (engine && engine->js) {
         engine->js->uncaught_nonfatal = on ? true : false;
-        fprintf(stderr, "[flag] set js=%p on=%d -> %d\n", (void*)engine->js, on, (int)engine->js->uncaught_nonfatal);
+        agbLog(AGB_LOG_FLAG, "set js=%p on=%d -> %d", (void*)engine->js, on, (int)engine->js->uncaught_nonfatal);
     }
 }
 
