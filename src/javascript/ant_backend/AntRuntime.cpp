@@ -347,7 +347,9 @@ int nodeQuerySelector(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, voi
 int globalFrameSlot(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalOpenWindow(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalPostMessage(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int globalFramePostMessage(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalConsoleLine(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int globalLayoutInfo(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalDialog(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalCloseWindow(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalStorageGet(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
@@ -4094,7 +4096,9 @@ void bindDocument(void* document)
         antb_define_method(g_engine, global, "__agbActivateSlot", globalActivateSlot, NULL);
         antb_define_method(g_engine, global, "__agbOpenWindow", globalOpenWindow, NULL);
         antb_define_method(g_engine, global, "__agbPostMessage", globalPostMessage, NULL);
+        antb_define_method(g_engine, global, "__agbFramePostMessage", globalFramePostMessage, NULL);
         antb_define_method(g_engine, global, "__agbConsoleLine", globalConsoleLine, NULL);
+        antb_define_method(g_engine, global, "__agbLayoutInfo", globalLayoutInfo, NULL);
         antb_define_method(g_engine, global, "__agbDialog", globalDialog, NULL);
         antb_define_method(g_engine, global, "__agbCloseWindow", globalCloseWindow, NULL);
         antb_define_method(g_engine, global, "__agbStorageGet", globalStorageGet, NULL);
@@ -6378,6 +6382,85 @@ int globalPostMessage(AntbEngine*, AntbValue*, AntbValue** args, int argc,
     return 1;
 }
 
+/* window.postMessage / message event. Frames share the window object in this
+ * port, so a message from an iframe has to reach the parent's listeners even
+ * though they are registered against a different Document node; the normal
+ * per-node dispatch would drop it. The origin is the URL of the document that
+ * is running right now (the iframe), which is what receivers check. */
+int globalFramePostMessage(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
+                           AntbValue* out, void*)
+{
+    AntbValue* event;
+    AntbValue* global;
+
+    (void)out;
+
+    if (!engine || argc < 1 || !g_listeners)
+        return 1;
+
+    event = antb_make_object(engine);
+    if (!event)
+        return 1;
+
+    antb_set_prop(engine, event, "data", args[0]);
+
+    {
+        WebCore::String origin("null");
+
+        if (g_document) {
+            WebCore::KURL url(g_document->URL());
+            WebCore::String protocol = url.protocol();
+
+            if (!protocol.isEmpty()) {
+                origin = protocol + "://" + url.host();
+                if (url.port())
+                    origin = origin + ":" + WebCore::String::number((unsigned)url.port());
+            }
+        }
+
+        if (getenv("AGB_EVT_DEBUG"))
+            agbLog(AGB_LOG_EVT, "postMessage origin=%s", origin.utf8().data());
+
+        {
+            AntbValue* value = antb_make_string(engine, origin.utf8().data());
+
+            if (value) {
+                antb_set_prop(engine, event, "origin", value);
+                antb_value_release(value);
+            }
+        }
+    }
+
+    global = antb_global(engine);
+    if (global)
+        antb_set_prop(engine, event, "source", global);
+
+    {
+        std::vector<AntbValue*> targets;
+
+        /* Retain first: a listener may remove itself while we dispatch. */
+        for (size_t i = 0; i < g_listeners->size(); ++i) {
+            Listener& l = (*g_listeners)[i];
+
+            if (l.type == "message" && l.fn)
+                targets.push_back(antb_retain(l.fn));
+        }
+
+        for (size_t i = 0; i < targets.size(); ++i) {
+            AntbValue* result = antb_call(engine, targets[i], global, &event, 1, NULL);
+
+            if (result)
+                antb_value_release(result);
+            antb_value_release(targets[i]);
+        }
+    }
+
+    if (global)
+        antb_value_release(global);
+    antb_value_release(event);
+    return 1;
+}
+
 /* window.console.*: the polyfills guard formats the arguments and passes one
  * line here, so page console output shares the engine timeline
  * ("[ 123.4ms] [con-call] ...") instead of going straight to ant's console. */
@@ -6392,6 +6475,85 @@ int globalConsoleLine(AntbEngine*, AntbValue*, AntbValue** args, int argc,
     }
 
     (void)out;
+    return 1;
+}
+
+/* Length -> text for __agbLayoutInfo ("auto", "200", "100%"). */
+static const char* layoutLengthText(const WebCore::Length& len, char* buf, size_t size)
+{
+    if (len.isAuto())
+        snprintf(buf, size, "auto");
+    else if (len.isPercent())
+        snprintf(buf, size, "%d%%", (int)len.percent());
+    else
+        snprintf(buf, size, "%d", (int)len.value());
+
+    return buf;
+}
+
+/* __agbLayoutInfo(node): the render-tree facts a page script cannot otherwise
+ * see.
+ *
+ * offsetWidth == 0 has two completely different causes and a computed style
+ * cannot tell them apart: the element has no renderer at all (its style said
+ * display:none the last time styles were recalculated) or it has a renderer
+ * that was never laid out (a dirty flag that got lost). Those need opposite
+ * fixes, so this dump separates them: renderer=0 means "no render tree
+ * object", renderer=1 with w=0 means "attached but never laid out", and the
+ * parent/self dirty bits say who was supposed to relayout whom. */
+int globalLayoutInfo(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
+                     AntbValue* out, void*)
+{
+    char text[512];
+
+    if (argc < 1 || !nodeOf(args[0])) {
+        strcpy(text, "node=null");
+    } else {
+        WebCore::Node* n = nodeOf(args[0]);
+        WebCore::RenderObject* r = n->renderer();
+        WebCore::RenderObject* p = r ? r->parent() : 0;
+        char styleText[128];
+
+        styleText[0] = 0;
+        if (r && r->style()) {
+            char hBuf[32];
+            char wBuf[32];
+            WebCore::RenderStyle* s = r->style();
+
+            snprintf(styleText, sizeof(styleText), " disp=%d sh=%s sw=%s",
+                     (int)s->display(),
+                     layoutLengthText(s->height(), hBuf, sizeof(hBuf)),
+                     layoutLengthText(s->width(), wBuf, sizeof(wBuf)));
+        }
+
+        snprintf(text, sizeof(text),
+                 "inDoc=%d renderer=%d type=%s x=%d y=%d w=%d h=%d"
+                 " self=%d child=%d parent=%s pw=%d ph=%d pself=%d pchild=%d%s",
+                 n->inDocument() ? 1 : 0,
+                 r ? 1 : 0,
+                 (r && r->renderName()) ? r->renderName() : "-",
+                 r ? r->xPos() : 0,
+                 r ? r->yPos() : 0,
+                 r ? r->width() : 0,
+                 r ? r->height() : 0,
+                 (r && r->selfNeedsLayout()) ? 1 : 0,
+                 (r && r->normalChildNeedsLayout()) ? 1 : 0,
+                 (p && p->renderName()) ? p->renderName() : "-",
+                 p ? p->width() : 0,
+                 p ? p->height() : 0,
+                 (p && p->selfNeedsLayout()) ? 1 : 0,
+                 (p && p->normalChildNeedsLayout()) ? 1 : 0,
+                 styleText);
+    }
+
+    {
+        AntbValue* value = antb_make_string(engine, text);
+
+        if (!value)
+            return 1;
+        antb_value_assign(out, value);
+        antb_value_release(value);
+    }
     return 1;
 }
 
