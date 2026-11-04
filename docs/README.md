@@ -12,9 +12,10 @@
 | [ant-engine.md](ant-engine.md) | ant/桥接**哪份是真的**、改引擎链路、ant.exe 单跑、ant 的反直觉清单 | 碰到 JS 引擎、桥接、worker、wasm |
 | [conventions.md](conventions.md) | 提交信息、回归页放哪、文档怎么更新、代码风格 | 提交前 |
 | [../handover.md](../handover.md) | 现状、待办（含验收标准）、已知限制、代码索引 | 想知道"还差什么" |
-| [lessons.md](lessons.md) | R1..R27 经验库：现象 → 根因 → 修法 → 验证 | 遇到眼熟的 bug、或想推翻旧结论 |
+| [lessons.md](lessons.md) | R1..R30 经验库：现象 → 根因 → 修法 → 验证 | 遇到眼熟的 bug、或想推翻旧结论 |
 | [architecture/module-pipeline.md](architecture/module-pipeline.md) | 入口模块管线（方案 A）三条泳道时序图 + 代码锚点 | 改模块加载/解析时序 |
 | [architecture/per-view-js-context.md](architecture/per-view-js-context.md) | 每 view 独立 JS 上下文（设计记录，已实现） | 改 realm / 多 view / iframe |
+| [architecture/frame-window.md](architecture/frame-window.md) | iframe 与 window 对象：规范差距、方案对比、per-frame window 代理的实施计划 | 改 frame / window 身份 / 跨 frame 通信 |
 | [embedding.md](embedding.md) | 对外嵌入接口 | 集成 agave |
 | [web-font.md](web-font.md) | `@font-face` 链路与坑 | 字体问题 |
 
