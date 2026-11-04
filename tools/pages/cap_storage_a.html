@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>cap storage a</title>
+</head>
+<body>
+<p>storage a: write, then navigate</p>
+<script>
+localStorage.setItem('cap.storage', 'ls-value');
+document.cookie = 'capstorage=ck-value; path=/';
+setTimeout(function () {
+  location.href = 'cap_storage_b.html';
+}, 50);
+</script>
+</body>
+</html>

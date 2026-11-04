@@ -73,7 +73,8 @@ WinMain → createTab → agave_webview_create（控件）
 | 症状 | 先查 |
 |---|---|
 | 白屏 / 元素缺失 | 探针**退出码** → `[antjs]` 错误 → `AGB_ERR_SNIPPET=1` 拿源码位置 |
-| `undefined is not a function` / `Cannot read properties of undefined` | 桥接缺方法或 wrapper 的 catch-all getter（`nodeGetter`），先于怀疑页面 |
+| `undefined is not a function` / `Cannot read properties of undefined` | 桥接缺方法或 wrapper 的 catch-all getter（`nodeGetter`），先于怀疑页面；已知缺口查 [capability-gaps.md](capability-gaps.md) |
+| 某个 Web API / 选择器不生效，但页面在别的浏览器正常 | 先查 [capability-gaps.md](capability-gaps.md)（`cap_*` 页可一条命令复测），别先怀疑页面 |
 | 样式不对 | `getComputedStyle` 是否走到、属性是否"未实现"；跑 `debug/csscheck.html` |
 | 画错 / 残影 / 不重绘 | 隐藏窗口没有 WM_PAINT（用 `--probe AGB_PROBE_SHOW=1` 或 `agave_view_host` 出 BMP）；再看 clip/repaint |
 | 卡住 / CPU 100% | `AGB_PROFILE=1` 直方图 + `cdb` 抓忙线程栈（[debugging.md](debugging.md)） |

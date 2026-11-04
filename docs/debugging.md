@@ -218,5 +218,7 @@ antbridge.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**�
   （`[nav]` 七项：链接/脚本跳转/历史后退/meta refresh/window.open/表单提交/关日志）；
   `debug/csscheck.html`（CSS 能力矩阵）；`debug/life.html`（生命周期）；`debug/defercheck.html`；
   deepseek 登录页（`inp=2 all=129`）。完整清单与基线见 [handover.md §3](../handover.md)。
+- **能力缺口基线**：`tools/pages/cap_{dom,css,history,storage_a}.html`（一条命令出当前值，
+  见 [capability-gaps.md](capability-gaps.md) §0）；修了某项就更新那里的表格。
 - **A/B 对比法**：改动前后结论不一致时，`git stash` → 编出旧 exe → 同参数同页面各跑一次 → 对比退出码
   与 `[exit]` 输出。这比"读代码猜"可靠得多（无头改造就是用这个方法证明零语义变化的）。

@@ -19,7 +19,9 @@
 
 **还没做**（§4 有验收标准）：模块图 flush 阻塞 engine 线程（P0-b）、DOMContentLoaded 双发（P0-c）、
 模块调度状态不是 per-realm（P1-a）、`g_documentParsed` 死标志（P1-c）、worker 里没有网络（P1-d）、
-prefetch 仍是字符串扫描（P2）、桥接无计数（P2）。
+301/302 对 WebCore 不可见（P1-e）、DOM 集合/表单/History 半实现（P1-f）、
+prefetch 仍是字符串扫描（P2）、桥接无计数（P2）。能力缺口的完整实测见
+[docs/capability-gaps.md](docs/capability-gaps.md)。
 
 ## 2. 系统地图
 
@@ -151,6 +153,16 @@ ant 原生构造器；http(s) 走异步桥取源码 + preamble 后包成 `data:`
 - 验收：`tools/nav_redirect_server.py` 的 `/redirect302` 出现 `[nav] redirect from=... to=...`，
   `[probe] main url` 是最终 URL；`tools/run_nav_tests.ps1` 增加该用例。
 
+### P1-f DOM 集合 / 表单 / History 补全
+- 现状：`document.forms/links/images/anchors/scripts` 恒为空数组；`form.submit()`/`form.action`
+  未桥接；`history.pushState` 只改 document URL（无 state/length/popstate）；`localStorage` 不跨文档。
+  实测值与复测命令见 [`docs/capability-gaps.md`](docs/capability-gaps.md) §1。
+- 动作：①`AntRuntime.cpp` 的 `documentGetter` 集合分支改为包装真实 `HTMLCollection`/NodeList；
+  ②类表补 `HTMLFormElement` 的方法/属性；③History 建真实条目并派发 `popstate`（或明确 shim 语义并在文档写死）；
+  ④storage 改成每次读取都走磁盘/共享表，而不是只在 engine 重建时读。
+- 验收：`tools/pages/cap_dom.html` / `cap_history.html` / `cap_storage_a.html` 的 `[exit]` 值
+  与 `docs/capability-gaps.md` 的"已支持"一致。
+
 ### P2 prefetch 换真解析
 - 现状：`modulePrefetchImports()` 用 `body.find("from")` 字符串扫描，字符串字面量会误判，预下载的图不完整。
 - 动作：用引擎自己的 import 解析（或至少跳过字符串/注释再扫）。
@@ -170,8 +182,10 @@ ant 原生构造器；http(s) 走异步桥取源码 + preamble 后包成 `data:`
   [`docs/architecture/module-pipeline.md`](docs/architecture/module-pipeline.md)）。
 - **一个 view 一个 realm**：`window` 对象每 engine 一个，iframe 与主 frame 共享它
   （`dispatchDidFinishDocumentLoad` 因此跳过非主 frame，见 `FrameLoaderClientMC.cpp`）。
-- **CSS 能力边界**：grid 布局、transform 绘制、非 `-webkit-` 的 box-shadow 未实现；
-  `var()` 在解析期展开（跨 sheet 失效、同名取首次定义）——`debug/csscheck.html` 是能力矩阵（R11）。
+- **CSS 能力边界**：grid 布局、transform 绘制未实现；`position:sticky`、`aspect-ratio`、flex `gap`、
+  `:is()`/`:where()` 不支持；`box-shadow`（无前缀）已可用；`var()` 在解析期展开（跨 sheet 失效、
+  同名取首次定义）。**完整实测值、影响与复测命令见 [`docs/capability-gaps.md`](docs/capability-gaps.md) §2**
+  （R11 是当时的过程记录）。
 - **wasm 是解释执行**：导出函数跨界约 3.9µs/次，适合"一次调用跑大循环"（R19）。
 - **worker 无网络 / 无 `SharedWorker`/`ServiceWorker`**：见 P1-d 与 R22。
 - **GC root 只能到 engine 边界**（ant 没有 unpin）：现在 per-document engine 让这一点等价于"每文档释放"（R4）。
@@ -189,6 +203,7 @@ ant 原生构造器；http(s) 走异步桥取源码 + preamble 后包成 `data:`
 | generation / 在途资源 | `AntRuntime.cpp`：`currentGeneration()` / `cancelInFlightResources()`；XHR `XhrJob::m_generation`、模块 `ModuleEntry::generation`、延迟模块 `DeferredModule::generation` |
 | DOM pin / 文档 slot | `AntRuntime.cpp`：`releasePinnedNodes()` / `wrapNode()` / `slotForDocument()` / `activateSlot()` |
 | 模块调度 | `AntRuntime.cpp`：`moduleStart()` / `moduleFetch()`（同步等待）/ `modulePrefetchImports()`（字符串扫描）/ `queueDeferredScript()` / `flushDeferredModules()` |
+| 能力缺口（JS/DOM/CSS） | [`docs/capability-gaps.md`](docs/capability-gaps.md)（实测值 + 一条命令复测）；探测页 `tools/pages/cap_*.html` |
 | 入口模块时序（三条泳道图） | [`docs/architecture/module-pipeline.md`](docs/architecture/module-pipeline.md) |
 | 桥接释放 | `AntBridge.c`：`antb_wrap_native_owner` / `antb_release_owner` / `agbReleaseEngineWrappers` / `agbReleaseEngineClasses` / `antb_engine_destroy` |
 | 页面时序挂点 | `FrameLoaderClientMC.cpp`：`dispatchWillClose` / `committedLoad` / `dispatchDidFinishDocumentLoad` / `dispatchDidFinishLoad` |

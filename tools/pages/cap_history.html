@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>cap history</title>
+</head>
+<body>
+<p>history</p>
+<script>
+/* pushState is a URL-rewrite shim here: this page records what the History
+ * object actually exposes (state/length/popstate) for the capability doc. */
+window.__pops = 0;
+window.addEventListener('popstate', function () { window.__pops++; });
+
+var err = 'none';
+try {
+  history.pushState({ v: 1 }, '', 'cap_history_pushed.html');
+} catch (e) {
+  err = String(e);
+}
+
+document.title = [
+  'push=' + typeof history.pushState,
+  'replace=' + typeof history.replaceState,
+  'state=' + typeof history.state,
+  'len=' + typeof history.length,
+  'pops=' + window.__pops,
+  'err=' + err,
+  'href=' + location.href
+].join(' ');
+</script>
+</body>
+</html>

@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>cap dom</title>
+</head>
+<body>
+<a href="x.html">first link</a>
+<img src="none.png" alt="">
+<form action="x.html" method="get">
+  <input type="text" name="q" value="1">
+  <input type="submit" value="go">
+</form>
+<p id="p">text</p>
+<script>
+/* Writes the current DOM/JS API surface into document.title so the probe can
+ * report it with:  --eval "probeExit(document.title)"
+ * Update docs/capability-gaps.md when a row changes. */
+var f = document.getElementsByTagName('form')[0];
+var b = document.body;
+
+document.title = [
+  'forms=' + document.forms.length,
+  'links=' + document.links.length,
+  'images=' + document.images.length,
+  'anchors=' + document.anchors.length,
+  'scripts=' + document.scripts.length,
+  'all=' + document.getElementsByTagName('*').length,
+  'formSubmit=' + typeof f.submit,
+  'formAction=' + typeof f.action,
+  'insertAdjacentHTML=' + typeof b.insertAdjacentHTML,
+  'innerText=' + typeof b.innerText,
+  'classListAdd=' + (b.classList ? typeof b.classList.add : 'none'),
+  'matches=' + typeof b.matches,
+  'closest=' + typeof b.closest,
+  'textContent=' + typeof b.textContent
+].join(' ');
+</script>
+</body>
+</html>

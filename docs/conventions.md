@@ -31,6 +31,7 @@
 | 新的调试开关/环境变量 | `docs/debugging.md` 的环境变量表 |
 | 新的构建/运行坑 | `docs/build-and-run.md` 的环境坑 |
 | 新的改法（改 X 去哪） | `docs/onboarding.md` 的任务索引表 |
+| 发现/修掉一个 Web 能力缺口（JS/DOM/CSS） | `docs/capability-gaps.md` 的表格 + 对应 `tools/pages/cap_*.html` 探测值 |
 
 原则：**同一件事只在一个地方详述**，其它地方给链接。AGENTS.md 只放铁律与地图。
 

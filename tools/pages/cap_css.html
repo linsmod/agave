@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>cap css</title>
+<style>
+#g  { display: grid; }
+#t  { transform: translateX(10px); }
+#s  { box-shadow: 0 0 4px red; }
+#st { position: sticky; top: 0; }
+#ar { aspect-ratio: 16 / 9; width: 160px; }
+#fx { display: flex; gap: 8px; }
+#fx > div { width: 20px; height: 10px; }
+#is:is(p) { color: rgb(1, 2, 3); }
+#wh:where(p) { color: rgb(4, 5, 6); }
+#var { color: var(--missing, rgb(7, 8, 9)); }
+</style>
+</head>
+<body>
+<div id="g">grid</div>
+<div id="t">transform</div>
+<div id="s">shadow</div>
+<div id="st">sticky</div>
+<div id="ar">ratio</div>
+<div id="fx"><div>a</div><div>b</div></div>
+<p id="is">is</p>
+<p id="wh">where</p>
+<div id="var">var</div>
+<script>
+/* Same contract as cap_dom.html: report through document.title. */
+function cs(id) { return getComputedStyle(document.getElementById(id)); }
+
+document.title = [
+  'grid=' + cs('g').display,
+  'transform=[' + cs('t').transform + ']',
+  'boxShadow=' + cs('s').boxShadow,
+  'sticky=' + cs('st').position,
+  'aspectHeight=' + cs('ar').height,
+  'gap=' + cs('fx').gap,
+  'isColor=' + cs('is').color,
+  'whereColor=' + cs('wh').color,
+  'varColor=' + cs('var').color
+].join(' ');
+</script>
+</body>
+</html>
