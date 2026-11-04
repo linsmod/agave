@@ -1,0 +1,85 @@
+# 构建与运行：工具链、产物、常见坑
+
+## 1. 工具链
+
+- Windows 10/11（全部构建与调试都在 Windows 上）。
+- **MSYS2 mingw64**：`C:\msys64\mingw64\bin` 进 `PATH`（`cmake --build` 直接跑时要自己加）。
+- **zig 编译器包装器**：CMake 的 `CMAKE_CXX_COMPILER` 是 `.zig-toolchain\zig-cxx.cmd`
+  （内部指向 WinGet 安装的真实 `zig.exe`）。代理会话的沙箱会拒绝执行 symlink 出来的 zig，
+  所以包装器必须直指 `WinGet\Packages\...\zig.exe`；**zig 升级后要同步路径**。
+- Generator 是 **Ninja**，构建目录 **`build-zig-native/`**（`CMAKE_BUILD_TYPE=Debug`）。
+- 构建目录已经存在就**不要 clean**（全量编译代价很大，见 §3）。
+
+## 2. 三条构建路径
+
+```powershell
+# A. 常规增量（首次 configure 慢，之后通常几秒到 1 分钟）
+pwsh -File tools\build_project.ps1 *> build-native.log; $LASTEXITCODE
+# 输出几千行，先落盘再 grep，别直接灌进上下文
+
+# B. 快速重链（只改了 1-2 个 .cpp/.c，跳过脚本的 toolchain/configure 检查）
+$env:PATH = "C:\msys64\mingw64\bin;" + $env:PATH
+cmake --build e:\mybrowsers\agave\build-zig-native --parallel 16
+
+# C. 改了 AntBridge.c（两步缺一不可）
+pwsh -File tools\build_antbridge.ps1 -Force
+cmake --build build-zig-native --parallel 16
+
+# D. 改了 ant 引擎内核（H:\ant-v16）
+ninja -C H:\ant-v16\build-zig libant.a
+pwsh -File tools\build_antbridge.ps1 -Force      # 重链 dll 并同步四处副本
+# 只有改了本仓库 C++ 才需要再 cmake --build build-zig-native
+```
+
+## 3. 改什么 → 重编什么（先估时间再动手）
+
+| 改动 | 需要做 | 经验耗时 |
+|---|---|---|
+| `prelude.js` / `polyfills.js` | 拷到 `build-zig-native\`（或 `cmake --build` 会顺带拷） | 0（下次绑文档生效） |
+| 一个 `webcore/*.cpp` / `webview/*.cpp` | `cmake --build build-zig-native` | 10 秒 ~ 1 分钟 |
+| `AntRuntime.cpp` / `AntBridge.c` | `build_antbridge.ps1 -Force` + `cmake --build` | 1 ~ 3 分钟 |
+| ant 的 1-2 个 `.c` | `ninja libant.a` + 重链 dll | ~1 分钟 |
+| ant 的**头文件** | 同上，但 libant 会重编 200+ 个对象 | ~10 分钟 |
+| 加/删源文件、改 CMakeLists | 重新 configure（脚本带 `-NoTouchWeb` 等参数会改目标集） | 数分钟 |
+
+## 4. 产物与运行拓扑
+
+`build-zig-native\` 是**唯一可以直接运行的目录**（所有 DLL 和运行时 JS 都在这里）：
+
+| 产物 | 用途 |
+|---|---|
+| `agave_shell.exe` | 桌面壳：GUI 浏览 + `--probe` 无头探针 |
+| `agave_view_host.exe` | **无窗口**渲染：`agave_view_host.exe <url> [out.bmp] [--eval js] [--click x y] [--type text] [--enter] [--wheel n] [--wheelup n] [--repaint]`，像素/交互校验用 |
+| `agave_embed.exe` | 嵌入 demo（同一套控件） |
+| `agave_webview.dll` | Win32 控件（`agave_webview_*` API） |
+| `libagave.dll` | 引擎本体 |
+| `antbridge.dll` (+ `antbridge.pdb`) | JS 桥（预编译产物，见 [ant-engine.md](ant-engine.md)） |
+| `prelude.js` / `polyfills.js` | 运行时从 exe 旁加载的 JS shim（可热改） |
+
+- `3rdparty/ant/{bin,lib}/antbridge.dll` 只是**分发副本**，运行时不读它们（`3rdparty/ant/bin` 被 gitignore）。
+- 把 exe 单独拷到别处跑会缺 DLL（`debug/` 里直接跑拷过去的 exe 会失败）。
+- 可选宿主：`test/`（`OPT_EXAMPLES=ON` 时构建 `agave_test`）、`examples/touchweb`（手机 UI，单独构建）。
+- 单元测试：`unit_tests/` 存在，但默认 `OPT_UNITTEST=OFF` 不构建；打开它会在 configure 阶段
+  从网络拉 googletest（`FetchContent`），离线环境会失败。
+
+## 5. 拿 ant 单独跑（脱离浏览器复现 JS 语义）
+
+```powershell
+H:\ant-v16\build-zig\ant.exe script.js      # 直接跑一段 JS
+H:\ant-v16\build-zig\ant.exe                # REPL
+```
+用途：怀疑"是引擎语义问题还是浏览器/桥接问题"时，先用它把纯 JS 行为钉死（ant 自带的
+`tests/test_wasm_*.cjs` 等也是这样跑的）。
+
+## 6. 环境坑（都实际踩过）
+
+- **`Start-Process -ArgumentList` 不会给含空格的参数加引号**：`--eval` 里带空格/单引号会被拆成多个
+  argv，JS 就变成语法错误。要么整串给 `-ArgumentList '--probe "url" --eval "..."'`，要么写 `.cmd`。
+- **PowerShell 会把 `&&` 搅成 `;`**（传给 `--eval` 时）；脚本里用嵌套三元或逗号表达式。
+- **旧进程占着 `antbridge.dll` 时链接会静默失败**——跑的还是旧 dll。重编前先
+  `Get-Process agave_shell | Stop-Process -Force`。
+- 命令执行器可能是 bash（`$env:` 会炸）：本仓库脚本都是 PowerShell，用 `pwsh -File` 调用。
+- 输出是 UTF-8；把日志重定向到文件再 grep，不要依赖控制台编码。
+- 网络偶发长滞（WinHTTP `SendRequest`）通常是 WPAD/PAC 抖动：同刻 GUI 正常就不是代码回归，先重试；
+  `AGB_NO_PROXY=1` 可以绕开代理解析。
+- 构建日志别直接进上下文（几千行）：`*> build-native.log` 然后 `grep`。

@@ -93,6 +93,9 @@ ant 原生构造器；http(s) 走异步桥取源码 + preamble 后包成 `data:`
 5. **现成脚本**：`tools/run_worker_tests.ps1`（Worker 九项）、`tools/bench_compile.ps1`（启动墙钟/CPU）、
    `tools/measure_cpu.ps1`（CPU 占用）、`tools/check_window_visible.ps1`（无头探针确实不出窗口）。
 
+探针参数、退出码、环境变量全表、cdb 配方、噪音对照见
+[`docs/debugging.md`](docs/debugging.md)。
+
 ## 4. 待办（按优先级，含验收标准）
 
 ### P0-b 图就绪与执行解耦
@@ -168,6 +171,6 @@ ant 原生构造器；http(s) 走异步桥取源码 + preamble 后包成 `data:`
 | 页面时序挂点 | `FrameLoaderClientMC.cpp`：`dispatchWillClose` / `committedLoad` / `dispatchDidFinishDocumentLoad` / `dispatchDidFinishLoad` |
 | WebCore 侧限制 | `src/webcore/loader/FrameLoader.cpp`（unload 门禁）、`src/webcore/dom/EventTargetNode.cpp`（事件转发边界）、`src/webcore/dom/Document.cpp`（`finishedParsing` 的 DCL） |
 | 地址栏输入 → URL | `examples/browser_shell/main.c`：`parseShellArgv()` / `normalizeUrl()` / `fileUrlFromLocalPath()`；`file:` URL 只允许单次转义 → `KURL::encode_string()`（幂等） |
-| 无头探针 | `examples/browser_shell/main.c`：`probeRun()`（`WS_POPUP|WS_EX_TOOLWINDOW` 隐藏父窗口）+ `probeWndProc()`；`AGB_PROBE_SHOW=1` 才显示 |
+| 无头探针 | `examples/browser_shell/main.c`：`probeRun()`（`WS_POPUP` + `WS_EX_TOOLWINDOW` 隐藏父窗口）+ `probeWndProc()`；`AGB_PROBE_SHOW=1` 才显示 |
 | Web Worker | `prelude.js` 末尾「Web Workers」段（`_agbWorkerStart` / `_agbWorkerPreamble` / `_agbWorkerPrefetch`）；ant 侧 `H:\ant-v16\src\modules\worker\{web,core}.c`；栈帧短名 `esm_frame_filename`（`H:\ant-v16\src\esm\loader.c`） |
 | 回归页 / 脚本 | 页面在 `debug/`（见 §3）；`tools/run_worker_tests.ps1`、`tools/check_window_visible.ps1`、`tools/bench_compile.ps1`、`tools/measure_cpu.ps1` |
