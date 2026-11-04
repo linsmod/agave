@@ -291,17 +291,18 @@
       toggle: function (t) { return !!__agbClassOp(el, 'toggle', t); }
     };
   };
-  g.window = g; g.self = g; g.top = g; g.parent = g; g.frames = g;
-  /* window.postMessage: frames share one window object in this port, so the
-   * engine dispatches the message to every "message" listener in the realm
-   * (see globalFramePostMessage). targetOrigin is accepted but not enforced
-   * yet; the event carries { data, origin, source }. */
+  /* window/self/top/parent/frames/document/length/frameElement are accessors
+   * installed by the engine (bindDocument): they resolve against the document
+   * bound right now, so a frame gets its own window object. Assigning them
+   * here would shadow those accessors with plain properties again. */
+  /* window.postMessage: the engine dispatches the message to every "message"
+   * listener in the realm (see globalFramePostMessage). targetOrigin is
+   * accepted but not enforced yet; the event carries { data, origin, source }. */
   g.postMessage = function (message, targetOrigin) {
     try {
       __agbFramePostMessage(message, targetOrigin == null ? '' : String(targetOrigin));
     } catch (e) {}
   };
-  if (!g.frameElement) g.frameElement = null;
   if (typeof g.requestAnimationFrame === 'undefined') {
     g.requestAnimationFrame = function (cb) { return setTimeout(function () { cb((new Date()).getTime()); }, 16); };
     g.cancelAnimationFrame = function (id) { clearTimeout(id); };

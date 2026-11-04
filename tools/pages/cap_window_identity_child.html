@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>cap_window_identity_child</title></head>
+<body style="margin:0">
+<script>
+/* Runs INSIDE the iframe. Each line is a spec rule that frames sharing one
+ * global window object got wrong:
+ *   - parent !== self, and parent is a different object than this window
+ *   - parent.document is the PARENT's document, not this frame's
+ *   - window.frames / length / name / frameElement describe this frame
+ *   - top === parent for a one level frame
+ */
+var parentIsSelf = (window.parent === window);
+var parentIsSelfProp = (window.parent === window.self);
+var docIsParentDoc = (window.parent.document === document);
+var parentTitle = window.parent.document.title;
+var topIsParent = (window.top === window.parent);
+var framesLen = window.parent.length;
+var framesZeroIsMe = (window.parent.frames[0] === window);
+var myName = window.name;
+var myFrameEl = window.frameElement;
+var frameElId = myFrameEl ? myFrameEl.id : 'none';
+var viewport = window.innerWidth + 'x' + window.innerHeight;
+/* globals still delegate to the shared object (documented limitation) */
+window.__leak = 'from-child';
+
+console.log('[child] parent===window ' + parentIsSelf +
+            ' parent===self ' + parentIsSelfProp +
+            ' parent.doc===doc ' + docIsParentDoc +
+            ' parentTitle=' + parentTitle +
+            ' top===parent ' + topIsParent +
+            ' parent.len=' + framesLen +
+            ' frames[0]===me ' + framesZeroIsMe +
+            ' name=' + myName +
+            ' frameEl=' + frameElId +
+            ' inner=' + viewport +
+            ' leak=' + (window.__leak || 'none'));
+</script>
+</body>
+</html>

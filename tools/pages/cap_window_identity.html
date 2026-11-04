@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>cap_window_identity</title>
+<style>
+  body { margin: 0; }
+  #kid { width: 200px; height: 120px; border: 0; display: block; }
+</style>
+</head>
+<body>
+<iframe id="kid" name="kid" src="cap_window_identity_child.html"></iframe>
+<script>
+/* Parent side of the window-identity check: a frame must NOT be this window. */
+window.__parentSees = {
+  hasFrames: typeof window.frames !== 'undefined',
+  frameCount: window.length,
+  selfIsWindow: window.self === window,
+  parentIsSelf: window.parent === window,
+  topIsSelf: window.top === window
+};
+console.log('[parent] len=' + window.length +
+            ' self===window ' + (window.self === window) +
+            ' parent===self ' + (window.parent === window) +
+            ' top===self ' + (window.top === window));
+</script>
+</body>
+</html>

@@ -36,6 +36,7 @@
 #include "MouseEvent.h"
 #include "KeyboardEvent.h"
 #include "Frame.h"
+#include "FrameTree.h"
 #include "FrameLoader.h"
 #include "Page.h"
 #include "KURL.h"
@@ -65,6 +66,14 @@
 #include <vector>
 #include <set>
 
+namespace AntRuntime {
+AntbValue* windowObjectFor(AntbEngine*, WebCore::Document*);
+void installFrameGlobals(AntbEngine*, WebCore::Document*);
+AntbValue* windowForDocument(AntbEngine*, WebCore::Document*);
+int windowGetter(AntbEngine*, AntbValue*, const char*, AntbValue*, void*);
+int windowSetter(AntbEngine*, AntbValue*, const char*, const AntbValue*, void*);
+}
+
 namespace {
 static std::string cookieHeaderForCurrentDocument();
 static void setCookieForCurrentDocument(const std::string& text);
@@ -89,6 +98,7 @@ struct RuntimeState {
     WebCore::Document* document;
     AntbClass*         nodeClass;
     AntbClass*         canvasCtxClass;  /* CanvasRenderingContext2D (2d context) */
+    AntbClass*         windowClass;     /* Window (per-frame window proxy) */
     AntbValue*         locationObj;
     AntbValue*         docObj;          /* the JS document object (rooted) */
     bool               documentBound;
@@ -230,6 +240,7 @@ static void activateState(RuntimeState* state)
 #define g_document      (g_currentState->document)
 #define g_nodeClass     (g_currentState->nodeClass)
 #define g_canvasCtxClass (g_currentState->canvasCtxClass)
+#define g_windowClass   (g_currentState->windowClass)
 #define g_locationObj   (g_currentState->locationObj)
 #define g_docObj        (g_currentState->docObj)
 #define g_documentBound (g_currentState->documentBound)
@@ -237,6 +248,29 @@ static void activateState(RuntimeState* state)
 #define g_docSlotGeneration (g_currentState->docSlotGeneration)
 #define g_docSlotCount  (g_currentState->docSlotCount)
 #define g_currentSlot   (g_currentState->currentSlot)
+
+/* Per-document JS object. Every frame gets its own document object, so
+ * `parent.document` and `document` are two different objects; the same
+ * document always maps to the same object (`document === window.document`).
+ * Keyed by (engine, document) because one document outlives many binds. */
+struct DocObjectEntry {
+    AntbEngine*        engine;
+    WebCore::Document* document;
+    AntbValue*         object;
+};
+
+static std::vector<DocObjectEntry>* g_docObjectCache = NULL;
+
+struct WindowEntry {
+    AntbEngine*        engine;
+    WebCore::Document* document;
+    AntbValue*         object;
+};
+
+static std::vector<WindowEntry>* g_windowCache = NULL;
+
+
+
 
 static int slotForDocument(WebCore::Document* document)
 {
@@ -1226,11 +1260,13 @@ int titleGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue
 {
     /* The exotic getter is called for every property of the document object, so
      * unknown names must fall through instead of returning the title. */
-    if (!name || !g_document)
+    WebCore::Document* d = documentOf(self);
+
+    if (!name || !d)
         return 0;
 
     if (!strcmp(name, "title")) {
-        WebCore::String title = g_document->title();
+        WebCore::String title = d->title();
         AntbValue* v = antb_make_string(engine, title.utf8().data());
         if (!v)
             return 0;
@@ -1245,7 +1281,7 @@ int titleGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue
 
 
     if (!strcmp(name, "head")) {
-        RefPtr<WebCore::NodeList> heads = g_document->getElementsByTagName("head");
+        RefPtr<WebCore::NodeList> heads = d->getElementsByTagName("head");
         WebCore::Node* headNode = (heads && heads->length()) ? heads->item(0) : 0;
         if (!headNode)
             return 1;
@@ -1257,20 +1293,30 @@ int titleGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue
     }
 
     if (!strcmp(name, "body")) {
-        if (!g_document->body())
+        if (!d->body())
             return 1;
         {
-            AntbValue* v = wrapNode(engine, g_document->body());
+            AntbValue* v = wrapNode(engine, d->body());
             if (v) { antb_value_assign(out, v); antb_value_release(v); }
         }
         return 1;
     }
 
+    if (!strcmp(name, "defaultView") || !strcmp(name, "parentWindow")) {
+        AntbValue* v = AntRuntime::windowForDocument(engine, d);
+
+        if (!v)
+            return 1;
+        antb_value_assign(out, v);
+        antb_value_release(v);
+        return 1;
+    }
+
     if (!strcmp(name, "documentElement")) {
-        if (!g_document->documentElement())
+        if (!d->documentElement())
             return 1;
         {
-            AntbValue* v = wrapNode(engine, g_document->documentElement());
+            AntbValue* v = wrapNode(engine, d->documentElement());
             if (v) { antb_value_assign(out, v); antb_value_release(v); }
         }
         return 1;
@@ -1309,7 +1355,7 @@ int titleGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue
     }
 
     if (!strcmp(name, "URL") || !strcmp(name, "documentURI")) {
-        WebCore::String url = g_document->URL();
+        WebCore::String url = d->URL();
         AntbValue* v = antb_make_string(engine, url.utf8().data());
         if (!v)
             return 0;
@@ -3825,6 +3871,30 @@ static void stopRealm(void)
         antb_value_release(g_docObj);
         g_docObj = 0;
     }
+    /* The per-window proxies of this realm die with it too. */
+    if (g_windowCache) {
+        for (size_t i = 0; i < g_windowCache->size(); ) {
+            if ((*g_windowCache)[i].engine == state->engine) {
+                if ((*g_windowCache)[i].object)
+                    antb_value_release((*g_windowCache)[i].object);
+                g_windowCache->erase(g_windowCache->begin() + i);
+            } else {
+                ++i;
+            }
+        }
+    }
+    /* The per-document objects of this realm die with the realm. */
+    if (g_docObjectCache) {
+        for (size_t i = 0; i < g_docObjectCache->size(); ) {
+            if ((*g_docObjectCache)[i].engine == state->engine) {
+                if ((*g_docObjectCache)[i].object)
+                    antb_value_release((*g_docObjectCache)[i].object);
+                g_docObjectCache->erase(g_docObjectCache->begin() + i);
+            } else {
+                ++i;
+            }
+        }
+    }
     if (g_locationObj) {
         antb_value_release(g_locationObj);
         g_locationObj = 0;
@@ -3841,6 +3911,7 @@ static void stopRealm(void)
     /* The node class belongs to the old engine. */
     g_nodeClass = 0;
     g_canvasCtxClass = 0;
+    g_windowClass = 0;
     clearExpandoObjects();
     g_documentBound = false;
 
@@ -3894,6 +3965,357 @@ void beginNewRealm(void)
            state->generation, (void*)state->engine);
 }
 
+AntbValue* documentObjectFor(AntbEngine* engine, WebCore::Document* document)
+{
+    AntbValue* docObj;
+    size_t i;
+
+    if (!engine || !document)
+        return NULL;
+
+    if (g_docObjectCache) {
+        for (i = 0; i < g_docObjectCache->size(); ++i) {
+            DocObjectEntry& e = (*g_docObjectCache)[i];
+
+            if (e.engine == engine && e.document == document)
+                return e.object ? antb_retain(e.object) : NULL;
+        }
+    } else {
+        g_docObjectCache = new std::vector<DocObjectEntry>();
+    }
+
+    docObj = antb_make_object(engine);
+    if (!docObj)
+        return NULL;
+
+        antb_define_property_rw(engine, docObj, "title", titleGetter, titleSetter, NULL);
+        antb_define_property_rw(engine, docObj, "cookie", titleGetter, titleSetter, NULL);
+
+        antb_define_method(engine, docObj, "getElementById", docGetElementById, NULL);
+        antb_define_method(engine, docObj, "createElement", docCreateElement, NULL);
+        antb_define_method(engine, docObj, "createElementNS", docCreateElementNS, NULL);
+        antb_define_method(engine, docObj, "createTextNode", docCreateTextNode, NULL);
+        antb_define_method(engine, docObj, "createComment", docCreateComment, NULL);
+        antb_define_method(engine, docObj, "createDocumentFragment", docCreateDocumentFragment, NULL);
+        /* document.implementation: jQuery and others feature-test
+         * document.implementation.createHTMLDocument(). */
+        {
+            AntbValue* implObj = antb_make_object(engine);
+            if (implObj) {
+                antb_define_method(engine, implObj, "createHTMLDocument", docCreateHTMLDocument, NULL);
+                antb_define_method(engine, implObj, "hasFeature", docHasFeature, NULL);
+                antb_set_prop(engine, docObj, "implementation", implObj);
+                antb_value_release(implObj);
+            }
+        }
+        antb_define_method(engine, docObj, "createHTMLDocument", docCreateHTMLDocument, NULL);
+        antb_define_method(engine, docObj, "write", docWrite, NULL);
+        antb_define_method(engine, docObj, "writeln", docWriteln, NULL);
+        antb_define_method(engine, docObj, "addEventListener", nodeAddEventListener, NULL);
+        antb_define_method(engine, docObj, "removeEventListener", nodeRemoveEventListener, NULL);
+        antb_define_method(engine, docObj, "dispatchEvent", nodeDispatchEvent, NULL);
+        /* The document is a plain object (not a Node wrapper), so the node
+         * methods have to be installed on it explicitly. */
+        antb_define_method(engine, docObj, "getElementsByTagName", nodeGetElementsByTagName, NULL);
+        antb_define_method(engine, docObj, "getElementsByClassName", nodeGetElementsByClassName, NULL);
+        antb_define_method(engine, docObj, "querySelector", nodeQuerySelector, NULL);
+        antb_define_method(engine, docObj, "querySelectorAll", nodeQuerySelectorAll, NULL);
+        antb_define_method(engine, docObj, "appendChild", nodeAppendChild, NULL);
+        antb_define_method(engine, docObj, "removeChild", nodeRemoveChild, NULL);
+        antb_define_method(engine, docObj, "insertBefore", nodeInsertBefore, NULL);
+        antb_define_method(engine, docObj, "replaceChild", nodeReplaceChild, NULL);
+        antb_define_method(engine, docObj, "getAttribute", nodeGetAttribute, NULL);
+        antb_define_method(engine, docObj, "setAttribute", nodeSetAttribute, NULL);
+        antb_define_method(engine, docObj, "hasAttribute", nodeHasAttribute, NULL);
+        antb_define_method(engine, docObj, "cloneNode", nodeCloneNode, NULL);
+        antb_define_method(engine, docObj, "contains", nodeContains, NULL);
+
+        /* Document is a Node: let the node APIs work directly on it. */
+        antb_set_native(docObj, document, AGB_TAG_NODE);
+
+    {
+        DocObjectEntry e;
+
+        e.engine   = engine;
+        e.document = document;
+        e.object   = antb_retain(docObj);
+        g_docObjectCache->push_back(e);
+    }
+
+    return docObj;
+}
+
+/* ---- per-frame window objects -------------------------------------------- *
+ * Every browsing context has its own Window object. Sharing one global between
+ * frames is what made `parent !== self` false, gave `window.frames`/`length`/
+ * `name`/`frameElement` nothing to say, and let a child frame's globals leak
+ * into the parent. The proxy is a native object holding the frame's Document:
+ * the frame-specific properties are answered from it and everything else is
+ * delegated to the shared global object, so `parent.jQuery`, polyfill hooks and
+ * cross-frame calls keep working (see docs/architecture/frame-window.md). */
+
+#define AGB_TAG_WINDOW 0x574E4431u   /* 'WND1' */
+
+static WebCore::Frame* frameOfDocument(WebCore::Document* document)
+{
+    return document ? document->frame() : 0;
+}
+
+static int childFrameCount(WebCore::Document* document)
+{
+    WebCore::Frame* frame = frameOfDocument(document);
+
+    return (frame && frame->tree()) ? (int)frame->tree()->childCount() : 0;
+}
+
+static int isFrameIndex(const char* name)
+{
+    if (!name || !name[0])
+        return 0;
+    for (; *name; ++name) {
+        if (*name < '0' || *name > '9')
+            return 0;
+    }
+    return 1;
+}
+
+/* The window object of a document: the shared global for a top level document
+ * (so `window === self === top` still holds there), a proxy for a frame. */
+AntbValue* windowForDocument(AntbEngine* engine, WebCore::Document* document)
+{
+    if (!engine || !document)
+        return NULL;
+
+    if (!document->parentDocument())
+        return antb_global(engine);
+
+    return windowObjectFor(engine, document);
+}
+
+AntbValue* windowObjectFor(AntbEngine* engine, WebCore::Document* document)
+{
+    AntbValue* v;
+    size_t i;
+
+    if (!engine || !document)
+        return NULL;
+
+    if (g_windowCache) {
+        for (i = 0; i < g_windowCache->size(); ++i) {
+            WindowEntry& e = (*g_windowCache)[i];
+
+            if (e.engine == engine && e.document == document)
+                return e.object ? antb_retain(e.object) : NULL;
+        }
+    } else {
+        g_windowCache = new std::vector<WindowEntry>();
+    }
+
+    if (!g_windowClass) {
+        g_windowClass = antb_class_create(engine, "Window");
+        if (!g_windowClass)
+            return NULL;
+    }
+
+    v = antb_wrap_native_as_owner(engine, g_windowClass, document, AGB_TAG_WINDOW, document);
+    if (!v)
+        return NULL;
+
+    /* Catch-all getter/setter for the instance: names the class does not list
+     * are dispatched by name (the same scheme nodeGetter/nodeSetter use). */
+    antb_define_property_rw(engine, v, "", windowGetter, windowSetter, NULL);
+
+    {
+        WindowEntry e;
+
+        e.engine   = engine;
+        e.document = document;
+        e.object   = antb_retain(v);
+        g_windowCache->push_back(e);
+    }
+
+    return v;
+}
+
+/* A window proxy answers for its own frame; everything else is the shared
+ * global's, which keeps direct cross-frame property access working. */
+int windowGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue* out, void*)
+{
+    WebCore::Document* d = (WebCore::Document*)antb_get_native(self, AGB_TAG_WINDOW);
+    AntbValue* v = NULL;
+
+    if (!d || !name)
+        return 0;
+
+    if (!strcmp(name, "window") || !strcmp(name, "self") || !strcmp(name, "globalThis")
+            || !strcmp(name, "frames") || !strcmp(name, "defaultView")) {
+        antb_value_assign(out, self);
+        return 1;
+    }
+
+    if (!strcmp(name, "parent") || !strcmp(name, "top")) {
+        WebCore::Document* other;
+
+        if (!strcmp(name, "parent")) {
+            other = d->parentDocument();
+        } else {
+            other = d->topDocument();
+            if (other == d)
+                other = 0;
+        }
+
+        if (!other) {
+            antb_value_assign(out, self);
+            return 1;
+        }
+        v = windowObjectFor(engine, other);
+    } else if (!strcmp(name, "document")) {
+        v = documentObjectFor(engine, d);
+    } else if (!strcmp(name, "length")) {
+        v = antb_make_number(engine, (double)childFrameCount(d));
+    } else if (!strcmp(name, "name")) {
+        WebCore::Frame* frame = frameOfDocument(d);
+
+        v = antb_make_string(engine, (frame && frame->tree())
+                                       ? frame->tree()->name().domString().utf8().data() : "");
+    } else if (!strcmp(name, "frameElement")) {
+        WebCore::Element* owner = d->ownerElement();
+
+        if (!owner)
+            return 1;   /* undefined for a top level document */
+        v = wrapNode(engine, owner);
+    } else if (!strcmp(name, "innerWidth") || !strcmp(name, "outerWidth")
+            || !strcmp(name, "innerHeight") || !strcmp(name, "outerHeight")) {
+        /* Same rule the prelude uses: the frame's own viewport. */
+        WebCore::Element* de = d->documentElement();
+        int width = de ? de->clientWidth() : 0;
+        int height = de ? de->clientHeight() : 0;
+
+        v = antb_make_number(engine, (double)(strstr(name, "Width") ? width : height));
+    } else if (isFrameIndex(name)) {
+        WebCore::Frame* frame = frameOfDocument(d);
+        WebCore::Frame* child = (frame && frame->tree()) ? frame->tree()->child(atoi(name)) : 0;
+
+        if (child && child->document())
+            v = windowObjectFor(engine, child->document());
+    } else {
+        AntbValue* global = antb_global(engine);
+
+        if (global) {
+            v = antb_get_prop(engine, global, name);
+            antb_value_release(global);
+        }
+    }
+
+    if (!v)
+        return 1;   /* undefined */
+
+    antb_value_assign(out, v);
+    antb_value_release(v);
+    return 1;
+}
+
+int windowSetter(AntbEngine* engine, AntbValue* self, const char* name, const AntbValue* value, void*)
+{
+    WebCore::Document* d = (WebCore::Document*)antb_get_native(self, AGB_TAG_WINDOW);
+
+    if (!d || !name)
+        return 0;
+
+    if (!strcmp(name, "name")) {
+        WebCore::Frame* frame = frameOfDocument(d);
+
+        if (frame && frame->tree()) {
+            char* s = antb_to_utf8(value);
+
+            frame->tree()->setName(WebCore::AtomicString(s ? s : ""));
+            antb_free(s);
+        }
+        return 1;
+    }
+
+    if (!strcmp(name, "location") || !strcmp(name, "href"))
+        return locationSetter(engine, self, "href", value, NULL);
+
+    /* Everything else is a property of the shared global. */
+    {
+        AntbValue* global = antb_global(engine);
+
+        if (global) {
+            antb_set_prop(engine, global, name, value);
+            antb_value_release(global);
+        }
+    }
+    return 1;
+}
+
+/* Bare `document`/`window`/`parent`/... are resolved by ant's identifier
+ * lookup, which does not run an exotic getter on the global object; they have
+ * to be real properties. So the frame-specific ones are refreshed whenever a
+ * document becomes the bound one (bindDocument / slot activation). */
+void installFrameGlobals(AntbEngine* engine, WebCore::Document* document)
+{
+    AntbValue* global;
+    AntbValue* selfWindow;
+    AntbValue* topWindow = NULL;
+    AntbValue* parentWindow = NULL;
+    AntbValue* docObj;
+    AntbValue* v;
+
+    if (!engine || !document)
+        return;
+
+    global = antb_global(engine);
+    if (!global)
+        return;
+
+    selfWindow = windowForDocument(engine, document);
+    docObj = documentObjectFor(engine, document);
+
+    if (document->parentDocument())
+        parentWindow = windowObjectFor(engine, document->parentDocument());
+    if (document->topDocument() != document)
+        topWindow = windowObjectFor(engine, document->topDocument());
+
+    if (selfWindow) {
+        antb_set_prop(engine, global, "window", selfWindow);
+        antb_set_prop(engine, global, "self", selfWindow);
+        antb_set_prop(engine, global, "frames", selfWindow);
+    }
+    if (docObj)
+        antb_set_prop(engine, global, "document", docObj);
+
+    v = topWindow ? topWindow : selfWindow;
+    if (v)
+        antb_set_prop(engine, global, "top", v);
+
+    v = parentWindow ? parentWindow : selfWindow;
+    if (v)
+        antb_set_prop(engine, global, "parent", v);
+
+    v = antb_make_number(engine, (double)childFrameCount(document));
+    if (v) {
+        antb_set_prop(engine, global, "length", v);
+        antb_value_release(v);
+    }
+
+    v = document->ownerElement() ? wrapNode(engine, document->ownerElement()) : NULL;
+    if (v) {
+        antb_set_prop(engine, global, "frameElement", v);
+        antb_value_release(v);
+    }
+
+    if (selfWindow)
+        antb_value_release(selfWindow);
+    if (topWindow)
+        antb_value_release(topWindow);
+    if (parentWindow)
+        antb_value_release(parentWindow);
+    if (docObj)
+        antb_value_release(docObj);
+    antb_value_release(global);
+}
+
 void bindDocument(void* document)
 {
     WebCore::Document* previous = g_document;
@@ -3920,8 +4342,13 @@ void bindDocument(void* document)
     if (g_documentBound) {
         AntbValue* global;
 
-        if (g_docObj)
-            antb_set_native(g_docObj, g_document, AGB_TAG_NODE);
+        /* Same realm, new document (a frame document created by the parser):
+         * the JS shims stay, but the document object is per document. */
+        if (g_docObj) {
+            antb_value_release(g_docObj);
+            g_docObj = 0;
+        }
+        g_docObj = documentObjectFor(g_engine, g_document);
 
         /* window IS the global object and nodeAddEventListener() reads the node
          * from it. Refreshing only g_docObj left the window pointing at the
@@ -3934,13 +4361,14 @@ void bindDocument(void* document)
             antb_set_native(global, g_document, AGB_TAG_NODE);
             antb_value_release(global);
         }
+        installFrameGlobals(g_engine, g_document);
         return;
     }
 
     {
         AntbValue* global   = antb_global(g_engine);
         AntbValue* window   = global;   /* window IS the global object */
-        AntbValue* docObj   = antb_make_object(g_engine);
+        AntbValue* docObj   = documentObjectFor(g_engine, g_document);
 
         if (!global || !docObj) {
             antb_value_release(global);
@@ -3948,8 +4376,6 @@ void bindDocument(void* document)
             return;
         }
 
-        antb_define_property_rw(g_engine, docObj, "title", titleGetter, titleSetter, NULL);
-        antb_define_property_rw(g_engine, docObj, "cookie", titleGetter, titleSetter, NULL);
 
         if (!g_nodeClass) {
             g_nodeClass = antb_class_create(g_engine, "Node");
@@ -4033,47 +4459,6 @@ void bindDocument(void* document)
             }
         }
 
-        antb_define_method(g_engine, docObj, "getElementById", docGetElementById, NULL);
-        antb_define_method(g_engine, docObj, "createElement", docCreateElement, NULL);
-        antb_define_method(g_engine, docObj, "createElementNS", docCreateElementNS, NULL);
-        antb_define_method(g_engine, docObj, "createTextNode", docCreateTextNode, NULL);
-        antb_define_method(g_engine, docObj, "createComment", docCreateComment, NULL);
-        antb_define_method(g_engine, docObj, "createDocumentFragment", docCreateDocumentFragment, NULL);
-        /* document.implementation: jQuery and others feature-test
-         * document.implementation.createHTMLDocument(). */
-        {
-            AntbValue* implObj = antb_make_object(g_engine);
-            if (implObj) {
-                antb_define_method(g_engine, implObj, "createHTMLDocument", docCreateHTMLDocument, NULL);
-                antb_define_method(g_engine, implObj, "hasFeature", docHasFeature, NULL);
-                antb_set_prop(g_engine, docObj, "implementation", implObj);
-                antb_value_release(implObj);
-            }
-        }
-        antb_define_method(g_engine, docObj, "createHTMLDocument", docCreateHTMLDocument, NULL);
-        antb_define_method(g_engine, docObj, "write", docWrite, NULL);
-        antb_define_method(g_engine, docObj, "writeln", docWriteln, NULL);
-        antb_define_method(g_engine, docObj, "addEventListener", nodeAddEventListener, NULL);
-        antb_define_method(g_engine, docObj, "removeEventListener", nodeRemoveEventListener, NULL);
-        antb_define_method(g_engine, docObj, "dispatchEvent", nodeDispatchEvent, NULL);
-        /* The document is a plain object (not a Node wrapper), so the node
-         * methods have to be installed on it explicitly. */
-        antb_define_method(g_engine, docObj, "getElementsByTagName", nodeGetElementsByTagName, NULL);
-        antb_define_method(g_engine, docObj, "getElementsByClassName", nodeGetElementsByClassName, NULL);
-        antb_define_method(g_engine, docObj, "querySelector", nodeQuerySelector, NULL);
-        antb_define_method(g_engine, docObj, "querySelectorAll", nodeQuerySelectorAll, NULL);
-        antb_define_method(g_engine, docObj, "appendChild", nodeAppendChild, NULL);
-        antb_define_method(g_engine, docObj, "removeChild", nodeRemoveChild, NULL);
-        antb_define_method(g_engine, docObj, "insertBefore", nodeInsertBefore, NULL);
-        antb_define_method(g_engine, docObj, "replaceChild", nodeReplaceChild, NULL);
-        antb_define_method(g_engine, docObj, "getAttribute", nodeGetAttribute, NULL);
-        antb_define_method(g_engine, docObj, "setAttribute", nodeSetAttribute, NULL);
-        antb_define_method(g_engine, docObj, "hasAttribute", nodeHasAttribute, NULL);
-        antb_define_method(g_engine, docObj, "cloneNode", nodeCloneNode, NULL);
-        antb_define_method(g_engine, docObj, "contains", nodeContains, NULL);
-
-        /* Document is a Node: let the node APIs work directly on it. */
-        antb_set_native(docObj, g_document, AGB_TAG_NODE);
 
         /* window.addEventListener is what jQuery's ready setup calls first;
          * listeners live on the document node so both targets share one list. */
@@ -4082,7 +4467,6 @@ void bindDocument(void* document)
         antb_define_method(g_engine, window, "removeEventListener", nodeRemoveEventListener, NULL);
         antb_define_method(g_engine, window, "dispatchEvent", nodeDispatchEvent, NULL);
 
-        antb_set_prop(g_engine, window, "document", docObj);
         antb_define_method(g_engine, global, "__agbHttpGet", globalHttpGet, NULL);
         antb_define_method(g_engine, global, "__agbHttpRequest", globalHttpRequest, NULL);
         /* Binary variants: base64 payloads for XHR responseType=arraybuffer and
@@ -4134,7 +4518,6 @@ void bindDocument(void* document)
                 antb_define_method(g_engine, loc, "toString", locationToString, NULL);
                 antb_define_method(g_engine, loc, "valueOf", locationToString, NULL);
                 antb_set_prop(g_engine, global, "location", loc);
-                antb_set_prop(g_engine, docObj, "defaultView", global);
                 antb_value_release(loc);
             }
             {
@@ -4162,9 +4545,9 @@ void bindDocument(void* document)
                 }
             }
         }
-        antb_set_prop(g_engine, global, "window", window);
-        antb_set_prop(g_engine, global, "document", docObj);
-
+        /* window/self/top/parent/frames/document/length: per frame, refreshed
+         * by the installer below (a child frame reads the same global object). */
+        installFrameGlobals(g_engine, g_document);
         g_docObj = antb_retain(docObj);
 
         antb_value_release(docObj);
@@ -4285,7 +4668,18 @@ void dropListenersForOldDocument()
 
 WebCore::Node* nodeOf(AntbValue* self)
 {
-    return self ? (WebCore::Node*)antb_get_native(self, AGB_TAG_NODE) : 0;
+    WebCore::Node* n;
+
+    if (!self)
+        return 0;
+
+    n = (WebCore::Node*)antb_get_native(self, AGB_TAG_NODE);
+    if (n)
+        return n;
+
+    /* A window proxy stands in for its document, so window.addEventListener()
+     * and the other document level methods resolve through it. */
+    return (WebCore::Node*)antb_get_native(self, AGB_TAG_WINDOW);
 }
 
 /* ------------------------------------------------------------------------- */
