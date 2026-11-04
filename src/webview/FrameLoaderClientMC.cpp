@@ -9,6 +9,7 @@
 #include "CString.h"
 #include "FrameLoaderClientMC.h"
 #include "../webcore/platform/network/native/NetLog.h"
+#include "NavLog.h"
 
 #if ENABLE(ANTJS)
 #include "AntRuntime.h"
@@ -52,6 +53,29 @@ namespace WebCore {
 static bool isMainFrameClient(Frame* frame)
 {
     return frame && frame->page() && frame->page()->mainFrame() == frame;
+}
+
+/* [nav] lines: navigation decisions the browser makes on its own (link clicks,
+ * location changes, form submits, history moves, redirects, popups). The type
+ * comes from NavigationAction, so a log reader can tell a page script from a
+ * user click without guessing from the URL. */
+static const char* navTypeName(NavigationType type)
+{
+    switch (type) {
+    case NavigationTypeLinkClicked:     return "link";
+    case NavigationTypeFormSubmitted:   return "form";
+    case NavigationTypeBackForward:     return "back-forward";
+    case NavigationTypeReload:          return "reload";
+    case NavigationTypeFormResubmitted: return "form-resubmitted";
+    case NavigationTypeOther:           break;
+    }
+
+    return "other";
+}
+
+static const char* navFrameName(Frame* frame)
+{
+    return isMainFrameClient(frame) ? "main" : "sub";
 }
 
 FrameLoaderClientMC::FrameLoaderClientMC()
@@ -104,19 +128,31 @@ void FrameLoaderClientMC::dispatchDecidePolicyForMIMEType(FramePolicyFunction po
     (m_frame->loader()->*policyFunction)(PolicyUse);
 }
 
-void FrameLoaderClientMC::dispatchDecidePolicyForNewWindowAction(FramePolicyFunction policyFunction, const NavigationAction&,
-                                                                     const ResourceRequest&, const String& frameName)
+void FrameLoaderClientMC::dispatchDecidePolicyForNewWindowAction(FramePolicyFunction policyFunction, const NavigationAction& action,
+                                                                     const ResourceRequest& request, const String& frameName)
 {
     if (!policyFunction || !m_frame)
         return;
+
+    agbNavLog("new-window %s type=%s name=%s url=%s",
+              navFrameName(m_frame), navTypeName(action.type()),
+              frameName.isEmpty() ? "(none)" : frameName.utf8().data(),
+              request.url().url().utf8().data());
+
     (m_frame->loader()->*policyFunction)(PolicyUse);
 }
 
-void FrameLoaderClientMC::dispatchDecidePolicyForNavigationAction(FramePolicyFunction policyFunction, const NavigationAction&,
-                                                                                                   const ResourceRequest&)
+void FrameLoaderClientMC::dispatchDecidePolicyForNavigationAction(FramePolicyFunction policyFunction, const NavigationAction& action,
+                                                                                                   const ResourceRequest& request)
 {
     if (!policyFunction || !m_frame)
         return;
+
+    agbNavLog("request %s type=%s method=%s url=%s",
+              navFrameName(m_frame), navTypeName(action.type()),
+              request.httpMethod().utf8().data(),
+              request.url().url().utf8().data());
+
     (m_frame->loader()->*policyFunction)(PolicyUse);
 }
 
@@ -124,6 +160,19 @@ void FrameLoaderClientMC::dispatchWillSubmitForm(FramePolicyFunction policyFunct
 {
     if (!policyFunction || !m_frame)
         return;
+
+    if (form && form->form()) {
+        HTMLFormElement* formElement = form->form();
+        CString name = formElement->name().utf8();
+
+        if (!name.length())
+            name = formElement->id().utf8();
+
+        agbNavLog("submit %s form=%s action=%s",
+                  navFrameName(m_frame),
+                  name.length() ? name.data() : "(unnamed)",
+                  formElement->action().utf8().data());
+    }
 
 	if (cb_save_submit_form) {
 		int passCount = 0;
@@ -402,6 +451,8 @@ void FrameLoaderClientMC::setMainFrameDocumentReady(bool)
 
 Frame* FrameLoaderClientMC::dispatchCreatePage()
 {
+    agbNavLog("popup open (window.open/target=_blank)");
+
     if (cb_open_window){
         FloatRect windowRect = m_frame->page()->chrome()->windowRect();
 
@@ -419,10 +470,14 @@ Frame* FrameLoaderClientMC::dispatchCreatePage()
         if (view){
             view->view->mainframe()->page()->chrome()->setWindowFeature(features);
             return view->view->mainframe();
-       }  else
+       }  else {
+            agbNavLog("popup blocked by host");
             return NULL;
-    } else
+       }
+    } else {
+        agbNavLog("popup blocked: host has no open-window hook");
         return NULL;
+    }
 }
 
 void FrameLoaderClientMC::dispatchWillFirstLayout()
@@ -462,8 +517,10 @@ ObjectContentType FrameLoaderClientMC::objectContentType(const KURL& url, const 
 
 bool FrameLoaderClientMC::canHandleRequest(const ResourceRequest& req) const
 {
-	if (cb_allow_main_request && !cb_allow_main_request(req.url().url().utf8().data()))
+	if (cb_allow_main_request && !cb_allow_main_request(req.url().url().utf8().data())) {
+        agbNavLog("blocked by host url=%s", req.url().url().utf8().data());
 		return false;
+    }
 
     if(isSupportedInternalScheme(req.url().protocol().latin1()))
         return true;
@@ -473,12 +530,16 @@ bool FrameLoaderClientMC::canHandleRequest(const ResourceRequest& req) const
 
 void FrameLoaderClientMC::dispatchDidFailProvisionalLoad(const ResourceError& err)
 {
+    agbNavLog("fail provisional code=%d url=%s", err.errorCode(), err.failingURL().utf8().data());
+
     if (cb_error) 
         cb_error((_mc_error)err.errorCode(), err.failingURL().utf8().data());
 }
 
 void FrameLoaderClientMC::dispatchDidFailLoad(const ResourceError& err)
 {
+    agbNavLog("fail load code=%d url=%s", err.errorCode(), err.failingURL().utf8().data());
+
     if (cb_error) 
         cb_error((_mc_error)err.errorCode(), err.failingURL().utf8().data());
 }
@@ -589,17 +650,26 @@ void FrameLoaderClientMC::dispatchDidHandleOnloadEvents()
 
 void FrameLoaderClientMC::dispatchDidReceiveServerRedirectForProvisionalLoad()
 {
-    notImplemented();
+    DocumentLoader* loader = m_frame ? m_frame->loader()->activeDocumentLoader() : 0;
+
+    if (loader)
+        agbNavLog("redirect %s from=%s to=%s",
+                  navFrameName(m_frame),
+                  loader->originalRequestCopy().url().url().utf8().data(),
+                  loader->request().url().url().utf8().data());
 }
 
 void FrameLoaderClientMC::dispatchDidCancelClientRedirect()
 {
-    notImplemented();
+    if (m_frame)
+        agbNavLog("client-redirect finished %s", navFrameName(m_frame));
 }
 
-void FrameLoaderClientMC::dispatchWillPerformClientRedirect(const KURL&, double, double)
+void FrameLoaderClientMC::dispatchWillPerformClientRedirect(const KURL& url, double interval, double)
 {
-    notImplemented();
+    if (m_frame)
+        agbNavLog("client-redirect %s url=%s in=%.1fs",
+                  navFrameName(m_frame), url.url().utf8().data(), interval);
 }
 
 void FrameLoaderClientMC::dispatchDidChangeLocationWithinPage()

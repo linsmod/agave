@@ -62,7 +62,8 @@ WinMain → createTab → agave_webview_create（控件）
 | 布局 | `src/webcore/rendering/` | flex 实际走 `-webkit-box`（`RenderFlexibleBox`） |
 | 绘制 / 裁剪 / 渐变 | `src/webcore/platform/graphics/GraphicsContextPS.cpp` | picasso 后端；`clip` 是设备坐标 |
 | 网络（HTTP/缓存/代理） | `src/webcore/platform/network/native/` | WinHTTP 后端 + `NetLog.cpp` |
-| 页面生命周期钩子（willClose/commit/DCL/load） | `src/webview/FrameLoaderClientMC.cpp` | 时序问题的第一现场 |
+| 页面生命周期钩子（willClose/commit/DCL/load） | `src/webview/FrameLoaderClientMC.cpp` | 时序问题的第一现场；`[evt]` 钩子也在这里 |
+| 导航动作日志（`[nav]`） | `src/webview/NavLog.h`（开关）+ `FrameLoaderClientMC.cpp`（request/redirect/submit/popup）+ `WebEngine.cpp`（open/back/reload） | 只加日志，不动热路径；回归 `tools/run_nav_tests.ps1` |
 | 快捷键 / 标签页 / 地址栏 / 探针 | `examples/browser_shell/main.c` | `normalizeUrl()` 是 URL 唯一入口 |
 | 控件窗口 / 剪贴板 / IME / 帧泵定时器 | `src/webview_control/AgaveWebView.c` | 跨线程规则见 [debugging.md](debugging.md) |
 | JS 语义 / VM / 编译 / ESM / worker / wasm | `H:\ant-v16\src\{silver,esm,modules}` | 见 [ant-engine.md](ant-engine.md) |

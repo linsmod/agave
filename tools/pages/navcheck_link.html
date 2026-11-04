@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>navcheck link</title>
+</head>
+<body>
+<p><a id="go" href="navcheck_target.html">go</a></p>
+<script>
+/* A real user gesture is not available in --probe, so click the link from a
+ * timer; the navigation must still be reported as type=link. */
+setTimeout(function () {
+  document.getElementById('go').click();
+}, 50);
+</script>
+</body>
+</html>

@@ -7,7 +7,7 @@
 | [../AGENTS.md](../AGENTS.md) | 项目一句话、rules、六条铁律、最常用命令 | **每次会话开始** |
 | [onboarding.md](onboarding.md) | 分层架构、目录地图、四个入口锚点、**我要改 X 去哪**、症状→先查哪 | 第一次改代码，或换个子系统 |
 | [build-and-run.md](build-and-run.md) | 工具链、三条构建路径、改什么重编什么、产物与运行拓扑、环境坑 | 编不动 / 跑不起来 / 不知道 exe 怎么摆 |
-| [debugging.md](debugging.md) | 无头探针、环境变量全表、cdb 配方、定位手段、已知噪音 vs 真错误、A/B 验证 | 页面不对、崩了、卡住 |
+| [debugging.md](debugging.md) | 无头探针、默认日志（`[evt]`/`[nav]`/`[ui]`）、环境变量全表、cdb 配方、定位手段、已知噪音 vs 真错误、A/B 验证 | 页面不对、崩了、卡住 |
 | [ant-engine.md](ant-engine.md) | ant/桥接**哪份是真的**、改引擎链路、ant.exe 单跑、ant 的反直觉清单 | 碰到 JS 引擎、桥接、worker、wasm |
 | [conventions.md](conventions.md) | 提交信息、回归页放哪、文档怎么更新、代码风格 | 提交前 |
 | [../handover.md](../handover.md) | 现状、待办（含验收标准）、已知限制、代码索引 | 想知道"还差什么" |

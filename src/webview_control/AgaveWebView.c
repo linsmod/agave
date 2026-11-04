@@ -18,6 +18,7 @@
 
 #include "macross.h"
 #include "agave_webview.h"
+#include "../webview/NavLog.h"
 
 #define AGW_CLASS_NAME "AgaveWebViewControl"
 #define AGW_MAX_VIEWS  32
@@ -489,6 +490,8 @@ static MC_BOOL agwOnWriteFile(int id, const char* url, const void* data,
 
         if (file) {
             int i2;
+
+            agbNavLog("download url=%s path=%s", url ? url : "", path);
 
             for (i2 = 0; i2 < g_viewCount; ++i2) {
                 AgaveWebView* item = g_views[i2];
@@ -1199,6 +1202,7 @@ static MaCrossView* agwOnOpenWindow(const char* url, unsigned int flags, const M
 
     if (origin->callbacks.on_new_window) {
         if (!origin->callbacks.on_new_window(origin, created, url ? url : "", origin->user)) {
+            agbNavLog("popup blocked by host");
             agave_webview_destroy(created);
             return NULL;
         }
@@ -1232,6 +1236,7 @@ int agave_control_open_window(const char* url)
 
     if (origin->callbacks.on_new_window) {
         if (!origin->callbacks.on_new_window(origin, created, url ? url : "", origin->user)) {
+            agbNavLog("popup blocked by host");
             agave_webview_destroy(created);
             return 0;
         }
@@ -1482,6 +1487,8 @@ void agave_webview_destroy(AgaveWebView* item)
 AgaveWebView* agave_webview_create_popup(AgaveWebView* from, const char* url)
 {
     AgaveWebView* created;
+
+    agbNavLog("popup create url=%s", (url && url[0]) ? url : "about:blank");
 
     created = agwCreatePopupControl(from);
 

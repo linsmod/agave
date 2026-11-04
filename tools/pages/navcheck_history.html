@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>navcheck history</title>
+</head>
+<body>
+<p id="state">step 1</p>
+<script>
+/* First visit: jump to page 2. Page 2 calls history.back(); landing here a
+ * second time proves the back-forward load happened (title becomes BACK-OK).
+ * The marker lives in a cookie because this engine's localStorage is not
+ * shared between documents (cookie jar is); it also expires so an aborted
+ * run cannot poison the next one. */
+function navMarker() {
+  var m = document.cookie.match(/(?:^|;\s*)navhist=(\d+)/);
+  return m ? parseInt(m[1], 10) : 0;
+}
+
+var started = navMarker();
+var fresh = started && (new Date().getTime() - started < 10000);
+
+if (!fresh) {
+  document.cookie = 'navhist=' + new Date().getTime() + '; path=/';
+  setTimeout(function () {
+    location.href = 'navcheck_p2.html';
+  }, 50);
+} else {
+  document.cookie = 'navhist=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+  document.title = 'BACK-OK';
+  document.getElementById('state').innerHTML = 'back-forward ok';
+}
+</script>
+</body>
+</html>

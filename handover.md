@@ -5,7 +5,7 @@
 > [`docs/lessons.md`](docs/lessons.md)；构建、探针、cdb、环境变量的**权威**手册是
 > [`AGENTS.md`](AGENTS.md)，这里不重复。
 >
-> 最近更新：2026-11-04（R24 探针真无头、R23 地址栏走 file:、R22 Web Worker、R21 `font` 简写、
+> 最近更新：2026-11-04（`[nav]` 导航日志、R24 探针真无头、R23 地址栏走 file:、R22 Web Worker、R21 `font` 简写、
 > R20 deepseek 登录页、R19 wasm 二进制通道）。
 
 ## 1. 现状
@@ -81,9 +81,10 @@ ant 原生构造器；http(s) 走异步桥取源码 + preamble 后包成 `data:`
 ## 3. 怎么验证一个改动
 
 1. **单页**：`agave_shell.exe --probe <url> --eval "probeExit(<表达式>)" --wait <ms> --settle <ms> --timeout <ms>`，
-   看 stdout 的 `[exit] ...` 与退出码；stderr 里有页面 console，以及**默认打开**的生命周期日志
-   （`[evt]`：commit/realm/bindDocument/DCL/load/teardown）与 GUI 输入日志（`[ui]`），
-   关掉用 `AGB_EVT_LOG=0` / `AGB_UI_LOG=0`（详见 [docs/debugging.md](docs/debugging.md)）。
+   看 stdout 的 `[exit] ...` 与退出码；stderr 里有**默认打开**的生命周期日志
+   （`[evt]`：commit/realm/bindDocument/DCL/load/teardown）、导航动作日志
+   （`[nav]`：open/request/submit/client-redirect/popup）与 GUI 输入日志（`[ui]`），
+   关掉用 `AGB_EVT_LOG=0` / `AGB_NAV_LOG=0` / `AGB_UI_LOG=0`（详见 [docs/debugging.md](docs/debugging.md)）。
 2. **多轮/生命周期**：加 `--reload n`（每轮 eval 一次）；`AGB_EVT_DEBUG=1` + `AGB_NET_LOG=1` 拼时间线。
 3. **回归清单**（`debug/` 下的页面，全部可 `--probe` 直接跑）：
    `life.html`（生命周期）、`evalenv_test.html`（eval 语义）、`expando_test.html`（元素 expando）、
@@ -92,8 +93,9 @@ ant 原生构造器；http(s) 走异步桥取源码 + preamble 后包成 `data:`
    `newtab.html`、`worker_support.html`。
 4. **两个"大图"**：`https://chat.deepseek.com/`（登录页 `inp=2 all=129`、无 `antjs` 错误）、
    `https://browserscore.dev/`（Vue 模块图）。
-5. **现成脚本**：`tools/run_worker_tests.ps1`（Worker 九项）、`tools/bench_compile.ps1`（启动墙钟/CPU）、
-   `tools/measure_cpu.ps1`（CPU 占用）、`tools/check_window_visible.ps1`（无头探针确实不出窗口）。
+5. **现成脚本**：`tools/run_worker_tests.ps1`（Worker 九项）、`tools/run_nav_tests.ps1`（`[nav]` 七项）、
+   `tools/bench_compile.ps1`（启动墙钟/CPU）、`tools/measure_cpu.ps1`（CPU 占用）、
+   `tools/check_window_visible.ps1`（无头探针确实不出窗口）。
 
 探针参数、退出码、环境变量全表、cdb 配方、噪音对照见
 [`docs/debugging.md`](docs/debugging.md)。
@@ -135,6 +137,18 @@ ant 原生构造器；http(s) 走异步桥取源码 + preamble 后包成 `data:`
   `onmessage` 里过滤掉。`importScripts` 的动态 URL 仍然做不到同步（规范要求同步），只能父侧预取 + 查表。
 - 验收：`debug/ws_workerfetch.html` 从 `fetch-err` 变成 `fetch=<字节数>`；动态 `importScripts` 给出清晰错误。
 
+### P1-e 301/302 对 WebCore 不可见
+- 现状：native 后端（`WinHttpSession.cpp`）用 WinHTTP 默认策略**静默跟随**重定向，
+  `WinHttpQueryHeaders` 拿到的已经是最终 200，`DocumentLoader::setRequest` 从不被调用
+  → 地址栏 / `[probe] main url` 停在原 URL，`[nav]` 也只有一条 `request`（没有 redirect 行）。
+- 影响：登录跳转、http→https、短链之后的 URL 全错；用户复制地址栏会拿到旧地址。
+- 动作：请求设 `WINHTTP_OPTION_REDIRECT_POLICY_NEVER`，在 `WinHttpSession` 的响应处处理 3xx：
+  读 `Location` → 走 `ResourceHandle` 的 `willSendRequest`（`FrameLoader::willSendRequest` 会
+  `setRequest` + `dispatchDidReceiveServerRedirectForProvisionalLoad`）→ 用新 URL 重发；
+  注意 POST→GET 转换、cookie/referer、缓存键。
+- 验收：`tools/nav_redirect_server.py` 的 `/redirect302` 出现 `[nav] redirect from=... to=...`，
+  `[probe] main url` 是最终 URL；`tools/run_nav_tests.ps1` 增加该用例。
+
 ### P2 prefetch 换真解析
 - 现状：`modulePrefetchImports()` 用 `body.find("from")` 字符串扫描，字符串字面量会误判，预下载的图不完整。
 - 动作：用引擎自己的 import 解析（或至少跳过字符串/注释再扫）。
@@ -159,6 +173,11 @@ ant 原生构造器；http(s) 走异步桥取源码 + preamble 后包成 `data:`
 - **wasm 是解释执行**：导出函数跨界约 3.9µs/次，适合"一次调用跑大循环"（R19）。
 - **worker 无网络 / 无 `SharedWorker`/`ServiceWorker`**：见 P1-d 与 R22。
 - **GC root 只能到 engine 边界**（ant 没有 unpin）：现在 per-document engine 让这一点等价于"每文档释放"（R4）。
+- **301/302 由 WinHTTP 静默跟随**：WebCore 只看到最终 200 和原始 URL，地址栏停在旧 URL、`[nav]` 没有
+  redirect 行。这不是日志缺失，是重定向没回传给 `FrameLoader`；修法见 §4 P1-e。
+- **localStorage 不跨文档**：同一进程内 A 文档写入后导航到 B，B 读到 `null`（cookie 正常；跨进程能读到
+  旧值）。写盘发生在文档 teardown，可读要等下一次 engine 重建；导航类测试页需要跨文档状态时用 cookie，
+  见 `tools/pages/navcheck_history.html` 的注释。
 
 ## 6. 关键代码位置索引
 
@@ -171,8 +190,10 @@ ant 原生构造器；http(s) 走异步桥取源码 + preamble 后包成 `data:`
 | 入口模块时序（三条泳道图） | [`docs/architecture/module-pipeline.md`](docs/architecture/module-pipeline.md) |
 | 桥接释放 | `AntBridge.c`：`antb_wrap_native_owner` / `antb_release_owner` / `agbReleaseEngineWrappers` / `agbReleaseEngineClasses` / `antb_engine_destroy` |
 | 页面时序挂点 | `FrameLoaderClientMC.cpp`：`dispatchWillClose` / `committedLoad` / `dispatchDidFinishDocumentLoad` / `dispatchDidFinishLoad` |
+| `[nav]` 导航日志 | `src/webview/NavLog.h`（通道与 `AGB_NAV_LOG`）；钩子在 `FrameLoaderClientMC.cpp`（request/new-window/submit/redirect/fail/blocked）、`WebEngine.cpp`（`macross_view_open_url/back/forward/reload/stop`）、`AgaveWebView.c`（popup/download） |
+| `[nav]` 回归 | `tools/run_nav_tests.ps1` + `tools/pages/navcheck_*.html` + `tools/nav_redirect_server.py` |
 | WebCore 侧限制 | `src/webcore/loader/FrameLoader.cpp`（unload 门禁）、`src/webcore/dom/EventTargetNode.cpp`（事件转发边界）、`src/webcore/dom/Document.cpp`（`finishedParsing` 的 DCL） |
 | 地址栏输入 → URL | `examples/browser_shell/main.c`：`parseShellArgv()` / `normalizeUrl()` / `fileUrlFromLocalPath()`；`file:` URL 只允许单次转义 → `KURL::encode_string()`（幂等） |
 | 无头探针 | `examples/browser_shell/main.c`：`probeRun()`（`WS_POPUP` + `WS_EX_TOOLWINDOW` 隐藏父窗口）+ `probeWndProc()`；`AGB_PROBE_SHOW=1` 才显示 |
 | Web Worker | `prelude.js` 末尾「Web Workers」段（`_agbWorkerStart` / `_agbWorkerPreamble` / `_agbWorkerPrefetch`）；ant 侧 `H:\ant-v16\src\modules\worker\{web,core}.c`；栈帧短名 `esm_frame_filename`（`H:\ant-v16\src\esm\loader.c`） |
-| 回归页 / 脚本 | 页面在 `debug/`（见 §3）；`tools/run_worker_tests.ps1`、`tools/check_window_visible.ps1`、`tools/bench_compile.ps1`、`tools/measure_cpu.ps1` |
+| 回归页 / 脚本 | 页面在 `debug/`（见 §3）；`tools/run_worker_tests.ps1`、`tools/run_nav_tests.ps1`、`tools/check_window_visible.ps1`、`tools/bench_compile.ps1`、`tools/measure_cpu.ps1` |
