@@ -4116,18 +4116,6 @@ void bindDocument(void* document)
     /* Bootstrap shims for this document, from prelude.js next to the binary
      * (or at AGB_PRELUDE). */
     loadPrelude();
-    /* Ant's Web Worker constructor crashes on anything but a usable script URL
-     * (it strdups a NULL) and workers need an environment we do not provide.
-     * Hiding the constructors makes pages take their non-worker path instead
-     * of killing the process. */
-    if (g_engine) {
-        static const char kHideWorkers[] =
-            "try{window.Worker=undefined}catch(e){}"
-            "try{window.SharedWorker=undefined}catch(e){}"
-            "try{window.ServiceWorker=undefined}catch(e){}";
-
-        antb_eval(g_engine, kHideWorkers, (int)strlen(kHideWorkers), NULL);
-    }
 
     /* Polyfills live in polyfills.js next to the binary (or at AGB_POLYFILLS)
      * so they can be edited without rebuilding the engine. */

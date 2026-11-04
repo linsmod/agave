@@ -116,7 +116,8 @@
       'backgroundSize','backgroundAttachment','backgroundClip','backgroundOrigin','color','width',
       'height','display','position','top','left','right','bottom','marginTop','marginLeft','marginRight',
       'marginBottom','paddingTop','paddingLeft','paddingRight','paddingBottom','borderTopWidth',
-      'borderLeftWidth','borderTopColor','borderColor','fontSize','fontFamily','fontWeight','lineHeight',
+      'borderLeftWidth','borderTopColor','borderColor','font','fontStyle','fontVariant','fontStretch',
+      'fontSize','fontFamily','fontWeight','lineHeight',
       'opacity','visibility','overflow','zIndex','textAlign','verticalAlign','float','clear','cursor',
       'whiteSpace','textDecoration','borderRadius','boxShadow','transform'];
     /* Accessors live on one shared prototype: defining 40 properties per call
@@ -538,4 +539,14 @@
       };
     }
   }
+
+  /* Ant's native Worker constructor crashes on anything but a usable script
+   * URL (it strdups a NULL) and workers need an environment we do not
+   * provide. Hiding the constructors makes pages take their non-worker path
+   * instead of killing the process. polyfills.js runs after this file and
+   * installs a harmless Worker stub (sites subclass the constructor), so the
+   * order matters: hide here, stub later. */
+  try { g.Worker = undefined; } catch (e) {}
+  try { g.SharedWorker = undefined; } catch (e) {}
+  try { g.ServiceWorker = undefined; } catch (e) {}
 })(window);
