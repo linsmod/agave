@@ -313,6 +313,21 @@ static void wideToUtf8(const wchar_t* source, char* target, int count)
     target[count - 1] = 0;
 }
 
+/* Reads a control back as UTF-8. The address bar is a Unicode edit control
+ * (CreateWindowExW), so GetWindowTextA would push paths through the ANSI code
+ * page and lose every character outside it. */
+static void readControlText(HWND control, char* out, size_t outSize)
+{
+    wchar_t wide[MAX_PATH_CHARS];
+
+    if (!outSize)
+        return;
+
+    wide[0] = 0;
+    GetWindowTextW(control, wide, MAX_PATH_CHARS);
+    wideToUtf8(wide, out, (int)outSize);
+}
+
 static int nextFreeTab(void)
 {
     int i;
@@ -785,17 +800,261 @@ static void onContextMenu(AgaveWebView* view, int x, int y,
 /* navigation helpers                                                        */
 /* ------------------------------------------------------------------------- */
 
+/* ------------------------------------------------------------------------- */
+/* address bar input -> URL                                                  */
+/* ------------------------------------------------------------------------- */
+
+static int startsWithNoCase(const char* text, const char* prefix)
+{
+    while (*prefix) {
+        char a = *text++;
+        char b = *prefix++;
+
+        if (!a)
+            return 0;
+        if (a >= 'A' && a <= 'Z')
+            a = (char)(a - 'A' + 'a');
+        if (b >= 'A' && b <= 'Z')
+            b = (char)(b - 'A' + 'a');
+        if (a != b)
+            return 0;
+    }
+    return 1;
+}
+
+/* "E:\dir", "E:/dir", "E:" (drive current directory). */
+static int isDrivePath(const char* text)
+{
+    if (!((text[0] >= 'a' && text[0] <= 'z') || (text[0] >= 'A' && text[0] <= 'Z')))
+        return 0;
+    if (text[1] != ':')
+        return 0;
+    return text[2] == '\\' || text[2] == '/' || text[2] == 0;
+}
+
+static int isUncPath(const char* text)
+{
+    return text[0] == '\\' && text[1] == '\\';
+}
+
+static int localPathExists(const char* text)
+{
+    wchar_t wide[MAX_PATH_CHARS];
+    DWORD attributes;
+
+    if (!text || !text[0])
+        return 0;
+
+    utf8ToWide(text, wide, MAX_PATH_CHARS);
+    attributes = GetFileAttributesW(wide);
+    return attributes != INVALID_FILE_ATTRIBUTES;
+}
+
+/* Bytes that may appear verbatim in the path of a file: URL. Everything else
+ * (space, %, #, ?, backslash and every non-ASCII UTF-8 byte) gets escaped -
+ * the engine parses the URL, so an unescaped space or '#' truncates it. */
+static int fileUrlByteIsSafe(unsigned char c)
+{
+    if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'))
+        return 1;
+
+    switch (c) {
+    case '-': case '_': case '.': case '~': case '/': case ':':
+    case '!': case '$': case '&': case '\'': case '(': case ')':
+    case '*': case '+': case ',': case ';': case '=': case '@':
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static void appendUrlEncoded(char* out, size_t outSize, size_t* written, const char* text)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    size_t o = *written;
+
+    while (*text && o + 4 < outSize) {
+        unsigned char c = (unsigned char)*text++;
+
+        if (fileUrlByteIsSafe(c)) {
+            out[o++] = (char)c;
+        } else {
+            out[o++] = '%';
+            out[o++] = hex[c >> 4];
+            out[o++] = hex[c & 15];
+        }
+    }
+
+    out[o] = 0;
+    *written = o;
+}
+
+/* "E:\deepseek-webui\index.html" (also with forward slashes, a UNC path or a
+ * relative path) -> "file:///E:/deepseek-webui/index.html". GetFullPathNameW
+ * normalizes separators, "." and ".." against the shell's working directory. */
+static void fileUrlFromLocalPath(const char* input, char* out, size_t outSize)
+{
+    wchar_t wideInput[MAX_PATH_CHARS];
+    wchar_t wideFull[MAX_PATH_CHARS];
+    char full[MAX_PATH_CHARS];
+    size_t written = 0;
+    char* p;
+
+    if (!outSize)
+        return;
+
+    out[0] = 0;
+    if (outSize < 8)
+        return;
+
+    utf8ToWide(input, wideInput, MAX_PATH_CHARS);
+    if (!GetFullPathNameW(wideInput, MAX_PATH_CHARS, wideFull, NULL)) {
+        wcsncpy(wideFull, wideInput, MAX_PATH_CHARS - 1);
+        wideFull[MAX_PATH_CHARS - 1] = 0;
+    }
+    wideToUtf8(wideFull, full, MAX_PATH_CHARS);
+
+    for (p = full; *p; ++p) {
+        if (*p == '\\')
+            *p = '/';
+    }
+
+    if (full[0] == '/' && full[1] == '/') {
+        /* UNC: the share host is the URL authority (file://host/share/x). */
+        char* share = strchr(full + 2, '/');
+
+        if (share) {
+            char host[MAX_PATH_CHARS];
+            size_t hostLen = (size_t)(share - (full + 2));
+
+            if (hostLen >= sizeof(host))
+                hostLen = sizeof(host) - 1;
+            memcpy(host, full + 2, hostLen);
+            host[hostLen] = 0;
+
+            appendUrlEncoded(out, outSize, &written, "file://");
+            appendUrlEncoded(out, outSize, &written, host);
+            appendUrlEncoded(out, outSize, &written, share);
+        } else {
+            appendUrlEncoded(out, outSize, &written, "file:");
+            appendUrlEncoded(out, outSize, &written, full);
+        }
+        return;
+    }
+
+    /* "C:/dir/x" -> file:///C:/dir/x (the leading slash comes from the path). */
+    appendUrlEncoded(out, outSize, &written, "file://");
+    appendUrlEncoded(out, outSize, &written, full);
+}
+
 static void normalizeUrl(const char* input, char* out, size_t outSize)
 {
     const char* text = input;
+    const char* rest;
+
+    if (!outSize)
+        return;
+
+    out[0] = 0;
+
+    if (!text)
+        return;
 
     while (*text == ' ')
         ++text;
 
-    if (!strncmp(text, "http://", 7) || !strncmp(text, "https://", 8) ||
-        !strncmp(text, "about:", 6) || !strncmp(text, "file://", 7) ||
-        !strncmp(text, "data:", 5)) {
+    /* Explorer's "Copy as path" quotes the path; accept the pasted form. */
+    if (text[0] == '"' && text[1]) {
+        size_t len = strlen(text);
+
+        if (len >= 2 && text[len - 1] == '"') {
+            static char unquoted[MAX_PATH_CHARS];
+
+            if (len - 1 < sizeof(unquoted)) {
+                memcpy(unquoted, text + 1, len - 2);
+                unquoted[len - 2] = 0;
+                normalizeUrl(unquoted, out, outSize);
+                return;
+            }
+        }
+    }
+
+    if (!*text) {
+        strncpy(out, "about:blank", outSize - 1);
+        out[outSize - 1] = 0;
+        return;
+    }
+
+    /* Address-bar paths: Ctrl+L focuses the field without selecting its text,
+     * so typing a path often lands behind the current scheme
+     * ("http://E:\deepseek-webui\index.html"). A local path behind a scheme
+     * wins over the scheme; otherwise the URL is taken as typed. */
+    if (startsWithNoCase(text, "http://") || startsWithNoCase(text, "https://")) {
+        rest = text + (startsWithNoCase(text, "https://") ? 8 : 7);
+
+        if (isDrivePath(rest) || isUncPath(rest)) {
+            fileUrlFromLocalPath(rest, out, outSize);
+            return;
+        }
+
         strncpy(out, text, outSize - 1);
+        out[outSize - 1] = 0;
+        return;
+    }
+
+    if (startsWithNoCase(text, "file:")) {
+        const char* p = text + 5;
+        const char* q;
+        int slashes = 0;
+
+        while (p[slashes] == '/')
+            ++slashes;
+        q = p + slashes;
+
+        /* Windows separators, or a drive/UNC path without the third slash:
+         * rebuild the canonical file:/// form (the engine needs it). */
+        if (strchr(p, '\\') || (slashes < 3 && (isDrivePath(q) || isUncPath(q)))) {
+            if (strchr(p, '\\') && slashes == 0)
+                fileUrlFromLocalPath(p, out, outSize);
+            else
+                fileUrlFromLocalPath(q, out, outSize);
+            return;
+        }
+
+        if (slashes < 2 && q[0]) {
+            /* file:C:/x */
+            fileUrlFromLocalPath(q, out, outSize);
+            return;
+        }
+
+        strncpy(out, text, outSize - 1);
+        out[outSize - 1] = 0;
+        return;
+    }
+
+    if (startsWithNoCase(text, "about:") || startsWithNoCase(text, "data:") ||
+        startsWithNoCase(text, "blob:") || startsWithNoCase(text, "agave:") ||
+        startsWithNoCase(text, "javascript:") || startsWithNoCase(text, "chrome:")) {
+        strncpy(out, text, outSize - 1);
+        out[outSize - 1] = 0;
+        return;
+    }
+
+    if (isDrivePath(text) || isUncPath(text)) {
+        fileUrlFromLocalPath(text, out, outSize);
+        return;
+    }
+
+    /* Relative path that resolves to something on disk ("./x.html", "debug\a.html"). */
+    if ((strchr(text, '\\') || strchr(text, '/')) && localPathExists(text)) {
+        fileUrlFromLocalPath(text, out, outSize);
+        return;
+    }
+
+    /* "localhost:8971/x" has no dot but is a host, not a search term. */
+    if (startsWithNoCase(text, "localhost") &&
+        (text[9] == 0 || text[9] == ':' || text[9] == '/')) {
+        _snprintf(out, outSize, "http://%s", text);
         out[outSize - 1] = 0;
         return;
     }
@@ -882,6 +1141,10 @@ static void navigateActive(const char* text, int newTab)
     }
 
     agave_webview_navigate(g_tabs[g_activeTab].view, url);
+
+    /* Hand the keyboard back to the page: with focus left in the address bar the
+     * next keystroke edits the URL that was just typed. */
+    agave_webview_set_focus(g_tabs[g_activeTab].view);
 }
 
 static void addBookmarkCurrent(void)
@@ -920,7 +1183,7 @@ static void doFind(int forward)
     if (!tab->used || !tab->view)
         return;
 
-    GetWindowTextA(g_findEdit, text, sizeof(text));
+    readControlText(g_findEdit, text, sizeof(text));
 
     if (text[0])
         agave_webview_search(tab->view, text, forward, 0);
@@ -1172,7 +1435,7 @@ static LRESULT CALLBACK shellProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM
         case ID_GO: {
             char text[MAX_PATH_CHARS];
 
-            GetWindowTextA(g_address, text, sizeof(text));
+            readControlText(g_address, text, sizeof(text));
             navigateActive(text, 0);
             break;
         }
@@ -1809,11 +2072,13 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
     g_newtab = makeButton("+", ID_NEWTAB);
     g_menu = makeButton("=", ID_MENU);
 
-    g_address = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "",
+    /* Unicode edit controls: CreateWindowExW + L"EDIT" (the ANSI variant would
+     * push typed paths through the ANSI code page, and GetWindowTextA with it). */
+    g_address = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
                                 WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
                                 0, 0, 0, 0, g_hwnd, (HMENU)(INT_PTR)ID_ADDRESS, instance, NULL);
 
-    g_findEdit = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "",
+    g_findEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
                                  WS_CHILD | ES_AUTOHSCROLL,
                                  0, 0, 0, 0, g_hwnd, (HMENU)(INT_PTR)ID_FIND_EDIT, instance, NULL);
     g_findNext = makeButton("v", ID_FIND_NEXT);
@@ -1876,13 +2141,18 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
         }
 
         if (probe) {
+            char normalized[MAX_PATH_CHARS];
+
             if (!urlArg) {
                 fprintf(stderr, "[probe] missing URL\n");
                 probeUsage();
                 return 1;
             }
 
-            return probeRun(urlArg);
+            /* Same address-bar rules as typing the URL: a local path becomes a
+             * file:// URL, "localhost:port" stays a host instead of a search. */
+            normalizeUrl(urlArg, normalized, sizeof(normalized));
+            return probeRun(normalized);
         }
 
         if (urlArg && urlArg[0]) {
@@ -1911,8 +2181,24 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
             if (msg.hwnd == g_address && msg.wParam == VK_RETURN) {
                 char text[MAX_PATH_CHARS];
 
-                GetWindowTextA(g_address, text, sizeof(text));
+                readControlText(g_address, text, sizeof(text));
                 navigateActive(text, 0);
+                continue;
+            }
+
+            /* Escape in the address bar drops the edit: show the URL the tab is
+             * really on and hand the keyboard back to the page. */
+            if (msg.hwnd == g_address && msg.wParam == VK_ESCAPE) {
+                Tab* escapeTab = &g_tabs[g_activeTab];
+
+                if (escapeTab->used) {
+                    wchar_t wideUrl[MAX_PATH_CHARS];
+
+                    utf8ToWide(escapeTab->url, wideUrl, MAX_PATH_CHARS);
+                    SetWindowTextW(g_address, wideUrl);
+                    if (escapeTab->view)
+                        agave_webview_set_focus(escapeTab->view);
+                }
                 continue;
             }
 
@@ -1935,7 +2221,14 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
                 if (msg.wParam == 'W' && !shift) { closeTab(g_activeTab); continue; }
                 if (msg.wParam == 'R' && !shift) { if (g_tabs[g_activeTab].used) agave_webview_reload(g_tabs[g_activeTab].view); continue; }
                 if (msg.wParam == VK_TAB) { switchTab(shift ? -1 : 1); continue; }
-                if (msg.wParam == 'L' && !shift) { SetFocus(g_address); continue; }
+                /* Ctrl+L selects the current URL: typing then replaces it, which
+                 * is also what stops "http://" + a typed path from being glued
+                 * onto the old one. */
+                if (msg.wParam == 'L' && !shift) {
+                    SetFocus(g_address);
+                    SendMessageW(g_address, EM_SETSEL, (WPARAM)0, (LPARAM)-1);
+                    continue;
+                }
                 if (msg.wParam == VK_ADD || msg.wParam == 0xBB) {
                     g_zoom = g_zoom < 400 ? g_zoom + 25 : g_zoom;
                     applyZoomToActive();

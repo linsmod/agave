@@ -1301,7 +1301,15 @@ DeprecatedString KURL::encode_string(const DeprecatedString& notEncodedString)
     const char *strEnd = str + asUTF8.length();
     while (str < strEnd) {
         unsigned char c = *str++;
-        if (isBadChar(c)) {
+        /* Escaping has to be idempotent: this is applied to a whole URL string
+         * that may already contain %XX escapes (WebView::loadUrl does that for
+         * every file: URL), and escaping the '%' again turned
+         * "file:///C:/my%20dir/a.html" into ".../my%2520dir/a.html", which no
+         * longer names the file. A '%' that does not start a valid escape is
+         * still escaped. */
+        if (c == '%' && strEnd - str >= 2 && isHexDigit((unsigned char)str[0]) && isHexDigit((unsigned char)str[1])) {
+            *p++ = '%';
+        } else if (isBadChar(c)) {
             *p++ = '%';
             *p++ = hexDigits[c >> 4];
             *p++ = hexDigits[c & 0xF];

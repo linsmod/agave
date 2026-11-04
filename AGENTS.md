@@ -51,6 +51,10 @@ WHEN USER REPLY A DOT[.] ONLY, MEANS OK/DONE/DO_AS_YOU_SAY/YES/GO_ON/ACCEPT/...
     `tools\cdb.exe -y "<build-zig-native>;H:\ant-v16\bridge" -cf cmds.txt build-zig-native\agave_shell.exe --probe ...`
     —— **不要用 `--` 分隔**（这版 cdb 会报 0x80070057），也别用 Start-Process 传 `-c "长命令"`（引号被吞）。
     当前 `antbridge.dll` 旁边就有匹配的 `antbridge.pdb`（带源码行号），`-y` 指过去即可解出 `process.c @ 2355` 这种帧
+- 地址栏输入 → URL：`examples/browser_shell/main.c` 的 `normalizeUrl()` 是**唯一**入口（地址栏/Go/收藏夹/`--probe` 都走它）。
+  本地路径（`X:\`、`X:/`、UNC、磁盘上存在的相对路径）→ `fileUrlFromLocalPath()`（`GetFullPathNameW` + `\`→`/` + 逐字节百分号转义）；
+  `file:` URL 在引擎侧只能**单次转义**（`WebView::loadUrl` 会对整串调 `KURL::encode_string`，所以它必须幂等：`%XX` 原样保留）。
+  调试入口：`agave_shell.exe --probe "<输入>" ...` 的 `[probe] main url=` 就是引擎最终 URL
 - worker 相关：worker 是**独立线程 + 独立 isolate**，崩溃栈会出现在非主线程上（`~*kb` 里找 `worker_thread_main`）；
   `new Worker` 的入口在 ant 侧走 ESM/CJS 模块加载，栈帧名对 data: URL 会折成 `data:script/<hash>`
   （`esm_frame_filename`），所以看到 `data:script/xxxxxxxx` 就是 worker 里的代码。回归：`pwsh -File tools\run_worker_tests.ps1`
