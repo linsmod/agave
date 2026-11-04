@@ -18,12 +18,15 @@
 `:empty` 等结构选择器随子节点变化失效（R28）、CSS 缩放的图片正确绘制（R29）、
 iframe 的视口度量按帧求值（R30）、**每个 frame 自己的 `window` 对象**（R31：`parent !== self`、
 `parent.document` 是父文档、`frames`/`length`/`name`/`frameElement` 按 frame tree 回答）、
-**无头截图**（R32：`--probe --shot`，屏幕上不出现任何窗口）。
+**无头截图**（R32：`--probe --shot`，屏幕上不出现任何窗口）、
+**一批 jsdom/DOM 缺口**（R34：元素树遍历、反射属性、`insertAdjacent*`、`form.submit/action/elements`、
+`img.complete/naturalWidth/decode`、`iframe.contentWindow/contentDocument`、`document.forms` 等真实集合、
+`activeElement`/`hasFocus`/`visibilityState`/`importNode`/`elementFromPoint`、`document.fonts` 桩）。
 
 **已经被检查过的"看起来不能用"**（别再当缺陷重开）：ant 的 Worker 是真的（R22）、ant 的 wasm 引擎是真的
 （R19）、渐变/`var()`/flex 大多可用（R11）、滚动与 hover 重绘正确（R13/R14）、刷新后 realm/监听器会清理（R9/R10）。
 
-**还没做**（§4 有验收标准）：模块图 flush 阻塞 engine 线程（P0-b）、DOMContentLoaded 双发（P0-c）、iframe 的 `contentWindow`/`contentDocument`（P0-d）、
+**还没做**（§4 有验收标准）：模块图 flush 阻塞 engine 线程（P0-b）、DOMContentLoaded 双发（P0-c）、
 模块调度状态不是 per-realm（P1-a）、`g_documentParsed` 死标志（P1-c）、worker 里没有网络（P1-d）、
 DOM 集合/表单/History 半实现（P1-f）、
 prefetch 仍是字符串扫描（P2）、桥接无计数（P2）。能力缺口的完整实测见
@@ -126,13 +129,10 @@ ant 原生构造器；http(s) 走异步桥取源码 + preamble 后包成 `data:`
 - **已知限制**：子 frame 的顶层 `var x` 仍写进共享全局（要修只能每 frame 一个 engine，方案 A，不做）。
   见 `docs/architecture/frame-window.md` §5。
 
-### P0-d iframe 的 `contentWindow` / `contentDocument`
-- 现状：`iframe.contentWindow` / `.contentDocument` 都是 `undefined`。frame 文档在桥接层有槽位，
-  `window.frames[i].document` 已经可用（R31），缺的是元素上的两个属性。
-- 动作：`nodeGetter` 里对 `iframe`/`frame` 标签的 `contentWindow` 返回 `windowObjectFor(childDocument)`，
-  `contentDocument` 返回 `documentObjectFor(childDocument)`；子 frame 尚未创建文档时返回 `null`。
-- 验收：`tools/pages/cap_window_identity.html` 的父页能读到 `document.getElementById('kid').contentDocument.title
-  === 'cap_window_identity_child'`，且 `contentWindow.document === contentDocument`。
+### P0-d iframe 的 `contentWindow` / `contentDocument`（✅ 2026-11-04 完成，R34）
+- `contentWindow` 返回该 frame 的 window 对象（顶层是全局、frame 是 `Window` 代理），
+  `contentDocument` 返回它的 document 对象；子文档还没建好时是 `null`。
+- 验证：`cap_dom.html` → `iframeCw=yes`；`cap_window_identity.html` 里 `contentWindow.document === contentDocument`。
 
 ### P0-b 图就绪与执行解耦
 - 现状：`moduleFetch()` 在 engine 线程上 `pump()+Sleep(0)` 同步等模块 body（5s/模块上限），
