@@ -625,6 +625,18 @@ void WinHttpSession::run(Job* job)
             WinHttpSetOption(request, WINHTTP_OPTION_DECOMPRESSION,
                              &decompression, sizeof(decompression));
         }
+
+        /* Redirects must reach WebCore: the shell has to see the new URL and
+         * FrameLoader has to re-check navigation policy for it. Following them
+         * inside WinHTTP hid the 3xx entirely (address bar stayed on the old
+         * URL). The loader-side code in ResourceHandleNet re-issues the request
+         * after FrameLoader::willSendRequest() had its say. */
+        if (!job->request.followRedirects) {
+            DWORD policy = WINHTTP_OPTION_REDIRECT_POLICY_NEVER;
+
+            WinHttpSetOption(request, WINHTTP_OPTION_REDIRECT_POLICY,
+                             &policy, sizeof(policy));
+        }
     }
 
     {

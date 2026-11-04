@@ -22,6 +22,9 @@ public:
 
     void add(ResourceHandle*);
     void cancel(ResourceHandle*);
+    /* Restarts an in-flight handle after a 3xx: the loader has already run
+     * FrameLoader::willSendRequest() and updated handle->request(). */
+    void redirect(ResourceHandle*);
     void startSyncJob(ResourceHandle*);
     void addCacheLoading(ResourceHandle*);
     static void releaseAllResourceJobs();

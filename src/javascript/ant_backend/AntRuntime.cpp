@@ -347,6 +347,7 @@ int nodeQuerySelector(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, voi
 int globalFrameSlot(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalOpenWindow(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalPostMessage(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int globalConsoleLine(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalDialog(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalCloseWindow(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalStorageGet(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
@@ -4093,6 +4094,7 @@ void bindDocument(void* document)
         antb_define_method(g_engine, global, "__agbActivateSlot", globalActivateSlot, NULL);
         antb_define_method(g_engine, global, "__agbOpenWindow", globalOpenWindow, NULL);
         antb_define_method(g_engine, global, "__agbPostMessage", globalPostMessage, NULL);
+        antb_define_method(g_engine, global, "__agbConsoleLine", globalConsoleLine, NULL);
         antb_define_method(g_engine, global, "__agbDialog", globalDialog, NULL);
         antb_define_method(g_engine, global, "__agbCloseWindow", globalCloseWindow, NULL);
         antb_define_method(g_engine, global, "__agbStorageGet", globalStorageGet, NULL);
@@ -6296,6 +6298,23 @@ int globalPostMessage(AntbEngine*, AntbValue*, AntbValue** args, int argc,
         g_postMessageHook(message ? message : "");
 
     antb_free(message);
+    (void)out;
+    return 1;
+}
+
+/* window.console.*: the polyfills guard formats the arguments and passes one
+ * line here, so page console output shares the engine timeline
+ * ("[ 123.4ms] [con-call] ...") instead of going straight to ant's console. */
+int globalConsoleLine(AntbEngine*, AntbValue*, AntbValue** args, int argc,
+                      AntbValue* out, void*)
+{
+    char* text = (argc > 0) ? antb_to_utf8(args[0]) : NULL;
+
+    if (text) {
+        agbLog(AGB_LOG_CONSOLE, "%s", text);
+        antb_free(text);
+    }
+
     (void)out;
     return 1;
 }

@@ -40,6 +40,7 @@ public:
         , m_hasDownloadClient(false)
         , m_forSavingResource(false)
         , m_totalReceived(0)
+        , m_redirectCount(0)
     {
     }
 
@@ -67,6 +68,7 @@ public:
     AuthenticationChallenge m_currentWebChallenge;
     bool                  m_forSavingResource;
     int                   m_totalReceived;   /* bytes received so far (didReceiveData) */
+    int                   m_redirectCount;   /* 3xx hops followed for this handle */
 
     /* Filled so the completed response can go into the HTTP cache. */
     Net::Response         m_netResponse;

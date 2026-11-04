@@ -1,25 +1,25 @@
 # handover：agave 浏览器引擎（现状 / 待办 / 代码索引）
 
 > 这一篇只写「现在是什么样、还差什么」。
-> 历史经验 —— 每个缺陷的 现象 → 根因 → 修法 → 验证（R1…R24，含设计约束）——在
+> 历史经验 —— 每个缺陷的 现象 → 根因 → 修法 → 验证（R1…R26，含设计约束）——在
 > [`docs/lessons.md`](docs/lessons.md)；构建、探针、cdb、环境变量的**权威**手册是
 > [`AGENTS.md`](AGENTS.md)，这里不重复。
 >
-> 最近更新：2026-11-04（`[nav]` 导航日志、R24 探针真无头、R23 地址栏走 file:、R22 Web Worker、R21 `font` 简写、
-> R20 deepseek 登录页、R19 wasm 二进制通道）。
+> 最近更新：2026-11-04（301/302 对 shell 可见（R26）、`[nav]`/默认日志收口、R24 探针真无头、R23 地址栏走 file:、
+> R22 Web Worker、R21 `font` 简写、R20 deepseek 登录页、R19 wasm 二进制通道）。
 
 ## 1. 现状
 
 **能跑通**：页面加载/解析（含 `defer`/`async`/ESM 模块）、DOM 桥接、computed style、布局与绘制、
 滚动、鼠标/键盘事件、定时器、XHR/fetch（二进制 + POST）、localStorage、Web Worker、`file:` 本地页面、
-标签页/地址栏/查找/书签、`beforeunload`。
+标签页/地址栏/查找/书签、`beforeunload`、301/302 重定向（地址栏更新 + `[nav] redirect`）。
 
 **已经被检查过的"看起来不能用"**（别再当缺陷重开）：ant 的 Worker 是真的（R22）、ant 的 wasm 引擎是真的
 （R19）、渐变/`var()`/flex 大多可用（R11）、滚动与 hover 重绘正确（R13/R14）、刷新后 realm/监听器会清理（R9/R10）。
 
 **还没做**（§4 有验收标准）：模块图 flush 阻塞 engine 线程（P0-b）、DOMContentLoaded 双发（P0-c）、
 模块调度状态不是 per-realm（P1-a）、`g_documentParsed` 死标志（P1-c）、worker 里没有网络（P1-d）、
-301/302 对 WebCore 不可见（P1-e）、DOM 集合/表单/History 半实现（P1-f）、
+DOM 集合/表单/History 半实现（P1-f）、
 prefetch 仍是字符串扫描（P2）、桥接无计数（P2）。能力缺口的完整实测见
 [docs/capability-gaps.md](docs/capability-gaps.md)。
 
@@ -85,10 +85,10 @@ ant 原生构造器；http(s) 走异步桥取源码 + preamble 后包成 `data:`
 1. **单页**：`agave_shell.exe --probe <url> --eval "probeExit(<表达式>)" --wait <ms> --settle <ms> --timeout <ms>`，
    看 stdout 的 `[exit] ...` 与退出码；stderr 里有**默认打开**的生命周期日志
    （`[evt]`：commit/realm/bindDocument/DCL/load/teardown）、导航动作日志
-   （`[nav]`：open/request/submit/client-redirect/popup）与 GUI 输入日志（`[ui]`），
+   （`[nav]`：open/request/submit/client-redirect/redirect/popup）与 GUI 输入日志（`[ui]`），
    关掉用 `AGB_EVT_LOG=0` / `AGB_NAV_LOG=0` / `AGB_UI_LOG=0`（详见 [docs/debugging.md](docs/debugging.md)）。
-   这三类日志（以及 `[shell]`/`[probe]`/`[flag]`）统一经 `src/webview/AgbLog.h` 输出，行首是
-   `[<进程内相对ms>]` 时间戳，跨 DLL 共享同一个原点，所以 stderr 直接就是一条时间线。
+   这些日志（以及 `[shell]`/`[probe]`/`[flag]`/页面 console 的 `[con-call]`）统一经 `src/webview/AgbLog.h`
+   输出，行首是 `[<进程内相对ms>]` 时间戳，跨 DLL 共享同一个原点，所以 stderr 直接就是一条时间线。
 2. **多轮/生命周期**：加 `--reload n`（每轮 eval 一次）；`AGB_EVT_DEBUG=1` + `AGB_NET_LOG=1` 拼时间线。
 3. **回归清单**（`debug/` 下的页面，全部可 `--probe` 直接跑）：
    `life.html`（生命周期）、`evalenv_test.html`（eval 语义）、`expando_test.html`（元素 expando）、
@@ -97,7 +97,7 @@ ant 原生构造器；http(s) 走异步桥取源码 + preamble 后包成 `data:`
    `newtab.html`、`worker_support.html`。
 4. **两个"大图"**：`https://chat.deepseek.com/`（登录页 `inp=2 all=129`、无 `antjs` 错误）、
    `https://browserscore.dev/`（Vue 模块图）。
-5. **现成脚本**：`tools/run_worker_tests.ps1`（Worker 九项）、`tools/run_nav_tests.ps1`（`[nav]` 七项）、
+5. **现成脚本**：`tools/run_worker_tests.ps1`（Worker 九项）、`tools/run_nav_tests.ps1`（`[nav]` 八项，含 302 重定向）、
    `tools/bench_compile.ps1`（启动墙钟/CPU）、`tools/measure_cpu.ps1`（CPU 占用）、
    `tools/check_window_visible.ps1`（无头探针确实不出窗口）。
 
@@ -141,18 +141,6 @@ ant 原生构造器；http(s) 走异步桥取源码 + preamble 后包成 `data:`
   `onmessage` 里过滤掉。`importScripts` 的动态 URL 仍然做不到同步（规范要求同步），只能父侧预取 + 查表。
 - 验收：`debug/ws_workerfetch.html` 从 `fetch-err` 变成 `fetch=<字节数>`；动态 `importScripts` 给出清晰错误。
 
-### P1-e 301/302 对 WebCore 不可见
-- 现状：native 后端（`WinHttpSession.cpp`）用 WinHTTP 默认策略**静默跟随**重定向，
-  `WinHttpQueryHeaders` 拿到的已经是最终 200，`DocumentLoader::setRequest` 从不被调用
-  → 地址栏 / `[probe] main url` 停在原 URL，`[nav]` 也只有一条 `request`（没有 redirect 行）。
-- 影响：登录跳转、http→https、短链之后的 URL 全错；用户复制地址栏会拿到旧地址。
-- 动作：请求设 `WINHTTP_OPTION_REDIRECT_POLICY_NEVER`，在 `WinHttpSession` 的响应处处理 3xx：
-  读 `Location` → 走 `ResourceHandle` 的 `willSendRequest`（`FrameLoader::willSendRequest` 会
-  `setRequest` + `dispatchDidReceiveServerRedirectForProvisionalLoad`）→ 用新 URL 重发；
-  注意 POST→GET 转换、cookie/referer、缓存键。
-- 验收：`tools/nav_redirect_server.py` 的 `/redirect302` 出现 `[nav] redirect from=... to=...`，
-  `[probe] main url` 是最终 URL；`tools/run_nav_tests.ps1` 增加该用例。
-
 ### P1-f DOM 集合 / 表单 / History 补全
 - 现状：`document.forms/links/images/anchors/scripts` 恒为空数组；`form.submit()`/`form.action`
   未桥接；`history.pushState` 只改 document URL（无 state/length/popstate）；`localStorage` 不跨文档。
@@ -189,8 +177,6 @@ ant 原生构造器；http(s) 走异步桥取源码 + preamble 后包成 `data:`
 - **wasm 是解释执行**：导出函数跨界约 3.9µs/次，适合"一次调用跑大循环"（R19）。
 - **worker 无网络 / 无 `SharedWorker`/`ServiceWorker`**：见 P1-d 与 R22。
 - **GC root 只能到 engine 边界**（ant 没有 unpin）：现在 per-document engine 让这一点等价于"每文档释放"（R4）。
-- **301/302 由 WinHTTP 静默跟随**：WebCore 只看到最终 200 和原始 URL，地址栏停在旧 URL、`[nav]` 没有
-  redirect 行。这不是日志缺失，是重定向没回传给 `FrameLoader`；修法见 §4 P1-e。
 - **localStorage 不跨文档**：同一进程内 A 文档写入后导航到 B，B 读到 `null`（cookie 正常；跨进程能读到
   旧值）。写盘发生在文档 teardown，可读要等下一次 engine 重建；导航类测试页需要跨文档状态时用 cookie，
   见 `tools/pages/navcheck_history.html` 的注释。
@@ -204,6 +190,7 @@ ant 原生构造器；http(s) 走异步桥取源码 + preamble 后包成 `data:`
 | DOM pin / 文档 slot | `AntRuntime.cpp`：`releasePinnedNodes()` / `wrapNode()` / `slotForDocument()` / `activateSlot()` |
 | 模块调度 | `AntRuntime.cpp`：`moduleStart()` / `moduleFetch()`（同步等待）/ `modulePrefetchImports()`（字符串扫描）/ `queueDeferredScript()` / `flushDeferredModules()` |
 | 能力缺口（JS/DOM/CSS） | [`docs/capability-gaps.md`](docs/capability-gaps.md)（实测值 + 一条命令复测）；探测页 `tools/pages/cap_*.html` |
+| 301/302 重定向 | `WinHttpSession.cpp`（`Request::followRedirects=false` → `WINHTTP_OPTION_REDIRECT_POLICY_NEVER`）；`ResourceHandleNet.cpp` `onResponse()`（3xx → `willSendRequest` → `ResourceHandleManager::redirect()`）；回归 `tools/nav_redirect_server.py` |
 | 入口模块时序（三条泳道图） | [`docs/architecture/module-pipeline.md`](docs/architecture/module-pipeline.md) |
 | 桥接释放 | `AntBridge.c`：`antb_wrap_native_owner` / `antb_release_owner` / `agbReleaseEngineWrappers` / `agbReleaseEngineClasses` / `antb_engine_destroy` |
 | 页面时序挂点 | `FrameLoaderClientMC.cpp`：`dispatchWillClose` / `committedLoad` / `dispatchDidFinishDocumentLoad` / `dispatchDidFinishLoad` |

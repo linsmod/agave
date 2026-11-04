@@ -384,6 +384,16 @@
                 for (i = 0; i < arguments.length; i++)
                     args.push(shorten(arguments[i]));
 
+                /* Route through the engine log sink so page console output gets
+                 * the same "[ 123.4ms]" prefix as [evt]/[nav] and the
+                 * [con-call] tag. Fallback: tag by hand if the sink is missing
+                 * (old engine build). */
+                if (typeof g.__agbConsoleLine === 'function') {
+                    g.__agbConsoleLine(args.join(' '));
+                    return;
+                }
+
+                args.unshift('[con-call]');
                 return original.apply(g.console, args);
             };
         }

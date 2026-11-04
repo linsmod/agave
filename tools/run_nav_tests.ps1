@@ -1,8 +1,8 @@
 # run_nav_tests.ps1 - regression for the [nav] log channel.
 #
 # One probe run per automatic navigation action (link click, location change,
-# history back, meta refresh, window.open, form submit) and one run with
-# AGB_NAV_LOG=0 to prove the channel can be silenced.
+# history back, meta refresh, window.open, form submit, http 302) and one run
+# with AGB_NAV_LOG=0 to prove the channel can be silenced.
 #
 #   pwsh -File tools/run_nav_tests.ps1
 #
@@ -81,6 +81,7 @@ try {
     Run-Case 'meta refresh'    'navcheck_meta.html'    'probeExit(document.title)' 'client-redirect main url=.*navcheck_target\.html'
     Run-Case 'window.open'     'navcheck_popup.html'   'probeExit(document.title)' 'popup create url=.*navcheck_target\.html'
     Run-Case 'form GET submit' 'navcheck_form.html'    'probeExit(location.search)' 'request main type=form method=GET url=.*\?q=hello' 'submit main form=.* action=navcheck_target\.html'
+    Run-Case 'http 302 redirect' 'redirect302'          'probeExit(document.title)' 'redirect main from=.*redirect302 to=.*navcheck_target\.html' '\[probe\] main url=.*navcheck_target\.html'
 
     # Opt-out: same link navigation, no [nav] line at all.
     $script:cases++

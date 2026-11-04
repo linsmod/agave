@@ -10,6 +10,7 @@
 #include "ResourceHandleInternal.h"
 #include "ResourceHandleManagerNet.h"
 #include "HttpCache.h"
+#include "NetLog.h"
 
 #include "ResourceError.h"
 #include "ResourceRequest.h"
@@ -18,6 +19,7 @@
 #include "CString.h"
 #include "KURL.h"
 #include "PlatformString.h"
+#include "FormData.h"
 
 #include <stdlib.h>
 #include <string>
@@ -81,6 +83,12 @@ void fillResponse(ResourceResponse& out, const KURL& url, const Net::Response& i
         out.setHTTPHeaderField(String::fromUTF8(in.headers[i].first.c_str()),
                                String::fromUTF8(in.headers[i].second.c_str()));
     }
+}
+
+bool isRedirectStatus(int status)
+{
+    return status == 301 || status == 302 || status == 303
+        || status == 307 || status == 308;
 }
 
 void buildRequest(Net::Request& req, const ResourceRequest& request)
@@ -157,6 +165,66 @@ void ResourceHandleInternal::onResponse(const Net::Response& netResponse)
                 m_request.url().url().ascii(), (int)m_cancelled, (void*)m_client);
     if (m_cancelled || !m_client)
         return;
+
+    /* 3xx: hand the redirect to WebCore instead of following it in WinHTTP.
+     * MainResourceLoader::willSendRequest() updates the DocumentLoader (this is
+     * where the address bar and the [nav] redirect line come from) and re-checks
+     * the navigation policy; then the transfer restarts for the new URL. */
+    if (isRedirectStatus(netResponse.status)) {
+        std::string location = netResponse.header("Location");
+
+        if (!location.empty()) {
+            KURL target(m_request.url(), DeprecatedString::fromUtf8(location.c_str()));
+
+            if (target.isValid()) {
+                if (m_redirectCount >= 20) {
+                    Net::Error error;
+
+                    error.code = -3;
+                    error.text = "too many redirects";
+                    onError(error);
+                    return;
+                }
+
+                m_redirectCount++;
+
+                ResourceResponse redirectResponse;
+                fillResponse(redirectResponse, m_request.url(), netResponse);
+
+                ResourceRequest newRequest = m_request;
+                newRequest.setURL(target);
+
+                /* 303 always, and 301/302 after a POST, become GET without a
+                 * body (307/308 keep the method). */
+                if (netResponse.status == 303
+                    || ((netResponse.status == 301 || netResponse.status == 302)
+                        && newRequest.httpMethod() == "POST")) {
+                    newRequest.setHTTPMethod("GET");
+                    newRequest.setHTTPBody(PassRefPtr<FormData>());
+                }
+
+                if (Net::logEnabled())
+                    Net::logLine("net.redirect %d %s -> %s", netResponse.status,
+                                 m_request.url().url().ascii(), target.url().ascii());
+
+                m_client->willSendRequest(m_handle, newRequest, redirectResponse);
+
+                /* The policy check may have cancelled the load. */
+                if (m_cancelled || !m_client)
+                    return;
+
+                m_request = newRequest;
+                m_hasResponse = false;
+                m_response = ResourceResponse();
+                m_netResponse = Net::Response();
+                m_body.clear();
+                m_totalReceived = 0;
+
+                ResourceHandleManager::sharedInstance()->redirect(m_handle);
+                return;
+            }
+        }
+    }
 
     ResourceResponse response;
     fillResponse(response, m_request.url(), netResponse);

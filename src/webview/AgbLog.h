@@ -26,6 +26,7 @@
  *   [shell] host lifecycle   window ready, message loop, exit bases
  *   [probe] headless probe   userdata, load error, dialog, exit code
  *   [flag]  engine flags     bridge switches (AntBridge.c)
+ *   [con-call] page console  console.log/info/warn/error, via the polyfills guard
  *
  * This is not the place for the opt-in debug channels ([netlog], [modfetch],
  * [snippet], [call], ...): they are separate tools with their own switches and
@@ -57,6 +58,7 @@ enum AgbLogChannel {
     AGB_LOG_SHELL,
     AGB_LOG_PROBE,
     AGB_LOG_FLAG,
+    AGB_LOG_CONSOLE,
     AGB_LOG_CHANNEL_COUNT
 };
 
@@ -69,6 +71,7 @@ static const char* agbLogChannelName(int channel)
     case AGB_LOG_SHELL: return "shell";
     case AGB_LOG_PROBE: return "probe";
     case AGB_LOG_FLAG:  return "flag";
+    case AGB_LOG_CONSOLE: return "con-call";
     default:            break;
     }
 

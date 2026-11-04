@@ -87,7 +87,6 @@ opacity/渐变（R11）、`var()` 含 fallback、`classList.add/toggle`、`match
   无 `SharedWorker`/`ServiceWorker`）：[handover.md P1-d](../handover.md) / R22。
 - **入口模块限制**（动态/async 入口、`import.meta.url` 伪装、DCL 之后的 inline 模块）：
   R7 / [module-pipeline.md](architecture/module-pipeline.md)。
-- **301/302 对 WebCore 不可见**（WinHTTP 静默跟随）：[handover.md P1-e](../handover.md)。
 - **wasm 是解释执行**：R19。
 
 ## 4. 修复后的收尾动作

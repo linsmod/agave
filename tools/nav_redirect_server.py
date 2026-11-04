@@ -6,6 +6,7 @@ Usage: python tools/nav_redirect_server.py [port]
 Serves tools/pages/ and adds:
   /redirect302 -> 302 to /navcheck_target.html
   /redirect301 -> 301 to /navcheck_target.html
+  /loop        -> 302 to itself (exercises the 20-hop guard)
   /slow        -> responds after 2s (for the [nav] stop case, if needed)
 """
 
@@ -23,6 +24,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         super().__init__(*args, directory=ROOT, **kwargs)
 
     def do_GET(self):
+        if self.path.startswith("/loop"):
+            self.send_response(302)
+            self.send_header("Location", "/loop")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if self.path.startswith("/redirect30"):
             status = 301 if self.path.startswith("/redirect301") else 302
             self.send_response(status)

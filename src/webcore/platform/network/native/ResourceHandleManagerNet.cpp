@@ -257,6 +257,10 @@ void ResourceHandleManager::add(ResourceHandle* job)
         if (req.method.empty())
             req.method = "GET";
         req.timeoutMs = Net::netDefaultTimeoutMs();
+        /* The loader needs to see every 3xx so FrameLoader::willSendRequest()
+         * runs and the shell can update the address bar. WinHTTP only follows
+         * the chain when this stays true. */
+        req.followRedirects = false;
 
         const HTTPHeaderMap& headers = d->m_request.httpHeaderFields();
         HTTPHeaderMap::const_iterator it = headers.begin();
@@ -315,6 +319,25 @@ void ResourceHandleManager::cancel(ResourceHandle* job)
     if (m_session && d->m_requestId)
         m_session->cancel(d->m_requestId);
 
+}
+
+/* A 3xx arrived. The handle already called FrameLoader::willSendRequest() and
+ * its request() now points at the redirect target; drop the old transfer (its
+ * queued data/complete events lose their client and are skipped by the session)
+ * and run the normal path again for the new URL. */
+void ResourceHandleManager::redirect(ResourceHandle* job)
+{
+    ResourceHandleInternal* d = job->getInternal();
+
+    if (!d || d->m_cancelled)
+        return;
+
+    if (m_session && d->m_requestId) {
+        m_session->cancel(d->m_requestId);
+        d->m_requestId = 0;
+    }
+
+    add(job);
 }
 
 void ResourceHandleManager::startSyncJob(ResourceHandle* job)

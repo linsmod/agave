@@ -89,6 +89,7 @@ antbridge.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**�
 [    901.5ms] [ui] key down vk=0x41
 [    901.5ms] [ui] char 'a'
 [    901.6ms] [ui] blur
+[   2986.8ms] [con-call] Error:
 ```
 
 | 通道 | 内容 | 关掉 | 更详细 |
@@ -111,9 +112,15 @@ antbridge.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**�
   `back-forward`=历史前进/后退、`reload`=重载、`other`=脚本 `location`/meta refresh/宿主打开。
   **重载时 `type=` 可能仍是上一次动作的类型**（WebCore 复用 `triggeringAction`），宿主发起的重载以
   `[nav] reload` 这行为准。
-- **301/302 不会出现 `[nav]`**：native 网络后端让 WinHTTP 自己跟随重定向，WebCore 永远只看到最终
-  200 和原始 URL（地址栏也停在原 URL）。要看到重定向链得先改成手动跟随，见
-  [handover.md §4 P1-e](../handover.md) 与 §5 限制。
+- **301/302 会出现 `[nav] redirect`**：native 后端不再让 WinHTTP 自己跟随
+  （`WINHTTP_OPTION_REDIRECT_POLICY_NEVER`），3xx 交给 `FrameLoader::willSendRequest`：先打
+  `[nav] redirect from=... to=...`，再按新 URL 打一条 `[nav] request`；地址栏和 `[probe] main url`
+  随之变成最终 URL。同一 URL 的自重定向（循环）不会打 redirect 行（`DocumentLoader` 只在 URL
+  变化时通知），20 跳后以 `[nav] fail provisional code=-3`（too many redirects）结束。
+- 页面自己的 `console.*` 输出由 polyfills 的控制台守卫收口到 **`[con-call]`** 通道
+  （`__agbConsoleLine` → `agbLog`），和 `[evt]`/`[nav]` 一样带 `[ 123.4ms]` 时间前缀、走 stderr；
+  `%c` 之类的样式参数按原样文本输出；单行超过 ~2KB 会被行缓冲截断。控制台守卫安装之前
+  （页面脚本开跑的头几毫秒）的调用仍走 ant 原生 console，没有前缀/时间。
 - `[nav] download` 只在会走 `cb_write_file_data` 的后端出现：native 后端目前没有下载链路
   （`FrameLoaderClientMC::startDownload` 仍是 `notImplemented()`），所以看不到这行。
 - 这些日志是**正常输出**，不是错误（见 §6 噪音对照）。
@@ -181,8 +188,8 @@ antbridge.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**�
   调试入口：`[probe] main url=` 就是引擎最终 URL；运行时的导航决策看 `[nav]`（见下一条）。
 - **导航去了别处 / 没发生**：按 `[nav] open`（宿主发起）→ `[nav] request type=... method=...`（引擎分类）
   → `[evt] commit`（真正提交）的顺序找断点。`popup create`/`blocked` 是弹窗，`client-redirect` 是
-  meta refresh / JS 定时跳转；`[nav] back/forward/reload/stop` 是宿主的历史与重载。301/302 不会出现在
-  `[nav]` 里（§2 的原因），要查重定向链先用 `AGB_NET_LOG=1` 或抓包。
+  meta refresh / JS 定时跳转；`[nav] back/forward/reload/stop` 是宿主的历史与重载。301/302 现在会以
+  `[nav] redirect from=... to=...` 出现（§2），要查更细的 3xx 交互再用 `AGB_NET_LOG=1` 或抓包。
 - **worker**：独立线程 + 独立 isolate，崩溃栈在**非主线程**（`~*kb` 里找 `worker_thread_main`）；
   worker 入口在 ant 侧走 ESM/CJS，栈帧名对 data: URL 折成 `data:script/<hash>`（看到它=worker 内的代码）。
   回归：`pwsh -File tools\run_worker_tests.ps1`。
@@ -210,12 +217,14 @@ antbridge.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**�
 | `Uncaught (in worker) ...` | worker 内未捕获异常（若页面没接 `onerror` 就是真的） |
 | `[probe] headless window hidden ...` | 正常，探针状态行 |
 | `[nav] ...` | 默认开启的导航动作日志，正常（`AGB_NAV_LOG=0` 可关） |
+| `[con-call] ...` | 页面自己的 `console.*` 输出（polyfills 守卫收口，带时间前缀），不是引擎错误 |
+| `[con-call] Error: `（消息为空） | 页面 `console.error(new Error())` 一类调用，正常噪音 |
 | `[evt] ...` / `[ui] ...` | 默认开启的生命周期/输入日志，正常（`AGB_EVT_LOG=0` / `AGB_UI_LOG=0` 可关） |
 
 ## 7. 验证闭环：回归清单 + A/B
 
 - 一条命令级回归：`tools/run_worker_tests.ps1`（Worker 九项）；`tools/run_nav_tests.ps1`
-  （`[nav]` 七项：链接/脚本跳转/历史后退/meta refresh/window.open/表单提交/关日志）；
+  （`[nav]` 八项：链接/脚本跳转/历史后退/meta refresh/window.open/表单提交/302 重定向/关日志）；
   `debug/csscheck.html`（CSS 能力矩阵）；`debug/life.html`（生命周期）；`debug/defercheck.html`；
   deepseek 登录页（`inp=2 all=129`）。完整清单与基线见 [handover.md §3](../handover.md)。
 - **能力缺口基线**：`tools/pages/cap_{dom,css,history,storage_a}.html`（一条命令出当前值，
