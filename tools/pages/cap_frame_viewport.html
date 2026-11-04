@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>cap_frame_viewport</title>
+<style>
+  body { margin: 0; }
+  #frame { width: 200px; height: 200px; border: 0; display: block; }
+</style>
+</head>
+<body>
+<iframe id="frame" src="cap_frame_viewport_child.html"></iframe>
+<script>
+/* The parent's viewport is ~1100 wide; the iframe's is 200x200. The child must
+ * report 200x200 for inner/outer/client, which is what pages size their layout
+ * from (WeChat's login QR is sized from window.outerWidth). */
+var de = document.documentElement;
+console.log('[parent] inner=' + window.innerWidth + 'x' + window.innerHeight +
+            ' outer=' + window.outerWidth + 'x' + window.outerHeight);
+</script>
+</body>
+</html>

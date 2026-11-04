@@ -185,9 +185,29 @@
   {
     var _ctors = ['Document','HTMLDocument','Element','HTMLElement','HTMLDivElement','Node','NodeList','HTMLCollection','Event','CustomEvent','MouseEvent','KeyboardEvent','DocumentFragment','Text','Comment','Attr','DOMParser','XMLSerializer','MutationObserver','Storage','Location','Navigator','Screen','History','Window','Performance','CSSStyleDeclaration','HTMLUnknownElement','HTMLAnchorElement','HTMLAreaElement','HTMLAudioElement','HTMLBRElement','HTMLBaseElement','HTMLBodyElement','HTMLButtonElement','HTMLCanvasElement','HTMLDListElement','HTMLDataElement','HTMLDataListElement','HTMLDetailsElement','HTMLDialogElement','HTMLEmbedElement','HTMLFieldSetElement','HTMLFontElement','HTMLFormElement','HTMLFrameElement','HTMLFrameSetElement','HTMLHRElement','HTMLHeadElement','HTMLHeadingElement','HTMLHtmlElement','HTMLIFrameElement','HTMLImageElement','HTMLInputElement','HTMLLIElement','HTMLLabelElement','HTMLLegendElement','HTMLLinkElement','HTMLMapElement','HTMLMediaElement','HTMLMenuElement','HTMLMetaElement','HTMLMeterElement','HTMLModElement','HTMLOListElement','HTMLObjectElement','HTMLOptGroupElement','HTMLOptionElement','HTMLOutputElement','HTMLParagraphElement','HTMLParamElement','HTMLPictureElement','HTMLPreElement','HTMLProgressElement','HTMLQuoteElement','HTMLScriptElement','HTMLSelectElement','HTMLSlotElement','HTMLSourceElement','HTMLSpanElement','HTMLStyleElement','HTMLTableCaptionElement','HTMLTableCellElement','HTMLTableColElement','HTMLTableElement','HTMLTableRowElement','HTMLTableSectionElement','HTMLTemplateElement','HTMLTextAreaElement','HTMLTimeElement','HTMLTitleElement','HTMLTrackElement','HTMLUListElement','HTMLVideoElement','SVGElement','SVGSVGElement'];
   if (typeof g.innerWidth === 'undefined') {
-    Object.defineProperty ? Object.defineProperty(g, 'innerWidth', { get: function () { return g.document && g.document.documentElement ? g.document.documentElement.clientWidth : 0; } }) : (g.innerWidth = 0);
-    Object.defineProperty ? Object.defineProperty(g, 'innerHeight', { get: function () { return g.document && g.document.documentElement ? g.document.documentElement.clientHeight : 0; } }) : (g.innerHeight = 0);
-    g.outerWidth = g.innerWidth; g.outerHeight = g.innerHeight;
+    /* Viewport metrics are per FRAME, not per process: an iframe is a small
+     * viewport inside the parent's window, and pages size themselves from
+     * these values. They used to be plain properties filled in once when this
+     * prelude ran (outerWidth = the top-level width), so a child frame read
+     * the parent's 1100 and laid its content out for a window it does not
+     * have - WeChat's login QR was sized for the parent page and then clipped
+     * inside its 200x200 iframe. Getters keep them in step with whichever
+     * document is bound. */
+    function innerW() { return (g.document && g.document.documentElement) ? g.document.documentElement.clientWidth : 0; }
+    function innerH() { return (g.document && g.document.documentElement) ? g.document.documentElement.clientHeight : 0; }
+    function defineViewport(name, getter) {
+      if (Object.defineProperty) {
+        try { Object.defineProperty(g, name, { get: getter, configurable: true }); return; } catch (e) {}
+      }
+      g[name] = getter();
+    }
+    defineViewport('innerWidth', innerW);
+    defineViewport('innerHeight', innerH);
+    /* outerWidth/outerHeight describe the browser window; with no real window
+     * chrome here the frame's own viewport is the best answer, and it must
+     * follow the bound document. */
+    defineViewport('outerWidth', innerW);
+    defineViewport('outerHeight', innerH);
     g.pageXOffset = 0; g.pageYOffset = 0; g.scrollX = 0; g.scrollY = 0;
     g.scrollTo = function (x, y) { if (g.document && g.document.documentElement) { g.document.documentElement.scrollLeft = x; g.document.documentElement.scrollTop = y; } };
     g.scrollBy = function (x, y) { g.scrollTo((g.pageXOffset||0)+x, (g.pageYOffset||0)+y); };

@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>cap_frame_viewport_child</title></head>
+<body style="margin:0">
+<script>
+/* Runs INSIDE the 200x200 iframe. Every value here must describe this frame's
+ * viewport, not the parent window's. */
+var de = document.documentElement;
+console.log('[child] inner=' + window.innerWidth + 'x' + window.innerHeight +
+            ' outer=' + window.outerWidth + 'x' + window.outerHeight +
+            ' de.client=' + de.clientWidth + 'x' + de.clientHeight +
+            ' body.client=' + (document.body ? document.body.clientWidth + 'x' + document.body.clientHeight : '?'));
+</script>
+</body>
+</html>
