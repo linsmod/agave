@@ -39,9 +39,27 @@
 #include "ResourceHandle.h"
 #include "SystemTime.h"
 
+/* The one diagnostics sink (src/webview/AgbLog.h, header-only). */
+#include "../../webview/AgbLog.h"
+
 using namespace std;
 
 namespace WebCore {
+
+/* [cache] resource types, for the hit/miss lines. */
+static const char* cacheTypeName(int type)
+{
+    switch (type) {
+    case 0: return "image";
+    case 1: return "css";
+    case 2: return "script";
+    case 3: return "font";
+    case 4: return "xsl";
+    case 5: return "xbl";
+    default: break;
+    }
+    return "other";
+}
 
 #if MOBILE
 static const int cDefaultCacheCapacity = 4096 * 1024;
@@ -108,6 +126,14 @@ CachedResource* Cache::requestResource(DocLoader* docLoader, CachedResource::Typ
     
     // Look up the resource in our map.
     CachedResource* resource = m_resources.get(url.url());
+
+    /* A memory-cache hit means the bytes are shared with whoever loaded this
+     * URL first, including its in-progress decode state. That is the first
+     * thing to check when one copy of an image looks different from another. */
+    if (resource)
+        agbLog(AGB_LOG_CACHE, "mem hit type=%s url=%s", cacheTypeName(type), url.url().utf8().data());
+    else
+        agbLog(AGB_LOG_CACHE, "mem miss type=%s url=%s", cacheTypeName(type), url.url().utf8().data());
 
     if (resource) {
         if (!skipCanLoadCheck && FrameLoader::restrictAccessToLocal() && !FrameLoader::canLoad(*resource, docLoader->doc())) {

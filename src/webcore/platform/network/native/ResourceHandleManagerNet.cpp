@@ -16,6 +16,9 @@
 #include "ResourceHandleInternal.h"
 #include "DeprecatedString.h"
 
+/* The one diagnostics sink (src/webview/AgbLog.h, header-only). */
+#include "../../../../webview/AgbLog.h"
+
 #include <string>
 
 namespace WebCore {
@@ -275,8 +278,8 @@ void ResourceHandleManager::add(ResourceHandle* job)
             Net::HttpCache::Entry cached;
 
             if (Net::HttpCache::instance().lookup(req, &cached)) {
-                if (netLogOn())
-                    fprintf(stderr, "[netmgr] cache hit status=%d body=%u\n", cached.response.status, (unsigned)cached.body.size());
+                agbLog(AGB_LOG_CACHE, "http hit status=%d body=%u url=%s",
+                       cached.response.status, (unsigned)cached.body.size(), req.url.c_str());
                 CachedDelivery delivery;
 
                 delivery.handle = job;
@@ -292,6 +295,8 @@ void ResourceHandleManager::add(ResourceHandle* job)
 
         if (netLogOn())
             fprintf(stderr, "[netmgr] session start url=%s\n", req.url.c_str());
+
+        agbLog(AGB_LOG_CACHE, "http miss url=%s", req.url.c_str());
 
         d->m_requestId = m_session->start(req, d);
         if (d->m_requestId == 0) {

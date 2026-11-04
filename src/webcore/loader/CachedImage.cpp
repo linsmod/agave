@@ -34,6 +34,9 @@
 #include "SystemTime.h"
 #include <wtf/Vector.h>
 
+/* The one diagnostics sink (src/webview/AgbLog.h, header-only). */
+#include "../../webview/AgbLog.h"
+
 #if ENABLE(SVG_EXPERIMENTAL_FEATURES)
 #include "SVGImage.h"
 #endif
@@ -158,8 +161,19 @@ IntRect CachedImage::imageRect(float multiplier) const
 void CachedImage::notifyObservers()
 {
     CachedResourceClientWalker w(m_clients);
-    while (CachedResourceClient *c = w.next())
+    int count = 0;
+
+    while (CachedResourceClient *c = w.next()) {
         c->imageChanged(this);
+        count++;
+    }
+
+    /* Who was told to repaint, and how much data the decoder had at that
+     * moment: a repaint driven by a partially decoded image is exactly how a
+     * QR ends up as a ghost. */
+    agbLog(AGB_LOG_CACHE, "img notify url=%s observers=%d bytes=%u all=%d",
+           url().utf8().data(), count,
+           (unsigned)(m_data ? m_data->size() : 0), m_loading ? 0 : 1);
 }
 
 void CachedImage::clear()
@@ -196,6 +210,11 @@ void CachedImage::data(PassRefPtr<SharedBuffer> data, bool allDataReceived)
     // It will not do anything now, but will delay decoding until 
     // queried for info (like size or specific image frames).
     sizeAvailable = m_image->setData(m_data, allDataReceived);
+
+    agbLog(AGB_LOG_CACHE, "img data url=%s bytes=%u all=%d sizeAvail=%d null=%d",
+           url().utf8().data(), (unsigned)(m_data ? m_data->size() : 0),
+           allDataReceived ? 1 : 0, sizeAvailable ? 1 : 0,
+           (m_image && m_image->isNull()) ? 1 : 0);
 
     // Go ahead and tell our observers to try to draw if we have either
     // received all the data or the size is known.  Each chunk from the

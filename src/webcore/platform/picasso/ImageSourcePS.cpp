@@ -21,6 +21,9 @@
 #include "JPEGImageDecoder.h"
 #endif /* JPEG_SUPPORT */
 
+/* The one diagnostics sink (src/webview/AgbLog.h, header-only). */
+#include "../../../webview/AgbLog.h"
+
 #ifdef PNG_SUPPORT
 #include "PNGImageDecoder.h"
 #endif /* PNG_SUPPORT */
@@ -186,6 +189,17 @@ NativeImagePtr ImageSource::createFrameAtIndex(size_t index)
         return 0;
 
     PixelsBuffer* buffer = m_decoder->frameBufferAtIndex(index);
+
+    /* [cache]: which frame a paint is about to use. FramePartial with fewer rows
+     * than the image means the paint is drawing a half-decoded frame;
+     * FrameComplete here means the frame is fine and the bug is a repaint that
+     * never reached the window. */
+    agbLog(AGB_LOG_CACHE, "frame idx=%u status=%d rows=%u/%d",
+           (unsigned)index,
+           buffer ? (int)buffer->status() : -1,
+           buffer ? buffer->height() : 0,
+           size().height());
+
 #ifdef IMAGE_DISPLAY_ONCE
     if (!buffer || !buffer->bytes().data() || (buffer->status() != PixelsBuffer::FrameComplete))
         return 0;

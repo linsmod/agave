@@ -43,10 +43,58 @@
 #include "TextStream.h"
 #include "XMLNames.h"
 
+/* The one diagnostics sink (see src/webview/AgbLog.h). Header-only, so it adds
+ * no link dependency to libagave. */
+#include "../../webview/AgbLog.h"
+
 namespace WebCore {
 
 using namespace HTMLNames;
 using namespace XMLNames;
+
+/* [style] tracing: AGB_STYLE_LOG=1 switches it on, AGB_STYLE_FILTER=<substr>
+ * narrows it to the elements whose tag, id or class contains that text.
+ *
+ * Why it exists: offsetWidth == 0 is usually "this element has no render tree
+ * object", and a computed style cannot say why - it happily reports the CSS
+ * width while the element is absent from the render tree. These lines say when
+ * an element was attached, when it was detached, and what each style recalc
+ * decided, which is the only way to see a renderer that never came back. */
+static bool styleLogFor(const Element* element)
+{
+    static int enabled = -1;
+    static const char* filter = 0;
+
+    if (enabled < 0) {
+        const char* on = getenv("AGB_STYLE_LOG");
+
+        enabled = (on && on[0] == '1' && !on[1]) ? 1 : 0;
+        filter = getenv("AGB_STYLE_FILTER");
+    }
+
+    if (!enabled)
+        return false;
+    if (!filter || !filter[0])
+        return true;
+
+    {
+        String haystack = element->tagName() + " "
+            + element->getAttribute(idAttr) + " "
+            + element->getAttribute(classAttr);
+
+        return haystack.find(String(filter)) != -1;
+    }
+}
+
+static void styleLogNode(const Element* element, const char* what, int a, int b, int c)
+{
+    agbLog(AGB_LOG_STYLE, "%s <%s> #%s .%s a=%d b=%d c=%d",
+           what,
+           element->tagName().utf8().data(),
+           element->getAttribute(idAttr).domString().utf8().data(),
+           element->getAttribute(classAttr).domString().utf8().data(),
+           a, b, c);
+}
 
 class ElementRareData {
 public:
@@ -697,7 +745,14 @@ void Element::removedFromDocument()
 
 void Element::attach()
 {
+    bool trace = styleLogFor(this);
+
+    if (trace)
+        styleLogNode(this, "attach-in", attached() ? 1 : 0, 0, 0);
     createRendererIfNeeded();
+    if (trace)
+        styleLogNode(this, "attach-out", renderer() ? 1 : 0,
+                     renderStyle() ? (int)renderStyle()->display() : -1, 0);
     ContainerNode::attach();
     if (ElementRareData* rd = rareData()) {
         if (rd->m_needsFocusAppearanceUpdateSoonAfterAttach) {
@@ -710,6 +765,8 @@ void Element::attach()
 
 void Element::detach()
 {
+    if (styleLogFor(this))
+        styleLogNode(this, "detach", attached() ? 1 : 0, renderer() ? 1 : 0, 0);
     cancelFocusAppearanceUpdate();
     if (ElementRareData* rd = rareData())
         rd->resetComputedStyle(this);
@@ -718,6 +775,9 @@ void Element::detach()
 
 void Element::recalcStyle(StyleChange change)
 {
+    bool trace = styleLogFor(this);
+    StyleChange incomingChange = change;
+
     // ### should go away and be done in renderobject
     RenderStyle* _style = renderStyle();
     bool hasParentStyle = (parentNode() && parentNode()->renderStyle()) ? true : false;
@@ -735,6 +795,8 @@ void Element::recalcStyle(StyleChange change)
         RenderStyle *newStyle = document()->styleSelector()->styleForElement(this);
         StyleChange ch = diff(_style, newStyle);
         if (ch == Detach) {
+            if (trace)
+                styleLogNode(this, "recalc-detach", (int)incomingChange, (int)ch, 0);
             if (attached())
                 detach();
             // ### Suboptimal. Style gets calculated again.
@@ -777,6 +839,10 @@ void Element::recalcStyle(StyleChange change)
 
     setChanged(NoStyleChange);
     setHasChangedChild(false);
+
+    if (trace)
+        styleLogNode(this, "recalc-out", (int)incomingChange, renderer() ? 1 : 0,
+                     renderStyle() ? (int)renderStyle()->display() : -1);
 }
 
 bool Element::childTypeAllowed(NodeType type)
