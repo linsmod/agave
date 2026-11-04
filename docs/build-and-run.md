@@ -55,6 +55,7 @@ pwsh -File tools\build_antbridge.ps1 -Force      # 重链 dll 并同步四处副
 | `libagave.dll` | 引擎本体 |
 | `antbridge.dll` (+ `antbridge.pdb`) | JS 桥（预编译产物，见 [ant-engine.md](ant-engine.md)） |
 | `prelude.js` / `polyfills.js` | 运行时从 exe 旁加载的 JS shim（可热改） |
+| `%LOCALAPPDATA%\Agave\probe\` / `...\view-host\` | 无头工具自己的 profile（cookies/cache），由 `AGB_USERDATA` 决定，见 [debugging.md](debugging.md) |
 
 - `3rdparty/ant/{bin,lib}/antbridge.dll` 只是**分发副本**，运行时不读它们（`3rdparty/ant/bin` 被 gitignore）。
 - 把 exe 单独拷到别处跑会缺 DLL（`debug/` 里直接跑拷过去的 exe 会失败）。

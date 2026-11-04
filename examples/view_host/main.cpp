@@ -23,6 +23,9 @@
  *                         elapse (needed for remote pages: they do not repaint
  *                         while requests are in flight)
  *         AGB_FRAME_LOG   print frames that took longer than 100 ms
+ *         AGB_USERDATA    profile root (cookies/localStorage/caches); defaults
+ *                         to %LOCALAPPDATA%\Agave\view-host so renders never
+ *                         touch the GUI profile
  */
 
 #include <windows.h>
@@ -112,6 +115,26 @@ bool writeBmp(const char* path, const unsigned char* bgra, int w, int h)
 
 int main(int argc, char** argv)
 {
+    /* Headless renderer: give it its own profile root so a render pass never
+     * reads or writes the cookies/cache a GUI session uses. $AGB_USERDATA wins;
+     * otherwise %LOCALAPPDATA%\Agave\view-host. */
+    {
+        static char env[MAX_PATH + 32];
+
+        if (!getenv("AGB_USERDATA")) {
+            const char* base = getenv("LOCALAPPDATA");
+
+            if (!base || !base[0])
+                base = getenv("TEMP");
+
+            if (base && base[0]) {
+                _snprintf(env, sizeof(env), "AGB_USERDATA=%s\\Agave\\view-host", base);
+                env[sizeof(env) - 1] = 0;
+                putenv(env);
+            }
+        }
+    }
+
     const char* url = (argc > 1) ? argv[1] : "https://example.com";
     const char* out = (argc > 2) ? argv[2] : "agave_view.bmp";
     const int W = 800, H = 600;

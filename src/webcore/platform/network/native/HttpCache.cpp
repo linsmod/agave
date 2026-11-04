@@ -56,6 +56,19 @@ long long nowMs()
 std::string cacheDir()
 {
 #if PLATFORM(WIN32)
+    /* $AGB_USERDATA redirects the whole profile root (cookies, localStorage,
+     * module cache, HTTP cache). The headless probe sets it so a test run never
+     * reads or writes the cache a GUI session uses. */
+    const char* userdata = getenv("AGB_USERDATA");
+
+    if (userdata && userdata[0]) {
+        std::string dir = std::string(userdata) + "\\http-cache";
+
+        CreateDirectoryA(userdata, NULL);
+        CreateDirectoryA(dir.c_str(), NULL);
+        return dir;
+    }
+
     const char* base = getenv("LOCALAPPDATA");
     std::string dir = base ? base : ".";
 

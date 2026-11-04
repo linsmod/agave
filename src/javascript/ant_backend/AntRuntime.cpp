@@ -766,9 +766,40 @@ static std::string        g_cookieFile;
 static std::string        g_storageFile;
 static std::vector<std::pair<std::string, std::string> >* g_storage = NULL;
 
+/* Creates every missing component of an absolute path ("a\b\c"). Returns true
+ * when the leaf exists afterwards. */
+static bool createDirTree(char* path)
+{
+    char* p;
+    char saved;
+
+    if (!path || !path[0])
+        return false;
+
+    for (p = path + 1; ; ++p) {
+        saved = *p;
+
+        if (saved == '\\' || saved == '/' || saved == 0) {
+            *p = 0;
+
+            CreateDirectoryA(path, NULL);
+
+            *p = saved;
+
+            if (!saved)
+                break;
+        }
+    }
+
+    return GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES;
+}
+
+
 /* Persisted cookies live in <data dir>/cookies.txt, one record per line:
  *   domain <TAB> path <TAB> secure <TAB> name <TAB> value
- * The data dir is %APPDATA%\Agave when writable, otherwise the exe folder. */
+ * The data dir is $AGB_USERDATA when set (the headless probe points it at its
+ * own directory so tests never touch the profile a GUI session uses), else
+ * %APPDATA%\Agave when writable, else the exe folder. */
 static const char* dataDir(void)
 {
     static char directory[AGB_PATH_CHARS];
@@ -779,6 +810,20 @@ static const char* dataDir(void)
 
     ready = 1;
     directory[0] = 0;
+
+    {
+        const char* userdata = getenv("AGB_USERDATA");
+
+        if (userdata && userdata[0]) {
+            _snprintf(directory, sizeof(directory), "%s", userdata);
+            directory[sizeof(directory) - 1] = 0;
+
+            if (createDirTree(directory))
+                return directory;
+
+            directory[0] = 0;
+        }
+    }
 
     {
         const char* appdata = getenv("APPDATA");

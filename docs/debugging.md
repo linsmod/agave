@@ -32,6 +32,16 @@ stderr 会打一行 `[probe] headless window hidden, AGB_PROBE_SHOW=1 to show (p
 验证"真的没窗口"：`powershell -File tools/check_window_visible.ps1 -ProcessId <pid>`
 （exit 0 = 无可见窗口，`-Json` 出明细）。要看真实 GUI：`agave_shell.exe <url>`（不带 `--probe`）。
 
+**profile 隔离**：`--probe` 有自己的 profile 根，默认 `%LOCALAPPDATA%\Agave\probe`
+（cookies / localStorage / module + HTTP 缓存 / shell state 全在里面），跑完不会动 GUI 会话的数据；
+stderr 的 `[probe] userdata=<路径>` 是实际生效的根。要隔离到别处（并行跑多个探针）：
+
+```powershell
+agave_shell.exe --probe <url> --userdata E:\tmp\probe-a ...   # 也可用环境变量 AGB_USERDATA
+```
+
+注意 `--offline` 重放用的是**探针自己**的缓存：先在线跑一次暖它，不要指望 GUI 会话的缓存。
+
 **本地测试页**：直接 `file://`（模块管线对 `file:` URL 本地直读，不用起服务）。
 需要 http 语义（相对 URL、worker、fetch）时起一个静态服务：
 
@@ -63,6 +73,7 @@ Start-Process -WindowStyle Hidden python -ArgumentList '-m','http.server','8971'
 | 字体 | `AGB_FONT_LOG=1` | `[fontsel] src[i] ... supported=0/1` 与 `[font] beginLoad/data` |
 | 控件 | `AGB_LOOP_DEBUG=1` / `AWG_CTX_DEBUG=1` | 控件帧循环 / 引擎上下文切换 |
 | JS 文件 | `AGB_PRELUDE` / `AGB_POLYFILLS` | 指向别处的 `prelude.js` / `polyfills.js` 副本 |
+| profile | `AGB_USERDATA` | 整个 profile 根（cookies/localStorage/模块缓存/HTTP 缓存/shell state）。`--probe` 默认 `%LOCALAPPDATA%\Agave\probe`，`--userdata` 等价 |
 
 ## 3. 定位手段
 

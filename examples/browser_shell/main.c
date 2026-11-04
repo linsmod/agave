@@ -84,17 +84,53 @@ static char     g_dataDir[MAX_PATH_CHARS];
 /* data directory + persisted state                                          */
 /* ------------------------------------------------------------------------- */
 
+/* $AGB_USERDATA (if set) is the single profile root: bookmarks/session here and
+ * cookies/localStorage/module cache in the engine. The headless probe points it
+ * at its own directory so test runs never touch the user's profile. */
+static void createDirTree(char* path)
+{
+    char* p;
+    char saved;
+
+    if (!path || !path[0])
+        return;
+
+    for (p = path + 1; ; ++p) {
+        saved = *p;
+
+        if (saved == '\\' || saved == '/' || saved == 0) {
+            *p = 0;
+            CreateDirectoryA(path, NULL);
+            *p = saved;
+
+            if (!saved)
+                break;
+        }
+    }
+}
+
 static void dataDirInit(void)
 {
-    const char* appdata = getenv("APPDATA");
+    const char* userdata = getenv("AGB_USERDATA");
 
-    if (appdata && appdata[0]) {
-        _snprintf(g_dataDir, sizeof(g_dataDir), "%s\\AgaveShell", appdata);
+    if (userdata && userdata[0]) {
+        _snprintf(g_dataDir, sizeof(g_dataDir), "%s", userdata);
         g_dataDir[sizeof(g_dataDir) - 1] = 0;
+        createDirTree(g_dataDir);
+        return;
+    }
 
-        if (CreateDirectoryA(g_dataDir, NULL) ||
-            GetFileAttributesA(g_dataDir) != INVALID_FILE_ATTRIBUTES)
-            return;
+    {
+        const char* appdata = getenv("APPDATA");
+
+        if (appdata && appdata[0]) {
+            _snprintf(g_dataDir, sizeof(g_dataDir), "%s\\AgaveShell", appdata);
+            g_dataDir[sizeof(g_dataDir) - 1] = 0;
+
+            if (CreateDirectoryA(g_dataDir, NULL) ||
+                GetFileAttributesA(g_dataDir) != INVALID_FILE_ATTRIBUTES)
+                return;
+        }
     }
 
     /* Portable mode: next to the executable. */
@@ -112,6 +148,50 @@ static void dataDirInit(void)
             CreateDirectoryA(g_dataDir, NULL);
         }
     }
+}
+
+/* Headless runs must not share the GUI profile: cookies, localStorage, the
+ * module/HTTP caches and the shell state all live under $AGB_USERDATA, so the
+ * probe gets its own root. AGB_USERDATA (env or --userdata) always wins, which
+ * also lets parallel probes use disjoint directories. */
+static void probeUserDataInit(void)
+{
+    char dir[MAX_PATH_CHARS];
+    char env[MAX_PATH_CHARS + 32];
+    const char* existing = getenv("AGB_USERDATA");
+
+    dir[0] = 0;
+
+    if (existing && existing[0]) {
+        _snprintf(dir, sizeof(dir), "%s", existing);
+    } else {
+        const char* base = getenv("LOCALAPPDATA");
+
+        if (!base || !base[0])
+            base = getenv("TEMP");
+
+        if (base && base[0])
+            _snprintf(dir, sizeof(dir), "%s\\Agave\\probe", base);
+    }
+
+    if (dir[0]) {
+        createDirTree(dir);
+    }
+
+    if (dir[0]) {
+        _snprintf(env, sizeof(env), "AGB_USERDATA=%s", dir);
+        putenv(env);
+    }
+
+    /* Shell state (bookmarks/session) follows the same root; nothing writes it
+     * in probe mode, but a stray path must not land in the user profile. */
+    if (dir[0]) {
+        _snprintf(g_dataDir, sizeof(g_dataDir), "%s", dir);
+        g_dataDir[sizeof(g_dataDir) - 1] = 0;
+    }
+
+    fprintf(stderr, "[probe] userdata=%s\n", dir[0] ? dir : "(default: not isolated!)");
+    fflush(stderr);
 }
 
 static void statePath(char* out, size_t size, const char* name)
@@ -1716,6 +1796,9 @@ static LRESULT CALLBACK probeWndProc(HWND hwnd, UINT message, WPARAM wParam, LPA
 
 static int probeRun(const char* url)
 {
+    /* Own profile root before any engine exists (cookies/localStorage/caches). */
+    probeUserDataInit();
+
     WNDCLASSA wc;
     AgaveWebViewCallback callbacks;
     MSG msg;
@@ -2009,7 +2092,10 @@ static void probeUsage(void)
             "  --reload <n>  reload the page n times and run the eval after\n"
             "                every round (page lifecycle comparison)\n"
             "  --offline module fetches are served from the cache only\n"
-            "            (no network; warm the cache with a normal run first)\n");
+            "            (no network; warm the cache with a normal run first)\n"
+            "  --userdata <dir>  profile root for this run (cookies, localStorage,\n"
+            "            module/HTTP caches, shell session). --probe defaults to\n"
+            "            %%LOCALAPPDATA%%\\Agave\\probe so tests never touch the GUI profile\n");
 }
 
 /* Parses the raw command line into argv/argc in place, honoring double quotes.
@@ -2085,6 +2171,15 @@ static void parseShellArgv(void)
             g_probeReloadsLeft = atoi(argv[++i]);
             g_probeReloadMode = 1;
             g_probeTotalRounds = g_probeReloadsLeft + 1;
+        } else if (!strcmp(argv[i], "--userdata") && i + 1 < argc) {
+            static char userdataEnv[MAX_PATH_CHARS + 32];
+
+            /* Picked up by the shell and by the engine (cookies/localStorage/
+             * module + HTTP caches). putenv, not SetEnvironmentVariableA: MinGW's
+             * getenv reads the CRT environment. */
+            _snprintf(userdataEnv, sizeof(userdataEnv), "AGB_USERDATA=%s", argv[++i]);
+            userdataEnv[sizeof(userdataEnv) - 1] = 0;
+            putenv(userdataEnv);
         } else if (!strcmp(argv[i], "--offline")) {
             /* Module fetches come from the cache only (read by the Ant runtime
              * as AGB_OFFLINE). Set before any view exists. putenv, not
