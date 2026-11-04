@@ -58,6 +58,14 @@ pwsh -File tools\build_antbridge.ps1 -Force      # 重链 dll 并同步四处副
 | `%LOCALAPPDATA%\Agave\probe\` / `...\view-host\` | 无头工具自己的 profile（cookies/cache），由 `AGB_USERDATA` 决定，见 [debugging.md](debugging.md) |
 
 - `3rdparty/ant/{bin,lib}/antbridge.dll` 只是**分发副本**，运行时不读它们（`3rdparty/ant/bin` 被 gitignore）。
+- **picasso（图形后端）源码在 `3rdparty/picasso/`，由 `add_subdirectory` 直接编译**，
+  产物是 `build-zig-native/picasso/libpicasso2_sw.a`（静态）。它以前是 `ExternalProject`：
+  从 `packages/picasso-2.8.0.tar.gz` 解压到构建目录、再用 `packages/patchs/` 覆盖几个文件，
+  所以**任何图形修复都写在仓库外**，清构建目录就被还原。现在改图形代码直接改 `3rdparty/picasso/`。
+  两个坑：①`BUILD_SHARED_LIBS` 与主工程共用，picasso 只在 `add_subdirectory` 期间用普通变量切成
+  静态、之后立刻还原（强制成 cache 会把 libagave 也变静态，`libagave_webview` 立刻链接失败）；
+  ②主工程给每个 C++ TU 强制 `-include src/wtf/Platform.h`（它拉 `mconfig.h`），picasso 没有
+  `mconfig.h`，所以 `3rdparty/picasso/CMakeLists.txt` 里把这一条从 `CMAKE_CXX_FLAGS` 剥掉。
 - 把 exe 单独拷到别处跑会缺 DLL（`debug/` 里直接跑拷过去的 exe 会失败）。
 - 可选宿主：`test/`（`OPT_EXAMPLES=ON` 时构建 `agave_test`）、`examples/touchweb`（手机 UI，单独构建）。
 - 单元测试：`unit_tests/` 存在，但默认 `OPT_UNITTEST=OFF` 不构建；打开它会在 configure 阶段

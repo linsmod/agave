@@ -100,6 +100,8 @@ antbridge.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**�
 | `[shell]` 宿主 | window ready / 进入与退出消息循环 / `CreateWindowEx` 失败 / `atexit` 模块基址 | — | — |
 | `[probe]` 探针 | userdata、headless 状态、加载错误、对话框、退出码 | — | — |
 | `[flag]` 引擎开关 | 桥接开关（`uncaught_nonfatal` 等），来自 antbridge.dll | — | — |
+| `[style]` 渲染树 | 指定元素的 attach / detach / recalcStyle（是否拿到 renderer、computed display）。**opt-in** | 默认关 | `AGB_STYLE_LOG=1` 打开，`AGB_STYLE_FILTER=<子串>` 按 tag/id/class 过滤 |
+| `[cache]` 资源缓存 | 内存缓存 hit/miss、HTTP 缓存 hit/miss、图片 `data`/`notify` 生命周期、绘制时用到的帧状态（`FrameComplete`/`rows=n/m`） | `AGB_CACHE_LOG=0` | — |
 
 注意：
 - `[ui]` 主要是 GUI 模式的输入（focus/blur/mouse/wheel/key/char）：输入事件在控件窗口过程里产生。
@@ -174,6 +176,18 @@ antbridge.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**�
   子树没有 renderer、不渲染；children 仍在 DOM（`innerHTML`/script 访问不变）。**别删**。
 - **`on_progress finished=1` 不代表加载成功**：用 `agave_webview_url` 比对 host 判断是否真提交
   （加载卡死时 FrameLoader 会以 `about:blank` 提交）。
+- **一条命令跑探针**：`pwsh -File tools/probe.ps1 -Url <url> -ScriptFile <js>`
+  —— 探针自己解析命令行、把 `"` 和 `\` 当语法，内联 `--eval` 里带 JS 字符串字面量会被拆坏；
+  这个 helper 用 `--eval-file` 传文件，顺带设好 `--wait/--settle/--timeout/--userdata`。
+  退出码仍是权威判据。
+- **一条命令截图**：`pwsh -File tools/screenshot.ps1 -Url <url> -Out <png> -Wait 16`
+  —— 窗口**不显示、不抢焦点**，用 `PrintWindow`（`PW_RENDERFULLCONTENT`）渲染；
+  不要 `SetForegroundWindow`、不要抓屏（会抓到任务视图/别的窗口，也会打扰用户）。
+- **"这个元素为什么是 0×0"**：先 `__agbLayoutInfo(node)`（不强制布局）——
+  `renderer=0` 是"没有渲染树对象"（样式在最后一次重算时是 `display:none`），
+  `renderer=1` 但 `w=0` 是"挂上了但从没布局"，两者的修法相反。配合 `[style]` 通道看时序。
+- **iframe 里到底是什么样**：`__agbActivateSlot(i)` 切换共享 window 绑定的 frame 文档
+  （返回上一个槽位），读 `document.*` 之后切回去；`__agbFrameSlot()` 返回当前槽位。
 - **一条命令抓带符号栈（首选）**：`pwsh -File tools/cdb_stack.ps1 -Url <url> -ScriptFile <js>`
   —— 自动带 `-y "build-zig-native;H:\ant-v16\bridge"`、`.lines`、`sxe av/0xC0000409/0x80000003`，
   命中后 dump `kb 60` + `~*kb 30` + `lm`，日志落 `debug/cdb_stack_<ts>.log`；退出时还会自动符号化

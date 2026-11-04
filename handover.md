@@ -13,12 +13,14 @@
 **能跑通**：页面加载/解析（含 `defer`/`async`/ESM 模块）、DOM 桥接、computed style、布局与绘制、
 滚动、鼠标/键盘事件、定时器、XHR/fetch（二进制 + POST）、localStorage、Web Worker、`file:` 本地页面、
 标签页/地址栏/查找/书签、`beforeunload`、301/302 重定向（地址栏更新 + `[nav] redirect`）、
-元素事件处理属性 `el.onload/onerror = fn`（R27）。
+元素事件处理属性 `el.onload/onerror = fn`（R27）、`window.postMessage`（同/跨 frame）、
+`:empty` 等结构选择器随子节点变化失效（R28）、CSS 缩放的图片正确绘制（R29）、
+iframe 的视口度量按帧求值（R30）。
 
 **已经被检查过的"看起来不能用"**（别再当缺陷重开）：ant 的 Worker 是真的（R22）、ant 的 wasm 引擎是真的
 （R19）、渐变/`var()`/flex 大多可用（R11）、滚动与 hover 重绘正确（R13/R14）、刷新后 realm/监听器会清理（R9/R10）。
 
-**还没做**（§4 有验收标准）：模块图 flush 阻塞 engine 线程（P0-b）、DOMContentLoaded 双发（P0-c）、
+**还没做**（§4 有验收标准）：per-frame `window` 对象（P0-a，规范问题）、模块图 flush 阻塞 engine 线程（P0-b）、DOMContentLoaded 双发（P0-c）、
 模块调度状态不是 per-realm（P1-a）、`g_documentParsed` 死标志（P1-c）、worker 里没有网络（P1-d）、
 DOM 集合/表单/History 半实现（P1-f）、
 prefetch 仍是字符串扫描（P2）、桥接无计数（P2）。能力缺口的完整实测见
@@ -106,6 +108,19 @@ ant 原生构造器；http(s) 走异步桥取源码 + preamble 后包成 `data:`
 [`docs/debugging.md`](docs/debugging.md)。
 
 ## 4. 待办（按优先级，含验收标准）
+
+### P0-a per-frame `window` 对象（规范问题，用户指定优先）
+- 现状：整个 view 只有一个 JS 全局对象，所有 frame 共享；`window.parent`/`top`/`self`/`frames`
+  在 `prelude.js` 里全指向自己。已经修掉的只是视口度量（R30：`innerWidth/innerHeight/
+  outerWidth/outerHeight` 按绑定 document 求值），其余仍是共享。
+- 影响：子 frame 的全局赋值污染父页；按规范写的跨 frame 组件（读 `window.parent !== window`、
+  用 `window.frames.length`）走错分支；DeepSeek 二维码在 200×200 iframe 里仍被裁切，怀疑与此有关。
+- 动作：给每个 frame 一个 **window 代理对象**——`window`/`document`/`location`/`parent`/`top`/
+  `self`/`frames`/`length`/`name`/`frameElement` 走代理，未知属性委托给共享全局（读/写都要）；
+  桥接层已有 `g_docSlots`/`__agbActivateSlot` 可复用。设计先写 `docs/architecture/frame-window.md`。
+- 验收：`tools/pages/cap_frame_viewport.html` 之外再加一页验证 `parent !== self`、
+  `parent.document === 父文档`、`frames.length`、子 frame 里 `var x=1` 不出现在父页；
+  DeepSeek 登录页二维码完整落在 200×200 内且能被 `cv2.QRCodeDetector` 解码。
 
 ### P0-b 图就绪与执行解耦
 - 现状：`moduleFetch()` 在 engine 线程上 `pump()+Sleep(0)` 同步等模块 body（5s/模块上限），

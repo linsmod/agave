@@ -49,9 +49,11 @@ classListAdd=function matches=function closest=function textContent=string
 | `HTMLFormElement.submit()` / `.action` | `undefined`；点 submit 按钮能提交（WebCore 默认动作） | 程序化提交、读/改 action、表单库的 `.submit()` 路径失效 | 缺口，P1 |
 | `history.pushState` / `replaceState` | 是函数，但**只改 document URL**：`state=undefined`、`len=undefined`、`pops=0`、`href` 被改写 | history 模式的 SPA（Vue/React Router）无法保存/恢复 state，收不到 `popstate`，前进后退会跳过视图 | 半实现，P1 |
 | `localStorage` 跨文档 | A 页写入 → 导航到 B → `null`；同一跑的 cookie 正常（`cookie=true`） | 用 localStorage 存 token/购物车的多页流程会丢状态；测试也不能拿它当跨页标记（用 cookie） | 缺口，P1 |
-| `window.postMessage` / `message` 事件 | `undefined`，调用直接抛 `TypeError`；同窗口/跨窗口都收不到 | 跨 frame 组件无法通信：DeepSeek 的微信扫码 iframe 用 `postMessage` 报 `wxReady`/扫码状态，父页因此永远等不到 ready（二维码区域空） | 缺口，P1 |
-| `document.querySelector(All)` 的属性选择器 | `[data-bar]` / `[class*=probe]` / `div[data-bar]` 全部 `0`；`.probe-cls` 为 `1` | 用 `querySelector('script[data-x]')` 做幂等、`[data-state]` 做 UI 分支的代码全部走空分支；不报错 | 缺口，P1 |
+| `window.postMessage` / `message` 事件 | **已支持**：同窗口/跨 frame 都能投递（`{data, origin, source}`，`origin` 取发送方文档的 scheme://host[:port]）；`cap_postmessage.html` → `postMessage=function sent=yes got=1` | —— | 已支持 |
+| iframe 的 `contentWindow` / `contentDocument` | 都是 `undefined`（frame 文档在桥接层有槽位，但没暴露成 DOM 属性） | 父页读不到子文档；调试靠 `__agbActivateSlot(i)` | 缺口，P1 |
+| iframe 与父页共享同一个 `window` 对象 | `window`/`document` 之外的全局是同一个；`innerWidth/innerHeight/outerWidth/outerHeight` **已改成按帧求值**（R30） | 子 frame 里的全局赋值会污染父页；`window.parent`/`top`/`frames` 指向自身，跨 frame 组件按规范写会走错分支 | 架构缺口，P0（需要 per-frame window 代理） |
 | `HTMLImageElement.complete` / `naturalWidth` / `width` | 全 `undefined`（图片实际能加载/绘制） | 图片预加载、`img.onload` 之外的完成判定、二维码/图标尺寸计算失效 | 缺口，P2 |
+| `document.querySelector(All)` 的属性选择器 | `[data-bar]` / `[class*=probe]` / `div[data-bar]` 全部 `0`；`.probe-cls` 为 `1` | 用 `querySelector('script[data-x]')` 做幂等、`[data-state]` 做 UI 分支的代码全部走空分支；不报错 | 缺口，P1 |
 | `Element.insertAdjacentHTML` | `undefined` | jQuery、统计/广告脚本常用；有特性检测的会降级，没有的直接抛错 | 缺口，P2 |
 | `HTMLElement.innerText` | `undefined`（`textContent` 正常） | 老代码/测试断言常用 | 缺口，P2 |
 | `window.open` 的引擎侧策略 | 可用，但**绕过** `FrameLoaderClientMC::dispatchCreatePage`，走控件 `agave_control_open_window` | 引擎级 new-window 策略/features 不生效；`[nav]` 里看到的是 `popup create`，不是 `popup open` | 管道差异，P2 |
@@ -68,8 +70,14 @@ classListAdd=function matches=function closest=function textContent=string
   `HTMLFormElement` 的 `submit`/`action` 等条目。
 - storage：`AntRuntime.cpp` 的 storage 绑定；写入在文档 teardown 落盘、读取只在 engine 重建时发生
   （跨进程能读到旧值，同进程导航读不到）。
-- `window.postMessage`：`prelude.js` 只有 Worker 的 `postMessage` 和宿主桥 `agavePostMessage`
-  （页面→壳），没有标准 `window.postMessage`/`message` 事件；`onmessage` 只出现在事件名表里。
+- `window.postMessage`（已支持）：`prelude.js` 的 `g.postMessage` → 桥 `__agbFramePostMessage`
+  （`AntRuntime.cpp` 的 `globalFramePostMessage`）派发到 `message` 监听器。宿主桥 `agavePostMessage`
+  是另一个方向（页面→壳），不要混。
+- iframe 文档：桥接层有 `g_docSlots` 槽位，`__agbActivateSlot(i)` 可切换绑定；
+  `contentWindow`/`contentDocument` 没有暴露成 DOM 属性。
+- 缩放图片（已修，R29）：`BitmapImage::draw` 的 `dst!=src` 分支原本走 picasso 的图像填充采样器，
+  画出来是鬼影；现在由 `src/webcore/platform/picasso/ImagePS.cpp` 的 `draw_scaled_image()`
+  自己做 box filter 再 bitblt。
 - 属性选择器：`AntRuntime.cpp` 的 `nodeQuerySelector` / `nodeQuerySelectorAll` 只把简单选择器交给
   WebCore；`[attr]` / `[attr=v]` / `[class*=]` / `div[attr]` 都返回空（`.class`、`#id`、tag 正常）。
 - 图片属性：`nodeGetter` 没有 `HTMLImageElement` 的 `complete`/`naturalWidth`/`width`/`height` 分支。
@@ -147,7 +155,14 @@ DeepSeek 登录页的对照组：开 polyfills `inputs=2 all=124`；关掉后 `i
    （修前 `hits=1`，修后 `hits=11`）。
 3. R27 修复后：`iframes=1 wxKids=1`；`open.weixin.qq.com/connect/qrconnect` 返回 200 并 commit；
    该 URL 单独打开能画出二维码，放进跨域 iframe（`debug/frame_cross.html`）也能画出。
-4. DeepSeek 页内这块仍然空白（iframe 元素存在、尺寸样式 200×200，但页面里看不到）。
-   待验证的下一层：微信组件靠 `window.postMessage` 给父页发 `wxReady`/扫码状态，而
-   `window.postMessage` 目前不存在（§1）；父页可能因此不把二维码容器显示出来。
-   补 `window.postMessage` + `message` 事件后要回来复测这一节。
+4. 现在二维码**能画出来**了，剩下两层都已定位并修掉前两层：
+   - **`:empty` 不失效**（R28）：`#wxLogin` 在 React 重渲染时是空的，解析成 `display:none`、
+     没有 renderer；二维码 iframe 插进去后 `:empty` 不再匹配却没人重算 → 一直 0×0。
+   - **CSS 缩放的图片画成鬼影**（R29）：二维码图片按 160×160 缩放显示时，黑色模块被画成透明，
+     白底上只剩轮廓、深色底上"看着像二维码"，扫码器读不出来。
+   - **iframe 视口取了父页的**（R30）：`outerWidth` 是 prelude 执行时复制的 1100，微信页按它排版，
+     塞进 200×200 的 iframe 就溢出。
+5. 仍未完成：二维码在 200×200 的 iframe 里**右侧/底部被裁掉**（内容宽于视口，出现滚动条）。
+   下一步是 per-frame `window` 代理（`window.parent`/`top`/`frames` 现在都指向自身），
+   然后再看子文档布局；`__agbActivateSlot(1)` 可以直接读子 frame 文档来量。
+
