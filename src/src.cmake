@@ -106,6 +106,14 @@ if (OPT_JS_ANT)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             ${PROJ_ROOT}/3rdparty/ant/bin/antbridge.dll
             $<TARGET_FILE_DIR:${LIB_NAME}>/antbridge.dll)
+    # antbridge is built -O2 -g (release + debug info); keep its PDB next to the
+    # DLL so cdb resolves engine/bridge frames without extra setup.
+    if (EXISTS ${PROJ_ROOT}/3rdparty/ant/bin/antbridge.pdb)
+        add_custom_command(TARGET ${LIB_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${PROJ_ROOT}/3rdparty/ant/bin/antbridge.pdb
+                $<TARGET_FILE_DIR:${LIB_NAME}>/antbridge.pdb)
+    endif()
 endif()
 
 # Native network backend (task 3-1): system stack (WinHTTP/SChannel) instead of

@@ -219,16 +219,16 @@ antbridge.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**�
   命中后 dump `kb 60` + `~*kb 30` + `lm`，日志落 `debug/cdb_stack_<ts>.log`；退出时还会自动符号化
   `[shell] atexit` 的 `#NN exe|libagave|antbridge+0x...` 帧。挂起用 `-Attach <pid>` 或
   `-Hang -Url <url> -HangAfter 8`；已有日志用 `-Symbolize <log>`。
-  ship 版 `antbridge.pdb` 在 `H:\ant-v16\bridge\`；若缺失/不匹配，
-  `pwsh -File tools/build_antbridge.ps1 -Debug` 生成 `ab_dbg.dll+ab_dbg.pdb` 并装到
-  `build-zig-native\`，`-Restore` 还原 ship DLL。下面两条是**需要自定义 cdb 命令时**的手工后备。
+  `antbridge.pdb` 和 DLL 一起安装（H:/ant-v16/bridge、3rdparty/ant/bin、build-zig-native），
+  所以 cdb 直接就有符号；`pwsh -File tools/build_antbridge.ps1 -Force` 重编并重装，`-Restore` 还原上一份 DLL。
+  下面两条是**需要自定义 cdb 命令时**的手工后备。
 - **抓挂起线程栈**：`tools\cdb.exe -p <pid> -c '~*k 30; qd'`（探针有超时会秒退，attach 要趁早）。
 - **断在首次异常**：写命令文件 `sxe av` / `g` / `~*kb 20` / `q`，再
   `tools\cdb.exe -y "<build-zig-native>;H:\ant-v16\bridge" -cf cmds.txt build-zig-native\agave_shell.exe --probe ...`
   —— **不要用 `--` 分隔**（这版 cdb 报 0x80070057），也别用 Start-Process 传 `-c "长命令"`（引号被吞）。
   `antbridge.dll` 旁边有匹配的 `antbridge.pdb`，`-y` 指过去就能解出 `process.c @ 2355` 这种帧。
-- **CPU 热点**（连 ant 内部符号一起解）：`AGB_PROFILE=1` 跑探针拿 `[profjs]` 直方图；antbridge 默认
-  没调试信息时用 `-g` 重链出 `ab_dbg.dll` + `ab_dbg.pdb`，`cdb -y <dll目录> -z antbridge.dll -c "ln antbridge+0x<rva>; qd"`
+- **CPU 热点**（连 ant 内部符号一起解）：`AGB_PROFILE=1` 跑探针拿 `[profjs]` 直方图；antbridge 和
+  libant 都是带调试信息的 release（`-O2 -g` / `-O3 -g`），`cdb -y <dll目录> -z antbridge.dll -c "ln antbridge+0x<rva>; qd"`
   出函数/源码行；在线抓栈用 `cdb -y <dll目录> -p <pid> -c "~*k 30; qd"`。
 - **地址栏输入 → URL**：`examples/browser_shell/main.c` 的 `normalizeUrl()` 是唯一入口（地址栏/Go/收藏夹/
   `--probe` 都走它）。本地路径 → `fileUrlFromLocalPath()`（`GetFullPathNameW` + `\`→`/` + 逐字节百分号转义）；

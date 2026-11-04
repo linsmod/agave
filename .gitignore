@@ -30,3 +30,7 @@ build-touch/
 build-ant-replay/
 3rdparty/ant/lib/antbridge.dll
 3rdparty/ant/lib/antbridge.dll
+
+# antbridge is built -O2 -g; the PDB is ~38 MB and stays local (build_antbridge.ps1 installs it).
+3rdparty/ant/bin/*.pdb
+3rdparty/ant/lib/*.pdb

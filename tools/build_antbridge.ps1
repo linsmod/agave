@@ -6,13 +6,14 @@
 # copies it. Any change to AntBridge.c therefore needs this script, followed by a
 # normal `cmake --build build-zig-native` so libagave relinks against it.
 #
-# Usage:  pwsh -File tools/build_antbridge.ps1 [-Check] [-Debug] [-Restore]
+# Usage:  pwsh -File tools/build_antbridge.ps1 [-Check] [-Force] [-Restore]
+#   The DLL is always built `-O2 -g` (release with debug info): same code as a
+#   pure release build, plus symbols, so cdb / tools/cdb_stack.ps1 can resolve
+#   antbridge and ant engine frames. antbridge.pdb is installed next to every
+#   DLL copy, and src/src.cmake copies it into the build dir.
 #   -Check    only verify that a rebuild is needed / all inputs exist
-#   -Debug    build ab_dbg.dll + ab_dbg.pdb (with -g), install it as
-#             build-zig-native\antbridge.dll, keeping the ship DLL as
-#             H:\ant-v16\bridge\antbridge_ship.dll. This is what makes
-#             cdb/tools/cdb_stack.ps1 able to resolve antbridge frames.
-#   -Restore  put the ship DLL back (undo -Debug)
+#   -Debug    accepted for compatibility; it is the default now (no-op)
+#   -Restore  put the saved ship DLL back (H:\ant-v16\bridge\antbridge_ship.dll)
 
 param(
     [switch]$Check,
@@ -38,9 +39,7 @@ $cshdr     = Join-Path $bridgeDir 'AntBridge.h'
 $obj       = Join-Path $bridgeDir 'AntBridge.obj'
 $outDll    = Join-Path $bridgeDir 'antbridge.dll'
 $outLib    = Join-Path $bridgeDir 'antbridge.dll.a'
-$dbgDll    = Join-Path $bridgeDir 'ab_dbg.dll'
-$dbgLib    = Join-Path $bridgeDir 'ab_dbg.dll.a'
-$dbgObj    = Join-Path $bridgeDir 'AntBridge_dbg.obj'
+$outPdb    = Join-Path $bridgeDir 'antbridge.pdb'
 $shipDll   = Join-Path $bridgeDir 'antbridge_ship.dll'
 $install   = Join-Path $root 'build-zig-native'
 
@@ -74,7 +73,7 @@ function AssertShellStopped {
 }
 
 if ($Restore) {
-    Require $shipDll 'antbridge_ship.dll (no -Debug build was installed)'
+    Require $shipDll 'antbridge_ship.dll (nothing was saved)'
     AssertShellStopped
     Copy-Item $shipDll (Join-Path $install 'antbridge.dll') -Force
     Write-Host "== restored ship antbridge.dll =="
@@ -82,9 +81,7 @@ if ($Restore) {
 }
 
 if ($Debug) {
-    $outDll = $dbgDll
-    $outLib = $dbgLib
-    $obj    = $dbgObj
+    Write-Host "== -Debug is the default now: antbridge is always built -O2 -g =="
 }
 
 Require $src    'AntBridge.c'
@@ -98,16 +95,17 @@ Write-Host "== inputs =="
 Write-Host "  source     : $src"
 Write-Host "  libant.a   : $libant"
 Write-Host "  vendor libs: $($vendorLibs.Count)"
-Write-Host "  output     : $outDll"
+Write-Host "  output     : $outDll (+ $(Split-Path -Leaf $outPdb))"
 
-# Only rebuild when the source is newer than the DLL, unless -Force is given.
-if ((Test-Path $outDll) -and -not $Force -and -not $Debug) {
+# Only rebuild when the source is newer than the DLL (and the PDB is there),
+# unless -Force is given.
+if ((Test-Path $outDll) -and (Test-Path $outPdb) -and -not $Force) {
     $sourceTime = (Get-Item $src).LastWriteTimeUtc
     $dllTime    = (Get-Item $outDll).LastWriteTimeUtc
     if ($dllTime -gt $sourceTime) {
         Write-Host "== up to date (dll is newer than source); nothing to do =="
         if ($Check) { return }
-        Write-Host "   pass -Check=false is not needed: re-run after touching the source"
+        Write-Host "   touch the source or pass -Force to rebuild"
         return
     }
 }
@@ -124,9 +122,9 @@ Copy-Item $src    $cssrc  -Force
 Copy-Item $header $cshdr  -Force
 
 Write-Host "== 2/3 compile =="
-$ccArgs = @('-target', 'x86_64-windows-gnu', '-std=gnu23', '-O2',
+# -O2 -g: release code with debug info (this is what makes cdb frames resolve).
+$ccArgs = @('-target', 'x86_64-windows-gnu', '-std=gnu23', '-O2', '-g',
             '-DAGB_BUILD_DLL', '-c', $cssrc, '-o', $obj)
-if ($Debug) { $ccArgs += '-g' }
 foreach ($inc in $includeDirs) { $ccArgs += @('-I', $inc) }
 
 & (Join-Path $zig 'zig-cc.cmd') @ccArgs
@@ -142,43 +140,39 @@ $ldArgs += @('-Wl,--end-group')
 $ldArgs += $systemLibs
 $ldArgs += @((Join-Path $mingwLib 'libpathcch.a'), (Join-Path $mingwLib 'libtaskschd.a'))
 $ldArgs += @('-Wl,--out-implib=' + $outLib)
-if ($Debug) { $ldArgs += '-g' }
+$ldArgs += '-g'
 $ldArgs += @('-o', $outDll)
 
 & (Join-Path $zig 'zig-cxx.cmd') @ldArgs
 if ($LASTEXITCODE -ne 0) { throw "link failed ($LASTEXITCODE)" }
 
-if ($Debug) {
-    AssertShellStopped
-    $pdb = [IO.Path]::ChangeExtension($outDll, '.pdb')
-    if (-not (Test-Path $pdb)) { throw "debug link did not produce $pdb" }
-    if (-not (Test-Path $shipDll)) {
-        Copy-Item (Join-Path $install 'antbridge.dll') $shipDll -Force
-        Write-Host "  saved ship DLL -> $shipDll"
-    }
-    Copy-Item $outDll (Join-Path $install 'antbridge.dll') -Force
-    Copy-Item $pdb $install -Force
-    Write-Host "== debug antbridge installed =="
-    Write-Host "  $install\antbridge.dll  +  $(Split-Path -Leaf $pdb)"
-    Write-Host "  restore with: pwsh -File tools/build_antbridge.ps1 -Restore"
-    return
+if (-not (Test-Path $outPdb)) { throw "link did not produce $outPdb" }
+
+Write-Host "== install =="
+AssertShellStopped
+
+# Keep one copy of the DLL that was installed before, so -Restore can undo an
+# experiment without a rebuild.
+if (Test-Path (Join-Path $install 'antbridge.dll')) {
+    Copy-Item (Join-Path $install 'antbridge.dll') $shipDll -Force
+    Write-Host "  saved previous DLL -> $shipDll"
 }
 
-Write-Host "== copy into agave =="
 $targets = @(
     (Join-Path $root '3rdparty\ant\bin'),
     (Join-Path $root '3rdparty\ant\lib'),
-    (Join-Path $root 'build-zig-native'),
+    $install,
     (Join-Path $ws   'host\nativerun')
 )
 foreach ($dir in $targets) {
     if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir | Out-Null }
     Copy-Item $outDll $dir -Force
+    Copy-Item $outPdb $dir -Force
     if (Test-Path $outLib) { Copy-Item $outLib $dir -Force }
     Write-Host "  -> $dir"
 }
-Copy-Item (Join-Path $install 'antbridge.dll') $shipDll -Force
-Write-Host "  saved ship DLL -> $shipDll"
 
-Write-Host "== done; now re-link libagave =="
+Write-Host "== done (release + debug info) =="
+Write-Host "  $outDll + $(Split-Path -Leaf $outPdb)"
+Write-Host "== now re-link libagave =="
 Write-Host "  cmake --build $root\build-zig-native --parallel 16"

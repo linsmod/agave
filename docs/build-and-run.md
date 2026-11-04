@@ -31,6 +31,14 @@ pwsh -File tools\build_antbridge.ps1 -Force      # 重链 dll 并同步四处副
 # 只有改了本仓库 C++ 才需要再 cmake --build build-zig-native
 ```
 
+**编译配置（别乱改，否则 attach 只剩模块+偏移）**
+
+| 产物 | 配置 | 说明 |
+|---|---|---|
+| `libant.a`（ant 引擎） | meson `buildtype=release` + `-Ddebug=true` → `-O3 -g` | 2026-11-04 起打开；`meson configure H:\ant-v16\build-zig -Ddebug=true`，改完 `ninja -C H:\ant-v16\build-zig libant.a` |
+| `antbridge.dll`（桥 + 引擎） | `-O2 -g`（脚本里写死） | 产出 `antbridge.pdb`，随 DLL 装到 `3rdparty/ant/bin`、`build-zig-native\` 等四处；`src/src.cmake` 会把它拷进构建目录 |
+| `agave_shell` / `libagave` | CMake `CMAKE_BUILD_TYPE=Debug`（`-O0 -g -D_DEBUG`） | 带完整 PDB（`libagave.pdb`），不是 release |
+
 ## 3. 改什么 → 重编什么（先估时间再动手）
 
 | 改动 | 需要做 | 经验耗时 |

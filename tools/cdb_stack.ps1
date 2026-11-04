@@ -15,8 +15,8 @@
                         saved log (e.g. the atexit dump) to function/file:line.
 
   Symbol path is built from build-zig-native + H:\ant-v16\bridge automatically.
-  antbridge frames only symbolize when a matching PDB is next to the DLL; build
-  one with `tools\build_antbridge.ps1 -Debug` (or pass -DebugBuild here).
+  antbridge is always built -O2 -g (release + debug info) and its PDB ships
+  next to the DLL; -DebugBuild forces a rebuild of it.
 
   When the run ends through exit(), the shell prints its own atexit stack; this
   script detects it in the log and symbolizes it automatically.
@@ -98,7 +98,7 @@ function Show-SymbolStatus {
     $ant = $interesting | Where-Object { $_ -match '\santbridge\s' }
     if ($ant -and -not ($ant | Where-Object { $_ -match '\santbridge\s+.*private pdb symbols' })) {
         Write-Host "  [!] antbridge has no PDB: its frames will stay module+offset." -ForegroundColor Yellow
-        Write-Host "      build one: pwsh -File tools/build_antbridge.ps1 -Debug   (or -DebugBuild)" -ForegroundColor Yellow
+        Write-Host "      rebuild: pwsh -File tools/build_antbridge.ps1 -Force   (or -DebugBuild)" -ForegroundColor Yellow
     }
 }
 
@@ -286,9 +286,9 @@ if ($Symbolize) {
 }
 
 if ($DebugBuild) {
-    Write-Host "== build debug antbridge (ab_dbg.dll + ab_dbg.pdb) =="
+    Write-Host "== build antbridge (release + debug info, antbridge.pdb) =="
     & pwsh -NoProfile -File (Join-Path $root 'tools\build_antbridge.ps1') -Debug
-    if ($LASTEXITCODE -ne 0) { throw "build_antbridge -Debug failed" }
+    if ($LASTEXITCODE -ne 0) { throw "build_antbridge failed" }
 }
 
 $exe = if ($Exe) { [IO.Path]::GetFullPath($Exe) } else { $default }
