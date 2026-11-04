@@ -47,6 +47,13 @@ WHEN USER REPLY A DOT[.] ONLY, MEANS OK/DONE/DO_AS_YOU_SAY/YES/GO_ON/ACCEPT/...
 - `<template>` 内容惰性（HTML5）：Node::createRendererIfNeeded 对 localName=="template" 返回，子树无 renderer 不渲染；children 留在 DOM（innerHTML/script 访问不变）。别删
 - `on_progress finished=1` 不代表加载成功；host 侧用 `agave_webview_url` 比对请求 host 判定是否真提交（加载卡死时 FrameLoader 会以 about:blank 提交）
 - 抓挂起线程栈：`tools/cdb.exe -p <pid> -c '~*k 30; qd'`（探针有超时会秒退，attach 要趁早）
+  - 要断在**首次异常**上抓栈：写命令文件 `sxe av` / `g` / `~*kb 20` / `q`，再
+    `tools\cdb.exe -y "<build-zig-native>;H:\ant-v16\bridge" -cf cmds.txt build-zig-native\agave_shell.exe --probe ...`
+    —— **不要用 `--` 分隔**（这版 cdb 会报 0x80070057），也别用 Start-Process 传 `-c "长命令"`（引号被吞）。
+    当前 `antbridge.dll` 旁边就有匹配的 `antbridge.pdb`（带源码行号），`-y` 指过去即可解出 `process.c @ 2355` 这种帧
+- worker 相关：worker 是**独立线程 + 独立 isolate**，崩溃栈会出现在非主线程上（`~*kb` 里找 `worker_thread_main`）；
+  `new Worker` 的入口在 ant 侧走 ESM/CJS 模块加载，栈帧名对 data: URL 会折成 `data:script/<hash>`
+  （`esm_frame_filename`），所以看到 `data:script/xxxxxxxx` 就是 worker 里的代码。回归：`pwsh -File tools\run_worker_tests.ps1`
 - 网络卡点：`AGB_NET_LOG=1` 看 `net.stage` 打点（crack/connected/openrequest/sending/sent）；WinHTTP SendRequest 偶发长滞是 WPAD/PAC 环境抖动，同刻 GUI 正常≠代码回归，先重试
 - 字体（@font-face）：`AGB_FONT_LOG=1` 看 `[fontsel] src[i] ... supported=0/1` 与 `[font] beginLoad/data`；
   回归页 `tools/pages/iconfont_render.html`（真实多格式 src），`agave_view_host.exe <file-url> out.bmp` 出图核对字形。链路与坑见 `docs/web-font.md`
@@ -124,7 +131,8 @@ tools\cdb.exe -p <pid> -c '~*k 30; qd'
 
 # prelude.js / polyfills.js 直接改即可生效（引擎每次文档绑定时从 exe 旁加载，无需重链/重编）
 #   prelude.js  = window 引导 shim（window/document 辅助、XHR/fetch/storage/matchMedia、事件派发）
-#   polyfills.js= DOM/构造函数补丁（append/prepend、classList、构造器 stub、Worker stub、console guard）
+#   polyfills.js= DOM/构造函数补丁（append/prepend、classList、构造器 stub、console guard）
+#   Web Worker 的真实现在 prelude.js 末尾（原生线程 + http 源码预取 + preamble），不在 polyfills
 #   改源文件后记得让构建把它拷到输出目录（add_custom_target prelude/polyfills），或直接改
 #   build-zig-native\prelude.js 临时验证；$AGB_PRELUDE / $AGB_POLYFILLS 可指向别处的副本
 Copy-Item src\javascript\ant_backend\polyfills.js build-zig-native\polyfills.js -Force

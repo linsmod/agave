@@ -313,6 +313,40 @@
       return out.buffer;
     };
   }
+  /* UTF-8 text -> base64. Data URLs carry worker scripts across the bridge
+     (btoa alone cannot encode non-ASCII source, and a JSON-escaped string
+     would double the payload size). */
+  if (typeof g.__agbB64EncodeUtf8 !== 'function') {
+    g.__agbB64EncodeUtf8 = function (text) {
+      var s = String(text === undefined || text === null ? '' : text), i, j, c;
+      var bytes;
+      try {
+        bytes = new TextEncoder().encode(s);
+      } catch (e) {
+        bytes = [];
+        for (i = 0; i < s.length; i++) {
+          c = s.charCodeAt(i);
+          if (c < 0x80) bytes.push(c);
+          else if (c < 0x800) bytes.push(0xc0 | (c >> 6), 0x80 | (c & 0x3f));
+          else if (c >= 0xd800 && c < 0xdc00 && i + 1 < s.length) {
+            var lo = s.charCodeAt(++i);
+            var cp = 0x10000 + ((c - 0xd800) << 10) + (lo - 0xdc00);
+            bytes.push(0xf0 | (cp >> 18), 0x80 | ((cp >> 12) & 0x3f),
+                       0x80 | ((cp >> 6) & 0x3f), 0x80 | (cp & 0x3f));
+          } else {
+            bytes.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 0x3f), 0x80 | (c & 0x3f));
+          }
+        }
+      }
+      var binary = '';
+      for (i = 0; i < bytes.length; i += 0x2000) {
+        var chunk = [];
+        for (j = i; j < bytes.length && j < i + 0x2000; j++) chunk.push(bytes[j]);
+        binary += String.fromCharCode.apply(null, chunk);
+      }
+      return btoa(binary);
+    };
+  }
   if (typeof g.__agbDecodeUtf8 !== 'function') {
     g.__agbDecodeUtf8 = function (buffer) {
       if (!buffer) return '';
@@ -540,13 +574,363 @@
     }
   }
 
-  /* Ant's native Worker constructor crashes on anything but a usable script
-   * URL (it strdups a NULL) and workers need an environment we do not
-   * provide. Hiding the constructors makes pages take their non-worker path
-   * instead of killing the process. polyfills.js runs after this file and
-   * installs a harmless Worker stub (sites subclass the constructor), so the
-   * order matters: hide here, stub later. */
-  try { g.Worker = undefined; } catch (e) {}
+  /* ---- Web Workers --------------------------------------------------------
+   * ant's Worker is real: its own thread, its own isolate, structured-clone
+   * messaging, error/close events. What it cannot do is load a script over
+   * the network - worker_resolve_entry only accepts data:, blob: and file:
+   * URLs, while every page on the web starts its workers from http(s). So:
+   *
+   *   data:/blob:/file:  the native constructor, untouched (the script is
+   *                      local already, so construction stays synchronous)
+   *   http(s)/relative    fetched here through the async bridge, then handed
+   *                      to the native constructor as a data: URL carrying a
+   *                      preamble that restores what the data: entry loses:
+   *                      location, origin and importScripts
+   *
+   * The constructor never blocks on the network. postMessage() calls made
+   * before the script is in place are queued and flushed in order, which is
+   * what a browser does while the worker's event loop is starting.
+   */
+  var _agbNativeWorker = (typeof g.Worker === 'function') ? g.Worker : null;
+  var _agbWorkerSeq = 0;
+  var _agbWorkerPending = {};
+
+  function _agbWorkerJsStr(v) {
+    return JSON.stringify(String(v === undefined || v === null ? '' : v));
+  }
+
+  /* The bits of URL the worker scope needs; parsed here because the worker
+   * only ever sees the data: URL we hand it. */
+  function _agbWorkerParseUrl(u) {
+    var s = String(u === undefined || u === null ? '' : u);
+    var m = /^([a-zA-Z][a-zA-Z0-9+.-]*:)\/\/([^\/?#]*)([^?#]*)(\?[^#]*)?(#.*)?$/.exec(s);
+    var out = { href: s, protocol: '', host: '', hostname: '', port: '',
+                pathname: '', search: '', hash: '', origin: '' };
+    if (!m) {
+      out.pathname = s;
+      return out;
+    }
+    out.protocol = m[1];
+    out.host = m[2];
+    out.pathname = m[3] || '/';
+    out.search = m[4] || '';
+    out.hash = m[5] || '';
+    var hp = m[2].split(':');
+    out.hostname = hp[0];
+    out.port = hp.length > 1 ? hp[1] : '';
+    out.origin = m[1] + '//' + m[2];
+    return out;
+  }
+
+  /* Source string evaluated inside the worker before the page's script. */
+  function _agbWorkerPreamble(entryUrl, name, imports) {
+    var p = _agbWorkerParseUrl(entryUrl);
+    var table = imports || {};
+    var lines = [
+      ';(function (S) {',
+      '  var ENTRY = ' + _agbWorkerJsStr(entryUrl) + ';',
+      '  var ORIGIN = ' + _agbWorkerJsStr(p.origin) + ';',
+      '  var LOC = ' + JSON.stringify(p) + ';',
+      '  var IMPORTS = ' + JSON.stringify(table) + ';',
+      '  function agbAbs(u) {',
+      '    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(u)) return u;',
+      '    if (u.charAt(0) === "/") return ORIGIN + u;',
+      '    var b = ENTRY.split("#")[0].split("?")[0];',
+      '    return b.substring(0, b.lastIndexOf("/") + 1) + u;',
+      '  }',
+      '  LOC.toString = function () { return this.href; };',
+      '  S.location = LOC;',
+      '  S.origin = ORIGIN;',
+      '  if (!S.name) S.name = ' + _agbWorkerJsStr(name) + ';',
+      /* importScripts() is synchronous by spec, so the scripts it can reach
+       * are fetched by the page before the worker starts and evaluated from
+       * this table. Anything not in it cannot be loaded here at all. */
+      '  S.importScripts = function () {',
+      '    for (var i = 0; i < arguments.length; i++) {',
+      '      var u = agbAbs(String(arguments[i]));',
+      '      var src = IMPORTS[u];',
+      '      if (src === undefined)',
+      '        throw new Error("importScripts: cannot load \'" + u + "\' (not prefetched)");',
+      '      (0, eval)(src);',
+      '    }',
+      '  };',
+      '})(self);',
+      ''
+    ];
+    return lines.join('\n');
+  }
+
+  /* importScripts('literal') arguments in a script, in source order. */
+  function _agbWorkerScanImports(src) {
+    var out = [], m, text = String(src || '');
+    var call = /importScripts\s*\(([^)]*)\)/g;
+    while ((m = call.exec(text))) {
+      var args = m[1], lit = /['"]([^'"]*)['"]/g, one;
+      while ((one = lit.exec(args))) {
+        if (one[1]) out.push(one[1]);
+      }
+    }
+    return out;
+  }
+
+  /* Fetches the entry's importScripts() targets so the preamble can hand them
+   * to the worker synchronously. Two levels deep is enough for the classic
+   * scripts that still use importScripts (bundlers inline everything). */
+  function _agbWorkerPrefetch(entryUrl, src, done) {
+    var p = _agbWorkerParseUrl(entryUrl);
+    var imports = {}, queue = [], seen = {}, qi = 0, inflight = 0, finished = false;
+
+    function absolute(u) {
+      var s = String(u || '');
+      if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(s)) return s;
+      if (s.charAt(0) === '/') return p.origin + s;
+      var base = entryUrl.split('#')[0].split('?')[0];
+      return base.substring(0, base.lastIndexOf('/') + 1) + s;
+    }
+
+    function enqueue(list, depth) {
+      for (var i = 0; i < list.length; i++) {
+        var abs = absolute(list[i]);
+        if (seen[abs]) continue;
+        seen[abs] = true;
+        queue.push([abs, depth]);
+      }
+    }
+
+    function pump() {
+      while (qi < queue.length) {
+        var item = queue[qi++];
+        inflight++;
+        (function (abs, depth) {
+          __agbHttpRequestEx(abs, 'GET', '', '', function (status, b64) {
+            inflight--;
+            /* Only a 2xx body is a script: an error page is valid HTML and
+             * would otherwise be evaluated as JavaScript. */
+            if (status >= 200 && status < 300) {
+              var text = '';
+              try { text = g.__agbDecodeUtf8(g.__agbB64ToBuffer(b64)); } catch (e) { text = ''; }
+              imports[abs] = text;
+              if (depth < 2) enqueue(_agbWorkerScanImports(text), depth + 1);
+            }
+            pump();
+          });
+        })(item[0], item[1]);
+      }
+      if (inflight === 0 && qi >= queue.length && !finished) {
+        finished = true;
+        done(imports);
+      }
+    }
+
+    enqueue(_agbWorkerScanImports(src), 1);
+    pump();
+  }
+
+  function _agbWorkerEvent(w, type, native) {
+    var ev = g.__agbMakeEvent(type, w);
+    ev.data = native ? native.data : undefined;
+    ev.origin = (native && native.origin) ? native.origin : '';
+    ev.lastEventId = '';
+    ev.source = null;
+    ev.ports = (native && native.ports) || [];
+    if (native) {
+      if (native.message !== undefined) ev.message = native.message;
+      if (native.filename !== undefined) ev.filename = native.filename;
+      if (native.lineno !== undefined) ev.lineno = native.lineno;
+      if (native.colno !== undefined) ev.colno = native.colno;
+      if (native.error !== undefined) ev.error = native.error;
+    }
+    return ev;
+  }
+
+  function _agbWorkerReport(e) {
+    /* Listener exceptions surface as page errors instead of vanishing. */
+    setTimeout(function () { throw e; }, 0);
+  }
+
+  function _agbWorkerFail(w, message) {
+    if (w._failed || w._terminated) return;
+    w._failed = true;
+    try { if (g.console && g.console.error) g.console.error('Worker error: ' + message); } catch (e) {}
+    var ev = g.__agbMakeEvent('error', w);
+    ev.message = String(message);
+    ev.filename = w._url;
+    ev.lineno = 0;
+    ev.colno = 0;
+    ev.error = null;
+    w._dispatch(ev);
+  }
+
+  function _agbWorkerAttach(w) {
+    var n = w._native;
+    if (!n) return;
+    n.onmessage = function (e) { w._dispatch(_agbWorkerEvent(w, 'message', e)); };
+    n.onmessageerror = function (e) { w._dispatch(_agbWorkerEvent(w, 'messageerror', e)); };
+    n.onerror = function (e) {
+      var ev = _agbWorkerEvent(w, 'error', e);
+      ev.cancelable = true;
+      var handled = w._dispatch(ev);
+      /* Returning true from onerror (or preventDefault()) suppresses the
+       * default report, exactly like the browser's error handling. */
+      if (handled === true && typeof ev.preventDefault === 'function') ev.preventDefault();
+    };
+  }
+
+  function _agbWorkerFlush(w) {
+    var queued = w._queue;
+    w._queue = [];
+    for (var i = 0; i < queued.length; i++) {
+      try { w._native.postMessage(queued[i][0], queued[i][1]); } catch (e) {}
+    }
+  }
+
+  function _agbWorkerStart(w, target, options) {
+    if (!_agbNativeWorker) {
+      _agbWorkerFail(w, 'Worker is not available in this build');
+      return;
+    }
+    var name = (options && typeof options.name === 'string') ? options.name : '';
+
+    /* Already-local script: let ant start it directly. */
+    if (/^(data|blob|file):/i.test(target)) {
+      w._native = new _agbNativeWorker(target, options || undefined);
+      _agbWorkerAttach(w);
+      _agbWorkerFlush(w);
+      return;
+    }
+
+    var id = ++_agbWorkerSeq;
+    w._id = id;
+    _agbWorkerPending[id] = w;
+
+    __agbHttpRequestEx(target, 'GET', '', '', function (status, b64) {
+      if (w._terminated || _agbWorkerPending[id] !== w) return;
+      delete _agbWorkerPending[id];
+      w._id = 0;
+      if (status < 200 || status >= 300) {
+        _agbWorkerFail(w, 'Failed to load worker script: ' + target + ' (' + status + ')');
+        return;
+      }
+      var src;
+      try { src = g.__agbDecodeUtf8(g.__agbB64ToBuffer(b64)); }
+      catch (e) { _agbWorkerFail(w, 'Cannot decode worker script: ' + target); return; }
+
+      _agbWorkerPrefetch(target, src, function (imports) {
+        if (w._terminated || w._native) return;
+        var dataUrl = 'data:text/javascript;base64,' +
+          g.__agbB64EncodeUtf8(_agbWorkerPreamble(target, name, imports) + src);
+        try {
+          w._native = new _agbNativeWorker(dataUrl, options || undefined);
+        } catch (e) {
+          _agbWorkerFail(w, String((e && e.message) || e));
+          return;
+        }
+        _agbWorkerAttach(w);
+        _agbWorkerFlush(w);
+      });
+    });
+  }
+
+  function _agbWorkerDispatch(w, ev) {
+    if (!ev || !ev.type) return undefined;
+    ev.target = w;
+    ev.currentTarget = w;
+    var handler = w['on' + ev.type], result;
+    if (typeof handler === 'function') {
+      try { result = handler.call(w, ev); } catch (e) { _agbWorkerReport(e); }
+    }
+    var list = (w._listeners[ev.type] || []).slice();
+    for (var i = 0; i < list.length; i++) {
+      try {
+        if (typeof list[i] === 'function') list[i].call(w, ev);
+        else if (list[i] && typeof list[i].handleEvent === 'function') list[i].handleEvent(ev);
+      } catch (e) { _agbWorkerReport(e); }
+    }
+    return result;
+  }
+
+  function Worker(scriptURL, options) {
+    if (!(this instanceof Worker))
+      throw new TypeError("Failed to construct 'Worker': use the 'new' operator");
+    if (scriptURL === undefined)
+      throw new TypeError("Failed to construct 'Worker': 1 argument required, but only 0 present");
+    var raw = String(scriptURL);
+    var target = g.__agbResolveUrl(raw);
+    if (!target)
+      throw new SyntaxError("Failed to construct 'Worker': invalid URL '" + raw + "'");
+
+    this.onmessage = null;
+    this.onmessageerror = null;
+    this.onerror = null;
+    this._listeners = {};
+    this._queue = [];
+    this._native = null;
+    this._terminated = false;
+    this._failed = false;
+    this._id = 0;
+    this._url = target;
+
+    try { _agbWorkerStart(this, target, options); }
+    catch (e) { _agbWorkerFail(this, String((e && e.message) || e)); }
+  }
+
+  Worker.prototype.constructor = Worker;
+  Worker.prototype._dispatch = function (ev) { return _agbWorkerDispatch(this, ev); };
+
+  Worker.prototype.postMessage = function (message, transfer) {
+    if (this._terminated) return;
+    if (!this._native) {
+      this._queue.push([message, transfer]);
+      return;
+    }
+    this._native.postMessage(message, transfer);
+  };
+
+  Worker.prototype.terminate = function () {
+    this._terminated = true;
+    this._queue.length = 0;
+    if (this._id && _agbWorkerPending[this._id]) delete _agbWorkerPending[this._id];
+    this._id = 0;
+    if (this._native) this._native.terminate();
+  };
+
+  Worker.prototype.addEventListener = function (type, listener) {
+    if (typeof listener !== 'function' &&
+        !(listener && typeof listener.handleEvent === 'function')) return;
+    var list = this._listeners[type] || (this._listeners[type] = []);
+    for (var i = 0; i < list.length; i++) if (list[i] === listener) return;
+    list.push(listener);
+  };
+
+  Worker.prototype.removeEventListener = function (type, listener) {
+    var list = this._listeners[type];
+    if (!list) return;
+    for (var i = 0; i < list.length; i++) {
+      if (list[i] === listener) { list.splice(i, 1); return; }
+    }
+  };
+
+  Worker.prototype.dispatchEvent = function (ev) {
+    var handled = _agbWorkerDispatch(this, ev);
+    return !(ev && ev.defaultPrevented) && handled !== false;
+  };
+
+  Worker.prototype.ref = function () { if (this._native) this._native.ref(); };
+  Worker.prototype.unref = function () { if (this._native) this._native.unref(); };
+
+  if (Object.defineProperty) {
+    Object.defineProperty(Worker.prototype, 'threadId', {
+      configurable: true, enumerable: false,
+      get: function () { return this._native ? this._native.threadId : -1; }
+    });
+  }
+
+  if (_agbNativeWorker) {
+    try { g.Worker = Worker; } catch (e) {}
+  }
+  /* Shared/service workers would need a second host protocol (shared scopes,
+   * precache, install/fetch events). Leaving them undefined makes pages take
+   * their non-worker path instead of half-working. */
   try { g.SharedWorker = undefined; } catch (e) {}
   try { g.ServiceWorker = undefined; } catch (e) {}
 })(window);
