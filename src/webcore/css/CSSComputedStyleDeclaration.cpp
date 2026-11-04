@@ -28,6 +28,8 @@
 #include "CSSPropertyNames.h"
 #include "CSSValueKeywords.h"
 #include "CSSValueList.h"
+
+#include <stdlib.h>
 #include "CachedImage.h"
 #include "DashboardRegion.h"
 #include "Document.h"
@@ -1058,6 +1060,35 @@ PassRefPtr<CSSValue> CSSComputedStyleDeclaration::getPropertyCSSValue(int proper
             }
             ASSERT_NOT_REACHED();
             return 0;
+        case CSS_PROP_FONT: {
+            /* Shorthand: style variant weight size[/line-height] family.
+             * Pages read getComputedStyle(el).font often enough that answering
+             * with an error (the old behaviour) both spammed the log and handed
+             * scripts an empty string; every part below already has a longhand
+             * case in this switch, so the values agree with them. */
+            String font;
+
+            font = style->fontDescription().italic() ? "italic" : "normal";
+            font += style->fontDescription().smallCaps() ? " small-caps" : " normal";
+            font += (style->fontDescription().weight() == cBoldWeight) ? " bold " : " normal ";
+            font += String::number(style->fontDescription().computedPixelSize()) + "px";
+
+            {
+                Length lineHeight = style->lineHeight();
+
+                if (!lineHeight.isNegative()) {
+                    int pixels = lineHeight.isPercent()
+                        ? static_cast<int>(lineHeight.percent() * style->fontDescription().specifiedSize()) / 100
+                        : static_cast<int>(lineHeight.value());
+
+                    font += "/" + String::number(pixels) + "px";
+                }
+            }
+
+            font += " " + style->fontDescription().family().family().domString();
+
+            return new CSSPrimitiveValue(font, CSSPrimitiveValue::CSS_STRING);
+        }
         case CSS_PROP_FONT_FAMILY:
             // FIXME: This only returns the first family.
             return new CSSPrimitiveValue(style->fontDescription().family().family().domString(), CSSPrimitiveValue::CSS_STRING);
@@ -1690,7 +1721,6 @@ PassRefPtr<CSSValue> CSSComputedStyleDeclaration::getPropertyCSSValue(int proper
         }
         case CSS_PROP_COUNTER_INCREMENT:
         case CSS_PROP_COUNTER_RESET:
-        case CSS_PROP_FONT:
         case CSS_PROP_FONT_STRETCH:
         case CSS_PROP_LIST_STYLE:
         case CSS_PROP_MARGIN:
@@ -1746,7 +1776,13 @@ PassRefPtr<CSSValue> CSSComputedStyleDeclaration::getPropertyCSSValue(int proper
 #endif
     }
 
-    LOG_ERROR("unimplemented propertyID: %d", propertyID);
+    /* Unimplemented properties answer with an empty string on purpose; printing
+     * one line per read turns any page that polls a webkit-* longhand into a
+     * stderr flood (font alone was hit thousands of times per page). Opt in
+     * with AGB_CSS_DEBUG when hunting for a missing property. */
+    if (getenv("AGB_CSS_DEBUG"))
+        LOG_ERROR("unimplemented propertyID: %d", propertyID);
+
     return 0;
 }
 
