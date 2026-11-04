@@ -18,7 +18,7 @@ agave 是**从零移植的浏览器**：WebKit 2008 的 WebCore（解析/布局/
 | ant/桥接哪份是真的、改引擎链路、ant 的反直觉 | [docs/ant-engine.md](docs/ant-engine.md) |
 | 提交/回归页/文档/代码风格约定 | [docs/conventions.md](docs/conventions.md) |
 | 现状、待办（含验收标准）、已知限制、代码索引 | [handover.md](handover.md) |
-| 历史缺陷：现象 → 根因 → 修法 → 验证（R1..R30） | [docs/lessons.md](docs/lessons.md) |
+| 历史缺陷：现象 → 根因 → 修法 → 验证（R1..R32） | [docs/lessons.md](docs/lessons.md) |
 | 入口模块管线三条泳道时序图 | [docs/architecture/module-pipeline.md](docs/architecture/module-pipeline.md) |
 
 ## rules
@@ -45,9 +45,9 @@ WHEN USER REPLY A DOT[.] ONLY, MEANS OK/DONE/DO_AS_YOU_SAY/YES/GO_ON/ACCEPT/...
    只改本仓库 C++ 时才需要 `cmake --build build-zig-native`。
 3. **重编前先停掉正在跑的 `agave_shell`**：旧进程占着 `antbridge.dll` 时链接静默失败，跑的还是旧 dll。
 4. `prelude.js` / `polyfills.js` 是**运行时**从 exe 旁加载的：拷到 `build-zig-native\` 即生效，**不用重链**。
-5. 探针默认**真无头**（不建浏览器窗口）；要像素/截图才 `AGB_PROBE_SHOW=1`。
+5. 探针默认**真无头**（不建浏览器窗口）；要像素用 `--shot <bmp>`（抓控件自己的 mirror 缓冲），`AGB_PROBE_SHOW=1` 只在调试「窗口可见时行为不同」的路径时才用。
 6. **不要 rebase** ant 的 `agave-bridge`：基线是冻结 tag，落后上游 54 个 commit，同步另外安排。
-7. **截图不许打扰用户**：用 `tools/screenshot.ps1`（隐藏窗口 + `PrintWindow`，不 `ShowWindow`、不抢焦点）；不要 `SetForegroundWindow`、不要截屏抓桌面。能用探针数字判断的，就不要截图。
+7. **截图不许打扰用户**：用 `tools/screenshot.ps1`（= `--probe ... --shot`，窗口从不 `ShowWindow`，不抢焦点、不上任务栏）；不要启动 GUI 壳截图、不要 `SetForegroundWindow`、不要截屏抓桌面。能用探针数字判断的，就不要截图。
 
 ## 三个最常用命令
 

@@ -20,6 +20,8 @@ build-zig-native\agave_shell.exe --probe tools\pages\cap_storage_a.html --wait 9
 build-zig-native\agave_shell.exe --probe tools\pages\cap_script.html     --wait 1200 --eval "probeExit(document.title)"
 build-zig-native\agave_shell.exe --probe tools\pages\cap_selectors.html  --wait 500 --eval "probeExit(document.title)"
 build-zig-native\agave_shell.exe --probe tools\pages\cap_postmessage.html --wait 800 --eval "probeExit(document.title)"
+# frame 的 window 身份：结果打在 [child] 控制台行上（页面不写 title）
+build-zig-native\agave_shell.exe --probe tools\pages\cap_window_identity.html --wait 900 --eval "probeExit(0)"
 ```
 
 退出码 0 且 `[exit]` 行就是当前值。要加一项探测：在 `cap_dom.html` / `cap_css.html`
@@ -50,8 +52,9 @@ classListAdd=function matches=function closest=function textContent=string
 | `history.pushState` / `replaceState` | 是函数，但**只改 document URL**：`state=undefined`、`len=undefined`、`pops=0`、`href` 被改写 | history 模式的 SPA（Vue/React Router）无法保存/恢复 state，收不到 `popstate`，前进后退会跳过视图 | 半实现，P1 |
 | `localStorage` 跨文档 | A 页写入 → 导航到 B → `null`；同一跑的 cookie 正常（`cookie=true`） | 用 localStorage 存 token/购物车的多页流程会丢状态；测试也不能拿它当跨页标记（用 cookie） | 缺口，P1 |
 | `window.postMessage` / `message` 事件 | **已支持**：同窗口/跨 frame 都能投递（`{data, origin, source}`，`origin` 取发送方文档的 scheme://host[:port]）；`cap_postmessage.html` → `postMessage=function sent=yes got=1` | —— | 已支持 |
-| iframe 的 `contentWindow` / `contentDocument` | 都是 `undefined`（frame 文档在桥接层有槽位，但没暴露成 DOM 属性） | 父页读不到子文档；调试靠 `__agbActivateSlot(i)` | 缺口，P1 |
-| iframe 与父页共享同一个 `window` 对象 | `window`/`document` 之外的全局是同一个；`innerWidth/innerHeight/outerWidth/outerHeight` **已改成按帧求值**（R30） | 子 frame 里的全局赋值会污染父页；`window.parent`/`top`/`frames` 指向自身，跨 frame 组件按规范写会走错分支 | 架构缺口，P0（需要 per-frame window 代理） |
+| iframe 的 `contentWindow` / `contentDocument` | 都是 `undefined`（frame 文档在桥接层有槽位，`window.frames[i]` 已可用，但元素上的这两个属性没接） | 父页 `iframe.contentDocument` 读子文档仍不行（`window.frames[0].document` 可以） | 缺口，P1 |
+| 每个 frame 的 `window` 身份（`parent`/`top`/`self`/`frames`/`length`/`name`/`frameElement`） | **已支持（R31）**：frame 有自己的 `Window` 代理，`parent !== self`、`parent.document` 是父文档、`frames.length`/`frames[i]`/`name`/`frameElement` 都按 frame tree 回答，未知属性委托给共享全局 | —— | 已支持（`cap_window_identity.html`） |
+| 子 frame 的顶层 `var` 污染父页 | 仍是共享全局：子 frame 里 `var x = 1` 父页也能读到（`window.foo` 同理） | 依赖「全局隔离」的 polyfill 会互相看见；规范上这是每个 browsing context 独立的全局对象 | 已知限制，要修只能每个 frame 一个 engine（方案 A，不做；见 `docs/architecture/frame-window.md`） |
 | `HTMLImageElement.complete` / `naturalWidth` / `width` | 全 `undefined`（图片实际能加载/绘制） | 图片预加载、`img.onload` 之外的完成判定、二维码/图标尺寸计算失效 | 缺口，P2 |
 | `document.querySelector(All)` 的属性选择器 | `[data-bar]` / `[class*=probe]` / `div[data-bar]` 全部 `0`；`.probe-cls` 为 `1` | 用 `querySelector('script[data-x]')` 做幂等、`[data-state]` 做 UI 分支的代码全部走空分支；不报错 | 缺口，P1 |
 | `Element.insertAdjacentHTML` | `undefined` | jQuery、统计/广告脚本常用；有特性检测的会降级，没有的直接抛错 | 缺口，P2 |

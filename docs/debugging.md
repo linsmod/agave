@@ -28,7 +28,8 @@ agave_shell.exe --probe <url> [--eval <js>] [--wait ms] [--settle ms] [--timeout
 **无头语义**：`--probe` 在创建任何窗口之前解析命令行，命中就直奔 `probeRun()`——不建浏览器主窗口、
 不建工具栏、不读/写 session/bookmark 文件。唯一的窗口是 `WS_POPUP|WS_EX_TOOLWINDOW` 的**隐藏**父窗口。
 stderr 会打一行 `[probe] headless window hidden, AGB_PROBE_SHOW=1 to show (pid <pid>)`。
-`AGB_PROBE_SHOW=1` 才 ShowWindow（隐藏窗口收不到 WM_PAINT，像素/截图类检查必须开它）。
+`--shot <bmp>` 抓的是控件自己的 mirror 缓冲（引擎线程每帧写的那份），**不需要**显示窗口；
+`AGB_PROBE_SHOW=1` 才 ShowWindow，只在调试「窗口可见时行为不同」的路径时才用。
 验证"真的没窗口"：`powershell -File tools/check_window_visible.ps1 -ProcessId <pid>`
 （exit 0 = 无可见窗口，`-Json` 出明细）。要看真实 GUI：`agave_shell.exe <url>`（不带 `--probe`）。
 
@@ -134,7 +135,7 @@ antbridge.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**�
 
 | 组 | 变量 | 作用 |
 |---|---|---|
-| 探针 | `AGB_PROBE_SHOW=1` | 显示探针窗口（要 WM_PAINT/截图时） |
+| 探针 | `AGB_PROBE_SHOW=1` | 显示探针窗口（调试可见性相关的差异；截图不需要它） |
 | 探针 | `AGB_PROBE_ALLOW_UNLOAD=1` | beforeunload 守卫直接放行（默认拒绝） |
 | 日志 | `AGB_EVT_LOG=0` | **关掉默认开启的页面生命周期日志**（`[evt]`） |
 | 日志 | `AGB_EVT_DEBUG=1` | 生命周期的详细版：evaluate 深度、listener 记账、JS `dispatchEvent` |
@@ -180,9 +181,11 @@ antbridge.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**�
   —— 探针自己解析命令行、把 `"` 和 `\` 当语法，内联 `--eval` 里带 JS 字符串字面量会被拆坏；
   这个 helper 用 `--eval-file` 传文件，顺带设好 `--wait/--settle/--timeout/--userdata`。
   退出码仍是权威判据。
-- **一条命令截图**：`pwsh -File tools/screenshot.ps1 -Url <url> -Out <png> -Wait 16`
-  —— 窗口**不显示、不抢焦点**，用 `PrintWindow`（`PW_RENDERFULLCONTENT`）渲染；
-  不要 `SetForegroundWindow`、不要抓屏（会抓到任务视图/别的窗口，也会打扰用户）。
+- **一条命令截图**：`pwsh -File tools/screenshot.ps1 -Url <url> -Out <png> -Wait 12000`
+  —— 内部就是 `agave_shell.exe --probe <url> --shot <bmp>`：探针窗口是隐藏的 `WS_POPUP`，
+  从不 `ShowWindow`，抓的是控件的 mirror 缓冲（`agave_webview_paint_to`），所以屏幕上什么都不会出现。
+  不要启动 GUI 壳截图、不要 `SetForegroundWindow`、不要抓屏（会抓到任务视图/别的窗口，也会打扰用户）。
+  需要像素时优先用它；能只看数字就别截图。
 - **"这个元素为什么是 0×0"**：先 `__agbLayoutInfo(node)`（不强制布局）——
   `renderer=0` 是"没有渲染树对象"（样式在最后一次重算时是 `display:none`），
   `renderer=1` 但 `w=0` 是"挂上了但从没布局"，两者的修法相反。配合 `[style]` 通道看时序。

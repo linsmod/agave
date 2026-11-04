@@ -1,6 +1,7 @@
 # iframe 与 window 对象：现状、规范差距与实施计划
 
-> 状态：**设计 + 第一步已落地**（R30 视口度量按帧求值）。完整 per-frame `window` 尚未实现。
+> 状态：**已落地（R31）**：方案 B 的 1–3 步 + 第 5 步的限制说明完成；第 4 步（`postMessage` 的
+> `event.source` 走代理、`targetOrigin` 校验）还没做。验收页 `tools/pages/cap_window_identity.html`。
 > 相关：`handover.md` §4 P0-a、`docs/lessons.md` R30、`docs/capability-gaps.md` §1。
 
 ## 1. 规范要求（我们差在哪）
@@ -70,10 +71,10 @@ HTML 规范里**每个 browsing context 有自己的 Window 对象**：
 | 步 | 内容 | 验收 |
 |---|---|---|
 | 1 | ✅ 视口度量按帧求值（R30） | `tools/pages/cap_frame_viewport.html`：父 1100×800、子 200×200 |
-| 2 | 桥接层：`FrameSlot` 记录 `parentSlot`、`frameElement`、`name`；`__agbActivateSlot` 同时切换"当前 window 代理" | `__agbFrameSlot()` 在子 frame 里返回子槽位；切回父页后 `document` 复原 |
-| 3 | C++ `WindowProxy` 对象（tag + catch-all get/set + 固定属性表），`prelude.js` 的 `window/self/top/parent/frames` 改为读代理 | 新增 `tools/pages/cap_window_identity.html`：子 frame 里 `parent !== self`、`parent.document === 父文档`、`frames.length === 1`、`name` 可读 |
+| 2 | ✅ 桥接层：不需要新增槽位字段 —— `Document::parentDocument()` 与 `FrameTree`（`childCount/child/name/setName`）已经能回答父子关系，`installFrameGlobals()` 在每次 bind 时刷新全局属性 | `cap_window_identity.html`：切到子 frame 后 `document`/`parent`/`length`/`name` 都是子 frame 的值 |
+| 3 | ✅ C++ `WindowProxy` 对象（tag + catch-all get/set + 固定属性表），`prelude.js` 的 `window/self/top/parent/frames` 改为读代理 | 新增 `tools/pages/cap_window_identity.html`：子 frame 里 `parent !== self`、`parent.document === 父文档`、`frames.length === 1`、`name` 可读 |
 | 4 | `postMessage` 走代理（`event.source` 是发送方代理，`targetOrigin` 校验） | `cap_postmessage.html` 仍 `got=1`，且 `event.source !== window` |
-| 5 | 文档化已知限制：`var x` 仍是共享全局；`frames[i]` 返回代理 | `docs/capability-gaps.md` §1 更新 |
+| 5 | ✅ 文档化已知限制：`var x` 仍是共享全局；`frames[i]` 返回代理 | `docs/capability-gaps.md` §1 更新 |
 
 ## 5. 已知限制（方案 B 之后仍然存在）
 
