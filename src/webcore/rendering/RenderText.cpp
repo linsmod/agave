@@ -1135,8 +1135,18 @@ int RenderText::previousOffset(int current) const
         return current - 1;
 
     long result = textBreakPreceding(iterator, current);
-    if (result == TextBreakDone)
-        result = current - 1;
+    if (result == TextBreakDone) {
+        /* Step back over the whole character. An astral character is one
+         * character but two offsets: returning current - 1 lands inside the
+         * surrogate pair, and Position::inRenderedText() then rejects every
+         * caret position past it as "inside a composed character" (it compares
+         * nextOffset(previousOffset(o)) with o). */
+        if (current >= 2 && current <= si->length() &&
+            (*si)[current - 1] >= 0xDC00 && (*si)[current - 1] <= 0xDFFF)
+            result = current - 2;
+        else
+            result = current - 1;
+    }
 
     return result;
 }
@@ -1149,8 +1159,14 @@ int RenderText::nextOffset(int current) const
         return current + 1;
 
     long result = textBreakFollowing(iterator, current);
-    if (result == TextBreakDone)
-        result = current + 1;
+    if (result == TextBreakDone) {
+        /* See previousOffset(): never hand back an offset inside a pair. */
+        if (current + 1 < si->length() &&
+            (*si)[current + 1] >= 0xDC00 && (*si)[current + 1] <= 0xDFFF)
+            result = current + 2;
+        else
+            result = current + 1;
+    }
 
     return result;
 }

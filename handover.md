@@ -29,6 +29,9 @@ iframe 的视口度量按帧求值（R30）、**每个 frame 自己的 `window` 
 **键盘文本输入**（R37：字符只来自 `WM_CHAR`、不再用虚拟键码猜；每个字符插一次；keydown 的
 `preventDefault` 能拦住字符；`keypress` 的 `keyCode`/`charCode` 是真字符；Backspace 删一个；
 `event.shiftKey/ctrlKey` 有值；`--keys`/`--pre-eval` 无头回归）。
+**输入法输入**（R38：控件是 Unicode 窗口、宿主消息循环用 `GetMessageW`/`DispatchMessageW`、
+`WM_IME_CHAR` 与 `WM_CHAR` 同一处理器、代理对配对成 4 字节 UTF-8；顺带修掉 grapheme 迭代器对
+emoji 的死循环和「emoji 之后光标退到它前面」；`--ime` 无头回归）。
 
 **已经被检查过的"看起来不能用"**（别再当缺陷重开）：ant 的 Worker 是真的（R22）、ant 的 wasm 引擎是真的
 （R19）、渐变/`var()`/flex 大多可用（R11）、滚动与 hover 重绘正确（R13/R14）、刷新后 realm/监听器会清理（R9/R10）。
@@ -243,3 +246,4 @@ ant 原生构造器；http(s) 走异步桥取源码 + preamble 后包成 `data:`
 | Web Worker | `prelude.js` 末尾「Web Workers」段（`_agbWorkerStart` / `_agbWorkerPreamble` / `_agbWorkerPrefetch`）；ant 侧 `H:\ant-v16\src\modules\worker\{web,core}.c`；栈帧短名 `esm_frame_filename`（`H:\ant-v16\src\esm\loader.c`） |
 | 回归页 / 脚本 | 页面在 `debug/`（见 §3）；`tools/run_worker_tests.ps1`、`tools/run_nav_tests.ps1`、`tools/run_typing_tests.ps1`、`tools/check_window_visible.ps1`、`tools/bench_compile.ps1`、`tools/measure_cpu.ps1` |
 | 键盘文本输入 | `src/webview/WebView.cpp`：`keyDown()`（只派发 keydown，记住 `preventDefault`）、`textInput()`（WM_CHAR：过滤控制字符 → `handleCharacterEvent`）；`src/webcore/page/EventHandler.cpp`：`keyEvent()` / `handleCharacterEvent()`（keypress + 默认插入）；`src/webview/KeyEventMC.cpp`：`PlatformKeyboardEvent`（字符不来自 vk）；回归 `tools/run_typing_tests.ps1`（R37） |
+| 输入法 / Unicode 输入 | `src/webview_control/AgaveWebView.c`：`agwRegisterClass()`（`RegisterClassW`，Unicode 窗口）、`agwUtf16ToUtf8()`（代理对配对）、`agwProc` 的 `WM_CHAR`/`WM_IME_CHAR`；宿主循环 `GetMessageW`/`DispatchMessageW`（`examples/browser_shell`、`examples/embed_demo`）；死循环与光标：`src/webcore/platform/unicode/TextBoundary.cpp`（`PrecedingCharsBreak`/`FollowingCharsBreak` 的 `c_ERROR_TYPE`）、`src/webcore/rendering/RenderText.cpp`（`previousOffset`/`nextOffset` 跨代理对）；回归 `--ime` 三例（R38） |

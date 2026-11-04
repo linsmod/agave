@@ -2,6 +2,11 @@
 
 给第三方程序用的最小内核接口：**一个子窗口 + 一套 C API**。宿主只要照常用自己的消息循环，剩下的（引擎线程、渲染缓冲、输入转发）都在控件内部。
 
+⚠ 宿主的消息循环必须用 **Unicode 版**：`GetMessageW` + `TranslateMessage` + `DispatchMessageW`。
+控件窗口是 Unicode 窗口（`RegisterClassW`），字符经 `WM_CHAR` / `WM_IME_CHAR` 以 UTF-16 码元到达；
+`GetMessageA`/`DispatchMessageA` 会把它们转成 ANSI 代码页字节，中文输入法打出来就是乱码
+（`ÖÐÎÄ`）。宿主自己的 ANSI 窗口不受影响 —— `DispatchMessageW` 会按目标窗口自动转换。
+
 ```c
 #include "agave_webview.h"
 

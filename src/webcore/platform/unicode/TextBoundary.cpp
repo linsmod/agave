@@ -668,7 +668,18 @@ int PrecedingCharsBreak(const UChar* text, int textlength, CHARS_BREAK* pCBKinfo
             {
                 case  c_ERROR_TYPE:
                 case  EXTEND:
-                    break;
+                {
+                    /* Unknown cluster type: emoji and the other astral
+                     * characters have no entry in the grapheme table. Report
+                     * the boundary instead of falling through with the index
+                     * unchanged - that made this loop spin forever, which is
+                     * how placing the caret in a field holding an emoji hung
+                     * the whole engine. */
+                    pCBKinfo->current =index;
+                    pCBKinfo->char_type =ch_type;
+
+                    return index;
+                }
                 case  CR:
                 case  CONTROL:
                 case  c_TYPE_ANY:
@@ -895,7 +906,14 @@ int FollowingCharsBreak(const UChar* text, int textlength, CHARS_BREAK* pCBKinfo
             {
                 case c_ERROR_TYPE:
                 case EXTEND:
-                    break;
+                {
+                    /* See PrecedingCharsBreak: an unknown cluster is its own
+                     * boundary, never a no-op step. */
+                    pCBKinfo->current =index;
+                    pCBKinfo->char_type =ch_type;
+
+                    return index;
+                }
                 case  CR:
                 case  CONTROL:
                 case  c_TYPE_ANY:

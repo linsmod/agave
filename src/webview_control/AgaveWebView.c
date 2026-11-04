@@ -20,7 +20,7 @@
 #include "agave_webview.h"
 #include "../webview/AgbLog.h"
 
-#define AGW_CLASS_NAME "AgaveWebViewControl"
+/* The control window class is registered as a Unicode class: see agwRegisterClass. */
 #define AGW_MAX_VIEWS  32
 #define AGW_QUEUE_SIZE 256
 #define AGW_MSG_STATE  (WM_APP + 0x51)
@@ -79,6 +79,10 @@ struct AgaveWebView {
 
     AgaveWebViewCallback callbacks;
     void*              user;
+
+    /* High half of a surrogate pair, waiting for its low half (WM_CHAR and
+     * WM_IME_CHAR deliver one UTF-16 code unit per message). */
+    unsigned int       pendingHighSurrogate;
 };
 
 static char             g_userAgent[256];
@@ -135,7 +139,7 @@ static void agwFreeItem(AgaveWebView* item)
     agwDestroySurface(item);
 
     if (item->hwnd) {
-        SetWindowLongPtrA(item->hwnd, GWLP_USERDATA, 0);
+        SetWindowLongPtrW(item->hwnd, GWLP_USERDATA, 0);
         DestroyWindow(item->hwnd);
         item->hwnd = NULL;
     }
@@ -767,9 +771,9 @@ static DWORD WINAPI agwEngineThread(LPVOID param)
         {
             MSG msg;
 
-            while (PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE)) {
+            while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) {
                 TranslateMessage(&msg);
-                DispatchMessageA(&msg);
+                DispatchMessageW(&msg);
             }
         }
 
@@ -957,9 +961,60 @@ int agave_webview_paint_to(AgaveWebView* item, void* hdc, int width, int height)
     return 1;
 }
 
+/* Encodes one UTF-16 code unit as UTF-8.
+ *
+ * A character outside the BMP arrives as a surrogate pair, i.e. as two separate
+ * WM_CHAR/WM_IME_CHAR messages; the high half is parked on the control until
+ * its low half shows up. Returns the byte count, 0 while waiting for the low
+ * half (or for an orphaned one). */
+static int agwUtf16ToUtf8(AgaveWebView* item, unsigned int unit, char* utf8)
+{
+    unsigned int code = unit;
+
+    if (unit >= 0xD800 && unit <= 0xDBFF) {
+        item->pendingHighSurrogate = unit;
+        return 0;
+    }
+
+    if (unit >= 0xDC00 && unit <= 0xDFFF) {
+        if (!item->pendingHighSurrogate)
+            return 0;                   /* orphaned low half: drop it */
+        code = 0x10000 + ((item->pendingHighSurrogate - 0xD800) << 10) + (unit - 0xDC00);
+        item->pendingHighSurrogate = 0;
+    } else {
+        item->pendingHighSurrogate = 0;
+    }
+
+    if (code < 0x80) {
+        utf8[0] = (char)code;
+        utf8[1] = 0;
+        return 1;
+    }
+    if (code < 0x800) {
+        utf8[0] = (char)(0xC0 | (code >> 6));
+        utf8[1] = (char)(0x80 | (code & 0x3F));
+        utf8[2] = 0;
+        return 2;
+    }
+    if (code < 0x10000) {
+        utf8[0] = (char)(0xE0 | (code >> 12));
+        utf8[1] = (char)(0x80 | ((code >> 6) & 0x3F));
+        utf8[2] = (char)(0x80 | (code & 0x3F));
+        utf8[3] = 0;
+        return 3;
+    }
+
+    utf8[0] = (char)(0xF0 | (code >> 18));
+    utf8[1] = (char)(0x80 | ((code >> 12) & 0x3F));
+    utf8[2] = (char)(0x80 | ((code >> 6) & 0x3F));
+    utf8[3] = (char)(0x80 | (code & 0x3F));
+    utf8[4] = 0;
+    return 4;
+}
+
 static LRESULT CALLBACK agwProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
-    AgaveWebView* item = (AgaveWebView*)GetWindowLongPtrA(hwnd, GWLP_USERDATA);
+    AgaveWebView* item = (AgaveWebView*)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
 
     switch (message) {
     case WM_PAINT: {
@@ -1074,25 +1129,22 @@ static LRESULT CALLBACK agwProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
                     (message == WM_KEYDOWN) ? EVT_KEY_DOWN : EVT_KEY_UP, 0);
         return 0;
 
-    case WM_CHAR: {
+    case WM_CHAR:
+    case WM_IME_CHAR: {
         char utf8[8];
-        unsigned int code = (unsigned int)wParam;
-        int length = 0;
+        int length;
 
         if (!item)
             return 0;
 
-        if (code < 0x80) {
-            utf8[length++] = (char)code;
-        } else if (code < 0x800) {
-            utf8[length++] = (char)(0xC0 | (code >> 6));
-            utf8[length++] = (char)(0x80 | (code & 0x3F));
-        } else {
-            utf8[length++] = (char)(0xE0 | (code >> 12));
-            utf8[length++] = (char)(0x80 | ((code >> 6) & 0x3F));
-            utf8[length++] = (char)(0x80 | (code & 0x3F));
-        }
-        utf8[length] = 0;
+        /* WM_CHAR and WM_IME_CHAR both carry one UTF-16 code unit. The control
+         * window is Unicode (RegisterClassW), so no ANSI conversion happens on
+         * the way: an ANSI window turned every IME character into code-page
+         * bytes (one WM_CHAR per DBCS byte), which is why Chinese input used to
+         * come out as "ÖÐÎÄ". */
+        length = agwUtf16ToUtf8(item, (unsigned int)wParam, utf8);
+        if (!length)
+            return 0;
 
         agbLog(AGB_LOG_UI, "char '%s'", utf8);
 
@@ -1104,7 +1156,7 @@ static LRESULT CALLBACK agwProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
         break;
     }
 
-    return DefWindowProcA(hwnd, message, wParam, lParam);
+    return DefWindowProcW(hwnd, message, wParam, lParam);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -1113,7 +1165,7 @@ static LRESULT CALLBACK agwProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
 
 static void agwRegisterClass(HINSTANCE instance)
 {
-    WNDCLASSA wc;
+    WNDCLASSW wc;
 
     if (g_classRegistered)
         return;
@@ -1121,11 +1173,13 @@ static void agwRegisterClass(HINSTANCE instance)
     memset(&wc, 0, sizeof(wc));
     wc.lpfnWndProc = agwProc;
     wc.hInstance = instance;
-    wc.hCursor = LoadCursorA(NULL, IDC_ARROW);
+    wc.hCursor = LoadCursorW(NULL, IDC_ARROW);
     wc.hbrBackground = (HBRUSH)GetStockObject(WHITE_BRUSH);
-    wc.lpszClassName = AGW_CLASS_NAME;
+    /* Unicode window: WM_CHAR / WM_IME_CHAR then carry a UTF-16 code unit
+     * instead of an ANSI code-page byte (see agwUtf16ToUtf8). */
+    wc.lpszClassName = L"AgaveWebViewControl";
 
-    RegisterClassA(&wc);
+    RegisterClassW(&wc);
     g_classRegistered = 1;
 }
 
@@ -1425,7 +1479,7 @@ AgaveWebView* agave_webview_create(void* parent, int x, int y, int width, int he
         g_lockReady = 1;
     }
 
-    agwRegisterClass((HINSTANCE)GetWindowLongPtrA((HWND)parent, GWLP_HINSTANCE));
+    agwRegisterClass((HINSTANCE)GetWindowLongPtrW((HWND)parent, GWLP_HINSTANCE));
 
     macross_set_open_window_hook(agave_control_open_window);
     macross_set_post_message_hook(agwOnPostMessage);
@@ -1446,11 +1500,11 @@ AgaveWebView* agave_webview_create(void* parent, int x, int y, int width, int he
     if (callbacks)
         item->callbacks = *callbacks;
 
-    item->hwnd = CreateWindowExA(0, AGW_CLASS_NAME, "",
+    item->hwnd = CreateWindowExW(0, L"AgaveWebViewControl", L"",
                                  WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN,
                                  x, y, width, height,
                                  (HWND)parent, NULL,
-                                 (HINSTANCE)GetWindowLongPtrA((HWND)parent, GWLP_HINSTANCE),
+                                 (HINSTANCE)GetWindowLongPtrW((HWND)parent, GWLP_HINSTANCE),
                                  NULL);
 
     if (!item->hwnd) {
@@ -1458,7 +1512,7 @@ AgaveWebView* agave_webview_create(void* parent, int x, int y, int width, int he
         return NULL;
     }
 
-    SetWindowLongPtrA(item->hwnd, GWLP_USERDATA, (LONG_PTR)item);
+    SetWindowLongPtrW(item->hwnd, GWLP_USERDATA, (LONG_PTR)item);
 
     agwLock();
     if (g_viewCount < AGW_MAX_VIEWS)
@@ -1501,7 +1555,7 @@ void agave_webview_destroy(AgaveWebView* item)
     agwUnlock();
 
     if (item->hwnd) {
-        SetWindowLongPtrA(item->hwnd, GWLP_USERDATA, 0);
+        SetWindowLongPtrW(item->hwnd, GWLP_USERDATA, 0);
         DestroyWindow(item->hwnd);
         item->hwnd = NULL;
     }

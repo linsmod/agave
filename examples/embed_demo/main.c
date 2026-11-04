@@ -272,9 +272,9 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
     ShowWindow(g_hwnd, SW_SHOW);
     UpdateWindow(g_hwnd);
 
-    while (GetMessageA(&message, NULL, 0, 0)) {
+    while (GetMessageW(&message, NULL, 0, 0)) {
         TranslateMessage(&message);
-        DispatchMessageA(&message);
+        DispatchMessageW(&message);
     }
 
     if (g_left)  agave_webview_destroy(g_left);

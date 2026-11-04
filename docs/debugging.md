@@ -18,7 +18,9 @@ agave_shell.exe --probe <url> [--eval <js>] [--wait ms] [--settle ms] [--timeout
   非 ASCII 直接以 `WM_CHAR` 发送。窗口始终隐藏，不打扰用户（铁律 7）。
   `--pre-eval "<js>"` 在第一个键之前跑一次短脚本（聚焦控件、关掉弹层）：
   `--pre-eval "document.querySelector('input').focus()" --keys "13800138000"` 就能在真实站点上验证输入。
-  回归：`pwsh -File tools/run_typing_tests.ps1`（5 个用例，页面 `tools/pages/cap_typing.html`）。
+  `--ime "<text>"` 走**输入法**那条路：每个 UTF-16 码元发一条 `WM_IME_CHAR`（星平面字符是两个，
+  即代理对），用来复测中文/emoji 输入；`--keys` 则走 `WM_KEYDOWN → TranslateMessage → WM_CHAR`。
+  回归：`pwsh -File tools/run_typing_tests.ps1`（8 个用例，页面 `tools/pages/cap_typing.html`）。
 - URL 参数走**地址栏同一套规则**（`normalizeUrl`），所以可以直接传本地路径 / 文件 URL。
 
 **退出码（先看它，再翻日志）**

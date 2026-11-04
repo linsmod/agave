@@ -1642,6 +1642,7 @@ static char g_probeShot[512];     /* --shot: write a BMP here, then exit     */
 static char g_probeKeys[512];     /* --keys: typed into the page before eval */
 static int  g_probeKeysDone;      /* the --keys list was typed out             */
 static char g_probePreScript[2048]; /* --pre-eval: runs once before --keys     */
+static char g_probeIme[512];        /* --ime: posted as WM_IME_CHAR           */
 static int  g_probePreDone;       /* --pre-eval was executed                   */
 
 /* Offscreen capture. A hidden window gets no WM_PAINT, so PrintWindow has
@@ -1893,6 +1894,7 @@ static int probeKeyIsExtended(unsigned vk)
 typedef struct {
     unsigned vk;    /* virtual key for WM_KEYDOWN, 0 = text only */
     unsigned ch;    /* the character the key produces, 0 = none */
+    unsigned ime;   /* 1 = post WM_IME_CHAR (what an IME delivers) */
 } ProbeKey;
 
 #define PROBE_MAX_KEYS 128
@@ -1947,8 +1949,33 @@ static void probeParseKeys(void)
                 cp = ((unsigned)(p[0] & 0x0F) << 12) |
                      ((unsigned)(p[1] & 0x3F) << 6) | (unsigned)(p[2] & 0x3F);
                 p += 3;
+            } else if ((p[0] & 0xF8) == 0xF0 && (p[1] & 0xC0) == 0x80 &&
+                       (p[2] & 0xC0) == 0x80 && (p[3] & 0xC0) == 0x80) {
+                cp = ((unsigned)(p[0] & 0x07) << 18) | ((unsigned)(p[1] & 0x3F) << 12) |
+                     ((unsigned)(p[2] & 0x3F) << 6) | (unsigned)(p[3] & 0x3F);
+                p += 4;
             } else {
                 ++p;            /* invalid byte: skip */
+                continue;
+            }
+
+            if (cp >= 0x10000) {
+                /* WM_CHAR carries one UTF-16 code unit: an astral character is
+                 * a surrogate pair, i.e. two messages. */
+                unsigned int pair = cp - 0x10000;
+                unsigned int hi = 0xD800 + (pair >> 10);
+                unsigned int lo = 0xDC00 + (pair & 0x3FF);
+
+                if (g_probeKeyCount + 1 < PROBE_MAX_KEYS) {
+                    g_probeKeyList[g_probeKeyCount].vk = 0;
+                    g_probeKeyList[g_probeKeyCount].ch = hi;
+                    g_probeKeyList[g_probeKeyCount].ime = 0;
+                    g_probeKeyCount++;
+                    g_probeKeyList[g_probeKeyCount].vk = 0;
+                    g_probeKeyList[g_probeKeyCount].ch = lo;
+                    g_probeKeyList[g_probeKeyCount].ime = 0;
+                    g_probeKeyCount++;
+                }
                 continue;
             }
 
@@ -1963,6 +1990,33 @@ static void probeParseKeys(void)
 
         g_probeKeyList[g_probeKeyCount].vk = vk;
         g_probeKeyList[g_probeKeyCount].ch = ch;
+        g_probeKeyCount++;
+    }
+}
+
+/* --ime: what a real IME delivers. Each character arrives as WM_IME_CHAR with
+ * one UTF-16 code unit (a character outside the BMP arrives as two of them, the
+ * surrogate pair), not as WM_KEYDOWN + WM_CHAR. The text is appended to the
+ * key list so it shares the one-per-tick pacing. */
+static void probeParseIme(void)
+{
+    WCHAR wide[PROBE_MAX_KEYS];
+    int count;
+    int i;
+
+    if (!g_probeIme[0])
+        return;
+
+    count = MultiByteToWideChar(CP_UTF8, 0, g_probeIme, -1, wide, PROBE_MAX_KEYS - 1);
+    if (count <= 0)
+        return;
+
+    for (i = 0; i < count && g_probeKeyCount < PROBE_MAX_KEYS; ++i) {
+        if (!wide[i])
+            break;
+        g_probeKeyList[g_probeKeyCount].vk = 0;
+        g_probeKeyList[g_probeKeyCount].ch = (unsigned)wide[i];
+        g_probeKeyList[g_probeKeyCount].ime = 1;
         g_probeKeyCount++;
     }
 }
@@ -1986,7 +2040,10 @@ static int probeSendNextKey(void)
      * The lParam has to look like a real keyboard message: TranslateMessage
      * derives WM_CHAR from it, and a zeroed lParam makes the WM_KEYUP look
      * like a key press too, so every character arrived twice. */
-    if (key.vk) {
+    if (key.ime) {
+        agbLog(AGB_LOG_PROBE, "ime u+%04X", key.ch);
+        PostMessageW(target, WM_IME_CHAR, (WPARAM)key.ch, 1);
+    } else if (key.vk) {
         unsigned scan = MapVirtualKeyA(key.vk, MAPVK_VK_TO_VSC);
         LPARAM down = (LPARAM)(1 | (scan << 16) | (probeKeyIsExtended(key.vk) ? (1 << 24) : 0));
         LPARAM up = (LPARAM)(down | (1 << 30) | (1 << 31));
@@ -1996,7 +2053,7 @@ static int probeSendNextKey(void)
         PostMessageA(target, WM_KEYUP, (WPARAM)key.vk, up);
     } else if (key.ch) {
         agbLog(AGB_LOG_PROBE, "char cp=%u", key.ch);
-        PostMessageA(target, WM_CHAR, (WPARAM)key.ch, 1);
+        PostMessageW(target, WM_CHAR, (WPARAM)key.ch, 1);
     }
 
     return 1;
@@ -2071,7 +2128,7 @@ static int probeRun(const char* url)
         " window.addEventListener('load', f);"
         "})();");
 
-    while (GetMessageA(&msg, NULL, 0, 0)) {
+    while (GetMessageW(&msg, NULL, 0, 0)) {
         /* Only our own window's timers: the webview control runs internal
          * SetTimer(id=1, ~10ms) frame-pump timers on its own child window,
          * and their WM_TIMER (same message, same wParam=1) used to fire the
@@ -2093,12 +2150,14 @@ static int probeRun(const char* url)
                 if (g_probeEvalDone)
                     continue;
 
-                /* --keys runs before the eval: one key per tick so the
+                /* --keys / --ime run before the eval: one key per tick so the
                  * character of a key is processed before the next key, then a
                  * short pause for the last one, then the eval. */
-                if (g_probeKeys[0] && !g_probeKeysDone) {
-                    if (!g_probeKeyCount)
+                if ((g_probeKeys[0] || g_probeIme[0]) && !g_probeKeysDone) {
+                    if (!g_probeKeyCount) {
                         probeParseKeys();
+                        probeParseIme();
+                    }
                     /* --pre-eval: focus the field / dismiss a dialog before the
                      * first key. Without it a headless run can only type into
                      * whatever the page focused by itself. */
@@ -2274,7 +2333,7 @@ static int probeRun(const char* url)
         }
 
         TranslateMessage(&msg);
-        DispatchMessageA(&msg);
+        DispatchMessageW(&msg);
     }
 
     if (g_probeNewView) {
@@ -2346,6 +2405,8 @@ static void probeUsage(void)
             "            {up} {down} {home} {end} {delete} {esc} name a key)\n"
             "  --pre-eval <js>  short snippet run once before --keys (focus a\n"
             "            field: \"document.querySelector('input').focus()\")\n"
+            "  --ime <text>  deliver text the way an IME does: WM_IME_CHAR per\n"
+            "            UTF-16 code unit (surrogate pairs included), no keydown\n"
             "  --reload <n>  reload the page n times and run the eval after\n"
             "                every round (page lifecycle comparison)\n"
             "  --offline module fetches are served from the cache only\n"
@@ -2444,6 +2505,9 @@ static void parseShellArgv(void)
         } else if (!strcmp(argv[i], "--pre-eval") && i + 1 < argc) {
             strncpy(g_probePreScript, argv[++i], sizeof(g_probePreScript) - 1);
             g_probePreScript[sizeof(g_probePreScript) - 1] = 0;
+        } else if (!strcmp(argv[i], "--ime") && i + 1 < argc) {
+            strncpy(g_probeIme, argv[++i], sizeof(g_probeIme) - 1);
+            g_probeIme[sizeof(g_probeIme) - 1] = 0;
         } else if (!strcmp(argv[i], "--wait") && i + 1 < argc) {
             g_probeWaitMs = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--settle") && i + 1 < argc) {
@@ -2591,7 +2655,7 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
 
     agbLog(AGB_LOG_SHELL, "entering message loop");
 
-    while (GetMessageA(&msg, NULL, 0, 0)) {
+    while (GetMessageW(&msg, NULL, 0, 0)) {
         if (msg.message == WM_KEYDOWN) {
             if (msg.hwnd == g_address && msg.wParam == VK_RETURN) {
                 char text[MAX_PATH_CHARS];
@@ -2677,7 +2741,7 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
         }
 
         TranslateMessage(&msg);
-        DispatchMessageA(&msg);
+        DispatchMessageW(&msg);
     }
 
     agbLog(AGB_LOG_SHELL, "message loop ended");
