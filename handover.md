@@ -40,7 +40,8 @@ width/height/orientation/resolution；无媒体类型的 `@media (min-width: …
 **圆角裁剪不再吞掉脏矩形**（R40：`clip(path)` 与设备矩形求交，聚焦/局部重绘时不再把文字擦掉）。
 **flex gap / aspect-ratio / `:is()` `:where()`**（R41：`gap`/`row-gap`/`column-gap` 按现代语义插在 in-flow 子项之间，
 简写 1 值=两轴；`aspect-ratio` 在另一轴确定时推另一轴；`:is()`/`:where()` 解析期展开成选择器列表；
-输入框聚焦时 placeholder 不再消失）。
+placeholder 改为 `paint()` 里独立绘制、不再写进输入框的值文本，聚焦空框时折叠全选以免被 `::selection`
+高亮，可见性实时看 `value` 是否为空）。
 
 **已经被检查过的"看起来不能用"**（别再当缺陷重开）：ant 的 Worker 是真的（R22）、ant 的 wasm 引擎是真的
 （R19）、渐变/`var()`/flex 大多可用（R11/R39）、滚动与 hover 重绘正确（R13/R14/R40）、刷新后 realm/监听器会清理（R9/R10）。
@@ -221,10 +222,11 @@ ant 原生构造器；http(s) 走异步桥取源码 + preamble 后包成 `data:`
   [`docs/architecture/module-pipeline.md`](docs/architecture/module-pipeline.md)）。
 - **一个 view 一个 realm**：`window` 对象每 engine 一个，iframe 与主 frame 共享它
   （`dispatchDidFinishDocumentLoad` 因此跳过非主 frame，见 `FrameLoaderClientMC.cpp`）。
-- **CSS 能力边界**：grid 布局、transform 绘制未实现；`position:sticky`、`aspect-ratio`、flex `gap`、
-  `:is()`/`:where()` 不支持；`box-shadow`（无前缀）已可用；`var()` 在解析期展开（跨 sheet 失效、
-  同名取首次定义）。**完整实测值、影响与复测命令见 [`docs/capability-gaps.md`](docs/capability-gaps.md) §2**
-  （R11 是当时的过程记录）。
+- **CSS 能力边界**：grid 布局、transform 绘制、`position:sticky` 未实现（按 static 降级）；
+  `aspect-ratio`、flex `gap`/`row-gap`/`column-gap`、`:is()`/`:where()`、`prefers-color-scheme`、
+  元素级级联的 `var()`（含 fallback / `!important` / 继承）、`box-sizing`（无前缀）、`box-shadow`
+  均已支持（R39/R41）。**完整实测值、影响与复测命令见 [`docs/capability-gaps.md`](docs/capability-gaps.md) §2**
+  （R11/R39/R41 是当时的过程记录）。
 - **wasm 是解释执行**：导出函数跨界约 3.9µs/次，适合"一次调用跑大循环"（R19）。
 - **worker 无网络 / 无 `SharedWorker`/`ServiceWorker`**：见 P1-d 与 R22。
 - **GC root 只能到 engine 边界**（ant 没有 unpin）：现在 per-document engine 让这一点等价于"每文档释放"（R4）。
