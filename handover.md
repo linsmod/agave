@@ -261,7 +261,13 @@ $p = Start-Process -FilePath 'e:\mybrowsers\agave\build-zig-native\agave_shell.e
 - 验收：预下载的图完整，求值阶段零同步补下载。
 
 ### P2 桥接可观测性
-- 动作：给桥接加计数输出（wrapper 数 / class 数 / root 余量），便于回归时盯表耗尽。
+- 动作：给桥接加计数输出（wrapper 数 / class 数 / root 余数），便于回归时盯表耗尽。
+
+### P1-d worker 里的网络（R22 遗留，未做）
+- 现状：worker 线程里 **`fetch` 不可用**（实测 `fetch('http://127.0.0.1:8971/w_dep.js')` → `connection reset by peer`：ant 的 fetch 需要它自己的运行时网络栈，worker isolate 里没有），`XMLHttpRequest` 在 worker scope 里干脆是 undefined；`importScripts` 只能加载父侧预取过的**字面量** URL（动态拼出来的会抛 `not prefetched`）；worker 里相对路径的 `import()` 也解析不了（入口是 data: URL）。
+- 影响：pdf.js / wasm / 需要二次加载资源的 worker 库会失败；纯计算类 worker 不受影响。
+- 方案（只改 `prelude.js`，不碰 C++）：worker 侧 preamble 提供 `fetch`/`XMLHttpRequest` 的 **RPC 版本** —— 请求包 `{__agbNet:{id,url,method,body}}` 走 `postMessage` 到父侧，父侧 wrapper 在原生 worker 的 message 里拦截该包，用现成的 `__agbHttpRequestEx` 取回（二进制 base64），再 `postMessage` 回复，worker 侧把 `{__agbNetReply:{id,status,b64}}` 解成 Response/Promise；控制包在两侧都要从页面可见的 `onmessage` 里过滤掉。`importScripts` 的动态 URL 走同一条 RPC 的**同步分支不可能**（规范要求同步）→ 只能父侧预取 + 缓存命中，超集仍需 async fetch + 重写。
+- 验收：`debug/` 里加 worker fetch 回归页，`ws_workerfetch`（现有探测页）从 `fetch-err` 变成 `fetch=<字节数>`；`importScripts` 动态 URL 至少给出清晰错误。
 
 ---
 
