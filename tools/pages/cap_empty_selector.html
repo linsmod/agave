@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>cap_empty_selector</title>
+<style>
+  #host { width: 240px; }
+  /* The shape DeepSeek uses for its WeChat QR host: the box only exists while
+   * it has children, so inserting the first child must re-resolve its style. */
+  #w { display: -webkit-box; width: 100%; height: 200px; background: #cfc; }
+  #w:empty { display: none; }
+</style>
+</head>
+<body>
+<div id="host"><div id="w"></div></div>
+<pre id="out"></pre>
+<script>
+/* __agbLayoutInfo does not force a layout, so each line reports what the engine
+ * did on its own. Before the fix, "filled" and "later" still showed
+ * renderer=0 (the :empty style was never re-resolved). */
+var log = [];
+var w = document.getElementById('w');
+log.push('empty[' + __agbLayoutInfo(w) + ']');
+
+var f = document.createElement('iframe');
+f.style.width = '200px';
+f.style.height = '200px';
+w.appendChild(f);
+log.push('filled[' + __agbLayoutInfo(w) + ']');
+
+setTimeout(function () {
+  log.push('later[' + __agbLayoutInfo(w) + ']');
+  log.push('offset=' + w.offsetWidth + 'x' + w.offsetHeight);
+  document.getElementById('out').textContent = log.join('\n');
+}, 150);
+</script>
+</body>
+</html>

@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>cap_dynamic_layout</title>
+<style>
+  #host { width: 240px; }
+  .fixed { width: 120px; height: 40px; background: #cfc; }
+  .fill { width: 100%; height: 200px; background: #ccf; }
+  .boxwrap { display: -webkit-box; width: 100%; height: 200px; background: #fcc; }
+  .boxwrap > * { width: 200px; height: 200px; }
+</style>
+</head>
+<body>
+<div id="host"></div>
+<pre id="out"></pre>
+<script>
+/* Measures offsetWidth/offsetHeight right after each DOM mutation.
+ * A 0 there (while the same node measures fine after an unrelated style
+ * touch) means the mutation did not dirty layout. */
+var log = [];
+function m(label, el) {
+  log.push(label + '=' + (el ? el.offsetWidth + 'x' + el.offsetHeight : 'null'));
+}
+var host = document.getElementById('host');
+
+/* 1: appendChild, fixed px block */
+var a = document.createElement('div');
+a.className = 'fixed';
+host.appendChild(a);
+m('appendFixed', a);
+
+/* 2: appendChild, width:100% block */
+var b = document.createElement('div');
+b.className = 'fill';
+host.appendChild(b);
+m('appendPct', b);
+
+/* 3: innerHTML */
+host.innerHTML += '<div id="c" class="fixed"></div>';
+m('innerHTML', document.getElementById('c'));
+
+/* 4: -webkit-box container appended with its child already inside */
+var d = document.createElement('div');
+d.className = 'boxwrap';
+var dk = document.createElement('div');
+d.appendChild(dk);
+host.appendChild(d);
+m('boxPrebuilt', d);
+m('boxPrebuiltChild', dk);
+
+/* 5: container first, child appended afterwards (the wxLogin shape) */
+var e = document.createElement('div');
+e.className = 'boxwrap';
+host.appendChild(e);
+m('boxThenChild_container', e);
+var ek = document.createElement('div');
+e.appendChild(ek);
+m('boxThenChild_container2', e);
+m('boxThenChild_child', ek);
+
+/* 6: iframe appended dynamically */
+var f = document.createElement('iframe');
+f.style.width = '200px';
+f.style.height = '200px';
+host.appendChild(f);
+m('iframe', f);
+
+/* 7: control - an unrelated style touch, then measure again */
+document.body.style.paddingTop = '1px';
+m('again_appendFixed', a);
+m('again_appendPct', b);
+m('again_boxThenChild_container', e);
+m('again_boxThenChild_child', ek);
+m('again_iframe', f);
+
+document.getElementById('out').textContent = log.join(' ');
+document.title = log.join(' ');
+</script>
+</body>
+</html>

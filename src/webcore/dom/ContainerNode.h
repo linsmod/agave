@@ -61,6 +61,7 @@ public:
     virtual void removedFromDocument();
     virtual void insertedIntoTree(bool deep);
     virtual void removedFromTree(bool deep);
+    virtual void childrenChanged();
 
     void removeAllChildren();
     void removeChildren();

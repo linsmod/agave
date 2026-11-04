@@ -222,6 +222,8 @@ bool ContainerNode::insertBefore(PassRefPtr<Node> newChild, Node* refChild, Exce
 
     document()->setDocumentChanged(true);
     dispatchSubtreeModifiedEvent();
+    /* The child list changed, so :empty and friends may have flipped. */
+    childrenChanged();
     return true;
 }
 
@@ -426,6 +428,9 @@ bool ContainerNode::removeChild(Node* oldChild, ExceptionCode& ec)
 
     document()->setDocumentChanged(true);
 
+    /* The child list changed, so :empty and friends may have flipped. */
+    childrenChanged();
+
     // Dispatch post-removal mutation events
     dispatchSubtreeModifiedEvent();
 
@@ -584,8 +589,29 @@ ContainerNode* ContainerNode::addChild(PassRefPtr<Node> newChild)
     return this;
 }
 
-void ContainerNode::queuePostAttachCallback(NodeCallback callback, Node* node)
+/* Structural selectors (:empty, :first-child, :last-child, :nth-child, ...)
+ * match on the CHILD LIST, so a child list change has to invalidate this node's
+ * style. Nothing did: inserting or removing a child only marked the document as
+ * changed (which schedules a rendering update) and left this node's own style
+ * clean, so it kept the display it had before the change.
+ *
+ * DeepSeek's WeChat QR host is exactly that shape:
+ *   .ds-sign-in-with-wechat-block__wrapper { display: flex; height: 200px }
+ *   .ds-sign-in-with-wechat-block__wrapper:empty { display: none }
+ * React re-rendered the block while the wrapper was still empty, so it
+ * resolved to display:none and got no renderer; the QR iframe was inserted a
+ * moment later, :empty stopped matching, and the wrapper stayed display:none
+ * (0x0, no renderer) until an unrelated recalc - which is why the QR area was
+ * blank (R28). */
+void ContainerNode::childrenChanged()
 {
+    Node::childrenChanged();
+
+    if (inDocument())
+        setChanged();
+}
+
+void ContainerNode::queuePostAttachCallback(NodeCallback callback, Node* node){
     if (!s_postAttachCallbackQueue)
         s_postAttachCallbackQueue = new NodeCallbackQueue;
     
