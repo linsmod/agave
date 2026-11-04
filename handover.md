@@ -26,6 +26,9 @@ iframe 的视口度量按帧求值（R30）、**每个 frame 自己的 `window` 
 `nth-child`/`not` 等伪类；实现是 `src/javascript/ant_backend/AgbSelector.h`）。
 **History 状态机**（R36：`pushState`/`replaceState` 保存 state、`history.state`/`length` 是真的、
 `back/forward/go` 恢复 URL 并派发带 `state` 的 `popstate`；跨文档的前进后退仍交给 FrameLoader）。
+**键盘文本输入**（R37：字符只来自 `WM_CHAR`、不再用虚拟键码猜；每个字符插一次；keydown 的
+`preventDefault` 能拦住字符；`keypress` 的 `keyCode`/`charCode` 是真字符；Backspace 删一个；
+`event.shiftKey/ctrlKey` 有值；`--keys` 无头回归）。
 
 **已经被检查过的"看起来不能用"**（别再当缺陷重开）：ant 的 Worker 是真的（R22）、ant 的 wasm 引擎是真的
 （R19）、渐变/`var()`/flex 大多可用（R11）、滚动与 hover 重绘正确（R13/R14）、刷新后 realm/监听器会清理（R9/R10）。
@@ -111,6 +114,7 @@ ant 原生构造器；http(s) 走异步桥取源码 + preamble 后包成 `data:`
 4. **两个"大图"**：`https://chat.deepseek.com/`（登录页 `inp=2 all=129`、无 `antjs` 错误）、
    `https://browserscore.dev/`（Vue 模块图）。
 5. **现成脚本**：`tools/run_worker_tests.ps1`（Worker 九项）、`tools/run_nav_tests.ps1`（`[nav]` 八项，含 302 重定向）、
+   `tools/run_typing_tests.ps1`（键盘输入五项：打字/退格/Tab 聚焦/keydown 过滤/textarea 回车）、
    `tools/bench_compile.ps1`（启动墙钟/CPU）、`tools/measure_cpu.ps1`（CPU 占用）、
    `tools/check_window_visible.ps1`（无头探针确实不出窗口）、`tools/probe.ps1` / `tools/screenshot.ps1`
    （无头探针 / 无头截图，屏幕上什么都不出现）。
@@ -237,4 +241,5 @@ ant 原生构造器；http(s) 走异步桥取源码 + preamble 后包成 `data:`
 | 地址栏输入 → URL | `examples/browser_shell/main.c`：`parseShellArgv()` / `normalizeUrl()` / `fileUrlFromLocalPath()`；`file:` URL 只允许单次转义 → `KURL::encode_string()`（幂等） |
 | 无头探针 | `examples/browser_shell/main.c`：`probeRun()`（`WS_POPUP` + `WS_EX_TOOLWINDOW` 隐藏父窗口）+ `probeWndProc()`；`AGB_PROBE_SHOW=1` 才显示 |
 | Web Worker | `prelude.js` 末尾「Web Workers」段（`_agbWorkerStart` / `_agbWorkerPreamble` / `_agbWorkerPrefetch`）；ant 侧 `H:\ant-v16\src\modules\worker\{web,core}.c`；栈帧短名 `esm_frame_filename`（`H:\ant-v16\src\esm\loader.c`） |
-| 回归页 / 脚本 | 页面在 `debug/`（见 §3）；`tools/run_worker_tests.ps1`、`tools/run_nav_tests.ps1`、`tools/check_window_visible.ps1`、`tools/bench_compile.ps1`、`tools/measure_cpu.ps1` |
+| 回归页 / 脚本 | 页面在 `debug/`（见 §3）；`tools/run_worker_tests.ps1`、`tools/run_nav_tests.ps1`、`tools/run_typing_tests.ps1`、`tools/check_window_visible.ps1`、`tools/bench_compile.ps1`、`tools/measure_cpu.ps1` |
+| 键盘文本输入 | `src/webview/WebView.cpp`：`keyDown()`（只派发 keydown，记住 `preventDefault`）、`textInput()`（WM_CHAR：过滤控制字符 → `handleCharacterEvent`）；`src/webcore/page/EventHandler.cpp`：`keyEvent()` / `handleCharacterEvent()`（keypress + 默认插入）；`src/webview/KeyEventMC.cpp`：`PlatformKeyboardEvent`（字符不来自 vk）；回归 `tools/run_typing_tests.ps1`（R37） |

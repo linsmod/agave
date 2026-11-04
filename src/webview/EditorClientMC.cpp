@@ -127,26 +127,21 @@ void EditorClientMC::handleKeypress(KeyboardEvent* event)
 
     Node* focus = frame->document()->focusedNode();
 
-    if (start->isContentEditable()) {
-        /* Printable characters never mapped to a command, so nothing was ever
-         * inserted: turn them into text through the normal editing path. */
-        String typed = kevent->text();
-        if (typed.length() == 1 && !kevent->ctrlKey() && !kevent->altKey()) {
-            UChar c = typed[0];
-            if (c >= 0x20 && c != 0x7F) {
-                frame->editor()->insertText(typed, event);
-                event->setDefaultHandled();
-                return;
-            }
-        }
+    /* Text insertion is NOT done here. The key event carries no character (the
+     * platform delivers it separately), and the old code inserted whatever the
+     * virtual key code spelled - VK_NUMPAD1 is 0x61, i.e. 'a', so typing 1 on
+     * the numpad produced "a1". EventHandler::handleCharacterEvent() inserts
+     * the real character; this function only maps the key to an editing
+     * command. */
+    if (!start->isContentEditable())
+        return;
 
-        String command(translate_key_event(kevent));
-        if (command.isEmpty())
-            return;
-        if (focus->renderer() && focus->renderer()->isTextField() && (command == "MoveUp" || command == "MoveDown")) 
-            return;
-        frame->editor()->execCommand(command);
-    }
+    String command(translate_key_event(kevent));
+    if (command.isEmpty())
+        return;
+    if (focus->renderer() && focus->renderer()->isTextField() && (command == "MoveUp" || command == "MoveDown")) 
+        return;
+    frame->editor()->execCommand(command);
     event->setDefaultHandled();
 }
 

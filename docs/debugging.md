@@ -11,6 +11,12 @@ agave_shell.exe --probe <url> [--eval <js>] [--wait ms] [--settle ms] [--timeout
 - 页面 JS 调 `probeExit(result)` 带结果退出；页面 `console.*` 进 stderr（console guard 自动节流重复警告）。
 - `--reload n` 语义：eval → reload → 轮询新文档就绪 → 再 eval，共 n+1 轮。
 - `--offline`：模块只从磁盘缓存取，未命中立刻失败；先在线跑一次暖缓存，再确定性重放模块图。
+- `--keys "<text>"`：eval **之前**把文字打进页面，走真实的 `WM_KEYDOWN → WM_CHAR → WM_KEYUP`
+  （PostMessage 到控件窗口，由宿主循环的 `TranslateMessage` 生成字符；一个 tick 一个键，
+  保证字符在下一个键之前处理完）。页面自己负责聚焦（`autofocus` / `el.focus()`）。
+  `{backspace} {enter} {tab} {esc} {delete} {left} {right} {up} {down} {home} {end}` 表示功能键；
+  非 ASCII 直接以 `WM_CHAR` 发送。窗口始终隐藏，不打扰用户（铁律 7）。
+  回归：`pwsh -File tools/run_typing_tests.ps1`（5 个用例，页面 `tools/pages/cap_typing.html`）。
 - URL 参数走**地址栏同一套规则**（`normalizeUrl`），所以可以直接传本地路径 / 文件 URL。
 
 **退出码（先看它，再翻日志）**

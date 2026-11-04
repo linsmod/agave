@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>cap typing</title>
+</head>
+<body>
+<input id="text" autofocus>
+<input id="filter">
+<textarea id="area"></textarea>
+<script>
+/* Keyboard text-input coverage. Type into the page with
+ *   agave_shell.exe --probe file:///.../cap_typing.html --keys "ab1" --eval ...
+ * and read document.title back: `value` must hold exactly what --keys sent.
+ *
+ * The bug this page pins down: the bridge fabricated the typed character from
+ * the virtual key code at WM_KEYDOWN time and inserted it, then WM_CHAR
+ * inserted the real character again. A letter doubled ("aa"), and any key
+ * whose vk is not its character inserted garbage (numpad 1 -> VK_NUMPAD1
+ * 0x61 -> "a", then "1" -> "a1").
+ *
+ * keydown/keypress/input are recorded with the field value at that moment, so a
+ * regression in the event stream is visible too: the value must still be empty
+ * when the keydown arrives (text is inserted by the keypress default action),
+ * and keypress must carry the real character code.
+ *
+ *   --keys "ab1"                 -> value "ab1"
+ *   --keys "abc{backspace}"      -> value "ab"   (one delete per key)
+ *   --keys "a1" with ?focus=filter -> value "1"  (keydown preventDefault wins)
+ */
+var text = document.getElementById('text');
+var filter = document.getElementById('filter');
+var area = document.getElementById('area');
+var events = [];
+
+function snap(tag) {
+  events.push(tag + '[' + text.value + ']');
+}
+
+text.addEventListener('keydown', function (e) {
+  snap('d' + e.keyCode);
+});
+text.addEventListener('keypress', function (e) {
+  snap('p' + e.keyCode + ':' + e.charCode);
+});
+text.addEventListener('input', function () {
+  snap('i');
+});
+
+/* A phone-field style filter: refuse anything that is not a digit, from the
+ * keydown, before the character can be inserted. */
+filter.addEventListener('keydown', function (e) {
+  /* Only printable non-digits are refused: Tab, Backspace and the arrows must
+   * keep working. */
+  if (e.keyCode >= 32 && (e.keyCode < 48 || e.keyCode > 57))
+    e.preventDefault();
+  /* A caret trap: pages do cancel arrow keys. That must not swallow the
+   * character of the *next* key (arrow keys produce no WM_CHAR). */
+  if (e.keyCode === 37)
+    e.preventDefault();
+});
+
+if (location.search.indexOf('filter') >= 0)
+  filter.focus();
+else
+  text.focus();
+
+window.reportTyping = function () {
+  document.title = [
+    'value=' + text.value,
+    'len=' + text.value.length,
+    'filter=' + filter.value,
+    'events=' + events.join(','),
+    'area=' + area.value
+  ].join(' ');
+  return document.title;
+};
+</script>
+</body>
+</html>

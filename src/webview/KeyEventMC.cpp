@@ -70,36 +70,32 @@ static String keyIdentifierForWindowsKeyCode(unsigned short keyCode)
         case KEY_DELETE:
             return "Remove";
         default:
-            return String::format("U+%04X", WTF::toASCIIUpper(keyCode));
+            break;
     }
-}
 
-static String singleCharacterString(unsigned int keyCode) 
-{
-    UChar c = (UChar)keyCode;
-    return String(&c, 1); 
-}
+    /* Numpad digits report VK_NUMPAD0..9 (0x60..0x69) on Windows. Those codes
+     * are not characters - VK_NUMPAD1 is 0x61, i.e. 'a' - so they must be
+     * mapped before the generic branch below turns them into "U+0061". */
+    if (keyCode >= 0x60 && keyCode <= 0x69)
+        return String::format("U+003%c", (char)('0' + (keyCode - 0x60)));
 
-/* The embedding API passes a virtual key code; for letters the produced
- * character depends on Shift (KEY_A .. KEY_Z are 0x41 .. 0x5A). */
-static unsigned int characterForKeyCode(unsigned int keyCode, unsigned flags)
-{
-    bool shift = (flags & 4) != 0;
-
-    if (!shift && keyCode >= 'A' && keyCode <= 'Z')
-        return keyCode - 'A' + 'a';
-
-    return keyCode;
+    return String::format("U+%04X", WTF::toASCIIUpper(keyCode));
 }
 
 PlatformKeyboardEvent::PlatformKeyboardEvent(bool isDown, unsigned code, unsigned flags)
-    : m_text(singleCharacterString(characterForKeyCode(code, flags)))
-    , m_unmodifiedText(singleCharacterString(characterForKeyCode(code, flags)))
+    /* No text: a Win32 virtual key code is not a character. The character
+     * arrives separately in WM_CHAR, which dispatches the keypress event and
+     * inserts the text (see WebView::textInput / EventHandler::handleCharacterEvent).
+     * Deriving it from the vk here used to insert the wrong character for
+     * every key whose vk is not its character (numpad 1 -> VK_NUMPAD1 == 0x61
+     * -> "a") and, together with WM_CHAR, inserted every character twice. */
+    : m_text(String())
+    , m_unmodifiedText(String())
     , m_keyIdentifier(keyIdentifierForWindowsKeyCode(code))
     , m_isKeyUp(!isDown)
     , m_autoRepeat((flags & 16) ? true : false)
     , m_WindowsKeyCode(code)
-    , m_isKeypad(false) // FIXME: don't use keypad
+    , m_isKeypad(code >= 0x60 && code <= 0x69)
     , m_shiftKey(flags & 4) // shift
     , m_ctrlKey(flags & 2) // ctrl
     , m_altKey(flags & 1) // alt

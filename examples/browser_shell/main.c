@@ -1639,6 +1639,8 @@ static int g_probeRoundsDone;     /* every round finished -> OK exit code   */
 static char g_probeToken[64];     /* per-reload marker for the NEW document */
 static int  g_probeVisible;       /* AGB_PROBE_SHOW: the window is on screen  */
 static char g_probeShot[512];     /* --shot: write a BMP here, then exit     */
+static char g_probeKeys[512];     /* --keys: typed into the page before eval */
+static int  g_probeKeysDone;      /* the --keys list was typed out             */
 
 /* Offscreen capture. A hidden window gets no WM_PAINT, so PrintWindow has
  * nothing to render; the control keeps its own mirror buffer, and
@@ -1862,6 +1864,142 @@ static LRESULT CALLBACK probeWndProc(HWND hwnd, UINT message, WPARAM wParam, LPA
     return DefWindowProcA(hwnd, message, wParam, lParam);
 }
 
+/* --keys: replay real typing through the control's own window procedure, so a
+ * headless probe exercises the same path a keyboard does (WM_KEYDOWN, WM_CHAR,
+ * WM_KEYUP) instead of a DOM-level shortcut that would skip the key handling
+ * under test.
+ *
+ * {backspace} {enter} {tab} {esc} {delete} {left} {right} {up} {down} {home}
+ * {end} name a non-printable key; everything else is typed as UTF-8.
+ *
+ * Keys go out one per timer tick: TranslateMessage appends the WM_CHAR to the
+ * end of the message queue, so a burst of posted keydowns would deliver every
+ * character after all of them - a real keyboard never does that, and the page
+ * would see the keys in the wrong order. */
+static int probeKeyIsExtended(unsigned vk)
+{
+    switch (vk) {
+    case VK_LEFT: case VK_RIGHT: case VK_UP: case VK_DOWN:
+    case VK_HOME: case VK_END: case VK_DELETE: case VK_INSERT:
+    case VK_PRIOR: case VK_NEXT:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+typedef struct {
+    unsigned vk;    /* virtual key for WM_KEYDOWN, 0 = text only */
+    unsigned ch;    /* the character the key produces, 0 = none */
+} ProbeKey;
+
+#define PROBE_MAX_KEYS 128
+static ProbeKey g_probeKeyList[PROBE_MAX_KEYS];
+static int g_probeKeyCount;
+static int g_probeKeyIndex;
+
+static void probeParseKeys(void)
+{
+    const unsigned char* p = (const unsigned char*)g_probeKeys;
+
+    g_probeKeyCount = 0;
+
+    while (*p && g_probeKeyCount < PROBE_MAX_KEYS) {
+        unsigned vk = 0;
+        unsigned ch = 0;
+        unsigned cp;
+
+        if (*p == '{') {
+            const char* name = (const char*)p + 1;
+            const char* close = strchr(name, '}');
+            size_t len = close ? (size_t)(close - name) : 0;
+
+            if (!close) {
+                ++p;            /* stray '{': type it literally */
+                ch = '{';
+            } else {
+                if (len == 9 && !strncmp(name, "backspace", 9))      { vk = VK_BACK;   ch = 8; }
+                else if (len == 5 && !strncmp(name, "enter", 5))     { vk = VK_RETURN; ch = 13; }
+                else if (len == 3 && !strncmp(name, "tab", 3))       { vk = VK_TAB;    ch = 9; }
+                else if (len == 3 && !strncmp(name, "esc", 3))       { vk = VK_ESCAPE; }
+                else if (len == 6 && !strncmp(name, "delete", 6))    { vk = VK_DELETE; }
+                else if (len == 4 && !strncmp(name, "left", 4))      { vk = VK_LEFT; }
+                else if (len == 5 && !strncmp(name, "right", 5))     { vk = VK_RIGHT; }
+                else if (len == 2 && !strncmp(name, "up", 2))        { vk = VK_UP; }
+                else if (len == 4 && !strncmp(name, "down", 4))      { vk = VK_DOWN; }
+                else if (len == 4 && !strncmp(name, "home", 4))      { vk = VK_HOME; }
+                else if (len == 3 && !strncmp(name, "end", 3))       { vk = VK_END; }
+                p = (const unsigned char*)close + 1;
+                if (!vk && !ch)
+                    continue;   /* unknown token: skip it */
+            }
+        } else {
+            /* Decode one UTF-8 code point (the control re-encodes it). */
+            if (p[0] < 0x80) {
+                cp = p[0];
+                p += 1;
+            } else if ((p[0] & 0xE0) == 0xC0 && (p[1] & 0xC0) == 0x80) {
+                cp = ((unsigned)(p[0] & 0x1F) << 6) | (unsigned)(p[1] & 0x3F);
+                p += 2;
+            } else if ((p[0] & 0xF0) == 0xE0 && (p[1] & 0xC0) == 0x80 && (p[2] & 0xC0) == 0x80) {
+                cp = ((unsigned)(p[0] & 0x0F) << 12) |
+                     ((unsigned)(p[1] & 0x3F) << 6) | (unsigned)(p[2] & 0x3F);
+                p += 3;
+            } else {
+                ++p;            /* invalid byte: skip */
+                continue;
+            }
+
+            ch = cp;
+            /* The virtual key a real keyboard reports: letters arrive as
+             * VK_A..VK_Z, digits as their ASCII code. Non-ASCII text has no vk. */
+            if (cp >= 'a' && cp <= 'z')
+                vk = cp - 'a' + 'A';
+            else if (cp < 0x80)
+                vk = cp;
+        }
+
+        g_probeKeyList[g_probeKeyCount].vk = vk;
+        g_probeKeyList[g_probeKeyCount].ch = ch;
+        g_probeKeyCount++;
+    }
+}
+
+/* Sends the next key; returns 0 when the list is exhausted. */
+static int probeSendNextKey(void)
+{
+    HWND target = (HWND)agave_webview_hwnd(g_probeView);
+    ProbeKey key;
+
+    if (!target || g_probeKeyIndex >= g_probeKeyCount)
+        return 0;
+
+    key = g_probeKeyList[g_probeKeyIndex++];
+
+    /* A posted WM_KEYDOWN is turned into WM_CHAR by the shell's own
+     * TranslateMessage, exactly like a keyboard message; posting WM_CHAR as
+     * well would deliver every character twice. Only text without a virtual
+     * key (non-ASCII) has to be posted directly.
+     *
+     * The lParam has to look like a real keyboard message: TranslateMessage
+     * derives WM_CHAR from it, and a zeroed lParam makes the WM_KEYUP look
+     * like a key press too, so every character arrived twice. */
+    if (key.vk) {
+        unsigned scan = MapVirtualKeyA(key.vk, MAPVK_VK_TO_VSC);
+        LPARAM down = (LPARAM)(1 | (scan << 16) | (probeKeyIsExtended(key.vk) ? (1 << 24) : 0));
+        LPARAM up = (LPARAM)(down | (1 << 30) | (1 << 31));
+
+        agbLog(AGB_LOG_PROBE, "key vk=%u ch=%u", key.vk, key.ch);
+        PostMessageA(target, WM_KEYDOWN, (WPARAM)key.vk, down);
+        PostMessageA(target, WM_KEYUP, (WPARAM)key.vk, up);
+    } else if (key.ch) {
+        agbLog(AGB_LOG_PROBE, "char cp=%u", key.ch);
+        PostMessageA(target, WM_CHAR, (WPARAM)key.ch, 1);
+    }
+
+    return 1;
+}
+
 static int probeRun(const char* url)
 {
     /* Own profile root before any engine exists (cookies/localStorage/caches). */
@@ -1952,6 +2090,23 @@ static int probeRun(const char* url)
                  * script gets evaluated once per nesting level. */
                 if (g_probeEvalDone)
                     continue;
+
+                /* --keys runs before the eval: one key per tick so the
+                 * character of a key is processed before the next key, then a
+                 * short pause for the last one, then the eval. */
+                if (g_probeKeys[0] && !g_probeKeysDone) {
+                    if (!g_probeKeyCount)
+                        probeParseKeys();
+                    if (!g_probeKeyIndex)
+                        agave_webview_set_focus(g_probeView);
+                    if (probeSendNextKey()) {
+                        SetTimer(g_probeWnd, PROBE_TIMER_EVAL, 60, NULL);
+                        continue;
+                    }
+                    g_probeKeysDone = 1;
+                    SetTimer(g_probeWnd, PROBE_TIMER_EVAL, 300, NULL);
+                    continue;
+                }
 
                 g_probeEvalDone = 1;
 
@@ -2173,6 +2328,10 @@ static void probeUsage(void)
             "  --shot <path>  write a BMP of what the page painted and exit; the\n"
             "            window stays hidden, so this is the headless screenshot\n"
             "            path (no focus stealing, nothing on screen)\n"
+            "  --keys <text>  type into the page before --eval, through the real\n"
+            "            WM_KEYDOWN/WM_CHAR/WM_KEYUP path (the page must focus its\n"
+            "            own control; {backspace} {enter} {tab} {left} {right}\n"
+            "            {up} {down} {home} {end} {delete} {esc} name a key)\n"
             "  --reload <n>  reload the page n times and run the eval after\n"
             "                every round (page lifecycle comparison)\n"
             "  --offline module fetches are served from the cache only\n"
@@ -2265,6 +2424,9 @@ static void parseShellArgv(void)
         } else if (!strcmp(argv[i], "--shot") && i + 1 < argc) {
             strncpy(g_probeShot, argv[++i], sizeof(g_probeShot) - 1);
             g_probeShot[sizeof(g_probeShot) - 1] = 0;
+        } else if (!strcmp(argv[i], "--keys") && i + 1 < argc) {
+            strncpy(g_probeKeys, argv[++i], sizeof(g_probeKeys) - 1);
+            g_probeKeys[sizeof(g_probeKeys) - 1] = 0;
         } else if (!strcmp(argv[i], "--wait") && i + 1 < argc) {
             g_probeWaitMs = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--settle") && i + 1 < argc) {

@@ -1427,6 +1427,11 @@ static EventTargetNode* eventTargetNodeForDocument(Document* doc)
 }
 
 
+/* Dispatches a keydown/keyup event.
+ *
+ * The return value is "the page cancelled the default action": the caller needs
+ * it because Win32 delivers the character of the key in a separate WM_CHAR, so
+ * WebView::keyDown() must remember the answer until that character arrives. */
 bool EventHandler::keyEvent(const PlatformKeyboardEvent& initialKeyEvent)
 {
     // Check for cases where we are too early for events -- possible unmatched key up
@@ -1434,68 +1439,86 @@ bool EventHandler::keyEvent(const PlatformKeyboardEvent& initialKeyEvent)
     EventTargetNode* node = eventTargetNodeForDocument(m_frame->document());
     if (!node)
         return false;
-        
-    if (initialKeyEvent.isKeyUp())
-        return !node->dispatchKeyEvent(initialKeyEvent);
-        
-    m_frame->loader()->resetMultipleFormSubmissionProtection();
-    
-    // Prepare the keyPress in advance of the keyDown so we can fire the input method
-    // in advance of keyDown
-    PlatformKeyboardEvent keyPressEvent = initialKeyEvent;    
-    keyPressEvent.setIsAutoRepeat(true);
-    RefPtr<KeyboardEvent> keypress = new KeyboardEvent(keyPressEvent, m_frame->document()->defaultView());
-    keypress->setTarget(node);
-    
-    // Run input method in advance of DOM event handling.  This may result in the IM
-    // modifying the page prior the keydown event, however this behaviour is necessary
-    // in order to match IE
-    m_frame->editor()->handleInputMethodKeypress(keypress.get());
-    
-    bool handledByInputMethod = keypress->defaultHandled();
-    
-    PlatformKeyboardEvent keyDownEvent = initialKeyEvent; 
-    
-    if (handledByInputMethod) 
-        keyDownEvent.setWindowsKeyCode(CompositionEventKeyCode);
-        
-    // We always send keyDown and keyPress for all events, including autorepeat keys
-    keyDownEvent.setIsAutoRepeat(false);
-    
-    bool result = !node->dispatchKeyEvent(keyDownEvent);
-    
-    // Focus may have change during the keyDown handling, so refetch node
-    node = eventTargetNodeForDocument(m_frame->document());
+
+    if (!initialKeyEvent.isKeyUp())
+        m_frame->loader()->resetMultipleFormSubmissionProtection();
+
+    /* keyDown/keyUp only. On Win32 the printable character is not known when
+     * the key goes down: it arrives in WM_CHAR, which calls
+     * handleCharacterEvent() below to dispatch the keypress and run the
+     * default action. The port used to build a keypress from the virtual key
+     * here, which both fabricated the character (VK_NUMPAD1 is 0x61 == 'a')
+     * and inserted it a second time on top of the one WM_CHAR delivered. */
+    RefPtr<KeyboardEvent> event = new KeyboardEvent(initialKeyEvent, m_frame->document()->defaultView());
+    event->setTarget(node);
+
+    ExceptionCode ec;
+    bool notPrevented = node->dispatchEvent(event.release(), ec, true);
+
+    return !notPrevented;
+}
+
+/* The character a key produced arrived from the platform (WM_CHAR on Win32).
+ *
+ * This is where a browser dispatches keypress and where the default action
+ * inserts the text: the page can filter a character by preventing the keypress
+ * default, which is exactly what the old keyDown-time insertion broke (the
+ * text was already in the field before the page saw the event). */
+bool EventHandler::handleCharacterEvent(const PlatformKeyboardEvent& keyEvent)
+{
+    EventTargetNode* node = eventTargetNodeForDocument(m_frame->document());
     if (!node)
-        return result;
-    
-    if (keypress->defaultHandled())
-        return true;
-    
-    if (handledByInputMethod)
-        return result;
-    
-    // If the default handling has been prevented on the keydown, we prevent it on
-    // the keypress as well
-    if (result)
-        keypress->setDefaultHandled();
-    
+        return false;
+
+    /* The engine decides the event type from the platform event itself:
+     * isKeyUp() -> keyup, isAutoRepeat() -> keypress, otherwise keydown (see
+     * KeyboardEvent's constructor). A character event is a keypress, so it has
+     * to carry that flag or the page would see a second keydown. */
+    PlatformKeyboardEvent press = keyEvent;
+    press.setIsAutoRepeat(true);
+
+    RefPtr<KeyboardEvent> keypress = new KeyboardEvent(press, m_frame->document()->defaultView());
+    keypress->setTarget(node);
+
     ExceptionCode ec;
     node->dispatchEvent(keypress, ec, true);
-    
-    return result || keypress->defaultHandled() || keypress->defaultPrevented();
+
+    if (keypress->defaultPrevented())
+        return true;
+
+    defaultKeyboardEventHandler(keypress.get());
+    if (keypress->defaultHandled())
+        return true;
+
+    if (keyEvent.text().isEmpty())
+        return false;
+
+    /* insertTextWithoutSendingTextEvent, not insertText: it reports whether the
+     * text really went into an editable selection, which is what tells the
+     * caller a fallback is needed. insertText() dispatches a textInput event and
+     * always returns "not prevented", i.e. no usable answer. */
+    return m_frame->editor()->insertTextWithoutSendingTextEvent(keyEvent.text(), false, keypress.get());
 }
 
 void EventHandler::defaultKeyboardEventHandler(KeyboardEvent* event)
 {
-   if (event->type() == keypressEvent) {
-        m_frame->editor()->handleKeypress(event);
-        if (event->defaultHandled())
+    if (event->type() == keydownEvent) {
+        /* Editing commands belong to the key, not to the character: Win32
+         * delivers the character in a separate WM_CHAR, so running the command
+         * from the keypress as well executed it twice (Backspace deleted two
+         * characters, Enter inserted two newlines). Tab is a focus move, not an
+         * editing command, and never reaches the command table. */
+        if (event->keyIdentifier() == "Tab") {
+            defaultTabEventHandler(event, event->keyEvent() && event->keyEvent()->shiftKey());
             return;
-        if ((event->keyIdentifier() == "Tab") && event->keyEvent()->shiftKey())
-            defaultTabEventHandler(event, true);
-        else if (event->keyIdentifier() == "Tab")
-            defaultTabEventHandler(event, false);
+        }
+        m_frame->editor()->handleKeypress(event);
+        return;
+    }
+
+    if (event->type() == keypressEvent) {
+        if (event->keyIdentifier() == "Tab")
+            defaultTabEventHandler(event, event->keyEvent() && event->keyEvent()->shiftKey());
     }
 }
 

@@ -35,6 +35,10 @@ namespace WebCore {
     public:
         String text() const { return m_text; }
         String unmodifiedText() const { return m_unmodifiedText; }
+        /* The character a key produced. Win32 delivers it separately from the
+         * key itself (WM_CHAR after WM_KEYDOWN), so the port fills it in when
+         * the character arrives instead of guessing it from the virtual key. */
+        void setText(const String& text) { m_text = text; m_unmodifiedText = text; }
         String keyIdentifier() const { return m_keyIdentifier; }
         bool isKeyUp() const { return m_isKeyUp; }
         bool isAutoRepeat() const { return m_autoRepeat; }

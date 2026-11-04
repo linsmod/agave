@@ -885,6 +885,23 @@ static int agwUiLogVerbose(void)
     return verbose;
 }
 
+/* Modifier bits the engine expects (see PlatformKeyboardEvent): alt=1,
+ * ctrl=2, shift=4. Passing 0 for every key made event.shiftKey/ctrlKey false
+ * in the page and broke Shift+arrow selection and Ctrl+shortcuts. */
+static unsigned agwKeyboardModifiers(void)
+{
+    unsigned modifiers = 0;
+
+    if (GetKeyState(VK_MENU) & 0x8000)
+        modifiers |= 1;
+    if (GetKeyState(VK_CONTROL) & 0x8000)
+        modifiers |= 2;
+    if (GetKeyState(VK_SHIFT) & 0x8000)
+        modifiers |= 4;
+
+    return modifiers;
+}
+
 static const char* agwButtonName(int button)
 {
     switch (button) {
@@ -1053,7 +1070,7 @@ static LRESULT CALLBACK agwProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
         agbLog(AGB_LOG_UI, "key %s vk=0x%02x",
                message == WM_KEYDOWN ? "down" : "up", (unsigned)wParam);
         if (item)
-            agwPost(AGW_CMD_KEY, item, NULL, (int)wParam, 0,
+            agwPost(AGW_CMD_KEY, item, NULL, (int)wParam, (int)agwKeyboardModifiers(),
                     (message == WM_KEYDOWN) ? EVT_KEY_DOWN : EVT_KEY_UP, 0);
         return 0;
 

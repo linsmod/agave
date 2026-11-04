@@ -68,6 +68,7 @@ public:
 	WebViewPrivate(struct _mc_view* v, unsigned char* buf, int w, int h, int p)
 		: m_view(v), m_buffer(buf), m_width(w), m_height(h), m_mode(0), m_txtanti(false)
 		, m_canvas(0), m_context(0), m_drawRect(0, 0, 0, 0), m_minLayoutSize(0, 0), m_oldLayoutSize(0, 0)
+		, m_swallowNextText(false)
 	{
 		m_canvas = ps_canvas_create_with_data(buf, pixelFormat(), w, h, p);
 		m_context = ps_context_create(m_canvas, 0);
@@ -108,6 +109,10 @@ public:
 	IntSize m_oldLayoutSize;
     RefPtr<Frame> m_frame;
     RefPtr<FrameView> m_frameView;
+    /* A keydown the page cancelled (preventDefault) must not turn into text:
+     * Win32 delivers the character in a separate WM_CHAR, long after the page
+     * said no. Set by keyDown(), consumed by textInput(). */
+    bool m_swallowNextText;
 };
 
 static Frame *incrementFrame(Frame *curr, bool forward, bool wrapFlag)
@@ -343,7 +348,21 @@ bool WebView::keyDown(_mc_key_sym key, unsigned m)
 {
 	PlatformKeyboardEvent keyEvent(true, (unsigned)key, m);
 	Frame* frame = d->m_frame->page()->focusController()->focusedOrMainFrame();
-	return frame->eventHandler()->keyEvent(keyEvent);
+
+	/* Only keys that really produce a character have a WM_CHAR on the way.
+	 * Arming the flag for every key would make "preventDefault on ArrowLeft"
+	 * swallow the next typed character. */
+	unsigned vk = (unsigned)key;
+	bool mayProduceText = (vk >= 0x20 && vk <= 0x7E) ||
+	                      vk == VK_BACK || vk == VK_TAB || vk == VK_RETURN;
+
+	/* keyEvent() answers true when the page called preventDefault(). The
+	 * character of this key is still on its way, so remember the answer and
+	 * drop that character: a keydown filter such as "only digits in a phone
+	 * field" has to be able to refuse the text. */
+	d->m_swallowNextText = mayProduceText && frame->eventHandler()->keyEvent(keyEvent);
+
+	return !d->m_swallowNextText;
 }
 
 bool WebView::contextMenu(unsigned m, int x, int y)
@@ -556,23 +575,67 @@ void WebView::loadUrl(const char* url, bool lc)
     d->m_frame->loader()->load(request);
 }
 
+/* The virtual key a typed character is reported with. keypress readers
+ * (event.keyCode / which) and the editing command table both key off it;
+ * Win32 gives no vk for text that came from the IME, so fall back to the
+ * character itself for printable ASCII (digits and punctuation have their
+ * ASCII value as vk). */
+static unsigned virtualKeyForCharacter(UChar c)
+{
+    if (c >= 'a' && c <= 'z')
+        return c - 'a' + 'A';   /* VK_A .. VK_Z */
+    if (c < 0x80)
+        return c;
+    return 0;
+}
+
 bool WebView::textInput(const char* text)
 {
 	String str = String::fromUTF8(text);
 	if (str.isEmpty() || str.isNull())
 		return false;
 
+    if (d->m_swallowNextText) {
+        /* The page cancelled the keydown of this character. */
+        d->m_swallowNextText = false;
+        return false;
+    }
+
     Frame* frame = d->m_frame->page()->focusController()->focusedOrMainFrame();
     if (!frame)
         return false;
 
-    /* Text controls cache the inner text that RenderTextControl paints.
-     * insertText()/confirmComposition() change the value without refreshing it,
-     * so the typed characters were invisible; setValue() refreshes both. */
+    /* WM_CHAR also carries the control characters TranslateMessage produces
+     * for Backspace (0x08), Enter (0x0D), Tab (0x09) and Ctrl+letter
+     * (0x01..0x1A). Those are editing commands, handled from the keydown, and
+     * must never be inserted as text: the old code appended them to the
+     * field's value, so pressing Backspace left a literal 0x08 behind. */
+    String typed;
+    for (unsigned i = 0; i < str.length(); ++i) {
+        UChar c = str[i];
+        if (c >= 0x20 && c != 0x7F)
+            typed.append(c);
+    }
+    if (typed.isEmpty())
+        return false;
+
+    /* A character is a keypress. The page sees the event first - charCode and
+     * keyCode now carry the real character - and its default action inserts
+     * the text through the normal editing path, so the caret, the selection
+     * and "insert at the caret" behave like in any other browser. The old code
+     * appended to input->value() directly, which ignored both. */
+    PlatformKeyboardEvent pressEvent(true, virtualKeyForCharacter(typed[0]), 0);
+    pressEvent.setText(typed);
+
+    if (frame->eventHandler()->handleCharacterEvent(pressEvent))
+        return true;
+
+    /* Nothing editable took the text (a field the engine does not consider
+     * editable): fall back to the value path the port used before. */
     if (Node* focused = frame->document()->focusedNode()) {
         if (focused->isElementNode() && focused->hasTagName(HTMLNames::inputTag)) {
             HTMLInputElement* input = static_cast<HTMLInputElement*>(focused);
-            input->setValue(input->value() + str);
+            input->setValue(input->value() + typed);
             /* setValue() refreshes m_value; the *painted* text of a focused
              * control comes from its inner editor, so refresh that as well. */
             if (input->renderer()) {
@@ -583,19 +646,14 @@ bool WebView::textInput(const char* text)
         }
         if (focused->isElementNode() && focused->hasTagName(HTMLNames::textareaTag)) {
             HTMLTextAreaElement* area = static_cast<HTMLTextAreaElement*>(focused);
-            area->setValue(area->value() + str);
+            area->setValue(area->value() + typed);
             if (area->renderer())
                 area->renderer()->repaint(true);
             return true;
         }
     }
 
-    Editor * editor = frame->editor();
-	if (!editor->canEdit()) 
-		return false;
-
-    editor->confirmComposition(str);
-	return true;
+    return false;
 }
 
 void WebView::setEncodingName(_mc_encoding name)

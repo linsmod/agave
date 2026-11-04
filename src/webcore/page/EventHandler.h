@@ -124,6 +124,7 @@ public:
     void setMouseDownMayStartAutoscroll() { m_mouseDownMayStartAutoscroll = true; }
 
     bool keyEvent(const PlatformKeyboardEvent&);
+    bool handleCharacterEvent(const PlatformKeyboardEvent&);
     void defaultKeyboardEventHandler(KeyboardEvent*);
 
     bool handleTextInputEvent(const String& text, Event* underlyingEvent = 0,
