@@ -1291,7 +1291,7 @@ static void paintTabs(HDC hdc, int width)
             continue;
 
         SetRect(&box, x, 2, x + TAB_W, TAB_HEIGHT - 2);
-        FillRect(hdc, &box, (HBRUSH)((i == g_activeTab) ? COLOR_WINDOW : COLOR_BTNSHADOW + 1));
+        FillRect(hdc, &box, (HBRUSH)(INT_PTR)((i == g_activeTab) ? COLOR_WINDOW : COLOR_BTNSHADOW + 1));
 
         SetRect(&box, x + 6, 2, x + 146, TAB_HEIGHT - 2);
         _snprintf(label, sizeof(label), "%s", g_tabs[i].title[0] ? g_tabs[i].title : "New tab");
@@ -1556,6 +1556,15 @@ static int g_probeTotalRounds = 1; /* 1 + number of reloads                 */
 static int g_probePollCount;      /* readyState polls in the current round  */
 static int g_probeRoundsDone;     /* every round finished -> OK exit code   */
 static char g_probeToken[64];     /* per-reload marker for the NEW document */
+static int  g_probeVisible;       /* AGB_PROBE_SHOW: the window is on screen  */
+
+/* Command line, parsed before any window exists: a --probe run must never
+ * create the browser window (it used to be shown, then left on screen for the
+ * whole capture because probeRun runs its own message loop). */
+static int  g_probeMode;                        /* --probe was given          */
+static int  g_showUsage;                        /* --help                     */
+static int  g_argError;                         /* --probe without a URL       */
+static char g_startupUrl[MAX_PATH_CHARS];       /* normalized, may be empty   */
 
 static void probePrint(const char* tag, const char* text)
 {
@@ -1717,9 +1726,11 @@ static int probeRun(const char* url)
     wc.lpszClassName = "AgaveProbeWindow";
     RegisterClassA(&wc);
 
-    /* Hidden top-level window: the control only needs a parent HWND. */
-    g_probeWnd = CreateWindowExA(0, "AgaveProbeWindow", "agave probe",
-                                 WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
+    /* Hidden popup: the control only needs a parent HWND. No frame, no caption
+     * and WS_EX_TOOLWINDOW, so a probe never shows a taskbar entry or steals
+     * the foreground - the capture is headless unless AGB_PROBE_SHOW is set. */
+    g_probeWnd = CreateWindowExA(WS_EX_TOOLWINDOW, "AgaveProbeWindow", "agave probe",
+                                 WS_POPUP, CW_USEDEFAULT, CW_USEDEFAULT,
                                  1100, 800, NULL, NULL, g_instance, NULL);
     if (!g_probeWnd) {
         fprintf(stderr, "[probe] CreateWindowEx failed: %lu\n", (unsigned long)GetLastError());
@@ -1741,12 +1752,23 @@ static int probeRun(const char* url)
     }
 
     /* AGB_PROBE_SHOW=1 shows the window; debugging aid for load paths that
-     * behave differently when the control is never visible. */
-    if (getenv("AGB_PROBE_SHOW"))
+     * behave differently when the control is never visible. A hidden window
+     * gets no WM_PAINT, so this is also what pixel checks need. */
+    g_probeVisible = getenv("AGB_PROBE_SHOW") != NULL;
+    if (g_probeVisible)
         ShowWindow(g_probeWnd, SW_SHOWNOACTIVATE);
 
+    fprintf(stderr, "[probe] headless %s (pid %lu)\n",
+            g_probeVisible ? "window shown (AGB_PROBE_SHOW)" : "window hidden, AGB_PROBE_SHOW=1 to show",
+            (unsigned long)GetCurrentProcessId());
+
     SetTimer(g_probeWnd, PROBE_TIMER_TIMEOUT, g_probeTimeoutMs, NULL);
-    agave_webview_set_focus(g_probeView);
+
+    /* Focus only makes sense for a visible window; a hidden control that grabs
+     * focus activates a window nobody can see. */
+    if (g_probeVisible)
+        agave_webview_set_focus(g_probeView);
+
     agave_webview_navigate(g_probeView, url);
 
     /* Load hook: the page reports its own window load event; --eval runs on
@@ -2026,9 +2048,69 @@ static int parseCommandLine(char* cmdline, char** argv, int maxArgs)
     return argc;
 }
 
+/* Command line before any window exists: a --probe run must never create the
+ * browser window. It used to be created and shown up front, so every headless
+ * capture flashed a full browser and left it on screen for the whole run
+ * (probeRun drives its own message loop on its own hidden window). */
+static void parseShellArgv(void)
+{
+    static char cmdlineBuf[8192];
+    char* argv[40];
+    int argc = 0;
+    const char* urlArg = NULL;
+    const char* raw = GetCommandLineA();
+    int i;
+
+    if (raw && *raw) {
+        strncpy(cmdlineBuf, raw, sizeof(cmdlineBuf) - 1);
+        cmdlineBuf[sizeof(cmdlineBuf) - 1] = 0;
+        argc = parseCommandLine(cmdlineBuf, argv, 40);
+    }
+
+    for (i = 1; i < argc; ++i) {
+        if (!strcmp(argv[i], "--probe")) {
+            g_probeMode = 1;
+        } else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
+            g_showUsage = 1;
+        } else if (!strcmp(argv[i], "--eval") && i + 1 < argc) {
+            strncpy(g_probeScript, argv[++i], sizeof(g_probeScript) - 1);
+            g_probeScript[sizeof(g_probeScript) - 1] = 0;
+        } else if (!strcmp(argv[i], "--wait") && i + 1 < argc) {
+            g_probeWaitMs = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "--settle") && i + 1 < argc) {
+            g_probeSettleMs = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "--timeout") && i + 1 < argc) {
+            g_probeTimeoutMs = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "--reload") && i + 1 < argc) {
+            g_probeReloadsLeft = atoi(argv[++i]);
+            g_probeReloadMode = 1;
+            g_probeTotalRounds = g_probeReloadsLeft + 1;
+        } else if (!strcmp(argv[i], "--offline")) {
+            /* Module fetches come from the cache only (read by the Ant runtime
+             * as AGB_OFFLINE). Set before any view exists. putenv, not
+             * SetEnvironmentVariable: MinGW's getenv reads the CRT _environ
+             * copy, which SetEnvironmentVariableA misses. */
+            putenv("AGB_OFFLINE=1");
+        } else if (argv[i][0] != '-') {
+            urlArg = argv[i];
+        }
+    }
+
+    if (urlArg && urlArg[0]) {
+        /* Same rules as typing the address: a local path becomes a file:// URL,
+         * "localhost:port" stays a host instead of a search term. */
+        normalizeUrl(urlArg, g_startupUrl, sizeof(g_startupUrl));
+    }
+
+    if (g_probeMode && !g_startupUrl[0] && !g_showUsage) {
+        fprintf(stderr, "[probe] missing URL\n");
+        probeUsage();
+        g_argError = 1;
+    }
+}
+
 int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, int show)
 {
-    atexit(shellExitTrace);
     WNDCLASSA wc;
     MSG msg;
     char initial[MAX_PATH_CHARS];
@@ -2039,12 +2121,27 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
     (void)show;
     (void)commandLine;
 
+    atexit(shellExitTrace);
     g_instance = instance;
+
+    /* Headless first: no window, no toolbar, no session/bookmark files. */
+    parseShellArgv();
+
+    if (g_showUsage) {
+        probeUsage();
+        return 0;
+    }
+
+    if (g_argError)
+        return PROBE_EXIT_USAGE;
+
+    if (g_probeMode)
+        return probeRun(g_startupUrl);
 
     memset(&wc, 0, sizeof(wc));
     wc.lpfnWndProc = shellProc;
     wc.hInstance = instance;
-    wc.hCursor = LoadCursorA(NULL, IDC_ARROW);
+    wc.hCursor = LoadCursorA(NULL, (LPCSTR)IDC_ARROW);
     wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
     wc.lpszClassName = "AgaveShellWindow";
 
@@ -2093,74 +2190,14 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
     ShowWindow(g_hwnd, SW_SHOW);
     UpdateWindow(g_hwnd);
 
-    /* Command line: flags first (--probe / --eval / ...), then an optional
-     * URL that wins over the restored session. */
-    {
-        static char cmdlineBuf[8192];
-        char* argv[40];
-        int argc = 0;
-        const char* urlArg = NULL;
-        int probe = 0;
-        int i;
-        const char* raw = GetCommandLineA();
-
-        if (raw && *raw) {
-            strncpy(cmdlineBuf, raw, sizeof(cmdlineBuf) - 1);
-            cmdlineBuf[sizeof(cmdlineBuf) - 1] = 0;
-            argc = parseCommandLine(cmdlineBuf, argv, 40);
-        }
-
-        for (i = 1; i < argc; ++i) {
-            if (!strcmp(argv[i], "--probe")) {
-                probe = 1;
-            } else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
-                probeUsage();
-                return 0;
-            } else if (!strcmp(argv[i], "--eval") && i + 1 < argc) {
-                strncpy(g_probeScript, argv[++i], sizeof(g_probeScript) - 1);
-                g_probeScript[sizeof(g_probeScript) - 1] = 0;
-            } else if (!strcmp(argv[i], "--wait") && i + 1 < argc) {
-                g_probeWaitMs = atoi(argv[++i]);
-            } else if (!strcmp(argv[i], "--settle") && i + 1 < argc) {
-                g_probeSettleMs = atoi(argv[++i]);
-            } else if (!strcmp(argv[i], "--timeout") && i + 1 < argc) {
-                g_probeTimeoutMs = atoi(argv[++i]);
-            } else if (!strcmp(argv[i], "--reload") && i + 1 < argc) {
-                g_probeReloadsLeft = atoi(argv[++i]);
-                g_probeReloadMode = 1;
-                g_probeTotalRounds = g_probeReloadsLeft + 1;
-            } else if (!strcmp(argv[i], "--offline")) {
-                /* Module fetches come from the cache only (read by the Ant
-                 * runtime as AGB_OFFLINE). Set before any view exists.
-                 * putenv, not SetEnvironmentVariable: MinGW's getenv reads the
-                 * CRT _environ copy, which SetEnvironmentVariableA misses. */
-                putenv("AGB_OFFLINE=1");
-            } else if (argv[i][0] != '-') {
-                urlArg = argv[i];
-            }
-        }
-
-        if (probe) {
-            char normalized[MAX_PATH_CHARS];
-
-            if (!urlArg) {
-                fprintf(stderr, "[probe] missing URL\n");
-                probeUsage();
-                return 1;
-            }
-
-            /* Same address-bar rules as typing the URL: a local path becomes a
-             * file:// URL, "localhost:port" stays a host instead of a search. */
-            normalizeUrl(urlArg, normalized, sizeof(normalized));
-            return probeRun(normalized);
-        }
-
-        if (urlArg && urlArg[0]) {
-            normalizeUrl(urlArg, initial, sizeof(initial));
-        } else {
-            restored = loadSession(session, 8);
-            strcpy(initial, restored > 0 ? session[0] : "http://www.163.com");
-        }
+    /* The command line was already parsed in parseShellArgv(): g_startupUrl
+     * wins over the restored session. */
+    if (g_startupUrl[0]) {
+        strncpy(initial, g_startupUrl, sizeof(initial) - 1);
+        initial[sizeof(initial) - 1] = 0;
+    } else {
+        restored = loadSession(session, 8);
+        strcpy(initial, restored > 0 ? session[0] : "http://www.163.com");
     }
 
     if (restored > 1) {
