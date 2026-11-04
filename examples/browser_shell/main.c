@@ -1641,6 +1641,8 @@ static int  g_probeVisible;       /* AGB_PROBE_SHOW: the window is on screen  */
 static char g_probeShot[512];     /* --shot: write a BMP here, then exit     */
 static char g_probeKeys[512];     /* --keys: typed into the page before eval */
 static int  g_probeKeysDone;      /* the --keys list was typed out             */
+static char g_probePreScript[2048]; /* --pre-eval: runs once before --keys     */
+static int  g_probePreDone;       /* --pre-eval was executed                   */
 
 /* Offscreen capture. A hidden window gets no WM_PAINT, so PrintWindow has
  * nothing to render; the control keeps its own mirror buffer, and
@@ -2097,8 +2099,18 @@ static int probeRun(const char* url)
                 if (g_probeKeys[0] && !g_probeKeysDone) {
                     if (!g_probeKeyCount)
                         probeParseKeys();
-                    if (!g_probeKeyIndex)
+                    /* --pre-eval: focus the field / dismiss a dialog before the
+                     * first key. Without it a headless run can only type into
+                     * whatever the page focused by itself. */
+                    if (!g_probeKeyIndex && !g_probePreDone) {
+                        g_probePreDone = 1;
                         agave_webview_set_focus(g_probeView);
+                        if (g_probePreScript[0]) {
+                            agave_webview_eval(g_probeView, g_probePreScript);
+                            SetTimer(g_probeWnd, PROBE_TIMER_EVAL, 200, NULL);
+                            continue;
+                        }
+                    }
                     if (probeSendNextKey()) {
                         SetTimer(g_probeWnd, PROBE_TIMER_EVAL, 60, NULL);
                         continue;
@@ -2332,6 +2344,8 @@ static void probeUsage(void)
             "            WM_KEYDOWN/WM_CHAR/WM_KEYUP path (the page must focus its\n"
             "            own control; {backspace} {enter} {tab} {left} {right}\n"
             "            {up} {down} {home} {end} {delete} {esc} name a key)\n"
+            "  --pre-eval <js>  short snippet run once before --keys (focus a\n"
+            "            field: \"document.querySelector('input').focus()\")\n"
             "  --reload <n>  reload the page n times and run the eval after\n"
             "                every round (page lifecycle comparison)\n"
             "  --offline module fetches are served from the cache only\n"
@@ -2427,6 +2441,9 @@ static void parseShellArgv(void)
         } else if (!strcmp(argv[i], "--keys") && i + 1 < argc) {
             strncpy(g_probeKeys, argv[++i], sizeof(g_probeKeys) - 1);
             g_probeKeys[sizeof(g_probeKeys) - 1] = 0;
+        } else if (!strcmp(argv[i], "--pre-eval") && i + 1 < argc) {
+            strncpy(g_probePreScript, argv[++i], sizeof(g_probePreScript) - 1);
+            g_probePreScript[sizeof(g_probePreScript) - 1] = 0;
         } else if (!strcmp(argv[i], "--wait") && i + 1 < argc) {
             g_probeWaitMs = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--settle") && i + 1 < argc) {
