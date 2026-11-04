@@ -54,6 +54,7 @@ public:
     virtual short baselinePosition(bool firstLine, bool isRootLineBox) const;
     virtual bool nodeAtPoint(const HitTestRequest&, HitTestResult&, int x, int y, int tx, int ty, HitTestAction);
     virtual void layout();
+    virtual void paint(PaintInfo&, int tx, int ty);
     virtual bool avoidsFloats() const { return true; }
 
     virtual bool isEdited() const { return m_dirty; }

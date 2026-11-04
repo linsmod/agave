@@ -207,11 +207,22 @@ bool HTMLInputElement::isMouseFocusable() const
 void HTMLInputElement::updateFocusAppearance(bool restorePreviousSelection)
 {        
     if (isTextField()) {
-        if (!restorePreviousSelection || cachedSelStart == -1)
+        /* Selecting the whole value on focus is WebKit's behaviour and what
+         * makes typing replace the old value - but with an empty value the
+         * only text in the control is the placeholder, and "select all" put a
+         * ::selection highlight over it (deepseek's login field looked like a
+         * pre-filled, selected field). Collapse instead when there is nothing
+         * to replace. */
+        if (value().isEmpty()) {
+            if (!restorePreviousSelection || cachedSelStart == -1)
+                setSelectionRange(0, 0);
+            else
+                setSelectionRange(cachedSelStart, cachedSelEnd);
+        } else if (!restorePreviousSelection || cachedSelStart == -1)
             select();
         else
             // Restore the cached selection.
-            setSelectionRange(cachedSelStart, cachedSelEnd); 
+            setSelectionRange(cachedSelStart, cachedSelEnd);
         
         if (document() && document()->frame())
             document()->frame()->revealSelection();

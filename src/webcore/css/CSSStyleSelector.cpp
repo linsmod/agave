@@ -1848,8 +1848,6 @@ void CSSStyleSelector::resolveCustomProperties(RenderStyle* parentStyle)
                     properties = properties->copy();
                     copied = true;
                 }
-                fprintf(stderr, "[dbg] var set '%s' = '%s'\n", current.customName().utf8().data(),
-                        current.rawValue().utf8().data());
                 properties->setProperty(current.customName(), current.rawValue());
             }
         }

@@ -256,8 +256,13 @@ RenderStyle* RenderTextControl::createCancelButtonStyle(RenderStyle* startStyle)
 
 void RenderTextControl::updatePlaceholder()
 {
+    /* The placeholder is NOT written into the value text any more. Doing that
+     * made it selectable (focusing an empty field runs select-all, so the
+     * site's ::selection colour got painted over the placeholder) and it forced
+     * the caret, hit testing and the editor to deal with text that is not the
+     * value. It is painted separately in paint(), like modern browsers do. */
     bool oldPlaceholderVisible = m_placeholderVisible;
-    
+
     String placeholder;
     if (!m_multiLine) {
         HTMLInputElement* input = static_cast<HTMLInputElement*>(node());
@@ -268,37 +273,30 @@ void RenderTextControl::updatePlaceholder()
             placeholder = input->getAttribute(placeholderAttr);
     }
 
-    if (!placeholder.isEmpty() || m_placeholderVisible) {
-        ExceptionCode ec = 0;
-        m_innerText->setInnerText(placeholder, ec);
-        m_placeholderVisible = !placeholder.isEmpty();
-    }
+    m_placeholderVisible = !placeholder.isEmpty();
 
+    if (!m_innerText)
+        return;
+
+    /* The value text keeps the normal colour (or the disabled colour). */
     Color color;
-    if (!placeholder.isEmpty())
-        color = Color::darkGray;
-    else if (node()->isEnabled())
+    if (node()->isEnabled())
         color = style()->color();
     else
         color = disabledTextColor(style()->color(), style()->backgroundColor());
 
     RenderObject* renderer = m_innerText->renderer();
+    if (!renderer)
+        return;
+
     RenderStyle* innerStyle = renderer->style();
     if (innerStyle->color() != color) {
         innerStyle->setColor(color);
         renderer->repaint();
     }
 
-    // temporary disable textSecurity if placeholder is visible
-    if (style()->textSecurity() != TSNONE && oldPlaceholderVisible != m_placeholderVisible) {
-        RenderStyle* newInnerStyle = new (renderArena()) RenderStyle(*innerStyle);
-        newInnerStyle->setTextSecurity(m_placeholderVisible ? TSNONE : style()->textSecurity());
-        renderer->setStyle(newInnerStyle);
-        for (Node* n = m_innerText->firstChild(); n; n = n->traverseNextNode(m_innerText.get())) {
-            if (n->renderer())
-                n->renderer()->setStyle(newInnerStyle);
-        }
-    }
+    if (oldPlaceholderVisible != m_placeholderVisible)
+        repaint();
 }
 
 void RenderTextControl::createSubtreeIfNeeded()
@@ -792,6 +790,59 @@ void RenderTextControl::paintObject(PaintInfo& paintInfo, int tx, int ty)
         RenderBlock::paintObject(paintInfo, tx, ty);
         context->restore();
     }
+}
+
+void RenderTextControl::paint(PaintInfo& paintInfo, int tx, int ty)
+{
+    /* Paint the placeholder before the block contents so the caret, the
+     * selection and the value text all stay above it. */
+    if (paintInfo.phase == PaintPhaseForeground && m_innerText && m_innerText->renderer() && !m_multiLine) {
+        /* Decide from the DOM, not from m_placeholderVisible: typing edits the
+         * inner text directly and does not always run updatePlaceholder(), so a
+         * cached flag would keep painting the placeholder over the value. */
+        HTMLInputElement* input = static_cast<HTMLInputElement*>(node());
+        String placeholder;
+        if (input->value().isEmpty())
+            placeholder = input->getAttribute(placeholderAttr);
+
+        if (!placeholder.isEmpty()) {
+            RenderBlock* inner = static_cast<RenderBlock*>(m_innerText->renderer());
+            RenderStyle* innerStyle = inner->style();
+            const Font& font = innerStyle->font();
+
+            /* Same geometry the caret uses: the inner block's first line box.
+             * An empty control still has one (hasLineIfEmpty), so this puts the
+             * placeholder exactly where the caret and the value text sit. */
+            /* paint() is called with the parent's origin: add our own position
+             * first (RenderBlock::paint does the same for its children). */
+            InlineFlowBox* line = inner->firstLineBox();
+            int baseX = tx + xPos();
+            int baseY = ty + yPos();
+            int x, y;
+
+            if (line) {
+                x = baseX + inner->xPos() + line->xPos();
+                y = baseY + inner->yPos() + line->yPos() + line->baseline();
+            } else {
+                x = baseX + inner->xPos() + inner->paddingLeft();
+                y = baseY + inner->yPos() + inner->paddingTop() + font.ascent();
+            }
+
+            IntRect clipRect(baseX + inner->xPos(), baseY + inner->yPos(), inner->width(), inner->height());
+            GraphicsContext* context = paintInfo.context;
+
+            context->save();
+            context->clip(clipRect);
+            context->setFont(font);
+            context->setFillColor(Color(0xA9, 0xA9, 0xA9));
+            context->drawText(TextRun(placeholder.characters(), placeholder.length()),
+                              IntPoint(x, y),
+                              TextStyle(false, false, 0, false, false));
+            context->restore();
+        }
+    }
+
+    RenderBlock::paint(paintInfo, tx, ty);
 }
 
 void RenderTextControl::layout()
