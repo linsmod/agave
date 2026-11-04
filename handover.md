@@ -44,7 +44,9 @@ placeholder 改为 `paint()` 里独立绘制、不再写进输入框的值文本
 高亮，可见性实时看 `value` 是否为空）。
 **footer 居中 / iframe 边框**（R42：`safe`/`unsafe` 对齐前缀被解析、column flex 里绝对定位子项按
 `align-items` 定 static position、`iframe.frameBorder` JS property 反射回 `frameborder` 属性；
-deepseek 备案号居中、二维码 iframe 无 2px 外框）。`calc()` 仍未实现（R43 计划）。
+deepseek 备案号居中、二维码 iframe 无 2px 外框）。
+**`calc()` 常量折叠**（R43：纯常量 calc 在解析期折成单值、自定义属性里 `calc(var(--token) + …)` 先做
+sheet 级常量代入；表单 feedback 的 `min-height` 由 4px 恢复 22px；混合单位 calc 仍不支持）。
 
 **已经被检查过的"看起来不能用"**（别再当缺陷重开）：ant 的 Worker 是真的（R22）、ant 的 wasm 引擎是真的
 （R19）、渐变/`var()`/flex 大多可用（R11/R39）、滚动与 hover 重绘正确（R13/R14/R40）、刷新后 realm/监听器会清理（R9/R10）。
@@ -227,9 +229,10 @@ ant 原生构造器；http(s) 走异步桥取源码 + preamble 后包成 `data:`
   （`dispatchDidFinishDocumentLoad` 因此跳过非主 frame，见 `FrameLoaderClientMC.cpp`）。
 - **CSS 能力边界**：grid 布局、transform 绘制、`position:sticky` 未实现（按 static 降级）；
   `aspect-ratio`、flex `gap`/`row-gap`/`column-gap`、`:is()`/`:where()`、`prefers-color-scheme`、
-  元素级级联的 `var()`（含 fallback / `!important` / 继承）、`box-sizing`（无前缀）、`box-shadow`
-  均已支持（R39/R41）。**完整实测值、影响与复测命令见 [`docs/capability-gaps.md`](docs/capability-gaps.md) §2**
-  （R11/R39/R41 是当时的过程记录）。
+  元素级级联的 `var()`（含 fallback / `!important` / 继承）、`box-sizing`（无前缀）、`box-shadow`、
+  `safe`/`unsafe` 对齐、常量 `calc()` 折叠（混合单位 calc 仍不支持）
+  均已支持（R39/R41/R42/R43）。**完整实测值、影响与复测命令见 [`docs/capability-gaps.md`](docs/capability-gaps.md) §2**
+  （R11/R39/R41/R42/R43 是当时的过程记录）。
 - **wasm 是解释执行**：导出函数跨界约 3.9µs/次，适合"一次调用跑大循环"（R19）。
 - **worker 无网络 / 无 `SharedWorker`/`ServiceWorker`**：见 P1-d 与 R22。
 - **GC root 只能到 engine 边界**（ant 没有 unpin）：现在 per-document engine 让这一点等价于"每文档释放"（R4）。

@@ -32,6 +32,8 @@
 #include "CSSGradientValue.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
 #include <vector>
 #include <utility>
 #include "CSSFontFaceRule.h"
@@ -209,6 +211,380 @@ void CSSParser::setupParser(const char* prefix, const String& string, const char
 static String rewriteCustomPropertyNames(const String& css);
 static String rewriteBareMediaQueries(const String& css);
 static String rewriteIsWhereSelectors(const String& css);
+static String foldCalcConstants(const String& css);
+static String substituteCalcVariables(const String& css);
+
+/* ---------------------------------------------------------------------------
+ * calc() constant folding
+ *
+ * The 2008 CSS grammar has no `calc()` production, so any declaration whose
+ * value is a calc() expression is dropped. Modern sites (DeepSeek in
+ * particular) use calc() heavily - e.g. the form-item feedback bar gets
+ * `min-height: var(--dsl-form-item-feedback-min-height)` where that variable
+ * is `calc(18px + 4px)`. Folding a calc() whose operands are all absolute
+ * lengths (or plain numbers) into a single value at *text* level is enough to
+ * make those declarations parse, without touching the grammar or Length.
+ *
+ * Expressions involving %, vw/vh, em/rem, env(), or unexpanded var() cannot
+ * be folded at this stage; they are left byte-for-byte unchanged, so the
+ * behaviour is exactly what it was before (the declaration is dropped).
+ * Declarations that contain var() are revisited through parseValue() after
+ * CSSStyleSelector::expandVariables(), so `calc(var(--x) + 4px)` is folded
+ * as soon as --x resolves to a length.
+ * ------------------------------------------------------------------------- */
+namespace {
+
+struct CalcValue {
+    double number;
+    bool isLength;   /* px-type absolute length, vs. a dimensionless number */
+};
+
+class CalcEvaluator {
+public:
+    CalcEvaluator(const char* begin, const char* end) : m_p(begin), m_end(end), m_ok(true) {}
+
+    bool evaluate(CalcValue& out)
+    {
+        skipSpace();
+        out = parseSum();
+        skipSpace();
+        return m_ok && m_p == m_end && out.isLength;
+    }
+
+private:
+    const char* m_p;
+    const char* m_end;
+    bool m_ok;
+
+    void skipSpace()
+    {
+        while (m_p < m_end && (*m_p == ' ' || *m_p == '\t' || *m_p == '\n' || *m_p == '\r'))
+            ++m_p;
+    }
+
+    static double unitToPx(const char* u, int len)
+    {
+        struct { const char* name; double factor; } units[] = {
+            { "px", 1.0 },
+            { "pt", 96.0 / 72.0 },
+            { "pc", 16.0 },
+            { "in", 96.0 },
+            { "cm", 96.0 / 2.54 },
+            { "mm", 96.0 / 25.4 },
+            { "q",  96.0 / 101.6 }
+        };
+
+        for (unsigned i = 0; i < sizeof(units) / sizeof(units[0]); ++i)
+            if ((int)strlen(units[i].name) == len && !strncmp(u, units[i].name, len))
+                return units[i].factor;
+
+        return -1.0;   /* unknown unit -> cannot fold */
+    }
+
+    CalcValue parseSum()
+    {
+        CalcValue v = parseProduct();
+        while (m_ok) {
+            skipSpace();
+            if (m_p >= m_end || (*m_p != '+' && *m_p != '-'))
+                break;
+            char op = *m_p++;
+            CalcValue r = parseProduct();
+            if (!m_ok || v.isLength != r.isLength) { m_ok = false; break; }
+            v.number = op == '+' ? v.number + r.number : v.number - r.number;
+        }
+        return v;
+    }
+
+    CalcValue parseProduct()
+    {
+        CalcValue v = parseUnary();
+        while (m_ok) {
+            skipSpace();
+            if (m_p >= m_end || (*m_p != '*' && *m_p != '/'))
+                break;
+            char op = *m_p++;
+            CalcValue r = parseUnary();
+            if (!m_ok) break;
+            if (op == '/') {
+                if (r.isLength || r.number == 0.0) { m_ok = false; break; }
+                v.number /= r.number;
+            } else {
+                /* number * length is allowed; length * length is not. */
+                if (v.isLength && r.isLength) { m_ok = false; break; }
+                v.number *= r.number;
+                v.isLength = v.isLength || r.isLength;
+            }
+        }
+        return v;
+    }
+
+    CalcValue parseUnary()
+    {
+        skipSpace();
+        bool negative = false;
+        while (m_ok && m_p < m_end && (*m_p == '+' || *m_p == '-')) {
+            if (*m_p == '-') negative = !negative;
+            ++m_p;
+            skipSpace();
+        }
+
+        CalcValue v;
+        if (m_p < m_end && *m_p == '(') {
+            ++m_p;
+            v = parseSum();
+            skipSpace();
+            if (m_p >= m_end || *m_p != ')') m_ok = false;
+            else ++m_p;
+        } else {
+            v = parseAtom();
+        }
+
+        if (negative) v.number = -v.number;
+        return v;
+    }
+
+    CalcValue parseAtom()
+    {
+        CalcValue v = { 0.0, false };
+        const char* start = m_p;
+        if (m_p < m_end && (*m_p == '.' || (*m_p >= '0' && *m_p <= '9'))) {
+            while (m_p < m_end && (*m_p == '.' || *m_p == '-' || *m_p == '+' ||
+                                   *m_p == 'e' || *m_p == 'E' ||
+                                   (*m_p >= '0' && *m_p <= '9')))
+                ++m_p;
+            char buf[64];
+            int len = (int)(m_p - start);
+            if (len > 63) len = 63;
+            memcpy(buf, start, len);
+            buf[len] = 0;
+            char* endp = 0;
+            v.number = strtod(buf, &endp);
+            if (!endp || *endp) { m_ok = false; return v; }
+        } else {
+            m_ok = false;   /* ident, var(), env(), ... -> cannot fold */
+            return v;
+        }
+
+        const char* unitStart = m_p;
+        while (m_p < m_end && ((*m_p >= 'a' && *m_p <= 'z') || (*m_p >= 'A' && *m_p <= 'Z') || *m_p == '%'))
+            ++m_p;
+
+        if (m_p > unitStart) {
+            double factor = unitToPx(unitStart, (int)(m_p - unitStart));
+            if (factor < 0) { m_ok = false; return v; }
+            v.number *= factor;
+            v.isLength = true;
+        }
+        return v;
+    }
+};
+
+}   // namespace
+
+/* ---------------------------------------------------------------------------
+ * Static substitution of simple custom properties inside calc()
+ *
+ * A custom property whose value is itself `calc(var(--token) + 4px)` cannot
+ * survive this 2008 grammar: valueText() serialises the calc() function's
+ * arguments as empty (the parser takes its `error` production), so the stored
+ * raw value becomes literally `calc()` and expanding var() later produces
+ * nothing. DeepSeek's form-item feedback bar is exactly this case:
+ *   --dsl-form-item-feedback-min-height: calc(var(--dsw-font-xxs-12-line-height) + 4px)
+ *
+ * Design tokens like --dsw-font-xxs-12-line-height are defined once as a plain
+ * length. Before the sheet is parsed we collect those simple definitions and
+ * substitute them *only inside calc() expressions*, turning the expression
+ * into a constant one that foldCalcConstants() can then collapse. Ordinary
+ * var() references outside calc() are untouched and still go through the
+ * per-element custom-property cascade (R39).
+ *
+ * Known limitation: if a token is overridden on a specific element, the
+ * substituted value is the sheet-level one. This only affects calc() values
+ * stored in custom properties, which real design systems define once at :root.
+ * ------------------------------------------------------------------------- */
+static String substituteCalcVariables(const String& css)
+{
+    if (!css.contains("calc(") || !css.contains("var("))
+        return css;
+
+    const UChar* text = css.characters();
+    unsigned length = css.length();
+
+    /* Collect `--name: <plain length/number>` definitions. */
+    std::vector<std::pair<String, String> > constants;
+    unsigned i = 0;
+    while (i < length) {
+        if (text[i] == '-' && i + 2 < length && text[i+1] == '-' &&
+            (i == 0 || text[i-1] == '{' || text[i-1] == ';' || text[i-1] == ' ' ||
+             text[i-1] == '\n' || text[i-1] == '\t')) {
+            unsigned nameStart = i;
+            unsigned j = i + 2;
+            while (j < length && (isalnum(text[j]) || text[j] == '-' || text[j] == '_'))
+                ++j;
+            unsigned k = j;
+            while (k < length && (text[k] == ' ' || text[k] == '\t')) ++k;
+            if (k < length && text[k] == ':') {
+                ++k;
+                while (k < length && (text[k] == ' ' || text[k] == '\t')) ++k;
+                unsigned valueStart = k;
+                while (k < length && text[k] != ';' && text[k] != '}' && text[k] != '\n') ++k;
+                /* Accept only a plain number or absolute length (no var/calc/%/
+                 * em/rem/vw/vh - those cannot be folded to a single px value). */
+                bool plain = true;
+                for (unsigned m = valueStart; m < k; ++m) {
+                    UChar c = text[m];
+                    if (c == '.' || (c >= '0' && c <= '9') || c == '-' || c == '+') continue;
+                    if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) continue;
+                    plain = false; break;
+                }
+                if (plain && k > valueStart) {
+                    String name(text + nameStart, j - nameStart);
+                    String value(text + valueStart, k - valueStart);
+                    /* Whether the unit is one CalcEvaluator can fold is decided
+                     * by the evaluator itself; here we only require a token that
+                     * cannot itself be a var()/calc()/list. */
+                    if (!value.contains("var(") && !value.contains("calc("))
+                        constants.push_back(std::make_pair(name, value));
+                }
+            }
+        }
+        ++i;
+    }
+
+    if (constants.empty())
+        return css;
+
+    /* Substitute var(--name) inside every calc(...) expression. */
+    std::vector<UChar> out;
+    out.reserve(length);
+    i = 0;
+    bool changed = false;
+    while (i < length) {
+        if (i + 5 <= length && text[i] == 'c' && text[i+1] == 'a' &&
+            text[i+2] == 'l' && text[i+3] == 'c' && text[i+4] == '(') {
+            unsigned j = i + 5;
+            int depth = 1;
+            while (j < length && depth) {
+                if (text[j] == '(') ++depth;
+                else if (text[j] == ')') --depth;
+                ++j;
+            }
+            if (depth == 0) {
+                /* Copy the expression, replacing var(--name) with the constant. */
+                unsigned p = i + 5;
+                unsigned end = j - 1;
+                out.insert(out.end(), text + i, text + i + 5);   /* "calc(" */
+                while (p < end) {
+                    if (p + 4 <= end && text[p] == 'v' && text[p+1] == 'a' &&
+                        text[p+2] == 'r' && text[p+3] == '(') {
+                        unsigned q = p + 4;
+                        int d2 = 1;
+                        while (q < end && d2) {
+                            if (text[q] == '(') ++d2;
+                            else if (text[q] == ')') --d2;
+                            ++q;
+                        }
+                        if (d2 == 0 && q > p + 6 && text[p+4] == '-' && text[p+5] == '-') {
+                            String ref(text + p + 4, q - 1 - (p + 4));
+                            String replacement;
+                            for (unsigned c = 0; c < constants.size(); ++c)
+                                if (constants[c].first == ref) { replacement = constants[c].second; break; }
+                            if (!replacement.isEmpty()) {
+                                const UChar* rc = replacement.characters();
+                                out.insert(out.end(), rc, rc + replacement.length());
+                                changed = true;
+                                p = q;
+                                continue;
+                            }
+                        }
+                        /* Unknown var: keep it verbatim. */
+                        out.insert(out.end(), text + p, text + q);
+                        p = q;
+                        continue;
+                    }
+                    out.push_back(text[p]);
+                    ++p;
+                }
+                out.push_back(')');
+                i = j;
+                continue;
+            }
+        }
+        out.push_back(text[i]);
+        ++i;
+    }
+
+    if (!changed)
+        return css;
+    return String(&out[0], (unsigned)out.size());
+}
+
+/* Replace every foldable calc(...) in `css` with its computed value. The
+ * returned string has the same length only when nothing was folded. */
+static String foldCalcConstants(const String& css)
+{
+    if (!css.contains("calc("))
+        return css;
+
+    std::vector<UChar> out;
+    out.reserve(css.length());
+    const UChar* chars = css.characters();
+    unsigned len = css.length();
+    unsigned i = 0;
+    bool changed = false;
+
+    while (i < len) {
+        if (i + 5 <= len && chars[i] == 'c' && chars[i+1] == 'a' &&
+            chars[i+2] == 'l' && chars[i+3] == 'c' && chars[i+4] == '(') {
+            unsigned j = i + 5;
+            int depth = 1;
+            while (j < len && depth) {
+                if (chars[j] == '(') ++depth;
+                else if (chars[j] == ')') --depth;
+                ++j;
+            }
+            if (depth == 0) {
+                /* Convert the expression (ASCII by definition) to a char buffer. */
+                std::vector<char> expr(j - i - 6 + 1);
+                for (unsigned k = i + 5; k < j - 1; ++k)
+                    expr[k - (i + 5)] = (char)chars[k];
+                expr[j - i - 6] = 0;
+
+                CalcValue result;
+                CalcEvaluator ev(&expr[0], &expr[0] + strlen(&expr[0]));
+                if (ev.evaluate(result)) {
+                    char buf[64];
+                    /* Six decimals are plenty for a pixel length; trailing
+                     * zeroes are trimmed so `18px + 4px` becomes exactly `22px`. */
+                    snprintf(buf, sizeof(buf), "%.6f", result.number);
+                    char* dot = strchr(buf, '.');
+                    if (dot) {
+                        char* e = buf + strlen(buf) - 1;
+                        while (e > dot && *e == '0') *e-- = 0;
+                        if (*e == '.') *e = 0;
+                    }
+                    strcat(buf, "px");
+                    for (const char* p = buf; *p; ++p) out.push_back((UChar)*p);
+                    changed = true;
+                    i = j;
+                    continue;
+                }
+            }
+            /* Not foldable: copy the whole calc(...) verbatim. */
+            for (unsigned k = i; k < j; ++k) out.push_back(chars[k]);
+            i = j;
+            continue;
+        }
+
+        out.push_back(chars[i]);
+        ++i;
+    }
+
+    if (!changed)
+        return css;
+    return String(&out[0], (unsigned)out.size());
+}
 
 void CSSParser::parseSheet(CSSStyleSheet* sheet, const String& string)
 {
@@ -220,7 +596,8 @@ void CSSParser::parseSheet(CSSStyleSheet* sheet, const String& string)
      * next one) from inheriting a previous sheet's values. */
     clearCustomProperties();
 
-    setupParser("", rewriteIsWhereSelectors(rewriteBareMediaQueries(rewriteCustomPropertyNames(string))), "");
+    setupParser("", foldCalcConstants(rewriteIsWhereSelectors(rewriteBareMediaQueries(
+                     rewriteCustomPropertyNames(substituteCalcVariables(string))))), "");
 
     CSSParser* old = currentParser;
     currentParser = this;
@@ -923,7 +1300,7 @@ bool CSSParser::parseExpandedValue(int propId, const String& text, bool importan
     sub.styleElement = styleElement;
     sub.id = propId;
     sub.important = important;
-    sub.setupParser("@-webkit-value{", text, "} ");
+    sub.setupParser("@-webkit-value{", foldCalcConstants(text), "} ");
 
     currentParser = &sub;
     cssyyparse(&sub);
@@ -941,13 +1318,15 @@ bool CSSParser::parseValue(CSSMutableStyleDeclaration *declaration, int _id, con
     styleElement = declaration->stylesheet();
 
     {
-        String text = rewriteCustomPropertyNames(string);
+        String text = foldCalcConstants(rewriteCustomPropertyNames(string));
 
         if (text.contains("var(")) {
             /* The variables are only known once the cascade at the element is
              * resolved, so keep the text and let CSSStyleSelector expand it.
              * The property still has to reach the declaration: inline styles
-             * (el.style.x = 'var(--y)') go through here, not the grammar. */
+             * (el.style.x = 'var(--y)') go through here, not the grammar.
+             * Once expanded we are called again with the var-free text, and
+             * foldCalcConstants() above can then fold the resulting calc(). */
             addRawValueProperty(_id, text, String(), _important);
             declaration->addParsedProperties(parsedProperties, numParsedProperties);
             clearProperties();
@@ -1026,7 +1405,7 @@ bool CSSParser::parseDeclaration(CSSMutableStyleDeclaration *declaration, const 
 {
     styleElement = declaration->stylesheet();
 
-    setupParser("@-webkit-decls{", rewriteCustomPropertyNames(string), "} ");
+    setupParser("@-webkit-decls{", foldCalcConstants(rewriteCustomPropertyNames(string)), "} ");
 
     CSSParser* old = currentParser;
     currentParser = this;

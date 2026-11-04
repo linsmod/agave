@@ -36,6 +36,12 @@
 @media (min-width: 1px) { #mq { border-top: 2px solid rgb(3, 3, 3); } }
 @media (prefers-color-scheme: dark) { #mq { background-color: rgb(0, 0, 200); } }
 @media (prefers-color-scheme: light) { #mq { background-color: rgb(200, 0, 0); } }
+/* calc() constant folding (R43): the feedback bar's min-height comes from
+ * calc(var(--lh) + 4px) in a custom property; mixed-unit calc stays dropped. */
+:root { --cap-lh: 18px; }
+#calcfb { min-height: calc(18px + 4px); }
+#calcvar { --cap-fb: calc(var(--cap-lh) + 4px); min-height: var(--cap-fb); }
+#calcmixed { min-height: calc(100% - 24px); }
 </style>
 </head>
 <body>
@@ -55,6 +61,9 @@
 <div id="safe"><span></span></div>
 <div id="absParent"><div id="absChild"></div></div>
 <div id="mq">mq</div>
+<div id="calcfb"></div>
+<div id="calcvar"></div>
+<div id="calcmixed"></div>
 <script>
 /* Same contract as cap_dom.html: report through document.title. */
 function cs(id) { return getComputedStyle(document.getElementById(id)); }
@@ -77,6 +86,9 @@ document.title = [
   'safeAlign=' + cs('safe').getPropertyValue('align-items'),
   'safeItemY=' + Math.round(document.querySelector('#safe > span').getBoundingClientRect().top),
   'absChildX=' + Math.round(document.getElementById('absChild').getBoundingClientRect().left),
+  'calcMinH=' + cs('calcfb').getPropertyValue('min-height'),
+  'calcVarMinH=' + cs('calcvar').getPropertyValue('min-height'),
+  'calcMixed=' + cs('calcmixed').getPropertyValue('min-height'),
   'bareMedia=' + cs('mq').borderTopWidth,
   'schemeBg=' + cs('mq').backgroundColor,
   'mediaDark=' + (matchMedia('(prefers-color-scheme: dark)').matches ? 1 : 0),

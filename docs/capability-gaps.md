@@ -114,8 +114,8 @@ qsChild=3 qsDesc=3 qsAdj=1 qsSib=2 qsNth=1 qsOdd=2 qsNot=2 qsFirst=1 qsList2=4 q
 grid=block transform=[] boxShadow=rgb(255, 0, 0) 0px 0px 4px sticky=static aspectHeight=90px
 gap=8px isColor=rgb(1, 2, 3) whereColor=rgb(4, 5, 6) varColor=rgb(7, 8, 9)
 varCascade=rgb(9, 8, 7) varInherit=rgb(1, 2, 3) boxSizing=border-box boxWidth=100 flexItemW=20
-safeAlign=center safeItemY=427 absChildX=88 bareMedia=2px schemeBg=rgb(0, 0, 200)
-mediaDark=1 mediaMin=1
+safeAlign=center safeItemY=427 absChildX=88 calcMinH=22px calcVarMinH=22px calcMixed=0px
+bareMedia=2px schemeBg=rgb(0, 0, 200) mediaDark=1 mediaMin=1
 ```
 
 （`schemeBg`/`mediaDark` 随系统深浅色变化：浅色时是 `rgb(200, 0, 0)` / `0`。要固定看某一种，
@@ -130,7 +130,7 @@ mediaDark=1 mediaMin=1
 | `aspect-ratio: 16/9` + `width:160px` | `height=90px` | **已支持**（R41）：宽或高为 auto 时按比例推另一轴（按 content box），`16 / 9` 与 `16/9` 都认 |
 | flex `gap: 8px` | `8px` | **已支持**（R41）：`gap`/`row-gap`/`column-gap`，简写 1 值=两轴、2 值=row col；flex 仍是 2008 的 `-webkit-box` 体系，但间距按现代语义插在 in-flow 子项之间 |
 | `:is(p)` / `:where(p)` | `rgb(1, 2, 3)` / `rgb(4, 5, 6)` | **已支持**（R41）：解析期把 `:is()`/`:where()` 文本展开成选择器列表（`p:is(.a,.b) span` → `p.a span, p.b span`）。限制：参数必须是简单选择器（不能带组合器），且不能嵌套在别的伪类括号里 |
-| `var(--missing, rgb(7,8,9))` | `rgb(7, 8, 9)` | 支持（fallback 正常）；**级联/继承已按规范工作**（R39：元素级覆盖、`!important`、继承都对，`getComputedStyle(el).getPropertyValue('--x')` 可读）；仍未做：`@property`、`var()` 在 `calc()` 里嵌套求值 |
+| `var(--missing, rgb(7,8,9))` | `rgb(7, 8, 9)` | 支持（fallback 正常）；**级联/继承已按规范工作**（R39：元素级覆盖、`!important`、继承都对，`getComputedStyle(el).getPropertyValue('--x')` 可读）；`calc()` 内的 `var(--常量token)` 在解析期代入（R43）；仍未做：`@property`、混合单位的 `calc()` 求值 |
 | `box-sizing: border-box` | `border-box` | **已支持**（R39）：无前缀名此前整条被丢（只有 `-webkit-box-sizing` 有词条），现在走别名表；布局按 border-box 计算，`getComputedStyle(el).boxSizing` 可读 |
 | `@media (prefers-color-scheme: dark)` | 深色时匹配 | **已支持**（R39）：`AGB_COLOR_SCHEME` 由宿主按注册表 `AppsUseLightTheme` 设置；`matchMedia` 与 CSS 用同一答案 |
 | `matchMedia('(min-width: …)')` | `matches` 正确 | **已支持**（R39）：width/height/device-*/orientation/resolution/prefers-* 都按真实视口求值，`not`/`only`/媒体类型/逗号列表也处理；未做：`addListener` 的变更回调（返回的 list 是静态快照） |
@@ -138,12 +138,13 @@ mediaDark=1 mediaMin=1
 | `align-items: safe center` | `center` | **已支持**（R42）：解析期删掉 `safe`/`unsafe` 溢出关键字，保留对齐关键字；否则两 token 会让整条声明被丢、`align-items` 退回 `stretch` |
 | column flex 里的 `position:absolute` 子项 | 按 `align-items` 定 staticX | **已支持**（R42）：`RenderFlexibleBox::layoutVerticalBox()` 的 positioned 分支按 `boxAlign()` 修正 static position（`BCENTER` 居中、`BEND` 右对齐）；此前无条件贴左 |
 | `iframe.frameBorder = "0"`（JS property） | `border-top-width: 0px` | **已支持**（R42）：`kReflectedAttributes` 加 `frameBorder→frameborder`，property 写入落到 `setAttribute()` → `parseMappedAttribute()` 的 `border-width:0` 呈现提示；静态 `frameborder="0"` 一直可用 |
+| `min-height: calc(18px + 4px)` | `22px` | **已支持**（R43）：解析期把纯常量的 `calc()` 折叠成单值（`+ - * /`、括号、绝对长度单位）；自定义属性值里的 `calc(var(--token) + 4px)` 先做 sheet 级常量代入再折叠。**限制**：含 `%`/`vw`/`vh`/`em`/`rem`/`env()` 的混合单位 calc 仍不支持（保留原样、声明被丢），需要布局期求值才能覆盖 `calc(100% - 24px)` 这类 |
 
 已确认可用的（别再当缺口重开）：块/inline-block/float/绝对定位/margin auto/padding/border-radius/
 opacity/渐变（R11）、`var()` 含 fallback 与元素级级联（R39）、`box-sizing`（R39）、
 `prefers-color-scheme` 与 `matchMedia` 的尺寸/方向查询（R39）、flex 子元素 blockify（R39）、
 `gap`/`aspect-ratio`/`:is()`/`:where()`（R41）、`safe`/`unsafe` 对齐前缀与 flex 绝对定位子项对齐、
-`frameBorder` 属性反射（R42）、
+`frameBorder` 属性反射（R42）、常量 `calc()` 折叠（R43）、
 `classList.add/toggle`、`matches`、`closest`、`dataset`、
 `append`、`remove`、`textContent`、`querySelectorAll`、`getElementsByClassName`、`document.cookie`。
 
