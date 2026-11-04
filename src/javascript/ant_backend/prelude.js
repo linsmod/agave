@@ -288,7 +288,13 @@
       add: function (t) { __agbClassOp(el, 'add', t); },
       remove: function (t) { __agbClassOp(el, 'remove', t); },
       contains: function (t) { return !!__agbClassOp(el, 'contains', t); },
-      toggle: function (t) { return !!__agbClassOp(el, 'toggle', t); }
+      toggle: function (t) { return !!__agbClassOp(el, 'toggle', t); },
+      replace: function (a, b) {
+        if (!__agbClassOp(el, 'contains', a)) return false;
+        __agbClassOp(el, 'remove', a);
+        __agbClassOp(el, 'add', b);
+        return true;
+      }
     };
   };
   /* window/self/top/parent/frames/document/length/frameElement are accessors
@@ -298,6 +304,25 @@
   /* window.postMessage: the engine dispatches the message to every "message"
    * listener in the realm (see globalFramePostMessage). targetOrigin is
    * accepted but not enforced yet; the event carries { data, origin, source }. */
+  /* img.decode(): the image is either painted or failed, so the promise
+   * resolves at once. Pages chain .then() on it before drawing to canvas. */
+  g.__agbDecodeImage = function () {
+    return (typeof Promise === 'function') ? Promise.resolve()
+                                           : { then: function (f) { if (f) f(); return this; }, catch: function () { return this; } };
+  };
+  /* document.fonts: a stub FontFaceSet. Text measurement is synchronous here
+   * (no web font loading), so an always-resolved set is the honest answer and
+   * pages that await fonts.ready do not hang. */
+  g.__agbFonts = {
+    status: 'loaded',
+    size: 0,
+    ready: (typeof Promise === 'function') ? Promise.resolve() : { then: function (f) { if (f) f(); return this; } },
+    check: function () { return true; },
+    add: function () { return this; },
+    'delete': function () { return true; },
+    forEach: function () {},
+    load: function () { return g.__agbDecodeImage(); }
+  };
   g.postMessage = function (message, targetOrigin) {
     try {
       __agbFramePostMessage(message, targetOrigin == null ? '' : String(targetOrigin));

@@ -38,6 +38,15 @@
 #include "KeyboardEvent.h"
 #include "Frame.h"
 #include "FrameTree.h"
+#include "CharacterData.h"
+#include "NamedAttrMap.h"
+#include "Attribute.h"
+#include "DocumentFragment.h"
+#include "editing/markup.h"
+#include "HTMLImageElement.h"
+#include "HTMLFormElement.h"
+#include "HTMLCollection.h"
+#include "HTMLFrameOwnerElement.h"
 #include "FrameLoader.h"
 #include "Page.h"
 #include "KURL.h"
@@ -68,6 +77,7 @@
 #include <set>
 
 namespace AntRuntime {
+AntbValue* documentObjectFor(AntbEngine*, WebCore::Document*);
 AntbValue* windowObjectFor(AntbEngine*, WebCore::Document*);
 void installFrameGlobals(AntbEngine*, WebCore::Document*);
 AntbValue* windowForDocument(AntbEngine*, WebCore::Document*);
@@ -350,6 +360,22 @@ int nodeContains(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeCompareDocumentPosition(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeRemove(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeGetBoundingClientRect(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeGetRootNode(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeGetAttributeNames(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeToggleAttribute(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeInsertAdjacentHTML(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeInsertAdjacentElement(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeInsertAdjacentText(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeReplaceChildren(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeScrollIntoView(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeFormSubmit(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeFormReset(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeFormCheckValidity(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeDocumentImportNode(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeDocumentAdoptNode(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeDocumentElementFromPoint(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeDocumentHasFocus(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+template <typename Collection> AntbValue* wrapNodeList(AntbEngine*, Collection*);
 int nodeGetContext(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeToDataURL(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 
@@ -1327,19 +1353,82 @@ int titleGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue
     if (!strcmp(name, "forms") || !strcmp(name, "images") || !strcmp(name, "links")
             || !strcmp(name, "anchors") || !strcmp(name, "scripts") || !strcmp(name, "embeds")
             || !strcmp(name, "plugins") || !strcmp(name, "applets")) {
-        /* Collections are exposed as empty arrays: scripts only read .length or
-         * iterate, and the real NodeLists are not wrapped yet. The empty array
-         * is a WRONG answer, not a missing one, so it is reported as a gap
-         * (AgbGapJsdom.h) - a page that counts forms silently sees zero. */
-        agbJsdomGapReport(name, "document");
+        /* Real collections now: the empty array this used to return made
+         * every `document.forms.length` / `document.images[0]` wrong, and the
+         * page silently took the "no such element" branch. Snapshots, not
+         * live collections (see docs/capability-gaps.md). */
+        const char* tagName = !strcmp(name, "forms")    ? "form"
+                            : !strcmp(name, "images")   ? "img"
+                            : !strcmp(name, "scripts")  ? "script"
+                            : !strcmp(name, "links")    ? "a"
+                            : !strcmp(name, "anchors")  ? "a"
+                            : !strcmp(name, "embeds")   ? "embed"
+                            : !strcmp(name, "applets")  ? "applet"
+                            : "object";
+        RefPtr<WebCore::NodeList> list = d->getElementsByTagName(tagName);
+        AntbValue* array = wrapNodeList(engine, list.get());
 
-        AntbValue* empty = antb_make_array(engine);
-        if (!empty)
+        if (!array)
             return 0;
-        antb_value_assign(out, empty);
-        antb_value_release(empty);
+        antb_value_assign(out, array);
+        antb_value_release(array);
         return 1;
     }
+
+    if (!strcmp(name, "activeElement")) {
+        /* Nothing focused: the body is the active element, like a browser. */
+        WebCore::Node* focused = d->focusedNode();
+
+        if (!focused || !focused->isElementNode())
+            focused = d->body();
+        if (!focused)
+            return 1;
+        {
+            AntbValue* v = wrapNode(engine, focused);
+
+            if (!v)
+                return 1;
+            antb_value_assign(out, v);
+            antb_value_release(v);
+        }
+        return 1;
+    }
+
+    if (!strcmp(name, "visibilityState")) {
+        AntbValue* v = antb_make_string(engine, "visible");
+
+        if (!v)
+            return 0;
+        antb_value_assign(out, v);
+        antb_value_release(v);
+        return 1;
+    }
+
+    if (!strcmp(name, "hidden")) {
+        /* document.hidden is the counterpart of visibilityState, not the
+         * element attribute. */
+        AntbValue* v = antb_make_number(engine, 0);
+
+        if (!v)
+            return 0;
+        antb_value_assign(out, v);
+        antb_value_release(v);
+        return 1;
+    }
+
+    if (!strcmp(name, "fonts")) {
+        AntbValue* global = antb_global(engine);
+        AntbValue* fonts = global ? antb_get_prop(engine, global, "__agbFonts") : NULL;
+
+        antb_value_release(global);
+
+        if (!fonts)
+            return 1;
+        antb_value_assign(out, fonts);
+        antb_value_release(fonts);
+        return 1;
+    }
+
 
     if (!strcmp(name, "cookie")) {
         std::string jar = cookieHeaderForCurrentDocument();
@@ -4044,6 +4133,10 @@ AntbValue* documentObjectFor(AntbEngine* engine, WebCore::Document* document)
         antb_define_method(engine, docObj, "hasAttribute", nodeHasAttribute, NULL);
         antb_define_method(engine, docObj, "cloneNode", nodeCloneNode, NULL);
         antb_define_method(engine, docObj, "contains", nodeContains, NULL);
+        antb_define_method(engine, docObj, "importNode", nodeDocumentImportNode, NULL);
+        antb_define_method(engine, docObj, "adoptNode", nodeDocumentAdoptNode, NULL);
+        antb_define_method(engine, docObj, "elementFromPoint", nodeDocumentElementFromPoint, NULL);
+        antb_define_method(engine, docObj, "hasFocus", nodeDocumentHasFocus, NULL);
 
         /* Document is a Node: let the node APIs work directly on it. */
         antb_set_native(docObj, document, AGB_TAG_NODE);
@@ -4418,6 +4511,17 @@ void bindDocument(void* document)
                 antb_class_add_method(g_engine, g_nodeClass, "removeAttribute", nodeRemoveAttribute, NULL);
                 antb_class_add_method(g_engine, g_nodeClass, "remove", nodeRemove, NULL);
                 antb_class_add_method(g_engine, g_nodeClass, "getBoundingClientRect", nodeGetBoundingClientRect, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "getRootNode", nodeGetRootNode, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "getAttributeNames", nodeGetAttributeNames, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "toggleAttribute", nodeToggleAttribute, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "insertAdjacentHTML", nodeInsertAdjacentHTML, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "insertAdjacentElement", nodeInsertAdjacentElement, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "insertAdjacentText", nodeInsertAdjacentText, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "replaceChildren", nodeReplaceChildren, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "scrollIntoView", nodeScrollIntoView, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "submit", nodeFormSubmit, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "reset", nodeFormReset, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "checkValidity", nodeFormCheckValidity, NULL);
                 /* Canvas: no per-tag classes exist, so the two element-side
                  * canvas APIs live here and check the tag themselves. */
                 antb_class_add_method(g_engine, g_nodeClass, "getContext", nodeGetContext, NULL);
@@ -5215,6 +5319,557 @@ static void clearExpandoObjects()
     g_expandoObjects->clear();
 }
 
+/* Element-only children / siblings. WebCore of this vintage has no
+ * firstElementChild & co., and every modern framework walks them. */
+static WebCore::Element* childElement(WebCore::Node* parent, int index)
+{
+    WebCore::Node* child;
+    int seen = 0;
+
+    if (!parent)
+        return 0;
+
+    WebCore::Element* last = 0;
+
+    for (child = parent->firstChild(); child; child = child->nextSibling()) {
+        if (!child->isElementNode())
+            continue;
+        last = static_cast<WebCore::Element*>(child);
+        if (index >= 0 && seen == index)
+            return last;
+        ++seen;
+    }
+
+    return index < 0 ? last : 0;
+}
+
+static WebCore::Element* siblingElement(WebCore::Node* node, int direction)
+{
+    WebCore::Node* sibling;
+
+    if (!node)
+        return 0;
+
+    sibling = direction > 0 ? node->nextSibling() : node->previousSibling();
+    while (sibling) {
+        if (sibling->isElementNode())
+            return static_cast<WebCore::Element*>(sibling);
+        sibling = direction > 0 ? sibling->nextSibling() : sibling->previousSibling();
+    }
+
+    return 0;
+}
+
+/* isConnected: the node hangs off a document. */
+static bool nodeIsConnected(WebCore::Node* node)
+{
+    WebCore::Node* top = node;
+
+    while (top && top->parent())
+        top = top->parent();
+
+    return top && top->isDocumentNode();
+}
+
+/* Reflected attributes: element properties that are just an attribute. */
+enum ReflectedKind { REFLECT_STRING = 0, REFLECT_BOOL, REFLECT_NUMBER };
+
+static const struct ReflectedAttribute {
+    const char* property;
+    const char* attribute;
+    int         kind;
+} kReflectedAttributes[] = {
+    { "dir",             "dir",             REFLECT_STRING },
+    { "lang",            "lang",            REFLECT_STRING },
+    { "slot",            "slot",            REFLECT_STRING },
+    { "part",            "part",            REFLECT_STRING },
+    { "contentEditable", "contenteditable", REFLECT_STRING },
+    { "draggable",       "draggable",       REFLECT_STRING },
+    { "translate",       "translate",       REFLECT_STRING },
+    { "hidden",          "hidden",          REFLECT_BOOL   },
+    { "spellcheck",      "spellcheck",      REFLECT_BOOL   },
+    { "autofocus",       "autofocus",       REFLECT_BOOL   },
+    { "tabIndex",        "tabindex",        REFLECT_NUMBER }
+};
+
+static const struct ReflectedAttribute* reflectedAttribute(const char* name)
+{
+    size_t i;
+
+    if (!name || !name[0])
+        return NULL;
+
+    for (i = 0; i < sizeof(kReflectedAttributes) / sizeof(kReflectedAttributes[0]); ++i) {
+        if (strcmp(kReflectedAttributes[i].property, name) == 0)
+            return &kReflectedAttributes[i];
+    }
+
+    return NULL;
+}
+
+/* insertAdjacent*(position, node): the four DOM positions, in one place. */
+static bool insertRelativeTo(WebCore::Node* target, WebCore::Node* node, const char* position)
+{
+    WebCore::ExceptionCode ec = 0;
+    RefPtr<WebCore::Node> holder;
+
+    if (!target || !node || !position)
+        return false;
+
+    holder = node;   /* our own ref; the tree takes its own */
+
+    if (!strcmp(position, "beforebegin")) {
+        if (!target->parent())
+            return false;
+        target->parent()->insertBefore(holder.release(), target, ec);
+    } else if (!strcmp(position, "afterbegin")) {
+        target->insertBefore(holder.release(), target->firstChild(), ec);
+    } else if (!strcmp(position, "beforeend")) {
+        target->appendChild(holder.release(), ec);
+    } else if (!strcmp(position, "afterend")) {
+        if (!target->parent())
+            return false;
+        target->parent()->insertBefore(holder.release(), target->nextSibling(), ec);
+    } else {
+        return false;
+    }
+
+    return !ec;
+}
+
+int nodeGetRootNode(AntbEngine* engine, AntbValue* self, AntbValue**, int, AntbValue* out, void*)
+{
+    WebCore::Node* n = nodeOf(self);
+    WebCore::Node* top;
+
+    if (!n)
+        return 1;
+
+    top = n;
+    while (top->parent())
+        top = top->parent();
+
+    {
+        AntbValue* v = top->isDocumentNode()
+                     ? AntRuntime::documentObjectFor(engine, static_cast<WebCore::Document*>(top))
+                     : wrapNode(engine, top);
+
+        if (v) {
+            antb_value_assign(out, v);
+            antb_value_release(v);
+        }
+    }
+    return 1;
+}
+
+int nodeGetAttributeNames(AntbEngine* engine, AntbValue* self, AntbValue**, int, AntbValue* out, void*)
+{
+    WebCore::Node* n = nodeOf(self);
+    AntbValue* array;
+
+    if (!n || !n->isElementNode())
+        return 1;
+
+    {
+        WebCore::NamedAttrMap* attributes = static_cast<WebCore::Element*>(n)->attributes();
+        unsigned i;
+        unsigned count;
+
+        if (!attributes)
+            return 1;
+
+        array = antb_make_array(engine);
+        if (!array)
+            return 1;
+
+        count = attributes->length();
+        for (i = 0; i < count; ++i) {
+            WebCore::Attribute* attribute = attributes->attributeItem(i);
+            AntbValue* name;
+
+            if (!attribute)
+                continue;
+            name = antb_make_string(engine, attribute->name().localName().domString().utf8().data());
+            if (name) {
+                antb_array_push(engine, array, name);
+                antb_value_release(name);
+            }
+        }
+
+        antb_value_assign(out, array);
+        antb_value_release(array);
+    }
+    return 1;
+}
+
+int nodeToggleAttribute(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                        AntbValue* out, void*)
+{
+    WebCore::Node* n = nodeOf(self);
+    WebCore::Element* element;
+    char* name;
+    int force = -1;
+
+    if (!n || !n->isElementNode() || argc < 1)
+        return 1;
+
+    element = static_cast<WebCore::Element*>(n);
+    name = antb_to_utf8(args[0]);
+    if (!name)
+        return 1;
+
+    if (argc > 1 && args[1])
+        force = antb_to_boolean(args[1]) ? 1 : 0;
+
+    {
+        bool present = element->hasAttribute(WebCore::String(name));
+        bool result = present;
+
+        WebCore::ExceptionCode ec = 0;
+
+        if (present && force != 1) {
+            element->removeAttribute(WebCore::String(name), ec);
+            result = false;
+        } else if (!present && force != 0) {
+            ec = 0;
+            element->setAttribute(WebCore::String(name), WebCore::String(""), ec);
+            result = true;
+        }
+
+        {
+            AntbValue* v = antb_make_number(engine, result ? 1 : 0);
+
+            if (v) {
+                antb_value_assign(out, v);
+                antb_value_release(v);
+            }
+        }
+    }
+
+    antb_free(name);
+    return 1;
+}
+
+int nodeInsertAdjacentHTML(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                           AntbValue* out, void*)
+{
+    WebCore::Node* n = nodeOf(self);
+    char* position;
+    char* html;
+
+    (void)engine; (void)out;
+
+    if (!n || argc < 2)
+        return 1;
+
+    position = antb_to_utf8(args[0]);
+    html = antb_to_utf8(args[1]);
+    if (!position || !html) {
+        antb_free(position);
+        antb_free(html);
+        return 1;
+    }
+
+    {
+        WebCore::Document* document = n->document();
+        RefPtr<WebCore::DocumentFragment> fragment;
+
+        if (document)
+            fragment = createFragmentFromMarkup(document, WebCore::String::fromUTF8(html),
+                                                document->baseURI());
+        if (fragment)
+            insertRelativeTo(n, fragment.get(), position);
+    }
+
+    antb_free(position);
+    antb_free(html);
+    return 1;
+}
+
+int nodeInsertAdjacentElement(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                              AntbValue* out, void*)
+{
+    WebCore::Node* n = nodeOf(self);
+    WebCore::Node* child;
+    char* position;
+
+    if (!n || argc < 2)
+        return 1;
+
+    child = nodeOf(args[1]);
+    position = antb_to_utf8(args[0]);
+    if (!child || !position) {
+        antb_free(position);
+        return 1;
+    }
+
+    if (insertRelativeTo(n, child, position)) {
+        AntbValue* v = wrapNode(engine, child);
+
+        if (v) {
+            antb_value_assign(out, v);
+            antb_value_release(v);
+        }
+    }
+
+    antb_free(position);
+    return 1;
+}
+
+int nodeInsertAdjacentText(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                           AntbValue* out, void*)
+{
+    WebCore::Node* n = nodeOf(self);
+    char* position;
+    char* text;
+
+    (void)engine; (void)out;
+
+    if (!n || argc < 2)
+        return 1;
+
+    position = antb_to_utf8(args[0]);
+    text = antb_to_utf8(args[1]);
+    if (position && text) {
+        WebCore::Document* document = n->document();
+
+        if (document) {
+            RefPtr<WebCore::Node> node = document->createTextNode(WebCore::String::fromUTF8(text));
+
+            if (node)
+                insertRelativeTo(n, node.get(), position);
+        }
+    }
+
+    antb_free(position);
+    antb_free(text);
+    return 1;
+}
+
+int nodeReplaceChildren(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                        AntbValue* out, void*)
+{
+    WebCore::Node* n = nodeOf(self);
+    WebCore::ExceptionCode ec = 0;
+
+    (void)engine; (void)out;
+
+    if (!n)
+        return 1;
+
+    while (n->firstChild()) {
+        RefPtr<WebCore::Node> child = n->firstChild();
+
+        n->removeChild(child.get(), ec);
+        ec = 0;
+    }
+
+    {
+        int i;
+
+        for (i = 0; i < argc; ++i) {
+            WebCore::Node* arg = nodeOf(args[i]);
+
+            if (arg) {
+                RefPtr<WebCore::Node> holder = arg;
+
+                n->appendChild(holder.release(), ec);
+                ec = 0;
+            } else {
+                char* text = antb_to_utf8(args[i]);
+
+                if (text) {
+                    WebCore::Document* document = n->document();
+
+                    if (document) {
+                        RefPtr<WebCore::Node> node = document->createTextNode(WebCore::String::fromUTF8(text));
+
+                        if (node)
+                            n->appendChild(node.release(), ec);
+                        ec = 0;
+                    }
+                    antb_free(text);
+                }
+            }
+        }
+    }
+    return 1;
+}
+
+int nodeScrollIntoView(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                       AntbValue* out, void*)
+{
+    WebCore::Node* n = nodeOf(self);
+    bool alignToTop = true;
+
+    (void)engine; (void)out;
+
+    if (!n || !n->isElementNode())
+        return 1;
+
+    if (argc > 0 && args[0])
+        alignToTop = antb_to_boolean(args[0]) != 0;
+
+    static_cast<WebCore::Element*>(n)->scrollIntoView(alignToTop);
+    return 1;
+}
+
+/* Wraps a WebCore NodeList/HTMLCollection as a JS array (a snapshot: these
+ * are not live collections, see docs/capability-gaps.md). */
+/* NodeList and HTMLCollection share length()/item(); one template covers both. */
+template <typename Collection>
+static AntbValue* wrapNodeList(AntbEngine* engine, Collection* list)
+{
+    AntbValue* array;
+    unsigned i;
+    unsigned count;
+
+    array = antb_make_array(engine);
+    if (!array || !list)
+        return array;
+
+    count = list->length();
+    for (i = 0; i < count; ++i) {
+        WebCore::Node* item = list->item(i);
+        AntbValue* wrapped;
+
+        if (!item)
+            continue;
+        wrapped = wrapNode(engine, item);
+        if (wrapped) {
+            antb_array_push(engine, array, wrapped);
+            antb_value_release(wrapped);
+        }
+    }
+
+    return array;
+}
+
+/* form.submit() / form.reset(): the methods live on the node class and check
+ * the tag, the same way getContext/toDataURL do. */
+int nodeFormSubmit(AntbEngine*, AntbValue* self, AntbValue**, int, AntbValue*, void*)
+{
+    WebCore::Node* n = nodeOf(self);
+
+    if (n && n->isElementNode()
+            && static_cast<WebCore::Element*>(n)->hasTagName(WebCore::HTMLNames::formTag))
+        static_cast<WebCore::HTMLFormElement*>(n)->submit();
+
+    return 1;
+}
+
+int nodeFormReset(AntbEngine*, AntbValue* self, AntbValue**, int, AntbValue*, void*)
+{
+    WebCore::Node* n = nodeOf(self);
+
+    if (n && n->isElementNode()
+            && static_cast<WebCore::Element*>(n)->hasTagName(WebCore::HTMLNames::formTag))
+        static_cast<WebCore::HTMLFormElement*>(n)->reset();
+
+    return 1;
+}
+
+int nodeFormCheckValidity(AntbEngine* engine, AntbValue*, AntbValue**, int, AntbValue* out, void*)
+{
+    /* No constraint validation yet: reporting "valid" keeps submit handlers
+     * running instead of silently blocking them. */
+    AntbValue* v = antb_make_number(engine, 1);
+
+    if (v) {
+        antb_value_assign(out, v);
+        antb_value_release(v);
+    }
+    return 1;
+}
+
+int nodeDocumentImportNode(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                           AntbValue* out, void*)
+{
+    WebCore::Document* document = documentOf(self);
+    WebCore::Node* source = (argc > 0) ? nodeOf(args[0]) : 0;
+
+    if (!document || !source)
+        return 1;
+
+    {
+        WebCore::ExceptionCode ec = 0;
+        RefPtr<WebCore::Node> imported = document->importNode(source, argc > 1 && antb_to_boolean(args[1]),
+                                                              ec);
+
+        if (imported) {
+            AntbValue* v = wrapNode(engine, imported.get());
+
+            if (v) {
+                antb_value_assign(out, v);
+                antb_value_release(v);
+            }
+        }
+    }
+    return 1;
+}
+
+int nodeDocumentAdoptNode(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                          AntbValue* out, void*)
+{
+    WebCore::Document* document = documentOf(self);
+    WebCore::Node* source = (argc > 0) ? nodeOf(args[0]) : 0;
+
+    if (!document || !source)
+        return 1;
+
+    {
+        WebCore::ExceptionCode ec = 0;
+        RefPtr<WebCore::Node> holder = source;   /* adoptNode takes ownership */
+        RefPtr<WebCore::Node> adopted = document->adoptNode(holder.release(), ec);
+
+        if (adopted) {
+            AntbValue* v = wrapNode(engine, adopted.get());
+
+            if (v) {
+                antb_value_assign(out, v);
+                antb_value_release(v);
+            }
+        }
+    }
+    return 1;
+}
+
+int nodeDocumentHasFocus(AntbEngine* engine, AntbValue*, AntbValue**, int, AntbValue* out, void*)
+{
+    /* No real window focus tracking: the bound document is the active one. */
+    AntbValue* v = antb_make_number(engine, 1);
+
+    if (v) {
+        antb_value_assign(out, v);
+        antb_value_release(v);
+    }
+    return 1;
+}
+
+int nodeDocumentElementFromPoint(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                                 AntbValue* out, void*)
+{
+    WebCore::Document* document = documentOf(self);
+
+    if (!document || argc < 2)
+        return 1;
+
+    {
+        WebCore::Element* element = document->elementFromPoint((int)antb_to_number(args[0]),
+                                                               (int)antb_to_number(args[1]));
+
+        if (element) {
+            AntbValue* v = wrapNode(engine, element);
+
+            if (v) {
+                antb_value_assign(out, v);
+                antb_value_release(v);
+            }
+        }
+    }
+    return 1;
+}
+
 int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue* out, void*)
 {
     /* Internal bookkeeping names must not go back through the bridge: reading
@@ -5306,6 +5961,133 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
         }
 
         return 0;
+    }
+
+    /* --- element tree navigation ----------------------------------------- *
+     * WebCore 2008 only has parentNode/childNodes/nextSibling; every modern
+     * framework walks the element-only variants, and reading them as
+     * undefined made `el.parentElement.remove()` throw. */
+    if (!strcmp(name, "parentElement")) {
+        WebCore::Node* parent = n->parent();
+
+        if (!parent || !parent->isElementNode())
+            return 1;   /* null for a top level element */
+        v = wrapNode(engine, parent);
+    } else if (!strcmp(name, "firstElementChild") || !strcmp(name, "lastElementChild")) {
+        WebCore::Element* child = childElement(n, name[0] == 'f' ? 0 : -1);
+
+        if (!child)
+            return 1;
+        v = wrapNode(engine, child);
+    } else if (!strcmp(name, "nextElementSibling") || !strcmp(name, "previousElementSibling")) {
+        WebCore::Element* sibling = siblingElement(n, name[0] == 'n' ? 1 : -1);
+
+        if (!sibling)
+            return 1;
+        v = wrapNode(engine, sibling);
+    } else if (!strcmp(name, "isConnected")) {
+        v = antb_make_number(engine, nodeIsConnected(n) ? 1 : 0);
+    } else if (!strcmp(name, "nodeValue")) {
+        /* Text/Comment carry data; every other node type is null. */
+        if (n->isTextNode() || n->isCommentNode()) {
+            WebCore::String data = static_cast<WebCore::CharacterData*>(n)->data();
+
+            v = antb_make_string(engine, data.utf8().data());
+        } else {
+            return 1;
+        }
+    } else if (!strcmp(name, "innerText") || !strcmp(name, "outerText")) {
+        if (!n->isElementNode())
+            return 1;
+        {
+            WebCore::String text = static_cast<WebCore::Element*>(n)->innerText();
+
+            v = antb_make_string(engine, text.utf8().data());
+        }
+    } else if (!strcmp(name, "offsetParent")) {
+        if (!n->isElementNode())
+            return 1;
+        {
+            WebCore::Element* parent = static_cast<WebCore::Element*>(n)->offsetParent();
+
+            if (!parent)
+                return 1;
+            v = wrapNode(engine, parent);
+        }
+    } else if (n->isElementNode()
+            && static_cast<WebCore::Element*>(n)->hasTagName(WebCore::HTMLNames::imgTag)
+            && (!strcmp(name, "complete") || !strcmp(name, "naturalWidth")
+                || !strcmp(name, "naturalHeight") || !strcmp(name, "width")
+                || !strcmp(name, "height"))) {
+        /* Pages wait for complete/naturalWidth before drawing the image
+         * themselves (canvas, QR scanners, lazy loaders). */
+        WebCore::HTMLImageElement* image = static_cast<WebCore::HTMLImageElement*>(n);
+
+        if (!strcmp(name, "complete"))
+            v = antb_make_number(engine, image->complete() ? 1 : 0);
+        else if (!strcmp(name, "naturalWidth"))
+            v = antb_make_number(engine, image->naturalWidth());
+        else if (!strcmp(name, "naturalHeight"))
+            v = antb_make_number(engine, image->naturalHeight());
+        else if (!strcmp(name, "width"))
+            v = antb_make_number(engine, image->width());
+        else
+            v = antb_make_number(engine, image->height());
+    } else if (n->isElementNode() && !strcmp(name, "decode")
+            && static_cast<WebCore::Element*>(n)->hasTagName(WebCore::HTMLNames::imgTag)) {
+        AntbValue* global = antb_global(engine);
+
+        if (global) {
+            AntbValue* fn = antb_get_prop(engine, global, "__agbDecodeImage");
+
+            if (fn) {
+                antb_value_assign(out, fn);
+                antb_value_release(fn);
+                antb_value_release(global);
+                return 1;
+            }
+            antb_value_release(global);
+        }
+        return 1;
+    } else if (n->isElementNode()
+            && static_cast<WebCore::Element*>(n)->hasTagName(WebCore::HTMLNames::formTag)
+            && (!strcmp(name, "action") || !strcmp(name, "elements"))) {
+        WebCore::HTMLFormElement* form = static_cast<WebCore::HTMLFormElement*>(n);
+
+        if (!strcmp(name, "action")) {
+            v = antb_make_string(engine, form->action().utf8().data());
+        } else {
+            RefPtr<WebCore::HTMLCollection> elements = form->elements();
+
+            v = wrapNodeList(engine, elements.get());
+        }
+    } else if (n->isElementNode()
+            && static_cast<WebCore::Element*>(n)->isFrameOwnerElement()
+            && (!strcmp(name, "contentWindow") || !strcmp(name, "contentDocument"))) {
+        WebCore::Document* child = static_cast<WebCore::HTMLFrameOwnerElement*>(n)->contentDocument();
+
+        if (!child)
+            return 1;   /* null until the frame document exists */
+        v = !strcmp(name, "contentWindow")
+          ? AntRuntime::windowObjectFor(engine, child)
+          : AntRuntime::documentObjectFor(engine, child);
+    } else if (n->isElementNode() && reflectedAttribute(name)) {
+        /* dir/lang/hidden/tabIndex/... : an attribute with a type. */
+        const struct ReflectedAttribute* reflected = reflectedAttribute(name);
+        WebCore::Element* element = static_cast<WebCore::Element*>(n);
+        WebCore::String attribute = element->getAttribute(WebCore::String(reflected->attribute));
+
+        if (reflected->kind == REFLECT_BOOL) {
+            v = antb_make_number(engine, attribute.isNull() ? 0 : 1);
+        } else if (reflected->kind == REFLECT_NUMBER) {
+            int number = (attribute.isNull() || attribute.isEmpty())
+                       ? (strcmp(reflected->attribute, "tabindex") == 0 ? -1 : 0)
+                       : atoi(attribute.utf8().data());
+
+            v = antb_make_number(engine, (double)number);
+        } else {
+            v = antb_make_string(engine, attribute.utf8().data());
+        }
     }
 
     /* Object.prototype helpers: the catch-all getter answers every name, so the
@@ -5677,6 +6459,36 @@ int nodeSetter(AntbEngine* engine, AntbValue* self, const char* name, const Antb
      * so `el.onclick = null` clears the handler. */
     if (n && name && !strncmp(name, "on", 2) && name[2])
         return setNodeEventHandler(n, name + 2, value);
+
+    /* Reflected attributes: `el.hidden = true`, `el.tabIndex = 3`,
+     * `el.dir = 'rtl'` are attribute writes, and reading them back must agree
+     * with getAttribute (they are read in nodeGetter). */
+    if (n && n->isElementNode() && reflectedAttribute(name)) {
+        const struct ReflectedAttribute* reflected = reflectedAttribute(name);
+        WebCore::Element* element = static_cast<WebCore::Element*>(n);
+        WebCore::ExceptionCode ec = 0;
+
+        if (reflected->kind == REFLECT_BOOL) {
+            if (value && antb_to_boolean(value))
+                element->setAttribute(WebCore::String(reflected->attribute), WebCore::String(""), ec);
+            else
+                element->removeAttribute(WebCore::String(reflected->attribute), ec);
+        } else if (reflected->kind == REFLECT_NUMBER) {
+            char buffer[32];
+
+            snprintf(buffer, sizeof(buffer), "%d", (int)antb_to_number(value));
+            element->setAttribute(WebCore::String(reflected->attribute), WebCore::String(buffer), ec);
+        } else {
+            char* text = value ? antb_to_utf8(value) : NULL;
+
+            if (text) {
+                element->setAttribute(WebCore::String(reflected->attribute),
+                                      WebCore::String::fromUTF8(text), ec);
+                antb_free(text);
+            }
+        }
+        return 1;
+    }
 
     if (!n || !value)
         return 0;

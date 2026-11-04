@@ -38,14 +38,19 @@ build-zig-native\agave_shell.exe --probe tools\pages\cap_gap_log.html --wait 500
 
 ## 1. JS / DOM
 
-`cap_dom.html` 当前输出：
+`cap_dom.html` 当前输出（2026-11-04 补齐一批 DOM 缺口后，见 R34）：
 
 ```
-forms=0 links=0 images=0 anchors=0 scripts=0 all=13
-formSubmit=undefined formAction=undefined
-imgComplete=undefined imgNatural=undefined imgWidth=undefined
-insertAdjacentHTML=undefined innerText=undefined
-classListAdd=function matches=function closest=function textContent=string
+forms=1 links=1 images=2 anchors=1 scripts=1 all=13
+formSubmit=function formAction=string imgComplete=0 imgNatural=0 imgWidth=1
+insertAdjacentHTML=function innerText=string classListAdd=function classListReplace=function
+matches=function closest=function textContent=string
+parentElement=object firstElementChild=object nextElementSibling=undefined
+isConnected=number getRootNode=function getAttributeNames=function toggleAttribute=function
+replaceChildren=function scrollIntoView=function offsetParent=undefined nodeValue=string
+tabIndex=number hidden=number formElements=2 imgDecode=function iframeCw=yes
+activeElement=object hasFocus=function visibilityState=string fonts=object
+importNode=function elementFromPoint=function
 ```
 
 `cap_selectors.html`：`attr=bar ds=bar qsAttr=0 qsClass=1 qsClassAttr=0 qsTagAttr=0`
@@ -54,25 +59,30 @@ classListAdd=function matches=function closest=function textContent=string
 
 | 能力 | 当前值 | 影响 | 判定 / 建议 |
 |---|---|---|---|
-| `document.forms` / `links` / `images` / `anchors` / `scripts` / `embeds` / `plugins` / `applets` | 全是长度 0 的数组（`getElementsByTagName('*')=13` 正常） | `document.forms[0].submit()`、用 `document.scripts` 找入口的打包器、用 `document.images` 预加载的代码会**静默走空分支** | 缺口，P1 |
-| `HTMLFormElement.submit()` / `.action` | `undefined`；点 submit 按钮能提交（WebCore 默认动作） | 程序化提交、读/改 action、表单库的 `.submit()` 路径失效 | 缺口，P1 |
+| `document.forms` / `links` / `images` / `anchors` / `scripts` / `embeds` / `plugins` / `applets` | **已支持（R34）**：真实集合（`forms=1 images=2 scripts=1 links=1`）。注意是**快照数组**，不是 live collection | —— | 已支持 |
+| `HTMLFormElement.submit()` / `.action` / `.elements` / `.reset()` | **已支持（R34）**：`formSubmit=function formAction=string formElements=2`；`checkValidity()` 恒返回 true（没有约束校验） | —— | 已支持（`checkValidity` 是桩） |
 | `history.pushState` / `replaceState` | 是函数，但**只改 document URL**：`state=undefined`、`len=undefined`、`pops=0`、`href` 被改写 | history 模式的 SPA（Vue/React Router）无法保存/恢复 state，收不到 `popstate`，前进后退会跳过视图 | 半实现，P1 |
 | `localStorage` 跨文档 | A 页写入 → 导航到 B → `null`；同一跑的 cookie 正常（`cookie=true`） | 用 localStorage 存 token/购物车的多页流程会丢状态；测试也不能拿它当跨页标记（用 cookie） | 缺口，P1 |
 | `window.postMessage` / `message` 事件 | **已支持**：同窗口/跨 frame 都能投递（`{data, origin, source}`，`origin` 取发送方文档的 scheme://host[:port]）；`cap_postmessage.html` → `postMessage=function sent=yes got=1` | —— | 已支持 |
-| iframe 的 `contentWindow` / `contentDocument` | 都是 `undefined`（frame 文档在桥接层有槽位，`window.frames[i]` 已可用，但元素上的这两个属性没接） | 父页 `iframe.contentDocument` 读子文档仍不行（`window.frames[0].document` 可以） | 缺口，P1 |
+| iframe 的 `contentWindow` / `contentDocument` | **已支持（R34）**：`iframeCw=yes`，`contentWindow.document === contentDocument` 成立；子文档还没建好时是 `null` | —— | 已支持 |
 | 每个 frame 的 `window` 身份（`parent`/`top`/`self`/`frames`/`length`/`name`/`frameElement`） | **已支持（R31）**：frame 有自己的 `Window` 代理，`parent !== self`、`parent.document` 是父文档、`frames.length`/`frames[i]`/`name`/`frameElement` 都按 frame tree 回答，未知属性委托给共享全局 | —— | 已支持（`cap_window_identity.html`） |
 | 子 frame 的顶层 `var` 污染父页 | 仍是共享全局：子 frame 里 `var x = 1` 父页也能读到（`window.foo` 同理） | 依赖「全局隔离」的 polyfill 会互相看见；规范上这是每个 browsing context 独立的全局对象 | 已知限制，要修只能每个 frame 一个 engine（方案 A，不做；见 `docs/architecture/frame-window.md`） |
-| `HTMLImageElement.complete` / `naturalWidth` / `width` | 全 `undefined`（图片实际能加载/绘制） | 图片预加载、`img.onload` 之外的完成判定、二维码/图标尺寸计算失效 | 缺口，P2 |
+| `HTMLImageElement.complete` / `naturalWidth` / `naturalHeight` / `width` / `height` / `decode()` | **已支持（R34）**：`imgComplete=0 imgNatural=0 imgWidth=1 imgDecode=function`（`decode()` 立即 resolve） | —— | 已支持 |
 | `document.querySelector(All)` 的属性选择器 | `[data-bar]` / `[class*=probe]` / `div[data-bar]` 全部 `0`；`.probe-cls` 为 `1` | 用 `querySelector('script[data-x]')` 做幂等、`[data-state]` 做 UI 分支的代码全部走空分支；不报错 | 缺口，P1 |
-| `Element.insertAdjacentHTML` | `undefined` | jQuery、统计/广告脚本常用；有特性检测的会降级，没有的直接抛错 | 缺口，P2 |
-| `HTMLElement.innerText` | `undefined`（`textContent` 正常） | 老代码/测试断言常用 | 缺口，P2 |
+| `Element.insertAdjacentHTML` / `insertAdjacentElement` / `insertAdjacentText` / `replaceChildren` | **已支持（R34）**：四个插入位置都走 `insertBefore/appendChild`，HTML 走 `createFragmentFromMarkup` | —— | 已支持 |
+| `HTMLElement.innerText` / `outerText` | **已支持（R34）**：走 `Element::innerText()`（会触发布局） | —— | 已支持 |
+| 元素树遍历 `parentElement` / `firstElementChild` / `lastElementChild` / `nextElementSibling` / `previousElementSibling` / `isConnected` / `getRootNode()` | **已支持（R34）** | —— | 已支持 |
+| 反射属性 `hidden` / `dir` / `lang` / `tabIndex` / `contentEditable` / `draggable` / `translate` / `slot` / `part` / `spellcheck` / `autofocus` | **已支持（R34）**：读写都落到属性（`el.hidden = true` → `hasAttribute('hidden')`） | —— | 已支持 |
+| `getAttributeNames()` / `toggleAttribute()` / `nodeValue` / `offsetParent` / `scrollIntoView()` / `classList.replace()` | **已支持（R34）** | —— | 已支持 |
+| `document.activeElement` / `hasFocus()` / `visibilityState` / `importNode` / `adoptNode` / `elementFromPoint` | **已支持（R34）**；`visibilityState` 恒 `"visible"`，`activeElement` 无焦点时回落到 `body` | —— | 已支持 |
+| `document.fonts` | **桩（R34）**：`{status:'loaded', ready:已 resolve, add/delete/check/forEach}`。没有 web font 加载，`ready` 立即兑现 | 用 `await document.fonts.ready` 的页面不再挂住；但 `fonts.load()` 不会真的加载字体 | 桩 |
 | `window.open` 的引擎侧策略 | 可用，但**绕过** `FrameLoaderClientMC::dispatchCreatePage`，走控件 `agave_control_open_window` | 引擎级 new-window 策略/features 不生效；`[nav]` 里看到的是 `popup create`，不是 `popup open` | 管道差异，P2 |
 | `el.onload = fn` 等事件处理属性 | **已修（R27）**：`hits=11`（属性 + addEventListener 都触发）；此前只有 `addEventListener` 生效，`onload` 是静默 expando | —— | 已支持 |
 
 定位锚点：
 
-- 集合空壳：`AntRuntime.cpp` 的 `documentGetter` 里 `"forms"`/`"links"`/… 分支
-  （注释原文 “Collections are exposed as empty arrays … the real NodeLists are not wrapped yet”）。
+- 集合：`AntRuntime.cpp` 的 `titleGetter` 里 `"forms"`/`"links"`/… 分支，走 `wrapNodeList()`（快照，不是 live collection）。
+- 元素属性：`nodeGetter` / `nodeSetter`（反射属性表 `kReflectedAttributes`）、`g_nodeClass` 上的方法（`getRootNode`/`insertAdjacent*`/`submit`…）。
 - History：`AntRuntime.cpp` 的 `historyPushState`（注释 “only rewrites the document URL … without a
   real history entry”）；`historyBack/Forward` 直接调 `page()->goBack()/goForward()`；
   `popstate` 只在 `prelude.js` 的 `onpopstate` 名字表里出现，没有任何派发点。

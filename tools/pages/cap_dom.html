@@ -36,9 +36,40 @@ document.title = [
   'insertAdjacentHTML=' + typeof b.insertAdjacentHTML,
   'innerText=' + typeof b.innerText,
   'classListAdd=' + (b.classList ? typeof b.classList.add : 'none'),
+  'classListReplace=' + (b.classList ? typeof b.classList.replace : 'none'),
   'matches=' + typeof b.matches,
   'closest=' + typeof b.closest,
-  'textContent=' + typeof b.textContent
+  'textContent=' + typeof b.textContent,
+  /* --- wave 1-3 (2026-11-04): tree navigation, attributes, mutation --- */
+  'parentElement=' + typeof b.parentElement,
+  'firstElementChild=' + typeof b.firstElementChild,
+  'nextElementSibling=' + typeof b.nextElementSibling,
+  'isConnected=' + typeof b.isConnected,
+  'getRootNode=' + typeof b.getRootNode,
+  'getAttributeNames=' + typeof b.getAttributeNames,
+  'toggleAttribute=' + typeof b.toggleAttribute,
+  'replaceChildren=' + typeof b.replaceChildren,
+  'scrollIntoView=' + typeof b.scrollIntoView,
+  'offsetParent=' + typeof b.offsetParent,
+  'nodeValue=' + typeof b.firstChild.nodeValue,
+  'tabIndex=' + typeof b.tabIndex,
+  'hidden=' + typeof b.hidden,
+  /* --- form / img / frame / document --- */
+  'formElements=' + (f.elements ? f.elements.length : 'none'),
+  'imgDecode=' + (pix ? typeof pix.decode : 'none'),
+  'iframeCw=' + (function () {
+      var fr = document.createElement('iframe');
+      document.body.appendChild(fr);
+      var ok = (fr.contentDocument !== undefined) && (fr.contentWindow !== undefined);
+      document.body.removeChild(fr);
+      return ok ? 'yes' : 'no';
+  })(),
+  'activeElement=' + typeof document.activeElement,
+  'hasFocus=' + typeof document.hasFocus,
+  'visibilityState=' + typeof document.visibilityState,
+  'fonts=' + (document.fonts ? typeof document.fonts.ready : 'none'),
+  'importNode=' + typeof document.importNode,
+  'elementFromPoint=' + typeof document.elementFromPoint
 ].join(' ');
 </script>
 </body>

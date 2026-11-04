@@ -49,88 +49,30 @@ typedef struct {
 
 static const AgbJsdomGap agbJsdomGaps[] = {
     /* --- element: tree navigation ---------------------------------------- */
-    { "parentElement",        "dom", "undefined; parentNode works" },
-    { "firstElementChild",    "dom", "undefined; children[0] works" },
-    { "lastElementChild",     "dom", "undefined; children[children.length-1] works" },
-    { "nextElementSibling",   "dom", "undefined; nextSibling works" },
-    { "previousElementSibling","dom", "undefined; previousSibling works" },
-    { "getRootNode",          "dom", "undefined; document is the only root" },
-    { "isConnected",          "dom", "undefined" },
 
     /* --- element: mutation ----------------------------------------------- */
-    { "insertAdjacentHTML",   "dom", "undefined; innerHTML += works" },
-    { "insertAdjacentElement","dom", "undefined; appendChild works" },
-    { "insertAdjacentText",   "dom", "undefined; appendChild(textNode) works" },
-    { "replaceChildren",      "dom", "undefined; remove children then appendChild" },
     { "attachShadow",         "dom", "undefined; no shadow DOM" },
 
     /* --- element: attributes / text -------------------------------------- */
-    { "getAttributeNames",    "dom", "undefined; attributes.length works" },
-    { "toggleAttribute",      "dom", "undefined; set/removeAttribute works" },
     { "getAttributeNode",     "dom", "undefined" },
     { "setAttributeNS",       "dom", "undefined; setAttribute works" },
-    { "nodeValue",            "dom", "undefined; textContent works" },
-    { "innerText",            "dom", "undefined; textContent works" },
-    { "outerText",            "dom", "undefined; textContent works" },
     { "getClientRects",       "dom", "undefined; getBoundingClientRect works" },
 
     /* --- element: reflected attributes ----------------------------------- */
-    { "dir",                  "dom", "undefined (reflected attributes are not exposed)" },
-    { "lang",                 "dom", "undefined (reflected attributes are not exposed)" },
-    { "hidden",               "dom", "undefined; document.hidden is never set, el.hidden not exposed" },
-    { "tabIndex",             "dom", "undefined (reflected attributes are not exposed)" },
-    { "contentEditable",      "dom", "undefined (reflected attributes are not exposed)" },
-    { "draggable",            "dom", "undefined (reflected attributes are not exposed)" },
-    { "translate",            "dom", "undefined (reflected attributes are not exposed)" },
-    { "slot",                 "dom", "undefined (reflected attributes are not exposed)" },
-    { "part",                 "dom", "undefined (reflected attributes are not exposed)" },
-    { "spellcheck",           "dom", "undefined (reflected attributes are not exposed)" },
-    { "autofocus",            "dom", "undefined (reflected attributes are not exposed)" },
 
     /* --- element: geometry / scrolling ----------------------------------- */
-    { "offsetParent",         "dom", "undefined; offsetTop/Left/Width/Height work" },
-    { "scrollIntoView",       "dom", "undefined; no scripted scrolling" },
     { "requestFullscreen",    "dom", "undefined; no fullscreen" },
-    { "classList.replace",    "dom", "undefined; add/remove/contains/toggle work" },
 
     /* --- form ------------------------------------------------------------- */
-    { "submit",               "form", "undefined; clicking a submit button still submits" },
-    { "action",               "form", "undefined; the form still posts to its own URL" },
-    { "reset",                "form", "undefined" },
-    { "checkValidity",        "form", "undefined; no constraint validation" },
-    { "elements",             "form", "undefined; querySelectorAll('input,select,textarea') works" },
 
     /* --- image ------------------------------------------------------------ */
-    { "complete",             "img", "undefined; the image still loads and paints" },
-    { "naturalWidth",         "img", "undefined" },
-    { "naturalHeight",        "img", "undefined" },
-    { "width",                "img", "undefined (use the CSS/attribute width)" },
-    { "height",               "img", "undefined (use the CSS/attribute height)" },
-    { "decode",               "img", "undefined; onload still fires" },
 
     /* --- frame ------------------------------------------------------------ */
-    { "contentWindow",        "frame", "undefined; window.frames[i] works" },
-    { "contentDocument",      "frame", "undefined; window.frames[i].document works" },
 
     /* --- document --------------------------------------------------------- */
-    { "activeElement",        "doc", "undefined; no focus tracking in script" },
     { "createRange",          "doc", "undefined; no Range API" },
     { "createTreeWalker",     "doc", "undefined; recursive querySelectorAll works" },
-    { "elementFromPoint",     "doc", "undefined; no hit testing from script" },
     { "execCommand",          "doc", "undefined; no editing commands" },
-    { "importNode",           "doc", "undefined; cloneNode + appendChild works" },
-    { "adoptNode",            "doc", "undefined" },
-    { "hasFocus",             "doc", "undefined" },
-    { "visibilityState",      "doc", "undefined; the page is never hidden" },
-    { "fonts",                "doc", "undefined; no FontFaceSet" },
-    { "forms",                "doc", "empty array (length 0); querySelectorAll('form') works" },
-    { "images",               "doc", "empty array (length 0); querySelectorAll('img') works" },
-    { "scripts",              "doc", "empty array (length 0); querySelectorAll('script') works" },
-    { "links",                "doc", "empty array (length 0); querySelectorAll('a[href]') works" },
-    { "anchors",              "doc", "empty array (length 0)" },
-    { "embeds",               "doc", "empty array (length 0)" },
-    { "plugins",              "doc", "empty array (length 0)" },
-    { "applets",              "doc", "empty array (length 0)" },
 
     /* --- history ---------------------------------------------------------- */
     { "state",                "history", "undefined; pushState only rewrites the URL" },
