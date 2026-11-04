@@ -1135,7 +1135,13 @@ void CSSStyleSelector::adjustRenderStyle(RenderStyle* style, Element *e)
         // box to size: its width/height are ignored and it measures 0x0). We map
         // display:flex onto the old -webkit-box implementation, which predates
         // that rule, so the blockification has to happen here.
-        if (e && parentStyle && style->position() == StaticPosition &&
+        //
+        // Only absolutely/fixed positioned children are left alone: they are not
+        // flex items at all. position:relative must still be blockified - a
+        // position:relative inline-flex child (deepseek's login button) otherwise
+        // stays inline-level and -webkit-box-align:stretch never widens it.
+        if (e && parentStyle &&
+            style->position() != AbsolutePosition && style->position() != FixedPosition &&
             (parentStyle->display() == BOX || parentStyle->display() == INLINE_BOX)) {
             EDisplay display = style->display();
             if (display == INLINE || display == INLINE_BLOCK)
