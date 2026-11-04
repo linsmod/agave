@@ -388,6 +388,17 @@ AntbValue* antb_make_string(AntbEngine* engine, const char* utf8)
     return alloc_value(engine->js, js_mkstr(engine->js, utf8, strlen(utf8)));
 }
 
+AntbValue* antb_make_null(AntbEngine* engine)
+{
+    AntbValue* out;
+
+    if (!engine || !engine->js)
+        return NULL;
+
+    out = alloc_value(engine->js, js_mknull());
+    return out;
+}
+
 AntbValue* antb_make_number(AntbEngine* engine, double v)
 {
     if (!engine || !engine->js)

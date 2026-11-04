@@ -63,7 +63,7 @@ qsChild=3 qsDesc=3 qsAdj=1 qsSib=2 qsNth=1 qsOdd=2 qsNot=2 qsFirst=1 qsList2=4 q
 |---|---|---|---|
 | `document.forms` / `links` / `images` / `anchors` / `scripts` / `embeds` / `plugins` / `applets` | **已支持（R34）**：真实集合（`forms=1 images=2 scripts=1 links=1`）。注意是**快照数组**，不是 live collection | —— | 已支持 |
 | `HTMLFormElement.submit()` / `.action` / `.elements` / `.reset()` | **已支持（R34）**：`formSubmit=function formAction=string formElements=2`；`checkValidity()` 恒返回 true（没有约束校验） | —— | 已支持（`checkValidity` 是桩） |
-| `history.pushState` / `replaceState` | 是函数，但**只改 document URL**：`state=undefined`、`len=undefined`、`pops=0`、`href` 被改写 | history 模式的 SPA（Vue/React Router）无法保存/恢复 state，收不到 `popstate`，前进后退会跳过视图 | 半实现，P1 |
+| `history.pushState` / `replaceState` / `state` / `length` / `popstate` | **已支持（R36）**：state 对象真的存下来了（`pushState` 后 `history.state` 是同一个值），`length` 随 entry 增长，`back/forward/go` 恢复 URL 并派发带 `state` 的 `popstate`，`pushState` 会截断 forward。跨文档的前进后退交给 FrameLoader（`[nav] request main type=back-forward`） | —— | 已支持（`cap_history.html`；限制：`length` 只数当前文档的 entry） |
 | `localStorage` 跨文档 | A 页写入 → 导航到 B → `null`；同一跑的 cookie 正常（`cookie=true`） | 用 localStorage 存 token/购物车的多页流程会丢状态；测试也不能拿它当跨页标记（用 cookie） | 缺口，P1 |
 | `window.postMessage` / `message` 事件 | **已支持**：同窗口/跨 frame 都能投递（`{data, origin, source}`，`origin` 取发送方文档的 scheme://host[:port]）；`cap_postmessage.html` → `postMessage=function sent=yes got=1` | —— | 已支持 |
 | iframe 的 `contentWindow` / `contentDocument` | **已支持（R34）**：`iframeCw=yes`，`contentWindow.document === contentDocument` 成立；子文档还没建好时是 `null` | —— | 已支持 |

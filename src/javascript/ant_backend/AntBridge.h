@@ -112,6 +112,9 @@ AGB_API AntbValue* antb_make_string(AntbEngine* engine, const char* utf8);
 /* Creates a JS number. */
 AGB_API AntbValue* antb_make_number(AntbEngine* engine, double v);
 
+/* Creates the JS null value (history.state is null, not undefined). */
+AGB_API AntbValue* antb_make_null(AntbEngine* engine);
+
 /* Creates an empty array; antb_array_push appends to it. */
 AGB_API AntbValue* antb_make_array(AntbEngine* engine);
 AGB_API void antb_array_push(AntbEngine* engine, AntbValue* array, const AntbValue* value);

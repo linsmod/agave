@@ -74,10 +74,9 @@ static const AgbJsdomGap agbJsdomGaps[] = {
     { "createTreeWalker",     "doc", "undefined; recursive querySelectorAll works" },
     { "execCommand",          "doc", "undefined; no editing commands" },
 
-    /* --- history ---------------------------------------------------------- */
-    { "history.state",        "history", "undefined; pushState only rewrites the URL" },
-    { "history.length",       "history", "undefined" }
-
+    /* --- history ---------------------------------------------------------- *
+     * history.state/length are real now (R36): the state objects live in the
+     * bridge's session history model. */
 };
 
 #define AGB_JSDOM_GAP_COUNT (sizeof(agbJsdomGaps) / sizeof(agbJsdomGaps[0]))

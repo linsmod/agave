@@ -78,6 +78,7 @@
 #include <set>
 
 namespace AntRuntime {
+void dispatchWindowEventState(const char* type, AntbValue* state);
 AntbValue* documentObjectFor(AntbEngine*, WebCore::Document*);
 AntbValue* windowObjectFor(AntbEngine*, WebCore::Document*);
 void installFrameGlobals(AntbEngine*, WebCore::Document*);
@@ -111,6 +112,8 @@ struct RuntimeState {
     AntbClass*         nodeClass;
     AntbClass*         canvasCtxClass;  /* CanvasRenderingContext2D (2d context) */
     AntbClass*         windowClass;     /* Window (per-frame window proxy) */
+    void*              sessionHistory;  /* std::vector<SessionHistoryEntry>*   */
+    int                sessionHistoryIndex;
     AntbValue*         locationObj;
     AntbValue*         docObj;          /* the JS document object (rooted) */
     bool               documentBound;
@@ -253,6 +256,7 @@ static void activateState(RuntimeState* state)
 #define g_nodeClass     (g_currentState->nodeClass)
 #define g_canvasCtxClass (g_currentState->canvasCtxClass)
 #define g_windowClass   (g_currentState->windowClass)
+#define g_sessionHistoryIndex (g_currentState->sessionHistoryIndex)
 #define g_locationObj   (g_currentState->locationObj)
 #define g_docObj        (g_currentState->docObj)
 #define g_documentBound (g_currentState->documentBound)
@@ -348,7 +352,7 @@ int historyBack(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int historyForward(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int historyGo(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int historyPushState(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
-int historyGapGetter(AntbEngine*, AntbValue*, const char*, AntbValue*, void*);
+int historyStateGetter(AntbEngine*, AntbValue*, const char*, AntbValue*, void*);
 AntbValue* wrapNode(AntbEngine*, WebCore::Node*);
 int nodeGetter(AntbEngine*, AntbValue*, const char*, AntbValue*, void*);
 int attrsGetter(AntbEngine*, AntbValue*, const char*, AntbValue*, void*);
@@ -1626,57 +1630,270 @@ int docWriteln(AntbEngine*, AntbValue*, AntbValue** args, int argc, AntbValue*, 
     antb_free(text);
     return 1;
 }
-int historyBack(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*)
-{
-    if (g_document && g_document->frame() && g_document->frame()->page())
-        g_document->frame()->page()->goBack();
-    return 1;
-}
-int historyForward(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*)
-{
-    if (g_document && g_document->frame() && g_document->frame()->page())
-        g_document->frame()->page()->goForward();
-    return 1;
-}
-int historyGo(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
-              AntbValue* out, void* user)
-{
-    double delta = (argc > 0) ? antb_to_number(args[0]) : -1;
-    if (delta < 0)
-        return historyBack(engine, self, args, argc, out, user);
-    if (delta > 0)
-        return historyForward(engine, self, args, argc, out, user);
-    return 1;
-}
-/* pushState only rewrites the document URL: enough for SPA routers that poll
- * location and re-render, without a real history entry. */
-/* history.state / history.length: read as undefined, but say so once. */
-int historyGapGetter(AntbEngine*, AntbValue*, const char* name, AntbValue*, void*)
-{
-    /* The key carries its receiver: a plain "length" would also fire for
-     * every element's `.length` miss. */
-    if (name && !strcmp(name, "state"))
-        agbJsdomGapReport("history.state", NULL);
-    else if (name && !strcmp(name, "length"))
-        agbJsdomGapReport("history.length", NULL);
+/* ---- session history ----------------------------------------------------- *
+ * The DOM side of History: state objects, length and popstate. WebCore 2008's
+ * History only forwards back/forward/go to the FrameLoader, and its
+ * HistoryItem has no state object at all, so the state lives here: one entry
+ * per session history entry of the main frame, and pushState/replaceState
+ * entries are marked as same-document (going back to them only rewrites the
+ * URL and fires popstate, exactly what SPA routers expect). */
 
-    return 0;
+struct SessionHistoryEntry {
+    std::string        url;
+    AntbValue*         state;      /* retained; NULL means null       */
+    WebCore::Document* document;   /* document that created the entry */
+};
+
+static std::vector<SessionHistoryEntry>& sessionHistoryEntries()
+{
+    /* The state field is a void* (RuntimeState is memset to zero). */
+    if (!g_currentState->sessionHistory)
+        g_currentState->sessionHistory = new std::vector<SessionHistoryEntry>();
+
+    return *(std::vector<SessionHistoryEntry>*)g_currentState->sessionHistory;
 }
 
-int historyPushState(AntbEngine*, AntbValue*, AntbValue** args, int argc, AntbValue*, void*)
+static void sessionHistoryClear()
 {
-    if (argc > 2 && g_document) {
-        char* urlText = antb_to_utf8(args[2]);
-        if (urlText) {
-            WebCore::KURL base(g_document->URL());
-            WebCore::KURL target(base, WebCore::DeprecatedString(urlText));
-            if (target.isValid())
-                g_document->setURL(target.url());
-            antb_free(urlText);
+    std::vector<SessionHistoryEntry>& entries = sessionHistoryEntries();
+
+    for (size_t i = 0; i < entries.size(); ++i) {
+        if (entries[i].state) {
+            antb_value_release(entries[i].state);
+            entries[i].state = NULL;
         }
     }
+
+    entries.clear();
+    g_sessionHistoryIndex = -1;
+}
+
+static void sessionHistoryReset(const std::string& url)
+{
+    std::vector<SessionHistoryEntry>& entries = sessionHistoryEntries();
+
+    sessionHistoryClear();
+
+    {
+        SessionHistoryEntry entry;
+
+        entry.url = url;
+        entry.state = NULL;
+        entry.document = g_document;
+        entries.push_back(entry);
+        g_sessionHistoryIndex = 0;
+    }
+}
+
+/* Called from bindDocument: a new main-frame document is a new session history
+ * entry (frames share the main frame's model, like the browser does). */
+static void sessionHistoryNoteDocument(WebCore::Document* document)
+{
+    std::vector<SessionHistoryEntry>& entries = sessionHistoryEntries();
+    std::string url;
+
+    if (!document)
+        return;
+
+    if (document->parentDocument())
+        return;
+
+    url = document->URL().utf8().data();
+
+    /* The view starts on about:blank; that is not a history entry. */
+    if (url == "about:blank")
+        return;
+
+    if (!entries.empty() && g_sessionHistoryIndex >= 0
+            && entries[g_sessionHistoryIndex].url == url)
+        return;   /* the same document bound again */
+
+    if (entries.empty()) {
+        sessionHistoryReset(url);
+        return;
+    }
+
+    /* Re-entering a URL we already have is a traversal (the frame loader is
+     * loading that history item), not a new entry. */
+    for (size_t i = 0; i < entries.size(); ++i) {
+        if (entries[i].url == url) {
+            g_sessionHistoryIndex = (int)i;
+            return;
+        }
+    }
+
+    /* A real navigation: forward entries are gone. */
+    if (g_sessionHistoryIndex + 1 < (int)entries.size()) {
+        for (size_t i = g_sessionHistoryIndex + 1; i < entries.size(); ++i) {
+            if (entries[i].state)
+                antb_value_release(entries[i].state);
+        }
+        entries.resize(g_sessionHistoryIndex + 1);
+    }
+
+    {
+        SessionHistoryEntry entry;
+
+        entry.url = url;
+        entry.state = NULL;
+        entry.document = g_document;
+        entries.push_back(entry);
+        g_sessionHistoryIndex = (int)entries.size() - 1;
+    }
+}
+
+static void sessionHistoryApplyURL(const std::string& url)
+{
+    if (!g_document || url.empty())
+        return;
+
+    g_document->setURL(WebCore::DeprecatedString(url.c_str()));
+}
+
+/* Walks the same-document entries; anything outside them is the FrameLoader's
+ * business (real page loads), so those fall through to it. */
+static void sessionHistoryGo(int delta)
+{
+    std::vector<SessionHistoryEntry>& entries = sessionHistoryEntries();
+    int target = g_sessionHistoryIndex + delta;
+
+    agbLog(AGB_LOG_NAV, "history go delta=%d index=%d entries=%d url=%s",
+           delta, g_sessionHistoryIndex, (int)entries.size(),
+           g_document ? g_document->URL().utf8().data() : "?");
+
+    if (delta != 0 && g_sessionHistoryIndex >= 0
+            && target >= 0 && target < (int)entries.size()
+            && entries[target].document == g_document) {
+        g_sessionHistoryIndex = target;
+        sessionHistoryApplyURL(entries[target].url);
+        AntRuntime::dispatchWindowEventState("popstate", entries[target].state);
+        return;
+    }
+
+    if (g_document && g_document->frame() && g_document->frame()->page()) {
+        if (delta < 0)
+            g_document->frame()->page()->goBack();
+        else if (delta > 0)
+            g_document->frame()->page()->goForward();
+    }
+}
+
+int historyBack(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*)
+{
+    sessionHistoryGo(-1);
     return 1;
 }
+
+int historyForward(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*)
+{
+    sessionHistoryGo(1);
+    return 1;
+}
+
+int historyGo(AntbEngine*, AntbValue*, AntbValue** args, int argc, AntbValue*, void*)
+{
+    sessionHistoryGo(argc > 0 && args[0] ? (int)antb_to_number(args[0]) : 0);
+    return 1;
+}
+
+/* history.state / history.length. */
+int historyStateGetter(AntbEngine* engine, AntbValue*, const char* name, AntbValue* out, void*)
+{
+    std::vector<SessionHistoryEntry>& entries = sessionHistoryEntries();
+    AntbValue* value = NULL;
+
+    if (!name)
+        return 0;
+
+    if (!strcmp(name, "state")) {
+        if (g_sessionHistoryIndex >= 0 && g_sessionHistoryIndex < (int)entries.size()
+                && entries[g_sessionHistoryIndex].state)
+            value = antb_retain(entries[g_sessionHistoryIndex].state);
+        if (!value)
+            value = antb_make_null(engine);
+    } else if (!strcmp(name, "length")) {
+        /* Entries of this document (the document itself + pushState calls).
+         * Cross-document entries live in the frame loader's back/forward list
+         * and are not reflected here - see docs/capability-gaps.md. */
+        int length = (int)entries.size();
+
+        if (length < 1)
+            length = 1;
+
+        value = antb_make_number(engine, (double)length);
+    } else {
+        return 0;
+    }
+
+    if (!value)
+        return 0;
+
+    antb_value_assign(out, value);
+    antb_value_release(value);
+    return 1;
+}
+
+/* pushState(state, title, url) / replaceState(state, title, url): the `user`
+ * pointer tells the two apart. */
+int historyPushState(AntbEngine*, AntbValue*, AntbValue** args, int argc, AntbValue*, void* user)
+{
+    bool replace = user != NULL;
+    std::vector<SessionHistoryEntry>& entries = sessionHistoryEntries();
+    std::string url;
+
+    if (g_document && argc > 2 && args[2]) {
+        char* urlText = antb_to_utf8(args[2]);
+
+        if (urlText && urlText[0]) {
+            WebCore::KURL base(g_document->URL());
+            WebCore::KURL target(base, WebCore::DeprecatedString(urlText));
+
+            if (target.isValid())
+                url = target.url().utf8().data();
+        }
+        antb_free(urlText);
+    }
+
+    if (url.empty() && g_document)
+        url = g_document->URL().utf8().data();
+
+    if (entries.empty())
+        sessionHistoryReset(url);
+
+    {
+        SessionHistoryEntry entry;
+
+        entry.url = url;
+        entry.state = (argc > 0 && args[0]) ? antb_retain(args[0]) : NULL;
+        entry.document = g_document;
+
+        if (replace) {
+            if (g_sessionHistoryIndex >= 0 && g_sessionHistoryIndex < (int)entries.size()) {
+                if (entries[g_sessionHistoryIndex].state)
+                    antb_value_release(entries[g_sessionHistoryIndex].state);
+                entries[g_sessionHistoryIndex] = entry;
+            } else {
+                entries.push_back(entry);
+                g_sessionHistoryIndex = (int)entries.size() - 1;
+            }
+        } else {
+            /* Drop the forward entries, then append. */
+            if (g_sessionHistoryIndex + 1 < (int)entries.size()) {
+                for (size_t i = g_sessionHistoryIndex + 1; i < entries.size(); ++i) {
+                    if (entries[i].state)
+                        antb_value_release(entries[i].state);
+                }
+                entries.resize(g_sessionHistoryIndex + 1);
+            }
+            entries.push_back(entry);
+            g_sessionHistoryIndex = (int)entries.size() - 1;
+        }
+    }
+
+    sessionHistoryApplyURL(url);
+    return 1;
+}
+
 int locationGetter(AntbEngine* engine, AntbValue*, const char* name, AntbValue* out, void*)
 {
     WebCore::KURL url;
@@ -3980,6 +4197,9 @@ static void stopRealm(void)
         antb_value_release(g_docObj);
         g_docObj = 0;
     }
+    /* Session history states are JS values of the realm that just died. */
+    sessionHistoryClear();
+
     /* The per-window proxies of this realm die with it too. */
     if (g_windowCache) {
         for (size_t i = 0; i < g_windowCache->size(); ) {
@@ -4474,6 +4694,7 @@ void bindDocument(void* document)
             antb_set_native(global, g_document, AGB_TAG_NODE);
             antb_value_release(global);
         }
+        sessionHistoryNoteDocument(g_document);
         installFrameGlobals(g_engine, g_document);
         return;
     }
@@ -4625,13 +4846,13 @@ void bindDocument(void* document)
                 antb_define_method(g_engine, hist, "back", historyBack, NULL);
                 antb_define_method(g_engine, hist, "forward", historyForward, NULL);
                 antb_define_method(g_engine, hist, "go", historyGo, NULL);
+                /* pushState and replaceState share one implementation; the
+                 * `user` pointer tells them apart. */
                 antb_define_method(g_engine, hist, "pushState", historyPushState, NULL);
-                /* state/length are not tracked (pushState only rewrites the
-                 * URL). As plain properties they read as undefined with no
-                 * hint; as accessors they report the gap once. */
-                antb_define_property_rw(g_engine, hist, "state", historyGapGetter, NULL, NULL);
-                antb_define_property_rw(g_engine, hist, "length", historyGapGetter, NULL, NULL);
-                antb_define_method(g_engine, hist, "replaceState", historyPushState, NULL);
+                antb_define_method(g_engine, hist, "replaceState", historyPushState, (void*)1);
+                antb_define_property_rw(g_engine, hist, "state", historyStateGetter, NULL, NULL);
+                antb_define_property_rw(g_engine, hist, "length", historyStateGetter, NULL, NULL);
+
                 antb_set_prop(g_engine, global, "history", hist);
                 antb_value_release(hist);
             }
@@ -4674,6 +4895,8 @@ void bindDocument(void* document)
                 }
             }
         }
+        /* A new main frame document is a new session history entry. */
+        sessionHistoryNoteDocument(g_document);
         /* window/self/top/parent/frames/document/length: per frame, refreshed
          * by the installer below (a child frame reads the same global object). */
         installFrameGlobals(g_engine, g_document);
@@ -8957,6 +9180,13 @@ namespace AntRuntime {
 
 void dispatchWindowEvent(const char* type)
 {
+    dispatchWindowEventState(type, NULL);
+}
+
+/* Same, but the event object carries `state`: popstate hands back the value
+ * that pushState/replaceState stored for the entry being restored. */
+void dispatchWindowEventState(const char* type, AntbValue* state)
+{
     AntbValue* self;
     std::vector<AntbValue*> snapshot;
 
@@ -8993,6 +9223,17 @@ void dispatchWindowEvent(const char* type)
             if (t) {
                 antb_set_prop(g_engine, evt, "type", t);
                 antb_value_release(t);
+            }
+
+            if (state) {
+                antb_set_prop(g_engine, evt, "state", state);
+            } else {
+                AntbValue* nullValue = antb_make_null(g_engine);
+
+                if (nullValue) {
+                    antb_set_prop(g_engine, evt, "state", nullValue);
+                    antb_value_release(nullValue);
+                }
             }
         }
 

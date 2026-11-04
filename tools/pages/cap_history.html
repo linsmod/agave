@@ -7,14 +7,33 @@
 <body>
 <p>history</p>
 <script>
-/* pushState is a URL-rewrite shim here: this page records what the History
- * object actually exposes (state/length/popstate) for the capability doc. */
-window.__pops = 0;
-window.addEventListener('popstate', function () { window.__pops++; });
+/* What the History object exposes after a real pushState/replaceState/back/
+ * forward/go sequence (R36). Every step is recorded, so a regression shows up
+ * as a changed value rather than "looks fine". */
+window.__pops = [];
+window.addEventListener('popstate', function (e) {
+  window.__pops.push(JSON.stringify(e.state));
+});
 
 var err = 'none';
+var steps = [];
+function snap(tag) {
+  steps.push(tag + ':len=' + history.length + ',state=' + JSON.stringify(history.state) +
+             ',path=' + location.pathname.split('/').pop());
+}
+
+snap('start');
 try {
   history.pushState({ v: 1 }, '', 'cap_history_pushed.html');
+  snap('push1');
+  history.pushState({ v: 2 }, '', 'cap_history_two.html');
+  snap('push2');
+  history.replaceState({ v: 22 }, '', 'cap_history_two.html');
+  snap('replace');
+  history.back();
+  snap('back');
+  history.pushState({ v: 3 }, '', 'cap_history_three.html');
+  snap('pushAfterBack');
 } catch (e) {
   err = String(e);
 }
@@ -24,9 +43,9 @@ document.title = [
   'replace=' + typeof history.replaceState,
   'state=' + typeof history.state,
   'len=' + typeof history.length,
-  'pops=' + window.__pops,
+  'pops=' + window.__pops.join(';'),
   'err=' + err,
-  'href=' + location.href
+  'steps=' + steps.join(' ')
 ].join(' ');
 </script>
 </body>
