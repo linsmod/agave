@@ -3032,12 +3032,18 @@ void* createContext()
          * registered before any script runs. */
         antb_set_context_activate(contextActivate);
         activateState(createRuntimeState(engine));
+        if (lifecycleLogEnabled())
+            fprintf(stderr, "[evt] realm start gen=%lu engine=%p (view context)\n",
+                    g_currentState ? g_currentState->generation : 0UL, (void*)engine);
         return g_currentState;
     }
 
     {
         RuntimeState* state = createRuntimeState(engine);
 
+        if (lifecycleLogEnabled())
+            fprintf(stderr, "[evt] realm start gen=%lu engine=%p (view context)\n",
+                    state->generation, (void*)engine);
         return state;
     }
 }
@@ -3787,6 +3793,24 @@ static void cancelInFlightResources(unsigned long generation)
     }
 }
 
+/* Page lifecycle events are on by default: a run should explain itself
+ * (commit -> realm start -> bind -> DCL -> load -> willClose -> realm stop)
+ * without any environment variable. AGB_EVT_LOG=0 turns them off; the
+ * verbose plumbing (evaluate depth, listener bookkeeping) stays under
+ * AGB_EVT_DEBUG. */
+bool lifecycleLogEnabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0) {
+        const char* value = getenv("AGB_EVT_LOG");
+
+        enabled = (value && value[0] == '0' && value[1] == 0) ? 0 : 1;
+    }
+
+    return enabled != 0;
+}
+
 /* Stops the current realm: the page's JS world goes away with its document.
  * The VM is destroyed, so its globals, its module registry and its timers
  * cannot be seen by the next document. */
@@ -3796,6 +3820,11 @@ static void stopRealm(void)
 
     if (!state || state == &g_emptyState)
         return;
+
+    if (lifecycleLogEnabled())
+        fprintf(stderr, "[evt] realm stop gen=%lu url=%s\n",
+                state->generation,
+                (g_document && !g_document->URL().isEmpty()) ? g_document->URL().utf8().data() : "(none)");
 
     /* Stop the realm's resources first: a response that arrives later must
      * not be delivered into the realm that replaces this one. */
@@ -3878,8 +3907,8 @@ void beginNewRealm(void)
     if (state->engine)
         antb_set_uncaught_nonfatal(state->engine, 1);
 
-    if (getenv("AGB_EVT_DEBUG"))
-        fprintf(stderr, "[evt] realm started (generation=%lu, engine=%p)\n",
+    if (lifecycleLogEnabled())
+        fprintf(stderr, "[evt] realm start gen=%lu engine=%p\n",
                 state->generation, (void*)state->engine);
 }
 
@@ -3900,7 +3929,7 @@ void bindDocument(void* document)
 
     g_currentSlot = slotForDocument(g_document);
 
-    if (getenv("AGB_EVT_DEBUG"))
+    if (lifecycleLogEnabled())
         fprintf(stderr, "[evt] bindDocument %p (bound=%d) url=%s\n", document, (int)g_documentBound,
                 g_document ? g_document->URL().utf8().data() : "?");
 
@@ -7457,7 +7486,14 @@ void dispatchWindowEvent(const char* type)
     AntbValue* self;
     std::vector<AntbValue*> snapshot;
 
-    if (!g_engine || !g_document || !type || !g_listeners)
+    if (!g_engine || !g_document || !type)
+        return;
+
+    if (lifecycleLogEnabled())
+        fprintf(stderr, "[evt] window event %s listeners=%d\n", type,
+                g_listeners ? (int)g_listeners->size() : 0);
+
+    if (!g_listeners)
         return;
 
     self = wrapNode(g_engine, g_document);
@@ -7536,7 +7572,7 @@ void documentWillUnload(void)
     if (!g_engine || !g_document)
         return;
 
-    if (getenv("AGB_EVT_DEBUG"))
+    if (lifecycleLogEnabled())
         fprintf(stderr, "[evt] documentWillUnload doc=%p listeners=%d\n",
                 g_document, g_listeners ? (int)g_listeners->size() : 0);
 

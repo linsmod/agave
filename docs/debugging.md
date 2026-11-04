@@ -49,12 +49,51 @@ agave_shell.exe --probe <url> --userdata E:\tmp\probe-a ...   # 也可用环境�
 Start-Process -WindowStyle Hidden python -ArgumentList '-m','http.server','8971','--directory','e:\mybrowsers\agave\debug'
 ```
 
-## 2. 环境变量全表
+## 2. 默认打开的日志（页面生命周期 + 用户输入）
+
+这两类日志**不需要任何环境变量**：一次运行应该能自己解释发生了什么。
+
+```
+[evt] realm start gen=3 engine=000002430258B6D0
+[evt] bindDocument 0000024300ED6E80 (bound=1) url=https://chat.deepseek.com/
+[evt] commit https://chat.deepseek.com/
+[evt] window event DOMContentLoaded listeners=3
+[evt] window event load listeners=5
+[evt] documentWillUnload doc=... listeners=2
+[evt] window event pagehide listeners=2
+[evt] window event unload listeners=2
+[evt] realm stop gen=3 url=https://chat.deepseek.com/
+[ui] resize 1084x677
+[ui] focus
+[ui] mouse down left at 320,180
+[ui] mouse up left at 320,180
+[ui] wheel up at 320,180
+[ui] key down vk=0x41
+[ui] char 'a'
+[ui] blur
+```
+
+| 通道 | 内容 | 关掉 | 更详细 |
+|---|---|---|---|
+| `[evt]` 生命周期 | commit → realm start/stop → bindDocument → pagehide/unload → DOMContentLoaded → load | `AGB_EVT_LOG=0` | `AGB_EVT_DEBUG=1`（evaluate 深度、listener 记账、JS `dispatchEvent`） |
+| `[ui]` 用户输入 | resize / focus / blur / mouse down/up / wheel / key down/up / char | `AGB_UI_LOG=0` | `AGB_UI_DEBUG=1` 连 `mouse move` 也打（默认不打，太吵） |
+
+注意：
+- `[ui]` 只覆盖 **GUI 模式**（`agave_shell.exe <url>`）：输入事件在控件窗口过程里产生；
+  `--probe` 无窗口、`agave_view_host` 直接调 macross，都不会有 `[ui]` 行。
+- `[evt]` 在 `--probe` 里照样有（页面生命周期与窗口无关）。
+- 这两组日志是**正常输出**，不是错误（见 §6 噪音对照）。
+
+## 3. 环境变量全表
 
 | 组 | 变量 | 作用 |
 |---|---|---|
 | 探针 | `AGB_PROBE_SHOW=1` | 显示探针窗口（要 WM_PAINT/截图时） |
 | 探针 | `AGB_PROBE_ALLOW_UNLOAD=1` | beforeunload 守卫直接放行（默认拒绝） |
+| 日志 | `AGB_EVT_LOG=0` | **关掉默认开启的页面生命周期日志**（`[evt]`） |
+| 日志 | `AGB_EVT_DEBUG=1` | 生命周期的详细版：evaluate 深度、listener 记账、JS `dispatchEvent` |
+| 日志 | `AGB_UI_LOG=0` | **关掉默认开启的用户输入日志**（`[ui]`，仅 GUI 模式） |
+| 日志 | `AGB_UI_DEBUG=1` | 连 `mouse move` 也打（默认只打 down/up/wheel/key/char/focus/resize） |
 | 探针宿主 | `AGB_WAIT_MS` / `AGB_MAX_FRAMES` / `AGB_IDLE_FRAMES` / `AGB_FRAME_LOG` | `agave_view_host` 的等待与帧循环（出图用） |
 | JS 错误 | `AGB_ERR_SNIPPET=1` | 引擎抛内部错误时打 `[snippet]` 源码片段（ant 侧） |
 | JS 调用 | `AGB_JS_DEBUG=1` / `AGB_JS_TRACE=1` / `AGB_CALL_DEBUG=1` | JS 求值 / 每次 JS→C 调用（`[call] name nargs`）/ 桥调用细节 |
@@ -75,7 +114,7 @@ Start-Process -WindowStyle Hidden python -ArgumentList '-m','http.server','8971'
 | JS 文件 | `AGB_PRELUDE` / `AGB_POLYFILLS` | 指向别处的 `prelude.js` / `polyfills.js` 副本 |
 | profile | `AGB_USERDATA` | 整个 profile 根（cookies/localStorage/模块缓存/HTTP 缓存/shell state）。`--probe` 默认 `%LOCALAPPDATA%\Agave\probe`，`--userdata` 等价 |
 
-## 3. 定位手段
+## 4. 定位手段
 
 - **未捕获/被页面吞掉的错误**：`AGB_ERR_SNIPPET=1`（ant `src/errors.c`）。引擎创建内部错误
   （`js_mkerr_typed`）时，若消息含 `length` / `not a function`，往 stderr 打
@@ -110,7 +149,7 @@ Start-Process -WindowStyle Hidden python -ArgumentList '-m','http.server','8971'
 - **字体**：`AGB_FONT_LOG=1`；回归页 `tools/pages/iconfont_render.html`，
   `agave_view_host.exe <file-url> out.bmp` 出图核对字形，链路见 [web-font.md](web-font.md)。
 
-## 4. 宿主/控件硬规则（违反会串消息或野指针）
+## 5. 宿主/控件硬规则（违反会串消息或野指针）
 
 - 宿主窗口消息循环处理 `WM_TIMER` 必须按 `msg.hwnd` 过滤——webview 控件内部有自己的 id=1 帧泵定时器，
   `wParam` 相同会串；引擎线程回调里**禁止 SetTimer**（窗口属主线程，跨线程未定义行为），走 `PostMessage`。
@@ -118,7 +157,7 @@ Start-Process -WindowStyle Hidden python -ArgumentList '-m','http.server','8971'
 - 调 `agave_webview_eval` 的分支要**防重入**（它内部会泵控件队列，可能再进消息循环）。
 - `agave_webview_destroy` 与引擎线程的 `macross_view_update` 竞争会崩：引用在飞时由引擎线程销毁。
 
-## 5. 已知噪音 vs 真错误
+## 6. 已知噪音 vs 真错误
 
 | stderr 输出 | 是什么 |
 |---|---|
@@ -128,8 +167,9 @@ Start-Process -WindowStyle Hidden python -ArgumentList '-m','http.server','8971'
 | `[snippet] ...` | 可能是正常噪音（core-js 探测），也可能是真错误，看 §3 的判据 |
 | `Uncaught (in worker) ...` | worker 内未捕获异常（若页面没接 `onerror` 就是真的） |
 | `[probe] headless window hidden ...` | 正常，探针状态行 |
+| `[evt] ...` / `[ui] ...` | 默认开启的生命周期/输入日志，正常（`AGB_EVT_LOG=0` / `AGB_UI_LOG=0` 可关） |
 
-## 6. 验证闭环：回归清单 + A/B
+## 7. 验证闭环：回归清单 + A/B
 
 - 一条命令级回归：`tools/run_worker_tests.ps1`（Worker 九项）；`debug/csscheck.html`（CSS 能力矩阵）；
   `debug/life.html`（生命周期）；`debug/defercheck.html`；deepseek 登录页（`inp=2 all=129`）。

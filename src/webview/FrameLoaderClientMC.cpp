@@ -632,6 +632,10 @@ void FrameLoaderClientMC::dispatchDidStartProvisionalLoad()
 
 void FrameLoaderClientMC::dispatchDidCommitLoad()
 {
+    /* Lifecycle timeline (on by default, AGB_EVT_LOG=0 silences). */
+    if (AntRuntime::lifecycleLogEnabled())
+        fprintf(stderr, "[evt] commit %s\n",
+                (m_frame && m_frame->document()) ? m_frame->document()->URL().utf8().data() : "(none)");
     Net::logEvent("page.commit", "");
     notImplemented();
 }

@@ -81,7 +81,9 @@ ant 原生构造器；http(s) 走异步桥取源码 + preamble 后包成 `data:`
 ## 3. 怎么验证一个改动
 
 1. **单页**：`agave_shell.exe --probe <url> --eval "probeExit(<表达式>)" --wait <ms> --settle <ms> --timeout <ms>`，
-   看 stdout 的 `[exit] ...` 与退出码；stderr 是页面 console / 引擎日志。
+   看 stdout 的 `[exit] ...` 与退出码；stderr 里有页面 console，以及**默认打开**的生命周期日志
+   （`[evt]`：commit/realm/bindDocument/DCL/load/teardown）与 GUI 输入日志（`[ui]`），
+   关掉用 `AGB_EVT_LOG=0` / `AGB_UI_LOG=0`（详见 [docs/debugging.md](docs/debugging.md)）。
 2. **多轮/生命周期**：加 `--reload n`（每轮 eval 一次）；`AGB_EVT_DEBUG=1` + `AGB_NET_LOG=1` 拼时间线。
 3. **回归清单**（`debug/` 下的页面，全部可 `--probe` 直接跑）：
    `life.html`（生命周期）、`evalenv_test.html`（eval 语义）、`expando_test.html`（元素 expando）、
