@@ -6,12 +6,19 @@
 # copies it. Any change to AntBridge.c therefore needs this script, followed by a
 # normal `cmake --build build-zig-native` so libagave relinks against it.
 #
-# Usage:  pwsh -File tools/build_antbridge.ps1 [-Check]
-#   -Check  only verify that a rebuild is needed / all inputs exist
+# Usage:  pwsh -File tools/build_antbridge.ps1 [-Check] [-Debug] [-Restore]
+#   -Check    only verify that a rebuild is needed / all inputs exist
+#   -Debug    build ab_dbg.dll + ab_dbg.pdb (with -g), install it as
+#             build-zig-native\antbridge.dll, keeping the ship DLL as
+#             H:\ant-v16\bridge\antbridge_ship.dll. This is what makes
+#             cdb/tools/cdb_stack.ps1 able to resolve antbridge frames.
+#   -Restore  put the ship DLL back (undo -Debug)
 
 param(
     [switch]$Check,
-    [switch]$Force
+    [switch]$Force,
+    [switch]$Debug,
+    [switch]$Restore
 )
 
 $ErrorActionPreference = 'Stop'
@@ -31,6 +38,11 @@ $cshdr     = Join-Path $bridgeDir 'AntBridge.h'
 $obj       = Join-Path $bridgeDir 'AntBridge.obj'
 $outDll    = Join-Path $bridgeDir 'antbridge.dll'
 $outLib    = Join-Path $bridgeDir 'antbridge.dll.a'
+$dbgDll    = Join-Path $bridgeDir 'ab_dbg.dll'
+$dbgLib    = Join-Path $bridgeDir 'ab_dbg.dll.a'
+$dbgObj    = Join-Path $bridgeDir 'AntBridge_dbg.obj'
+$shipDll   = Join-Path $bridgeDir 'antbridge_ship.dll'
+$install   = Join-Path $root 'build-zig-native'
 
 $libant    = Join-Path $antRoot 'build-zig\libant.a'
 $vendorDir = Join-Path $antRoot 'build-zig\vendor'
@@ -54,6 +66,27 @@ function Require($path, $what) {
     if (-not (Test-Path $path)) { throw "$what not found: $path" }
 }
 
+function AssertShellStopped {
+    $p = Get-Process agave_shell -ErrorAction SilentlyContinue
+    if ($p) {
+        throw "agave_shell is running (pid $($p.Id -join ',')); stop it before swapping antbridge.dll"
+    }
+}
+
+if ($Restore) {
+    Require $shipDll 'antbridge_ship.dll (no -Debug build was installed)'
+    AssertShellStopped
+    Copy-Item $shipDll (Join-Path $install 'antbridge.dll') -Force
+    Write-Host "== restored ship antbridge.dll =="
+    return
+}
+
+if ($Debug) {
+    $outDll = $dbgDll
+    $outLib = $dbgLib
+    $obj    = $dbgObj
+}
+
 Require $src    'AntBridge.c'
 Require $libant 'libant.a'
 Require (Join-Path $zig 'zig-cc.cmd')  'zig-cc.cmd'
@@ -68,7 +101,7 @@ Write-Host "  vendor libs: $($vendorLibs.Count)"
 Write-Host "  output     : $outDll"
 
 # Only rebuild when the source is newer than the DLL, unless -Force is given.
-if ((Test-Path $outDll) -and -not $Force) {
+if ((Test-Path $outDll) -and -not $Force -and -not $Debug) {
     $sourceTime = (Get-Item $src).LastWriteTimeUtc
     $dllTime    = (Get-Item $outDll).LastWriteTimeUtc
     if ($dllTime -gt $sourceTime) {
@@ -93,6 +126,7 @@ Copy-Item $header $cshdr  -Force
 Write-Host "== 2/3 compile =="
 $ccArgs = @('-target', 'x86_64-windows-gnu', '-std=gnu23', '-O2',
             '-DAGB_BUILD_DLL', '-c', $cssrc, '-o', $obj)
+if ($Debug) { $ccArgs += '-g' }
 foreach ($inc in $includeDirs) { $ccArgs += @('-I', $inc) }
 
 & (Join-Path $zig 'zig-cc.cmd') @ccArgs
@@ -108,10 +142,27 @@ $ldArgs += @('-Wl,--end-group')
 $ldArgs += $systemLibs
 $ldArgs += @((Join-Path $mingwLib 'libpathcch.a'), (Join-Path $mingwLib 'libtaskschd.a'))
 $ldArgs += @('-Wl,--out-implib=' + $outLib)
+if ($Debug) { $ldArgs += '-g' }
 $ldArgs += @('-o', $outDll)
 
 & (Join-Path $zig 'zig-cxx.cmd') @ldArgs
 if ($LASTEXITCODE -ne 0) { throw "link failed ($LASTEXITCODE)" }
+
+if ($Debug) {
+    AssertShellStopped
+    $pdb = [IO.Path]::ChangeExtension($outDll, '.pdb')
+    if (-not (Test-Path $pdb)) { throw "debug link did not produce $pdb" }
+    if (-not (Test-Path $shipDll)) {
+        Copy-Item (Join-Path $install 'antbridge.dll') $shipDll -Force
+        Write-Host "  saved ship DLL -> $shipDll"
+    }
+    Copy-Item $outDll (Join-Path $install 'antbridge.dll') -Force
+    Copy-Item $pdb $install -Force
+    Write-Host "== debug antbridge installed =="
+    Write-Host "  $install\antbridge.dll  +  $(Split-Path -Leaf $pdb)"
+    Write-Host "  restore with: pwsh -File tools/build_antbridge.ps1 -Restore"
+    return
+}
 
 Write-Host "== copy into agave =="
 $targets = @(
@@ -126,6 +177,8 @@ foreach ($dir in $targets) {
     if (Test-Path $outLib) { Copy-Item $outLib $dir -Force }
     Write-Host "  -> $dir"
 }
+Copy-Item (Join-Path $install 'antbridge.dll') $shipDll -Force
+Write-Host "  saved ship DLL -> $shipDll"
 
 Write-Host "== done; now re-link libagave =="
 Write-Host "  cmake --build $root\build-zig-native --parallel 16"

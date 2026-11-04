@@ -174,6 +174,14 @@ antbridge.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**�
   子树没有 renderer、不渲染；children 仍在 DOM（`innerHTML`/script 访问不变）。**别删**。
 - **`on_progress finished=1` 不代表加载成功**：用 `agave_webview_url` 比对 host 判断是否真提交
   （加载卡死时 FrameLoader 会以 `about:blank` 提交）。
+- **一条命令抓带符号栈（首选）**：`pwsh -File tools/cdb_stack.ps1 -Url <url> -ScriptFile <js>`
+  —— 自动带 `-y "build-zig-native;H:\ant-v16\bridge"`、`.lines`、`sxe av/0xC0000409/0x80000003`，
+  命中后 dump `kb 60` + `~*kb 30` + `lm`，日志落 `debug/cdb_stack_<ts>.log`；退出时还会自动符号化
+  `[shell] atexit` 的 `#NN exe|libagave|antbridge+0x...` 帧。挂起用 `-Attach <pid>` 或
+  `-Hang -Url <url> -HangAfter 8`；已有日志用 `-Symbolize <log>`。
+  ship 版 `antbridge.pdb` 在 `H:\ant-v16\bridge\`；若缺失/不匹配，
+  `pwsh -File tools/build_antbridge.ps1 -Debug` 生成 `ab_dbg.dll+ab_dbg.pdb` 并装到
+  `build-zig-native\`，`-Restore` 还原 ship DLL。下面两条是**需要自定义 cdb 命令时**的手工后备。
 - **抓挂起线程栈**：`tools\cdb.exe -p <pid> -c '~*k 30; qd'`（探针有超时会秒退，attach 要趁早）。
 - **断在首次异常**：写命令文件 `sxe av` / `g` / `~*kb 20` / `q`，再
   `tools\cdb.exe -y "<build-zig-native>;H:\ant-v16\bridge" -cf cmds.txt build-zig-native\agave_shell.exe --probe ...`
@@ -211,7 +219,7 @@ antbridge.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**�
 | stderr 输出 | 是什么 |
 |---|---|
 | `[shell] window ready hwnd=...` / `[flag] set js=...` | 启动与引擎标志，正常（探针模式不会再打 window ready） |
-| `[shell] atexit fired, bases exe=... agave=... ant=...` + 一串 `#00 exe+0x...` | 退出时的模块基址 + 调用栈，**是给符号化用的基址**，不是崩溃 |
+| `[shell] atexit fired, bases exe=... agave=... ant=...` + 一串 `#00 exe+0x...` | 退出时的模块基址 + 调用栈，**是给符号化用的基址**；`tools/cdb_stack.ps1 -Symbolize <log>` 可直接解出函数/源码行 |
 | `LEAK: N Node` | 文档结束时未释放的 DOM 包装（少量是预期的延迟一代释放） |
 | `[snippet] ...` | 可能是正常噪音（core-js 探测），也可能是真错误，看 §3 的判据 |
 | `Uncaught (in worker) ...` | worker 内未捕获异常（若页面没接 `onerror` 就是真的） |

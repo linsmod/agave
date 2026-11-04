@@ -2081,11 +2081,14 @@ static void probeUsage(void)
     fprintf(stderr,
             "usage:\n"
             "  agave_shell.exe [url]\n"
-            "  agave_shell.exe --probe <url> [--eval <js>] [--wait <ms>]\n"
-            "                  [--settle <ms>] [--timeout <ms>]\n"
+            "  agave_shell.exe --probe <url> [--eval <js> | --eval-file <path>]\n"
+            "                  [--wait <ms>] [--settle <ms>] [--timeout <ms>]\n"
             "  --eval    script to run after the load finished (default dumps outerHTML\n"
             "            via agavePostMessage; page console goes to stderr)\n"
             "            the script may call probeExit(result) to leave immediately\n"
+            "  --eval-file  same as --eval, but read the script from a file: the\n"
+            "            command line parser treats \" and \\ specially, so any JS\n"
+            "            containing string literals belongs in a file\n"
             "  --wait    settle time after 'load finished' before eval (default 3000)\n"
             "  --settle  time after eval before exit (default 1000)\n"
             "  --timeout hard cap from start (default 60000)\n"
@@ -2161,6 +2164,23 @@ static void parseShellArgv(void)
         } else if (!strcmp(argv[i], "--eval") && i + 1 < argc) {
             strncpy(g_probeScript, argv[++i], sizeof(g_probeScript) - 1);
             g_probeScript[sizeof(g_probeScript) - 1] = 0;
+        } else if (!strcmp(argv[i], "--eval-file") && i + 1 < argc) {
+            /* Same as --eval, but the script comes from a file. parseCommandLine
+             * treats " and \ as syntax, so an inline script holding JS string
+             * literals (or a regexp) arrives mangled; a file always survives. */
+            FILE* scriptFile = fopen(argv[++i], "rb");
+
+            if (!scriptFile) {
+                fprintf(stderr, "[shell] --eval-file: cannot open %s\n", argv[i]);
+                g_argError = 1;
+                return;
+            }
+            {
+                size_t got = fread(g_probeScript, 1, sizeof(g_probeScript) - 1, scriptFile);
+
+                g_probeScript[got] = 0;
+            }
+            fclose(scriptFile);
         } else if (!strcmp(argv[i], "--wait") && i + 1 < argc) {
             g_probeWaitMs = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--settle") && i + 1 < argc) {
