@@ -14,13 +14,43 @@ d.dataset.foo = 'bar';
 d.setAttribute('data-bar', 'baz');
 document.getElementById('host').appendChild(d);
 
+/* Selector engine coverage: the bridge used to split on spaces and match
+ * only "#id", ".class" and a tag, so everything below except qsClass was 0. */
+var list = document.createElement('ul');
+list.id = 'sel-list';
+for (var i = 1; i <= 3; i++) {
+  var li = document.createElement('li');
+  li.id = 'li' + i;
+  li.className = i === 2 ? 'pick odd' : 'pick';
+  li.setAttribute('data-n', String(i));
+  list.appendChild(li);
+}
+document.body.appendChild(list);
+
+function n(sel) { return document.querySelectorAll(sel).length; }
+
 document.title = [
   'attr=' + String(d.getAttribute('data-foo')),
   'ds=' + String(d.dataset.foo),
-  'qsAttr=' + document.querySelectorAll('[data-bar]').length,
-  'qsClass=' + document.querySelectorAll('.probe-cls').length,
-  'qsClassAttr=' + document.querySelectorAll('[class*=probe]').length,
-  'qsTagAttr=' + document.querySelectorAll('div[data-bar]').length
+  'qsAttr=' + n('[data-bar]'),
+  'qsClass=' + n('.probe-cls'),
+  'qsClassAttr=' + n('[class*=probe]'),
+  'qsTagAttr=' + n('div[data-bar]'),
+  'qsExact=' + n('[data-bar="baz"]'),
+  'qsExactCase=' + n('[data-bar="BAZ"]'),
+  'qsBegin=' + n('[data-bar^="ba"]'),
+  'qsEnd=' + n('[data-bar$="az"]'),
+  'qsList=' + n('[class~="probe-cls"]'),
+  'qsChild=' + n('#sel-list > li'),
+  'qsDesc=' + n('#sel-list li'),
+  'qsAdj=' + n('#li1 + li'),
+  'qsSib=' + n('#li1 ~ li'),
+  'qsNth=' + n('li:nth-child(2)'),
+  'qsOdd=' + n('li:nth-child(odd)'),
+  'qsNot=' + n('li:not(.odd)'),
+  'qsFirst=' + n('li:first-child'),
+  'qsList2=' + n('li, div.probe-cls'),
+  'qsNone=' + n('[data-nope]')
 ].join(' ');
 </script>
 </body>

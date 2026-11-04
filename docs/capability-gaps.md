@@ -53,7 +53,9 @@ activeElement=object hasFocus=function visibilityState=string fonts=object
 importNode=function elementFromPoint=function
 ```
 
-`cap_selectors.html`：`attr=bar ds=bar qsAttr=0 qsClass=1 qsClassAttr=0 qsTagAttr=0`
+`cap_selectors.html`（R35 修复后）：
+`attr=bar ds=bar qsAttr=1 qsClass=1 qsClassAttr=1 qsTagAttr=1 qsExact=1 qsExactCase=1 qsBegin=1 qsEnd=1 qsList=1
+qsChild=3 qsDesc=3 qsAdj=1 qsSib=2 qsNth=1 qsOdd=2 qsNot=2 qsFirst=1 qsList2=4 qsNone=0`
 `cap_script.html`（R27 修复后）：`hits=11 child=loaded`
 `cap_postmessage.html`：`postMessage=undefined sent=ERR TypeError: undefined is not a function got=0`
 
@@ -68,7 +70,7 @@ importNode=function elementFromPoint=function
 | 每个 frame 的 `window` 身份（`parent`/`top`/`self`/`frames`/`length`/`name`/`frameElement`） | **已支持（R31）**：frame 有自己的 `Window` 代理，`parent !== self`、`parent.document` 是父文档、`frames.length`/`frames[i]`/`name`/`frameElement` 都按 frame tree 回答，未知属性委托给共享全局 | —— | 已支持（`cap_window_identity.html`） |
 | 子 frame 的顶层 `var` 污染父页 | 仍是共享全局：子 frame 里 `var x = 1` 父页也能读到（`window.foo` 同理） | 依赖「全局隔离」的 polyfill 会互相看见；规范上这是每个 browsing context 独立的全局对象 | 已知限制，要修只能每个 frame 一个 engine（方案 A，不做；见 `docs/architecture/frame-window.md`） |
 | `HTMLImageElement.complete` / `naturalWidth` / `naturalHeight` / `width` / `height` / `decode()` | **已支持（R34）**：`imgComplete=0 imgNatural=0 imgWidth=1 imgDecode=function`（`decode()` 立即 resolve） | —— | 已支持 |
-| `document.querySelector(All)` 的属性选择器 | `[data-bar]` / `[class*=probe]` / `div[data-bar]` 全部 `0`；`.probe-cls` 为 `1` | 用 `querySelector('script[data-x]')` 做幂等、`[data-state]` 做 UI 分支的代码全部走空分支；不报错 | 缺口，P1 |
+| `document.querySelector(All)` 的选择器引擎 | **已支持（R35）**：选择器列表、组合器（后代/`>`/`+`/`~`）、属性选择器六个操作符、常用伪类（`nth-child`/`not`/`first-child`/`checked`/…）。实现是 `src/javascript/ant_backend/AgbSelector.h`（WebCore 2008 没有 `Node::querySelectorAll`） | —— | 已支持（`cap_selectors.html`） |
 | `Element.insertAdjacentHTML` / `insertAdjacentElement` / `insertAdjacentText` / `replaceChildren` | **已支持（R34）**：四个插入位置都走 `insertBefore/appendChild`，HTML 走 `createFragmentFromMarkup` | —— | 已支持 |
 | `HTMLElement.innerText` / `outerText` | **已支持（R34）**：走 `Element::innerText()`（会触发布局） | —— | 已支持 |
 | 元素树遍历 `parentElement` / `firstElementChild` / `lastElementChild` / `nextElementSibling` / `previousElementSibling` / `isConnected` / `getRootNode()` | **已支持（R34）** | —— | 已支持 |

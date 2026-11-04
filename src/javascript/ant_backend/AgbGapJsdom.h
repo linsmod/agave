@@ -75,11 +75,9 @@ static const AgbJsdomGap agbJsdomGaps[] = {
     { "execCommand",          "doc", "undefined; no editing commands" },
 
     /* --- history ---------------------------------------------------------- */
-    { "state",                "history", "undefined; pushState only rewrites the URL" },
-    { "length",               "history", "undefined" },
+    { "history.state",        "history", "undefined; pushState only rewrites the URL" },
+    { "history.length",       "history", "undefined" }
 
-    /* --- selectors -------------------------------------------------------- */
-    { "querySelector[attr]",  "css", "attribute selectors ([data-x]) match nothing" }
 };
 
 #define AGB_JSDOM_GAP_COUNT (sizeof(agbJsdomGaps) / sizeof(agbJsdomGaps[0]))

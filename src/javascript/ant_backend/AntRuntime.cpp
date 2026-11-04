@@ -19,6 +19,7 @@
 
 #include "AgbLog.h"
 #include "AgbGapJsdom.h"
+#include "AgbSelector.h"
 #include "AntBridge.h"
 #include "../../webcore/platform/network/native/NetworkSession.h"
 #include "../platform/network/native/NetLog.h"
@@ -1652,8 +1653,12 @@ int historyGo(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
 /* history.state / history.length: read as undefined, but say so once. */
 int historyGapGetter(AntbEngine*, AntbValue*, const char* name, AntbValue*, void*)
 {
-    if (name && name[0])
-        agbJsdomGapReport(name, "history");
+    /* The key carries its receiver: a plain "length" would also fire for
+     * every element's `.length` miss. */
+    if (name && !strcmp(name, "state"))
+        agbJsdomGapReport("history.state", NULL);
+    else if (name && !strcmp(name, "length"))
+        agbJsdomGapReport("history.length", NULL);
 
     return 0;
 }
@@ -7220,51 +7225,13 @@ int nodeGetElementsByClassName(AntbEngine* engine, AntbValue* self, AntbValue** 
 /* Selector support: descendant selectors made of #id, .class and tag parts
  * ("#s-top-bar .s-top-tabs", "div.foo", "a"). Anything fancier yields an
  * empty list, which is what most callers already handle. */
-static void matchSimpleSelector(WebCore::Node* root, const WebCore::String& part,
-                                Vector<WebCore::Node*>& matches)
-{
-    if (part.isEmpty())
-        return;
-
-    if (part[0] == '#') {
-        WebCore::String id = part.substring(1);
-        WebCore::Element* element = root->document() ? root->document()->getElementById(WebCore::AtomicString(id)) : 0;
-        if (element && (element == root || element->isDescendantOf(root)))
-            matches.append(element);
-        return;
-    }
-
-    if (part[0] == '.') {
-        WebCore::String wanted = part.substring(1);
-        for (WebCore::Node* n = root->firstChild(); n; n = n->traverseNextNode(root)) {
-            if (!n->isElementNode())
-                continue;
-            {
-                WebCore::String cls = static_cast<WebCore::Element*>(n)->getAttribute(WebCore::String("class"));
-                if (cls.contains(wanted, false))
-                    matches.append(n);
-            }
-        }
-        return;
-    }
-
-    {
-        RefPtr<WebCore::NodeList> list = root->getElementsByTagName(part);
-        if (list) {
-            unsigned count = list->length();
-            for (unsigned i = 0; i < count; ++i)
-                if (WebCore::Node* child = list->item(i))
-                    matches.append(child);
-        }
-    }
-}
-
 int nodeQuerySelectorAll(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
                          AntbValue* out, void*)
 {
     WebCore::Node* root = nodeOf(self);
     char* selector;
     AntbValue* arr;
+    std::vector<AgbSelector::Selector> selectors;
 
     if (!root || argc < 1)
         return 1;
@@ -7273,49 +7240,45 @@ int nodeQuerySelectorAll(AntbEngine* engine, AntbValue* self, AntbValue** args, 
     if (!selector)
         return 1;
 
-    /* Attribute selectors ([data-x], [class*=y]) are not parsed by our
-     * selector engine: they silently match nothing, which is exactly the kind
-     * of gap that makes a page take the "no such element" branch. */
-    if (strchr(selector, '['))
-        agbJsdomGapReport("querySelector[attr]", NULL);
-
     arr = antb_make_array(engine);
     if (!arr) {
         antb_free(selector);
         return 1;
     }
 
-    {
-        WebCore::String text = WebCore::String::fromUTF8(selector);
-        Vector<WebCore::String> parts;
-        unsigned partStart = 0;
+    /* The real selector engine (AgbSelector.h): selector lists, combinators,
+     * attribute selectors and the common pseudo-classes. It used to be a
+     * space-splitter that only understood "#id", ".class" and a tag name, so
+     * `[data-x]`, `a[href]`, `ul > li` and `a, b` silently matched nothing. */
+    if (AgbSelector::parse(selector, selectors)) {
+        bool fastPath = selectors.size() == 1 && selectors[0].steps.size() == 1
+                     && !selectors[0].steps[0].conds.empty()
+                     && selectors[0].steps[0].conds[0].kind == AgbSelector::COND_TAG;
 
-        for (unsigned i = 0; i <= text.length(); ++i) {
-            if (i == text.length() || text[i] == ' ') {
-                if (i > partStart)
-                    parts.append(text.substring(partStart, i - partStart));
-                partStart = i + 1;
+        if (fastPath) {
+            /* `div`, `div.cls`, `div[data-x]`: let the engine find the
+             * candidates instead of walking every node in the tree. */
+            const WebCore::AtomicString& tag = selectors[0].steps[0].conds[0].name;
+            RefPtr<WebCore::NodeList> candidates = root->getElementsByTagName(tag);
+
+            if (candidates) {
+                unsigned count = candidates->length();
+
+                for (unsigned i = 0; i < count; ++i) {
+                    WebCore::Node* n = candidates->item(i);
+
+                    if (n && n->isElementNode()
+                            && AgbSelector::matchesAny(selectors, static_cast<WebCore::Element*>(n)))
+                        pushWrappedNode(engine, arr, n);
+                }
             }
-        }
-
-        if (parts.size() == 1) {
-            Vector<WebCore::Node*> matches;
-            matchSimpleSelector(root, parts[0], matches);
-            for (unsigned i = 0; i < matches.size(); ++i)
-                pushWrappedNode(engine, arr, matches[i]);
-        } else if (parts.size() > 1) {
-            Vector<WebCore::Node*> current;
-            matchSimpleSelector(root, parts[0], current);
-
-            for (unsigned p = 1; p < parts.size() && !current.isEmpty(); ++p) {
-                Vector<WebCore::Node*> next;
-                for (unsigned i = 0; i < current.size(); ++i)
-                    matchSimpleSelector(current[i], parts[p], next);
-                current = next;
+        } else {
+            for (WebCore::Node* n = root->firstChild(); n; n = n->traverseNextNode(root)) {
+                if (!n->isElementNode())
+                    continue;
+                if (AgbSelector::matchesAny(selectors, static_cast<WebCore::Element*>(n)))
+                    pushWrappedNode(engine, arr, n);
             }
-
-            for (unsigned i = 0; i < current.size(); ++i)
-                pushWrappedNode(engine, arr, current[i]);
         }
     }
 
@@ -7324,7 +7287,7 @@ int nodeQuerySelectorAll(AntbEngine* engine, AntbValue* self, AntbValue** args, 
     antb_value_release(arr);
     return 1;
 }
-/* Returns the first match: callers expect an element, not a list. */
+
 int nodeQuerySelector(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
                       AntbValue* out, void*)
 {
