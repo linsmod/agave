@@ -117,6 +117,12 @@ AGW_API int  agave_webview_zoom(AgaveWebView* view);
 AGW_API const char* agave_webview_url(AgaveWebView* view);
 AGW_API const char* agave_webview_title(AgaveWebView* view);
 
+/* Paints the last rendered frame into `hdc`, scaled to width x height. The
+ * control keeps its own mirror buffer, so this works while the window is
+ * hidden: it is the headless screenshot path (PrintWindow needs a window that
+ * gets WM_PAINT, which a hidden one never does). */
+AGW_API int agave_webview_paint_to(AgaveWebView* view, void* hdc, int width, int height);
+
 /* Focus handling, mostly for hosts with several controls. */
 AGW_API void agave_webview_set_focus(AgaveWebView* view);
 

@@ -1638,6 +1638,74 @@ static int g_probePollCount;      /* readyState polls in the current round  */
 static int g_probeRoundsDone;     /* every round finished -> OK exit code   */
 static char g_probeToken[64];     /* per-reload marker for the NEW document */
 static int  g_probeVisible;       /* AGB_PROBE_SHOW: the window is on screen  */
+static char g_probeShot[512];     /* --shot: write a BMP here, then exit     */
+
+/* Offscreen capture. A hidden window gets no WM_PAINT, so PrintWindow has
+ * nothing to render; the control keeps its own mirror buffer, and
+ * agave_webview_paint_to() blits that into our DIB. Nothing is ever shown, so
+ * a screenshot cannot disturb the user (iron law 7). */
+static int probeCapture(const char* path)
+{
+    HWND target = (HWND)agave_webview_hwnd(g_probeView);
+    RECT rc;
+    HDC mdc;
+    HBITMAP dib;
+    BITMAPINFO bi;
+    BITMAPFILEHEADER fh;
+    unsigned char* bits = NULL;
+    int w, h, rowBytes, ok = 0;
+
+    if (!target || !GetClientRect(target, &rc))
+        return 0;
+
+    w = (int)(rc.right - rc.left);
+    h = (int)(rc.bottom - rc.top);
+    if (w <= 0 || h <= 0)
+        return 0;
+
+    memset(&bi, 0, sizeof(bi));
+    bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bi.bmiHeader.biWidth = w;
+    bi.bmiHeader.biHeight = h;      /* bottom-up: the BMP order */
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+
+    mdc = CreateCompatibleDC(NULL);
+    if (!mdc)
+        return 0;
+    dib = CreateDIBSection(mdc, &bi, DIB_RGB_COLORS, (void**)&bits, NULL, 0);
+    if (!dib || !bits) {
+        if (dib) DeleteObject(dib);
+        DeleteDC(mdc);
+        return 0;
+    }
+    SelectObject(mdc, dib);
+
+    agave_webview_paint_to(g_probeView, mdc, w, h);
+
+    rowBytes = w * 4;
+    {
+        FILE* f = fopen(path, "wb");
+
+        if (f) {
+            memset(&fh, 0, sizeof(fh));
+            fh.bfType = 0x4D42;     /* 'BM' */
+            fh.bfOffBits = (DWORD)(sizeof(fh) + sizeof(BITMAPINFOHEADER));
+            fh.bfSize = fh.bfOffBits + (DWORD)((size_t)rowBytes * (size_t)h);
+            fwrite(&fh, sizeof(fh), 1, f);
+            fwrite(&bi.bmiHeader, sizeof(BITMAPINFOHEADER), 1, f);
+            fwrite(bits, (size_t)rowBytes * (size_t)h, 1, f);
+            fclose(f);
+            ok = 1;
+            agbLog(AGB_LOG_PROBE, "shot %dx%d -> %s", w, h, path);
+        }
+    }
+
+    DeleteObject(dib);
+    DeleteDC(mdc);
+    return ok;
+}
 
 /* Command line, parsed before any window exists: a --probe run must never
  * create the browser window (it used to be shown, then left on screen for the
@@ -1887,6 +1955,16 @@ static int probeRun(const char* url)
 
                 g_probeEvalDone = 1;
 
+                /* --shot: capture what the page painted and leave. The window
+                 * is never shown, so this is the headless screenshot path. */
+                if (g_probeShot[0]) {
+                    if (probeCapture(g_probeShot))
+                        g_probeGotExit = 1;
+                    else
+                        agbLog(AGB_LOG_PROBE, "shot failed: %s", g_probeShot);
+                    break;
+                }
+
                 /* Commit check first: a failed/stalled navigation still
                  * reports progress finished=1, and the eval would then run
                  * against the initial about:blank document. Require the
@@ -2092,6 +2170,9 @@ static void probeUsage(void)
             "  --wait    settle time after 'load finished' before eval (default 3000)\n"
             "  --settle  time after eval before exit (default 1000)\n"
             "  --timeout hard cap from start (default 60000)\n"
+            "  --shot <path>  write a BMP of what the page painted and exit; the\n"
+            "            window stays hidden, so this is the headless screenshot\n"
+            "            path (no focus stealing, nothing on screen)\n"
             "  --reload <n>  reload the page n times and run the eval after\n"
             "                every round (page lifecycle comparison)\n"
             "  --offline module fetches are served from the cache only\n"
@@ -2181,6 +2262,9 @@ static void parseShellArgv(void)
                 g_probeScript[got] = 0;
             }
             fclose(scriptFile);
+        } else if (!strcmp(argv[i], "--shot") && i + 1 < argc) {
+            strncpy(g_probeShot, argv[++i], sizeof(g_probeShot) - 1);
+            g_probeShot[sizeof(g_probeShot) - 1] = 0;
         } else if (!strcmp(argv[i], "--wait") && i + 1 < argc) {
             g_probeWaitMs = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--settle") && i + 1 < argc) {

@@ -912,6 +912,34 @@ static void agwPaint(AgaveWebView* item, HDC hdc)
     agwUnlock();
 }
 
+int agave_webview_paint_to(AgaveWebView* item, void* hdc, int width, int height)
+{
+    if (!item || !hdc)
+        return 0;
+
+    agwLock();
+    if (item->mirrorDc && item->mirrorBits && item->width > 0 && item->height > 0) {
+        int w = width > 0 ? width : item->width;
+        int h = height > 0 ? height : item->height;
+
+        if (w != item->width || h != item->height) {
+            SetStretchBltMode((HDC)hdc, HALFTONE);
+            SetBrushOrgEx((HDC)hdc, 0, 0, NULL);
+            StretchBlt((HDC)hdc, 0, 0, w, h, item->mirrorDc,
+                       0, 0, item->width, item->height, SRCCOPY);
+        } else {
+            BitBlt((HDC)hdc, 0, 0, w, h, item->mirrorDc, 0, 0, SRCCOPY);
+        }
+    } else {
+        RECT fill;
+
+        SetRect(&fill, 0, 0, width, height);
+        FillRect((HDC)hdc, &fill, (HBRUSH)GetStockObject(WHITE_BRUSH));
+    }
+    agwUnlock();
+    return 1;
+}
+
 static LRESULT CALLBACK agwProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
     AgaveWebView* item = (AgaveWebView*)GetWindowLongPtrA(hwnd, GWLP_USERDATA);
