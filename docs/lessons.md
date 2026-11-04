@@ -86,6 +86,7 @@ ant 引擎热点、wasm 二进制通道、React 需要的 DOM 桥形状、comput
 | R5 旧页面的长定时器 | 实测刷新后不再触发（engine 销毁即丢定时器），符合浏览器语义。 |
 | R6 `g_moduleCache`（内存 body + 磁盘缓存） | 仍按 URL 全局共享，只有「在途」部分按 generation 取消。磁盘缓存内容寻址、与 realm 无关，可以保持全局。 |
 | R7 入口模块管线合一（方案 A）的已知限制 | 已落地并验证（file:// 直读 + http 大图 offline 重放 + reload×2 三轮）。限制：①动态插入与 async 入口仍走 CachedScript；②入口 `<script>` 的 load/error 不派发（避免在帧循环上下文跑页面 JS）；③`import.meta.url` 对 file: 模块显示伪装 URL（`http://file.ant/...`）；④DCL 后才到达的 inline 模块排队后不再执行；⑤iframe 嵌套时等待位单槽，iframe 的模块入口回退 CachedScript。 |
+| R33 全局对象上的能力缺口**不用 Proxy** 检测（2026-11-04 评估否决） | `[gap-jsdom]` 能报元素/文档/表单/图片/frame/History 上的缺口（钩在 `nodeGetter` 兜底，原生查表），但 `window.getSelection`、`IntersectionObserver`、`ResizeObserver`、`PerformanceObserver`、`customElements`、`devicePixelRatio` 这几个在**全局对象自己身上**，报不出来。试过的三条路，结论都是不做：①**Proxy 换全局原型**（`Object.setPrototypeOf(window, new Proxy(proto, {get, has}))`）—— 能抓到 `window.X` 和 `'X' in window`（`has` 返回 false，语义不变），但**抓不到裸标识符**（实测 `window.zzzWinMiss` 进 trap、裸 `zzzOtherMiss` 不进：ant 的全局标识符查找只看自有属性表，不查原型链），而裸写法才是主流；且 20 万次 `window.zzzMiss` 从 **30ms 变 178ms（6×）**，因为它把原生属性缺失变成了 JS trap 调用。②**真 accessor**（`Object.defineProperty(window, name, {get})`）—— 能抓到裸标识符（实测 `zzzAccName` 返回 getter 的值），但 `'X' in window` 会变 **true**，页面从"优雅降级"变成 `new undefined()` 崩溃，得不偿失。③**原生 exotic getter**（`antb_define_property_rw(global, ...)`）—— ant 的裸标识符查找不走它（R31 踩过：裸 `document` 直接 ReferenceError），只能覆盖 `window.X`，为 6 个低频名字动全局属性查找机制不值得。 | 判据：`[gap-jsdom]` 的既有开销是**零可测**（20 万次元素属性 miss：开/关都是 207ms，因为 `nodeGetter` 的 if 链本来就长）；全局缺口只留在 `docs/capability-gaps.md` 里。要重开这个评估，先复测上面两组数字。 |
 
 
 ---

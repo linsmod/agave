@@ -25,6 +25,13 @@
  * Adding an entry: append to agbJsdomGaps[], and call agbJsdomGapReport() from
  * the place that returns the missing value (nodeGetter's fall-through for
  * element properties, titleGetter for document collections, ...).
+ *
+ * Why not Proxy (measured, see lessons R33): a Proxy as the global's prototype
+ * catches window.X and 'X' in window but NOT a bare identifier (ant's global
+ * lookup reads the own property table only), and it turns 200k global misses
+ * from 30ms into 178ms. A real accessor catches bare identifiers but flips
+ * 'X' in window to true, which breaks feature detection. The native table
+ * check costs nothing measurable, so it stays.
  */
 
 #ifndef AgbGapJsdom_h
