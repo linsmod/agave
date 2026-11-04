@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>cap script</title>
+</head>
+<body>
+<p>dynamic script: onload property vs addEventListener</p>
+<script>
+var hits = 0;
+var s = document.createElement('script');
+s.src = 'cap_script_child.js';
+s.addEventListener('load', function () { hits += 1; });
+s.onload = function () { hits += 10; };
+document.head.appendChild(s);
+setTimeout(function () {
+  document.title = 'hits=' + hits + ' child=' + String(window.__capScript);
+}, 800);
+</script>
+</body>
+</html>

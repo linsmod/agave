@@ -4194,6 +4194,7 @@ struct Listener {
     std::string    type;
     AntbValue*     fn;      /* rooted */
     bool           once;    /* remove after the first dispatch */
+    bool           handler; /* set through `el.onxxx = fn`, replaced in place */
 };
 
 /* Per-state listener list (see RuntimeState::listeners). */
@@ -4203,6 +4204,63 @@ static std::vector<Listener>*& listeners()
 }
 
 #define g_listeners listeners()
+
+/* Event handler properties (`script.onload = fn`, `img.onerror = fn`): the DOM
+ * treats them as a single replaceable listener. They were plain expandos here,
+ * so pages that wait for onload (DeepSeek's WeChat QR loader among them) never
+ * ran their callback and failed silently. */
+static AntbValue* findNodeEventHandler(WebCore::Node* n, const char* type)
+{
+    if (!n || !type || !g_listeners)
+        return 0;
+
+    for (size_t i = 0; i < g_listeners->size(); ++i) {
+        Listener& l = (*g_listeners)[i];
+
+        if (l.handler && l.node == n && l.type == type && l.fn)
+            return l.fn;
+    }
+
+    return 0;
+}
+
+static int setNodeEventHandler(WebCore::Node* n, const char* type, const AntbValue* value)
+{
+    if (!n || !type)
+        return 0;
+
+    if (!g_listeners)
+        g_listeners = new std::vector<Listener>();
+
+    /* One handler per (node, type): assigning replaces the previous one. */
+    for (size_t i = 0; i < g_listeners->size(); ) {
+        Listener& l = (*g_listeners)[i];
+
+        if (l.handler && l.node == n && l.type == type) {
+            if (l.fn)
+                antb_value_release(l.fn);
+            g_listeners->erase(g_listeners->begin() + i);
+        } else {
+            ++i;
+        }
+    }
+
+    if (value && antb_is_function(value)) {
+        Listener l;
+
+        l.node = n;
+        l.type = type;
+        l.fn = antb_retain(value);
+        l.once = false;
+        l.handler = true;
+        g_listeners->push_back(l);
+
+        if (getenv("AGB_EVT_DEBUG"))
+            agbLog(AGB_LOG_EVT, "on%s handler node=%p listeners=%d", type, (void*)n, (int)g_listeners->size());
+    }
+
+    return 1;
+}
 
 
 /* Navigation dropped the previous document: its listeners reference nodes and
@@ -4723,6 +4781,17 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
     if (!n)
         return 0;
 
+    /* Event handler properties: read back the function nodeSetter stored. */
+    if (name && !strncmp(name, "on", 2) && name[2]) {
+        AntbValue* fn = findNodeEventHandler(n, name + 2);
+
+        if (!fn)
+            return 0;
+
+        antb_value_assign(out, fn);
+        return 1;
+    }
+
     /* document.defaultView: React Router's data router reads
      * `document.defaultView.history` before anything else, and the property
      * set on the shared document object does not reach wrappers handed out
@@ -5141,6 +5210,12 @@ int nodeSetter(AntbEngine* engine, AntbValue* self, const char* name, const Antb
 
     (void)engine;
 
+    /* Event handler properties are listeners, not expandos: `script.onload = f`
+     * has to fire when the script finishes. Placed before the null-value guard
+     * so `el.onclick = null` clears the handler. */
+    if (n && name && !strncmp(name, "on", 2) && name[2])
+        return setNodeEventHandler(n, name + 2, value);
+
     if (!n || !value)
         return 0;
 
@@ -5329,6 +5404,7 @@ int nodeAddEventListener(AntbEngine* engine, AntbValue* self, AntbValue** args, 
         /* Only functions are callable later: pages happily pass null or objects
          * as the listener, and dispatching those crashed the process. */
         l.fn = antb_is_function(args[1]) ? antb_retain(args[1]) : NULL;
+        l.handler = false;
 
         /* options.once: remove the listener after its first dispatch. The third
          * argument is either a boolean (capture, ignored here) or an object. */

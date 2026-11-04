@@ -5,14 +5,15 @@
 > [`docs/lessons.md`](docs/lessons.md)；构建、探针、cdb、环境变量的**权威**手册是
 > [`AGENTS.md`](AGENTS.md)，这里不重复。
 >
-> 最近更新：2026-11-04（301/302 对 shell 可见（R26）、`[nav]`/默认日志收口、R24 探针真无头、R23 地址栏走 file:、
-> R22 Web Worker、R21 `font` 简写、R20 deepseek 登录页、R19 wasm 二进制通道）。
+> 最近更新：2026-11-04（`el.on*` 事件属性（R27）、301/302 对 shell 可见（R26）、`[nav]`/默认日志收口、
+> R24 探针真无头、R23 地址栏走 file:、R22 Web Worker、R21 `font` 简写、R20 deepseek 登录页、R19 wasm 二进制通道）。
 
 ## 1. 现状
 
 **能跑通**：页面加载/解析（含 `defer`/`async`/ESM 模块）、DOM 桥接、computed style、布局与绘制、
 滚动、鼠标/键盘事件、定时器、XHR/fetch（二进制 + POST）、localStorage、Web Worker、`file:` 本地页面、
-标签页/地址栏/查找/书签、`beforeunload`、301/302 重定向（地址栏更新 + `[nav] redirect`）。
+标签页/地址栏/查找/书签、`beforeunload`、301/302 重定向（地址栏更新 + `[nav] redirect`）、
+元素事件处理属性 `el.onload/onerror = fn`（R27）。
 
 **已经被检查过的"看起来不能用"**（别再当缺陷重开）：ant 的 Worker 是真的（R22）、ant 的 wasm 引擎是真的
 （R19）、渐变/`var()`/flex 大多可用（R11）、滚动与 hover 重绘正确（R13/R14）、刷新后 realm/监听器会清理（R9/R10）。
@@ -146,10 +147,13 @@ ant 原生构造器；http(s) 走异步桥取源码 + preamble 后包成 `data:`
   未桥接；`history.pushState` 只改 document URL（无 state/length/popstate）；`localStorage` 不跨文档。
   实测值与复测命令见 [`docs/capability-gaps.md`](docs/capability-gaps.md) §1。
 - 动作：①`AntRuntime.cpp` 的 `documentGetter` 集合分支改为包装真实 `HTMLCollection`/NodeList；
-  ②类表补 `HTMLFormElement` 的方法/属性；③History 建真实条目并派发 `popstate`（或明确 shim 语义并在文档写死）；
-  ④storage 改成每次读取都走磁盘/共享表，而不是只在 engine 重建时读。
-- 验收：`tools/pages/cap_dom.html` / `cap_history.html` / `cap_storage_a.html` 的 `[exit]` 值
-  与 `docs/capability-gaps.md` 的"已支持"一致。
+  ②类表补 `HTMLFormElement` 的方法/属性、`HTMLImageElement` 的 `complete/naturalWidth/width`；
+  ③History 建真实条目并派发 `popstate`（或明确 shim 语义并在文档写死）；
+  ④实现 `window.postMessage` + `message` 事件（跨 frame）；⑤`querySelector(All)` 支持属性选择器；
+  ⑥storage 改成每次读取都走磁盘/共享表，而不是只在 engine 重建时读。
+- 验收：`tools/pages/cap_dom.html` / `cap_history.html` / `cap_storage_a.html` / `cap_selectors.html` /
+  `cap_postmessage.html` 的 `[exit]` 值与 `docs/capability-gaps.md` 的"已支持"一致；
+  DeepSeek 登录页的微信二维码能显示（`capability-gaps.md` §6 的案例）。
 
 ### P2 prefetch 换真解析
 - 现状：`modulePrefetchImports()` 用 `body.find("from")` 字符串扫描，字符串字面量会误判，预下载的图不完整。
@@ -189,6 +193,7 @@ ant 原生构造器；http(s) 走异步桥取源码 + preamble 后包成 `data:`
 | generation / 在途资源 | `AntRuntime.cpp`：`currentGeneration()` / `cancelInFlightResources()`；XHR `XhrJob::m_generation`、模块 `ModuleEntry::generation`、延迟模块 `DeferredModule::generation` |
 | DOM pin / 文档 slot | `AntRuntime.cpp`：`releasePinnedNodes()` / `wrapNode()` / `slotForDocument()` / `activateSlot()` |
 | 模块调度 | `AntRuntime.cpp`：`moduleStart()` / `moduleFetch()`（同步等待）/ `modulePrefetchImports()`（字符串扫描）/ `queueDeferredScript()` / `flushDeferredModules()` |
+| 事件处理属性（`el.on*`） | `AntRuntime.cpp`：`nodeGetter`/`nodeSetter` 的 `on*` 分支 + `setNodeEventHandler()` / `findNodeEventHandler()`；回归 `tools/pages/cap_script.html`（R27） |
 | 能力缺口（JS/DOM/CSS） | [`docs/capability-gaps.md`](docs/capability-gaps.md)（实测值 + 一条命令复测）；探测页 `tools/pages/cap_*.html` |
 | 301/302 重定向 | `WinHttpSession.cpp`（`Request::followRedirects=false` → `WINHTTP_OPTION_REDIRECT_POLICY_NEVER`）；`ResourceHandleNet.cpp` `onResponse()`（3xx → `willSendRequest` → `ResourceHandleManager::redirect()`）；回归 `tools/nav_redirect_server.py` |
 | 入口模块时序（三条泳道图） | [`docs/architecture/module-pipeline.md`](docs/architecture/module-pipeline.md) |

@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>cap postmessage</title>
+</head>
+<body>
+<p>window.postMessage / message event</p>
+<script>
+window.__got = 0;
+window.addEventListener('message', function () { window.__got++; }, false);
+
+var sent = 'no';
+try {
+  window.postMessage('cap-ping', '*');
+  sent = 'yes';
+} catch (e) {
+  sent = 'ERR ' + e;
+}
+
+setTimeout(function () {
+  document.title = 'postMessage=' + typeof window.postMessage
+    + ' sent=' + sent + ' got=' + window.__got;
+}, 400);
+</script>
+</body>
+</html>
