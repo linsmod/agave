@@ -261,7 +261,10 @@ void RenderTextControl::updatePlaceholder()
     String placeholder;
     if (!m_multiLine) {
         HTMLInputElement* input = static_cast<HTMLInputElement*>(node());
-        if (input->value().isEmpty() && document()->focusedNode() != node())
+        /* Keep the placeholder visible while the field is focused: modern
+         * browsers only hide it once there is a value (the 2008 code dropped it
+         * on focus, which made every focused field look empty). */
+        if (input->value().isEmpty())
             placeholder = input->getAttribute(placeholderAttr);
     }
 

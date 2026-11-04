@@ -417,6 +417,7 @@ void RenderFlexibleBox::layoutHorizontalBox(bool relayoutChildren)
         
         // Now that our height is actually known, we can place our boxes.
         m_stretchingChildren = (style()->boxAlign() == BSTRETCH);
+        bool firstInFlowChild = true;
         child = iterator.first();
         while (child) {
             if (child->isPositioned()) {
@@ -442,6 +443,11 @@ void RenderFlexibleBox::layoutHorizontalBox(bool relayoutChildren)
             child->layoutIfNeeded();
     
             // We can place the child now, using our value of box-align.
+            /* flex gap: space between in-flow items (not before the first one) */
+            if (!firstInFlowChild)
+                xPos += style()->flexColumnGap().calcValue(contentWidth());
+            firstInFlowChild = false;
+
             xPos += child->marginLeft();
             int childY = yPos;
             switch (style()->boxAlign()) {
@@ -803,6 +809,7 @@ void RenderFlexibleBox::layoutVerticalBox(bool relayoutChildren)
         int minHeight = m_height + toAdd;
         m_overflowHeight = m_height;
 
+        bool firstInFlowChild = true;
         child = iterator.first();
         while (child) {
             // make sure we relayout children if we need it.
@@ -826,6 +833,11 @@ void RenderFlexibleBox::layoutVerticalBox(bool relayoutChildren)
     
             // Compute the child's vertical margins.
             child->calcVerticalMargins();
+
+            /* flex gap: space between in-flow items (not before the first one) */
+            if (!firstInFlowChild)
+                m_height += style()->flexRowGap().calcValue(contentHeight());
+            firstInFlowChild = false;
     
             // Add in the child's marginTop to our height.
             m_height += child->marginTop();

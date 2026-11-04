@@ -719,7 +719,10 @@ inline RenderStyle *initDefaultStyle()
 }
 
 RenderStyle::RenderStyle()
-    : box(initDefaultStyle()->box)
+    : m_rowGap(RenderStyle::initialFlexRowGap())
+    , m_columnGap(RenderStyle::initialFlexColumnGap())
+    , m_aspectRatio(0.0f)
+    , box(initDefaultStyle()->box)
     , visual(defaultStyle->visual)
     , background(defaultStyle->background)
     , surround(defaultStyle->surround)
@@ -776,6 +779,9 @@ RenderStyle::RenderStyle(const RenderStyle& o)
     , rareInheritedData(o.rareInheritedData)
     , inherited(o.inherited)
     , m_customProperties(o.m_customProperties)
+    , m_rowGap(o.m_rowGap)
+    , m_columnGap(o.m_columnGap)
+    , m_aspectRatio(o.m_aspectRatio)
     , pseudoStyle(0)
     , m_pseudoState(o.m_pseudoState)
     , m_affectedByAttributeSelectors(false)
@@ -796,6 +802,8 @@ void RenderStyle::inheritFrom(const RenderStyle* inheritParent)
     /* Custom properties inherit: the child shares the parent's resolved map and
      * CSSStyleSelector copies it only if the child declares its own. */
     m_customProperties = inheritParent->m_customProperties;
+    /* row-gap/column-gap/aspect-ratio are not inherited: they keep the values
+     * already set on this style. */
 #if ENABLE(SVG)
     if (m_svgStyle != inheritParent->m_svgStyle)
         m_svgStyle.access()->inheritFrom(inheritParent->m_svgStyle.get());
@@ -820,7 +828,10 @@ bool RenderStyle::operator==(const RenderStyle& o) const
             inherited == o.inherited &&
             /* Same object (shared parent map) or both unset. Two equal maps in
              * different objects compare unequal, which only costs sharing. */
-            m_customProperties == o.m_customProperties
+            m_customProperties == o.m_customProperties &&
+            m_rowGap == o.m_rowGap &&
+            m_columnGap == o.m_columnGap &&
+            m_aspectRatio == o.m_aspectRatio
 #if ENABLE(SVG)
             && m_svgStyle == o.m_svgStyle
 #endif

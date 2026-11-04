@@ -194,13 +194,39 @@
 
             var got = el.style.getPropertyValue ? el.style.getPropertyValue(name) : el.style[name];
 
-            if (!got) return false;
-
             function norm(s) {
                 return String(s).toLowerCase().replace(/\s+/g, ' ').replace(/^\s+|\s+$/g, '');
             }
 
             var want = norm(value), actual = norm(got);
+
+            /* 'gap' is a shorthand: the style object only keeps the longhands,
+             * so expand it ourselves and look at those. */
+            if (norm(name) === 'gap') {
+                var axes = want.split(/\s+/);
+
+                try {
+                    el.style.setProperty('row-gap', axes[0]);
+                    el.style.setProperty('column-gap', axes.length > 1 ? axes[1] : axes[0]);
+                } catch (e) { return false; }
+
+                return !!el.style.getPropertyValue('row-gap') && !!el.style.getPropertyValue('column-gap');
+            }
+
+            /* 'aspect-ratio: 16 / 9' is stored as one number. */
+            if (norm(name) === 'aspect-ratio') {
+                var parts = want.split('/');
+                var w = parseFloat(parts[0]), h = parts.length > 1 ? parseFloat(parts[1]) : 1;
+                var ratio = (h > 0) ? w / h : NaN;
+
+                if (isNaN(ratio))
+                    return false;
+                if (!got)
+                    return true;    /* parsed but not serialisable: still supported */
+                return Math.abs(ratio - parseFloat(got)) < 0.01;
+            }
+
+            if (!got) return false;
 
             /* Grid is not implemented: CSSParser degrades display:grid to
              * block so the declaration survives, and the style object may hand

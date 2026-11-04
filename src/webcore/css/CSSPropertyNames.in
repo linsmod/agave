@@ -210,3 +210,7 @@ zoom
 -webkit-user-drag
 -webkit-user-modify
 -webkit-user-select
+gap
+row-gap
+column-gap
+aspect-ratio

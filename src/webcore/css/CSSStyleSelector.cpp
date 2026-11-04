@@ -4095,6 +4095,55 @@ void CSSStyleSelector::applyProperty(int id, CSSValue *value)
             return; // Error case.
         style->setBoxOrdinalGroup((unsigned int)(primitiveValue->getDoubleValue()));
         return;
+    case CSS_PROP_ROW_GAP:
+        HANDLE_INHERIT_AND_INITIAL(flexRowGap, FlexRowGap)
+        if (!primitiveValue)
+            return;
+        if (primitiveValue->primitiveType() == CSSPrimitiveValue::CSS_IDENT) {
+            /* 'normal' is 0 for flex containers. */
+            style->setFlexRowGap(Length(0, Fixed));
+            return;
+        }
+        {
+            int type = primitiveValue->primitiveType();
+
+            if (type > CSSPrimitiveValue::CSS_PERCENTAGE && type < CSSPrimitiveValue::CSS_DEG)
+                style->setFlexRowGap(Length(primitiveValue->computeLengthIntForLength(style, zoomFactor), Fixed));
+            else if (type == CSSPrimitiveValue::CSS_PERCENTAGE)
+                style->setFlexRowGap(Length(primitiveValue->getDoubleValue(), Percent));
+        }
+        return;
+    case CSS_PROP_COLUMN_GAP:
+        HANDLE_INHERIT_AND_INITIAL(flexColumnGap, FlexColumnGap)
+        if (!primitiveValue)
+            return;
+        if (primitiveValue->primitiveType() == CSSPrimitiveValue::CSS_IDENT) {
+            style->setFlexColumnGap(Length(0, Fixed));
+            return;
+        }
+        {
+            int type = primitiveValue->primitiveType();
+
+            if (type > CSSPrimitiveValue::CSS_PERCENTAGE && type < CSSPrimitiveValue::CSS_DEG)
+                style->setFlexColumnGap(Length(primitiveValue->computeLengthIntForLength(style, zoomFactor), Fixed));
+            else if (type == CSSPrimitiveValue::CSS_PERCENTAGE)
+                style->setFlexColumnGap(Length(primitiveValue->getDoubleValue(), Percent));
+        }
+        return;
+    case CSS_PROP_ASPECT_RATIO:
+        HANDLE_INHERIT_AND_INITIAL(aspectRatio, AspectRatio)
+        if (!primitiveValue)
+            return;
+        if (primitiveValue->primitiveType() == CSSPrimitiveValue::CSS_IDENT) {
+            style->setAspectRatio(0.0f);   /* auto */
+            return;
+        }
+        if (primitiveValue->primitiveType() == CSSPrimitiveValue::CSS_NUMBER) {
+            float ratio = primitiveValue->getFloatValue();
+            style->setAspectRatio(ratio > 0.0f ? ratio : 0.0f);
+            return;
+        }
+        return;
     case CSS_PROP__WEBKIT_BOX_SIZING:
         HANDLE_INHERIT_AND_INITIAL(boxSizing, BoxSizing)
         if (!primitiveValue) return;

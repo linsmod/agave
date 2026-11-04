@@ -207,9 +207,13 @@ enum CSSPropertyID {
     CSS_PROP__WEBKIT_USER_DRAG = 200,
     CSS_PROP__WEBKIT_USER_MODIFY = 201,
     CSS_PROP__WEBKIT_USER_SELECT = 202,
+    CSS_PROP_GAP = 203,
+    CSS_PROP_ROW_GAP = 204,
+    CSS_PROP_COLUMN_GAP = 205,
+    CSS_PROP_ASPECT_RATIO = 206,
 };
 
-const int numCSSProperties = 203;
+const int numCSSProperties = 207;
 const size_t maxCSSPropertyNameLength = 43;
 
 const char* getPropertyName(CSSPropertyID);

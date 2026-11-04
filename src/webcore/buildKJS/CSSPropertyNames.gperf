@@ -209,4 +209,8 @@ zoom, CSS_PROP_ZOOM
 -webkit-user-drag, CSS_PROP__WEBKIT_USER_DRAG
 -webkit-user-modify, CSS_PROP__WEBKIT_USER_MODIFY
 -webkit-user-select, CSS_PROP__WEBKIT_USER_SELECT
+gap, CSS_PROP_GAP
+row-gap, CSS_PROP_ROW_GAP
+column-gap, CSS_PROP_COLUMN_GAP
+aspect-ratio, CSS_PROP_ASPECT_RATIO
 %%

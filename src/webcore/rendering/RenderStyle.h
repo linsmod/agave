@@ -1178,6 +1178,12 @@ protected:
      * other inherited data; shared with the parent style until a child
      * declares a property of its own (see CSSStyleSelector). */
     RefPtr<StyleCustomPropertyData> m_customProperties;
+
+    /* Flex gap (row-gap / column-gap) and aspect-ratio. Not inherited, so they
+     * live directly on the style object instead of in one of the DataRefs. */
+    Length m_rowGap;
+    Length m_columnGap;
+    float m_aspectRatio;
     
 // list of associated pseudo styles
     RenderStyle* pseudoStyle;
@@ -1834,7 +1840,23 @@ public:
     StyleCustomPropertyData* customProperties() const { return m_customProperties.get(); }
     void setCustomProperties(PassRefPtr<StyleCustomPropertyData> properties) { m_customProperties = properties; }
 
+    /* Flex gap. Named flex* because columnGap() already means the multicolumn
+     * gap on this class. */
+    Length flexRowGap() const { return m_rowGap; }
+    Length flexColumnGap() const { return m_columnGap; }
+    void setFlexRowGap(const Length& v) { m_rowGap = v; }
+    void setFlexColumnGap(const Length& v) { m_columnGap = v; }
+
+    /* 0 means 'auto' (no ratio). */
+    float aspectRatio() const { return m_aspectRatio; }
+    void setAspectRatio(float v) { m_aspectRatio = v; }
+
     // Initial values for all the properties
+    /* flex gap defaults to 0 ('normal' means 0 for flex containers) */
+    static Length initialGap() { return Length(0, Fixed); }
+    static Length initialFlexRowGap() { return Length(0, Fixed); }
+    static Length initialFlexColumnGap() { return Length(0, Fixed); }
+    static float initialAspectRatio() { return 0.0f; }
     static bool initialBackgroundAttachment() { return true; }
     static EBackgroundBox initialBackgroundClip() { return BGBORDER; }
     static EBackgroundBox initialBackgroundOrigin() { return BGPADDING; }

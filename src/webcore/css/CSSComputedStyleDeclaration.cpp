@@ -1623,6 +1623,27 @@ PassRefPtr<CSSValue> CSSComputedStyleDeclaration::getPropertyCSSValue(int proper
             return new CSSPrimitiveValue(style->zIndex(), CSSPrimitiveValue::CSS_NUMBER);
 		case CSS_PROP_ZOOM:
             return new CSSPrimitiveValue(style->zoom(), CSSPrimitiveValue::CSS_NUMBER);
+        case CSS_PROP_ROW_GAP:
+            return new CSSPrimitiveValue(style->flexRowGap().calcValue(0), CSSPrimitiveValue::CSS_PX);
+        case CSS_PROP_COLUMN_GAP:
+            return new CSSPrimitiveValue(style->flexColumnGap().calcValue(0), CSSPrimitiveValue::CSS_PX);
+        case CSS_PROP_GAP: {
+            /* Serialised like the shorthand: one value when both axes match. */
+            int row = style->flexRowGap().calcValue(0);
+            int column = style->flexColumnGap().calcValue(0);
+
+            if (row == column)
+                return new CSSPrimitiveValue(row, CSSPrimitiveValue::CSS_PX);
+
+            CSSValueList* list = new CSSValueList(true);
+            list->append(new CSSPrimitiveValue(row, CSSPrimitiveValue::CSS_PX));
+            list->append(new CSSPrimitiveValue(column, CSSPrimitiveValue::CSS_PX));
+            return list;
+        }
+        case CSS_PROP_ASPECT_RATIO:
+            if (style->aspectRatio() <= 0.0f)
+                return new CSSPrimitiveValue(CSS_VAL_AUTO);
+            return new CSSPrimitiveValue(style->aspectRatio(), CSSPrimitiveValue::CSS_NUMBER);
         case CSS_PROP__WEBKIT_BOX_SIZING:
             if (style->boxSizing() == CONTENT_BOX)
                 return new CSSPrimitiveValue(CSS_VAL_CONTENT_BOX);

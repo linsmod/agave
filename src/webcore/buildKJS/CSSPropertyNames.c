@@ -968,6 +968,10 @@ static const char * const propertyList[] = {
 "-webkit-user-drag", 
 "-webkit-user-modify", 
 "-webkit-user-select", 
+"gap", 
+"row-gap", 
+"column-gap", 
+"aspect-ratio", 
     0
 };
 const char* getPropertyName(CSSPropertyID id)

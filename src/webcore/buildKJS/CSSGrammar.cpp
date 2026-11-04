@@ -194,6 +194,25 @@ int getPropertyID(const char* tagStr, int len)
         }
     }
 
+
+    /* Names that are not in the generated gperf table. */
+    {
+        static const struct {
+            const char* name;
+            int id;
+        } extraProps[] = {
+            { "gap", CSS_PROP_GAP },
+            { "row-gap", CSS_PROP_ROW_GAP },
+            { "column-gap", CSS_PROP_COLUMN_GAP },
+            { "aspect-ratio", CSS_PROP_ASPECT_RATIO }
+        };
+
+        for (size_t i = 0; i < sizeof(extraProps) / sizeof(extraProps[0]); ++i) {
+            if (strlen(extraProps[i].name) == (size_t)len && !strncmp(tagStr, extraProps[i].name, (size_t)len))
+                return extraProps[i].id;
+        }
+    }
+
     const struct props* propsPtr = findProp(tagStr, (size_t)len);
     if (!propsPtr)
         return 0;

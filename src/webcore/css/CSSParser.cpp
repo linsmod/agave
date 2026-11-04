@@ -208,6 +208,7 @@ void CSSParser::setupParser(const char* prefix, const String& string, const char
 
 static String rewriteCustomPropertyNames(const String& css);
 static String rewriteBareMediaQueries(const String& css);
+static String rewriteIsWhereSelectors(const String& css);
 
 void CSSParser::parseSheet(CSSStyleSheet* sheet, const String& string)
 {
@@ -218,8 +219,8 @@ void CSSParser::parseSheet(CSSStyleSheet* sheet, const String& string)
      * only has to outlive one sheet: clearing it here keeps a page (or the
      * next one) from inheriting a previous sheet's values. */
     clearCustomProperties();
-    
-    setupParser("", rewriteBareMediaQueries(rewriteCustomPropertyNames(string)), "");
+
+    setupParser("", rewriteIsWhereSelectors(rewriteBareMediaQueries(rewriteCustomPropertyNames(string))), "");
 
     CSSParser* old = currentParser;
     currentParser = this;
@@ -243,17 +244,311 @@ PassRefPtr<CSSRule> CSSParser::parseRule(CSSStyleSheet *sheet, const String &str
     return rule.release();
 }
 
-/* ------------------------------------------------------------------------- */
-/* CSS custom properties ('--x: value') and var()                            */
-/* ------------------------------------------------------------------------- */
-/* Custom properties are NOT resolved here: their value depends on the
- * cascade at the element (theme classes, per-component overrides) and on the
- * parent element. The parser records '--x: value' as a declaration with the
- * raw text, and any declaration whose value contains var() the same way;
- * CSSStyleSelector resolves both while it computes the style of an element. */
-
+/* Custom properties are no longer collected in a process-wide table (they are
+ * kept as declarations and resolved per element, see CSSStyleSelector), so
+ * there is nothing to clear when a sheet finishes. Kept because the callers and
+ * the header still reference it. */
 void CSSParser::clearCustomProperties(void)
 {
+}
+
+static bool isCombinatorChar(UChar c)
+{
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '>' || c == '+' || c == '~';
+}
+
+/* Splits a selector list on top-level commas (parentheses and strings are
+ * respected). */
+static void splitSelectorList(const String& list, Vector<String>& out)
+{
+    unsigned start = 0;
+    int depth = 0;
+
+    for (unsigned i = 0; i <= list.length(); ++i) {
+        UChar c = (i < list.length()) ? list[i] : (UChar)',';
+
+        if (c == '"' || c == '\'') {
+            UChar quote = c;
+
+            for (++i; i < list.length() && list[i] != quote; ++i) {
+                if (list[i] == '\\')
+                    ++i;
+            }
+            continue;
+        }
+        if (c == '(')
+            ++depth;
+        else if (c == ')') {
+            if (depth > 0)
+                --depth;
+        } else if (depth == 0 && (c == ',' || i == list.length())) {
+            String one = list.substring(start, i - start).stripWhiteSpace();
+
+            if (!one.isEmpty())
+                out.append(one);
+            start = i + 1;
+        }
+    }
+}
+
+/* Expands every ':is()'/':where()' of one selector (which may become several).
+ * Returns true when something was expanded. */
+static bool expandOneSelector(const String& selector, String& result)
+{
+    unsigned length = selector.length();
+    int depth = 0;
+
+    for (unsigned i = 0; i < length; ++i) {
+        UChar c = selector[i];
+
+        if (c == '"' || c == '\'') {
+            UChar quote = c;
+
+            for (++i; i < length && selector[i] != quote; ++i) {
+                if (selector[i] == '\\')
+                    ++i;
+            }
+            continue;
+        }
+        if (c == '(') {
+            ++depth;
+            continue;
+        }
+        if (c == ')') {
+            if (depth > 0)
+                --depth;
+            continue;
+        }
+        if (depth != 0 || c != ':' || i + 3 >= length || (selector[i + 1] != 'i' && selector[i + 1] != 'w'))
+            continue;
+
+        bool isIs = (selector.substring(i, 4) == String(":is("));
+        bool isWhere = (selector.substring(i, 7) == String(":where("));
+
+        if (!isIs && !isWhere)
+            continue;
+
+        unsigned innerStart = isIs ? i + 4 : i + 7;
+        int innerDepth = 1;
+        unsigned closeParen = innerStart;
+
+        for (; closeParen < length && innerDepth > 0; ++closeParen) {
+            if (selector[closeParen] == '(')
+                ++innerDepth;
+            else if (selector[closeParen] == ')')
+                --innerDepth;
+        }
+        if (innerDepth != 0)
+            return false;           /* unbalanced: leave it alone */
+
+        String inner = selector.substring(innerStart, closeParen - 1 - innerStart);
+
+        /* Where the compound this pseudo-class belongs to starts: after the last
+         * top-level combinator of the prefix. */
+        unsigned compoundStart = 0;
+        int prefixDepth = 0;
+
+        for (unsigned k = 0; k < i; ++k) {
+            UChar pc = selector[k];
+
+            if (pc == '(')
+                ++prefixDepth;
+            else if (pc == ')')
+                --prefixDepth;
+            else if (prefixDepth == 0 && isCombinatorChar(pc))
+                compoundStart = k + 1;
+        }
+
+        String prefix = selector.substring(0, compoundStart);
+        String compound = selector.substring(compoundStart, i - compoundStart);
+        String suffix = selector.substring(closeParen);
+
+        Vector<String> parts;
+        splitSelectorList(inner, parts);
+
+        if (parts.isEmpty())
+            return false;
+
+        for (unsigned k = 0; k < parts.size(); ++k) {
+            for (unsigned j = 0; j < parts[k].length(); ++j) {
+                if (isCombinatorChar(parts[k][j]))
+                    return false;   /* complex argument: not supported */
+            }
+        }
+
+        String expanded;
+
+        for (unsigned k = 0; k < parts.size(); ++k) {
+            if (k)
+                expanded += ", ";
+
+            /* A type selector has to go first in a compound ('#a' + 'p' is
+             * 'p#a', not '#ap'). */
+            UChar first = parts[k].isEmpty() ? (UChar)0 : parts[k][0];
+            bool typeLike = (first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z') ||
+                            first == '*' || first == '_' || first == '-';
+
+            if (typeLike)
+                expanded += prefix + parts[k] + compound + suffix;
+            else
+                expanded += prefix + compound + parts[k] + suffix;
+        }
+
+        result = expanded;
+        return true;
+    }
+
+    return false;
+}
+
+/* Expands a whole selector list (a rule prelude) until no ':is()'/':where()'
+ * is left. */
+static String expandSelectorList(const String& prelude)
+{
+    String list = prelude;
+
+    for (int guard = 0; guard < 16; ++guard) {
+        Vector<String> selectors;
+        splitSelectorList(list, selectors);
+
+        bool changed = false;
+        String rebuilt;
+
+        for (unsigned i = 0; i < selectors.size(); ++i) {
+            String expanded;
+
+            if (expandOneSelector(selectors[i], expanded)) {
+                if (i)
+                    rebuilt += ", ";
+                rebuilt += expanded;
+                changed = true;
+            } else {
+                if (i)
+                    rebuilt += ", ";
+                rebuilt += selectors[i];
+            }
+        }
+
+        if (!changed)
+            break;
+        list = rebuilt;
+    }
+
+    return list;
+}
+
+/* ':is(sel, sel)' and ':where(sel, sel)' (Selectors 4).
+ *
+ * The 2008 selector grammar has no production for a selector list inside a
+ * pseudo-class, and nesting one in the yacc grammar is a large change for a
+ * feature that is almost always written in its simple form. Expand the
+ * pseudo-class textually instead: 'p:is(.a, .b) span' becomes
+ * 'p.a span, p.b span', which the existing grammar parses as ordinary
+ * selectors.
+ *
+ * Only the simple, top-level form is expanded: the arguments must be simple
+ * selectors (no combinators) and the pseudo-class must not sit inside another
+ * pseudo-class' parentheses. Anything else is left untouched, so it simply does
+ * not match - the same failure mode as before. */
+static String rewriteIsWhereSelectors(const String& css)
+{
+    if (!css.contains(":is(") && !css.contains(":where("))
+        return css;
+
+    /* Walk the sheet and rewrite only rule preludes (the text between a block
+     * opening brace and the next '{'). Declaration blocks are copied verbatim,
+     * so a prelude is never copied twice and strings/comments stay untouched.
+     *
+     * A stack is needed because group rules ('@media { ... }') contain rules,
+     * not declarations: inside them the text between '}' and '{' is a prelude
+     * again. */
+    std::vector<UChar> out;
+    const UChar* text = css.characters();
+    unsigned length = css.length();
+    unsigned segmentStart = 0;
+    unsigned i = 0;
+    Vector<bool> blockStack;            /* true = the block holds declarations */
+    bool inDeclarations = false;
+
+    out.reserve(length + 64);
+
+    while (i < length) {
+        UChar c = text[i];
+
+        if (c == '/' && i + 1 < length && text[i + 1] == '*') {
+            out.push_back(text[i++]);
+            out.push_back(text[i++]);
+            while (i < length && !(text[i] == '*' && i + 1 < length && text[i + 1] == '/'))
+                out.push_back(text[i++]);
+            if (i < length) {
+                out.push_back(text[i++]);
+                if (i < length)
+                    out.push_back(text[i++]);
+            }
+            continue;
+        }
+        if (c == '"' || c == '\'') {
+            UChar quote = c;
+
+            out.push_back(text[i++]);
+            while (i < length && text[i] != quote) {
+                if (text[i] == '\\' && i + 1 < length)
+                    out.push_back(text[i++]);
+                out.push_back(text[i++]);
+            }
+            if (i < length)
+                out.push_back(text[i++]);
+            continue;
+        }
+        if (c == '{') {
+            String prelude(&text[segmentStart], i - segmentStart);
+
+            if (prelude.contains(":is(") || prelude.contains(":where(")) {
+                String rewritten = expandSelectorList(prelude);
+
+                for (unsigned k = 0; k < rewritten.length(); ++k)
+                    out.push_back(rewritten[k]);
+            } else {
+                for (unsigned k = segmentStart; k < i; ++k)
+                    out.push_back(text[k]);
+            }
+
+            out.push_back(text[i++]);
+
+            String trimmed = prelude.stripWhiteSpace();
+            bool groupRule = trimmed.startsWith("@media") || trimmed.startsWith("@supports") ||
+                             trimmed.startsWith("@document") || trimmed.startsWith("@-webkit-document");
+
+            blockStack.append(!groupRule);
+            inDeclarations = !groupRule;
+            segmentStart = i;
+            continue;
+        }
+        if (c == '}') {
+            out.push_back(text[i++]);
+            if (!blockStack.isEmpty())
+                blockStack.removeLast();
+            inDeclarations = !blockStack.isEmpty() && blockStack.last();
+            segmentStart = i;
+            continue;
+        }
+        if (c == ';' && !inDeclarations) {
+            /* At-rule without a block ('@import ...;'): copy it as it is. */
+            for (unsigned k = segmentStart; k <= i; ++k)
+                out.push_back(text[k]);
+            ++i;
+            segmentStart = i;
+            continue;
+        }
+        if (inDeclarations)
+            out.push_back(text[i]);
+        ++i;
+    }
+
+    for (unsigned k = segmentStart; k < length; ++k)
+        out.push_back(text[k]);
+
+    return out.empty() ? css : String(&out[0], (unsigned)out.size());
 }
 
 /* The media-query grammar requires a media type before the first expression
@@ -1436,6 +1731,41 @@ bool CSSParser::parseValue(int propId, bool important)
             valid_primitive = validUnit(value, FLength, strict);
         break;
 
+    case CSS_PROP_ROW_GAP:              // normal | <length> | <percentage>
+    case CSS_PROP_COLUMN_GAP:
+        if (id == CSS_VAL_NORMAL)
+            valid_primitive = true;
+        else
+            valid_primitive = validUnit(value, FLength | FPercent | FNonNeg, strict);
+        break;
+
+    case CSS_PROP_ASPECT_RATIO:         // auto | <number> [ / <number> ]?
+        if (id == CSS_VAL_AUTO)
+            valid_primitive = true;
+        else if (value->unit == CSSPrimitiveValue::CSS_NUMBER) {
+            valid_primitive = value->fValue > 0;
+            /* '16 / 9' and '16/9': consume the denominator and fold it into the
+             * ratio (the renderer only needs width/height). */
+            if (valid_primitive) {
+                Value* next = valueList->next();
+
+                if (next) {
+                    if (next->unit != Value::Operator || next->iValue != '/') {
+                        valid_primitive = false;
+                    } else {
+                        Value* denominator = valueList->next();
+
+                        if (!denominator || denominator->unit != CSSPrimitiveValue::CSS_NUMBER ||
+                            denominator->fValue <= 0)
+                            valid_primitive = false;
+                        else
+                            value->fValue = value->fValue / denominator->fValue;
+                    }
+                }
+            }
+        }
+        break;
+
     case CSS_PROP_WORD_BREAK:          // normal | break-all | break-word (this is a custom extension)
         if (id == CSS_VAL_NORMAL || id == CSS_VAL_BREAK_ALL || id == CSS_VAL_BREAK_WORD)
             valid_primitive = true;
@@ -1975,6 +2305,32 @@ bool CSSParser::parseValue(int propId, bool important)
         const int properties[4] = { CSS_PROP_BORDER_TOP_COLOR, CSS_PROP_BORDER_RIGHT_COLOR,
                                     CSS_PROP_BORDER_BOTTOM_COLOR, CSS_PROP_BORDER_LEFT_COLOR };
         return parse4Values(propId, properties, important);
+    }
+    case CSS_PROP_GAP:
+        /* <row-gap> <column-gap>?  (one value: both axes) */
+    {
+        int num = inShorthand() ? 1 : valueList->size();
+
+        if (num != 1 && num != 2)
+            return false;
+
+        ShorthandScope scope(this, propId);
+
+        if (!parseValue(CSS_PROP_ROW_GAP, important))
+            return false;
+
+        if (num == 2) {
+            if (!parseValue(CSS_PROP_COLUMN_GAP, important))
+                return false;
+        } else {
+            CSSValue* value = parsedProperties[numParsedProperties - 1]->value();
+
+            m_implicitShorthand = true;
+            addProperty(CSS_PROP_COLUMN_GAP, value, important);
+            m_implicitShorthand = false;
+        }
+
+        return true;
     }
     case CSS_PROP_BORDER_WIDTH:
         // <border-width>{1,4} | inherit

@@ -1175,6 +1175,14 @@ void RenderBox::calcWidth()
             }
         }
 
+        /* aspect-ratio with an auto width and a definite height: width follows. */
+        if (style()->width().isAuto() && style()->aspectRatio() > 0.0f && style()->height().isFixed()) {
+            int contentH = style()->height().value();
+            int contentW = (int)(contentH * style()->aspectRatio() + 0.5f);
+
+            m_width = contentW + borderLeft() + borderRight() + paddingLeft() + paddingRight();
+        }
+
         // Calculate MinWidth
         int minW = calcWidthUsing(MinWidth, containerWidth);
         if (m_width < minW) {
@@ -1324,6 +1332,17 @@ void RenderBox::calcHeight()
         else {
             h = style()->height();
             checkMinMaxHeight = true;
+        }
+
+        /* aspect-ratio (CSS Sizing 4): with an auto height and a definite width
+         * the height follows the ratio. The ratio is applied to the content box. */
+        if (h.isAuto() && style()->aspectRatio() > 0.0f && !style()->width().isAuto()) {
+            int contentW = width() - borderLeft() - borderRight() - paddingLeft() - paddingRight();
+
+            if (contentW > 0) {
+                h = Length((int)(contentW / style()->aspectRatio() + 0.5f), Fixed);
+                checkMinMaxHeight = false;
+            }
         }
 
         // Block children of horizontal flexible boxes fill the height of the box.
