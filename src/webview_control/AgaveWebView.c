@@ -37,7 +37,11 @@ typedef struct {
     int  type;
     int  index;
     int  x, y, a, b;
-    char text[2048];
+    /* Payload for navigate/eval/search. Must be at least as large as the
+     * host's script buffer (agave_shell --eval-file is 8 KB): a shorter buffer
+     * silently truncated long eval scripts, and the engine then reported a
+     * bogus SyntaxError in the middle of the script. */
+    char text[8192];
 } AgwCommand;
 
 struct AgaveWebView {
@@ -189,7 +193,18 @@ static void agwPost(int type, AgaveWebView* view, const char* text,
     command.b = b;
 
     if (text) {
-        strncpy(command.text, text, sizeof(command.text) - 1);
+        size_t len = strlen(text);
+
+        if (len >= sizeof(command.text)) {
+            /* Never truncate silently: a cut-off eval script parses as a
+             * syntax error somewhere in the middle, which looks like an engine
+             * bug. Say so and keep the prefix. */
+            agbLog(AGB_LOG_SHELL, "command %d payload truncated: %lu > %lu bytes",
+                   type, (unsigned long)len, (unsigned long)sizeof(command.text) - 1);
+            len = sizeof(command.text) - 1;
+        }
+        memcpy(command.text, text, len);
+        command.text[len] = 0;
     }
 
     agwLock();
