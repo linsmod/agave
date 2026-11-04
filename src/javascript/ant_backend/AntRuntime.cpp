@@ -18,6 +18,7 @@
 #include <map>
 
 #include "AgbLog.h"
+#include "AgbGapJsdom.h"
 #include "AntBridge.h"
 #include "../../webcore/platform/network/native/NetworkSession.h"
 #include "../platform/network/native/NetLog.h"
@@ -336,6 +337,7 @@ int historyBack(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int historyForward(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int historyGo(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int historyPushState(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int historyGapGetter(AntbEngine*, AntbValue*, const char*, AntbValue*, void*);
 AntbValue* wrapNode(AntbEngine*, WebCore::Node*);
 int nodeGetter(AntbEngine*, AntbValue*, const char*, AntbValue*, void*);
 int attrsGetter(AntbEngine*, AntbValue*, const char*, AntbValue*, void*);
@@ -1326,7 +1328,11 @@ int titleGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue
             || !strcmp(name, "anchors") || !strcmp(name, "scripts") || !strcmp(name, "embeds")
             || !strcmp(name, "plugins") || !strcmp(name, "applets")) {
         /* Collections are exposed as empty arrays: scripts only read .length or
-         * iterate, and the real NodeLists are not wrapped yet. */
+         * iterate, and the real NodeLists are not wrapped yet. The empty array
+         * is a WRONG answer, not a missing one, so it is reported as a gap
+         * (AgbGapJsdom.h) - a page that counts forms silently sees zero. */
+        agbJsdomGapReport(name, "document");
+
         AntbValue* empty = antb_make_array(engine);
         if (!empty)
             return 0;
@@ -1554,6 +1560,15 @@ int historyGo(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
 }
 /* pushState only rewrites the document URL: enough for SPA routers that poll
  * location and re-render, without a real history entry. */
+/* history.state / history.length: read as undefined, but say so once. */
+int historyGapGetter(AntbEngine*, AntbValue*, const char* name, AntbValue*, void*)
+{
+    if (name && name[0])
+        agbJsdomGapReport(name, "history");
+
+    return 0;
+}
+
 int historyPushState(AntbEngine*, AntbValue*, AntbValue** args, int argc, AntbValue*, void*)
 {
     if (argc > 2 && g_document) {
@@ -4502,6 +4517,11 @@ void bindDocument(void* document)
                 antb_define_method(g_engine, hist, "forward", historyForward, NULL);
                 antb_define_method(g_engine, hist, "go", historyGo, NULL);
                 antb_define_method(g_engine, hist, "pushState", historyPushState, NULL);
+                /* state/length are not tracked (pushState only rewrites the
+                 * URL). As plain properties they read as undefined with no
+                 * hint; as accessors they report the gap once. */
+                antb_define_property_rw(g_engine, hist, "state", historyGapGetter, NULL, NULL);
+                antb_define_property_rw(g_engine, hist, "length", historyGapGetter, NULL, NULL);
                 antb_define_method(g_engine, hist, "replaceState", historyPushState, NULL);
                 antb_set_prop(g_engine, global, "history", hist);
                 antb_value_release(hist);
@@ -4664,6 +4684,41 @@ void dropListenersForOldDocument()
             antb_value_release((*g_listeners)[i].fn);
     }
     g_listeners->clear();
+}
+
+/* "div#app" / "img#qr" / "document" for a [gap-jsdom] line. Only called when
+ * a gap is reported for the first time, never on the hot path. */
+static void gapNodeWhere(WebCore::Node* node, char* buffer, size_t size)
+{
+    const char* tag = "node";
+    WebCore::String id;
+    size_t used;
+
+    if (!node || !buffer || !size)
+        return;
+
+    if (node->nodeType() == 9) {
+        snprintf(buffer, size, "document");
+        return;
+    }
+
+    if (node->isElementNode()) {
+        WebCore::Element* element = static_cast<WebCore::Element*>(node);
+
+        tag = element->tagName().utf8().data();
+        id = element->getAttribute("id");
+    }
+
+    snprintf(buffer, size, "%s", tag);
+    /* tagName is upper case for HTML elements; the log line reads better in
+     * the lower case form pages use in selectors. */
+    for (used = 0; buffer[used]; ++used) {
+        if (buffer[used] >= 'A' && buffer[used] <= 'Z')
+            buffer[used] = (char)(buffer[used] - 'A' + 'a');
+    }
+    if (!id.isEmpty() && used + 1 < size) {
+        snprintf(buffer + used, size - used, "#%s", id.utf8().data());
+    }
 }
 
 WebCore::Node* nodeOf(AntbValue* self)
@@ -5583,6 +5638,15 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
             }
         }
 
+        /* A known capability gap: say it once, then keep returning undefined
+         * (AgbGapJsdom.h). Feature detection calls this in loops. */
+        if (agbJsdomGapPending(name)) {
+            char where[96];
+
+            gapNodeWhere(n, where, sizeof(where));
+            agbJsdomGapReport(name, where);
+        }
+
         return 0;
     }
 
@@ -6396,6 +6460,12 @@ int nodeQuerySelectorAll(AntbEngine* engine, AntbValue* self, AntbValue** args, 
     selector = antb_to_utf8(args[0]);
     if (!selector)
         return 1;
+
+    /* Attribute selectors ([data-x], [class*=y]) are not parsed by our
+     * selector engine: they silently match nothing, which is exactly the kind
+     * of gap that makes a page take the "no such element" branch. */
+    if (strchr(selector, '['))
+        agbJsdomGapReport("querySelector[attr]", NULL);
 
     arr = antb_make_array(engine);
     if (!arr) {

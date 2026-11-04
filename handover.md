@@ -105,7 +105,10 @@ ant 原生构造器；http(s) 走异步桥取源码 + preamble 后包成 `data:`
    `https://browserscore.dev/`（Vue 模块图）。
 5. **现成脚本**：`tools/run_worker_tests.ps1`（Worker 九项）、`tools/run_nav_tests.ps1`（`[nav]` 八项，含 302 重定向）、
    `tools/bench_compile.ps1`（启动墙钟/CPU）、`tools/measure_cpu.ps1`（CPU 占用）、
-   `tools/check_window_visible.ps1`（无头探针确实不出窗口）。
+   `tools/check_window_visible.ps1`（无头探针确实不出窗口）、`tools/probe.ps1` / `tools/screenshot.ps1`
+   （无头探针 / 无头截图，屏幕上什么都不出现）。
+6. **看页面踩了哪些缺口**：`[gap-jsdom]` 默认开启，每个已知缺口第一次被访问时打一行，
+   名单在 `src/javascript/ant_backend/AgbGapJsdom.h`（= `docs/capability-gaps.md` §1 的机器可读版）。
 
 探针参数、退出码、环境变量全表、cdb 配方、噪音对照见
 [`docs/debugging.md`](docs/debugging.md)。

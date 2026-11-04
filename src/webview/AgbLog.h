@@ -31,6 +31,10 @@
  *                            attach/detach/style-recalc of the matching elements
  *   [cache] resource cache   memory-cache and HTTP-cache hit/miss per resource
  *                            (default on, AGB_CACHE_LOG=0 silences it)
+ *   [gap-jsdom] capability   the FIRST access of a known JS/DOM gap, once per
+ *                            gap per process (default on, AGB_GAP_LOG=0
+ *                            silences it). The registry lives in
+ *                            src/javascript/ant_backend/AgbGapJsdom.h
  *
  * This is not the place for the opt-in debug channels ([netlog], [modfetch],
  * [snippet], [call], ...): they are separate tools with their own switches and
@@ -65,6 +69,7 @@ enum AgbLogChannel {
     AGB_LOG_CONSOLE,
     AGB_LOG_STYLE,
     AGB_LOG_CACHE,
+    AGB_LOG_GAP,
     AGB_LOG_CHANNEL_COUNT
 };
 
@@ -80,6 +85,7 @@ static const char* agbLogChannelName(int channel)
     case AGB_LOG_CONSOLE: return "con-call";
     case AGB_LOG_STYLE: return "style";
     case AGB_LOG_CACHE: return "cache";
+    case AGB_LOG_GAP:   return "gap-jsdom";
     default:            break;
     }
 
@@ -190,6 +196,7 @@ static inline int agbLogEnabled(int channel)
     case AGB_LOG_NAV: value = getenv("AGB_NAV_LOG"); break;
     case AGB_LOG_UI:  value = getenv("AGB_UI_LOG");  break;
     case AGB_LOG_CACHE: value = getenv("AGB_CACHE_LOG"); break;
+    case AGB_LOG_GAP: value = getenv("AGB_GAP_LOG"); break;
     /* Render-tree tracing is per element, so it is opt-in twice: the switch
      * must be "1" (default off) and AGB_STYLE_FILTER narrows it to the ids,
      * classes or tags that contain that substring. */

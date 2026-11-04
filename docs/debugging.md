@@ -135,6 +135,7 @@ antbridge.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**�
 
 | 组 | 变量 | 作用 |
 |---|---|---|
+| 日志 | `AGB_GAP_LOG=0` | 关掉 `[gap-jsdom]`（默认开启：每个已知缺口只在**第一次被访问**时打一行） |
 | 探针 | `AGB_PROBE_SHOW=1` | 显示探针窗口（调试可见性相关的差异；截图不需要它） |
 | 探针 | `AGB_PROBE_ALLOW_UNLOAD=1` | beforeunload 守卫直接放行（默认拒绝） |
 | 日志 | `AGB_EVT_LOG=0` | **关掉默认开启的页面生命周期日志**（`[evt]`） |
@@ -189,6 +190,18 @@ antbridge.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**�
 - **"这个元素为什么是 0×0"**：先 `__agbLayoutInfo(node)`（不强制布局）——
   `renderer=0` 是"没有渲染树对象"（样式在最后一次重算时是 `display:none`），
   `renderer=1` 但 `w=0` 是"挂上了但从没布局"，两者的修法相反。配合 `[style]` 通道看时序。
+- **页面踩了哪些 JS/DOM 缺口**：`[gap-jsdom]` 默认开着，每个缺口**每个进程只打一次**（不是每次访问），
+  例如 DeepSeek 登录页：
+  ```
+  [    236.0ms] [gap-jsdom] name=querySelector[attr] area=css effect="attribute selectors ([data-x]) match nothing"
+  [   1258.0ms] [gap-jsdom] name=document.hidden area=dom effect="undefined; document.hidden is never set, el.hidden not exposed"
+  [   1487.0ms] [gap-jsdom] name=history.state area=history effect="undefined; pushState only rewrites the URL"
+  [   2318.1ms] [gap-jsdom] name=document.activeElement area=doc effect="undefined; no focus tracking in script"
+  ```
+  `name=<接收者>.<属性>`（元素给 `tag#id`），`area` 分组，`effect` 是页面实际得到的值 + 替代写法。
+  名单在 `src/javascript/ant_backend/AgbGapJsdom.h`（= `docs/capability-gaps.md` §1 的机器可读版），
+  `AGB_GAP_LOG=0` 关掉。全局对象上的缺口（`window.getSelection`、`IntersectionObserver` 等）打不出来，
+  原因见该头文件注释（ant 的标识符查找不走全局对象的 exotic getter）。
 - **iframe 里到底是什么样**：`__agbActivateSlot(i)` 切换共享 window 绑定的 frame 文档
   （返回上一个槽位），读 `document.*` 之后切回去；`__agbFrameSlot()` 返回当前槽位。
 - **一条命令抓带符号栈（首选）**：`pwsh -File tools/cdb_stack.ps1 -Url <url> -ScriptFile <js>`

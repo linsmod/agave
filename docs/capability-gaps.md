@@ -22,10 +22,17 @@ build-zig-native\agave_shell.exe --probe tools\pages\cap_selectors.html  --wait 
 build-zig-native\agave_shell.exe --probe tools\pages\cap_postmessage.html --wait 800 --eval "probeExit(document.title)"
 # frame 的 window 身份：结果打在 [child] 控制台行上（页面不写 title）
 build-zig-native\agave_shell.exe --probe tools\pages\cap_window_identity.html --wait 900 --eval "probeExit(0)"
+# [gap-jsdom] 自检：六个缺口各打一行，值不变（innerText=undefined submit=undefined complete=undefined
+# forms=0 attr=0 state=undefined）
+build-zig-native\agave_shell.exe --probe tools\pages\cap_gap_log.html --wait 500 --eval "probeExit(document.title)"
 ```
 
 退出码 0 且 `[exit]` 行就是当前值。要加一项探测：在 `cap_dom.html` / `cap_css.html`
 的 `document.title = [...]` 里加一行，再在本页加一行表格。
+
+运行时也有信号：`[gap-jsdom]` 通道默认开启，页面第一次访问某个已知缺口时打一行
+（`name=div#app.innerText area=dom effect="undefined; textContent works"`）。名单是
+`src/javascript/ant_backend/AgbGapJsdom.h`，与本页 §1 一一对应；`AGB_GAP_LOG=0` 关掉。
 
 **这些是存量缺口，不是回归**：页面行为不对时先查本页，别先怀疑页面或最近的提交。
 

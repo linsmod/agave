@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>cap_gap_log</title></head>
+<body>
+<div id="gapbox"><span>a</span></div>
+<form id="gapform" action="/x"><input name="q"></form>
+<img id="gapimg" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7">
+<script>
+/* Touches a few registered capability gaps so the [gap-jsdom] channel has
+ * something to print. Each gap must appear ONCE no matter how often it is
+ * read, so every one below is accessed twice.
+ *
+ *   agave_shell.exe --probe tools/pages/cap_gap_log.html --wait 500 --eval "probeExit(0)"
+ *
+ * Expected lines (order is by first access):
+ *   name=div#gapbox.innerText        area=dom
+ *   name=form#gapform.submit         area=form
+ *   name=img#gapimg.complete         area=img
+ *   name=document.forms              area=doc
+ *   name=querySelector[attr]         area=css
+ *   name=history.state               area=history
+ */
+var box = document.getElementById('gapbox');
+var form = document.getElementById('gapform');
+var img = document.getElementById('gapimg');
+
+for (var i = 0; i < 2; i++) {
+  var a = box.innerText;
+  var b = form.submit;
+  var c = img.complete;
+  var d = document.forms.length;
+  var e = document.querySelectorAll('[data-missing]').length;
+  var f = history.state;
+}
+
+/* The values themselves are checked here: a gap must keep reading as
+ * undefined/empty, the channel only adds the log line. */
+document.title = [
+  'innerText=' + typeof box.innerText,
+  'submit=' + typeof form.submit,
+  'complete=' + typeof img.complete,
+  'forms=' + document.forms.length,
+  'attr=' + document.querySelectorAll('[data-missing]').length,
+  'state=' + typeof history.state
+].join(' ');
+</script>
+</body>
+</html>
