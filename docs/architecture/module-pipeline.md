@@ -1,3 +1,21 @@
+# 入口模块管线（方案 A 落地版）：模块求值只发生在解析流程内
+
+状态：**已落地并验证**（`file://` 直读、`http` 大图 `--offline` 重放、`--reload 2` 三轮）。
+本文是 `handover.md` §2.3 时间轴的展开：三条泳道（宿主主线程 / 引擎线程 / WinHTTP worker）、
+入口模块的等待位、`file:` 模块的伪装层。设计与取舍记录见 `docs/lessons.md` R7、R9、R17。
+
+## 怎么读
+
+- **模块求值只允许发生在引擎线程的解析调用栈里**：网络泵（`pumpAsyncRequests`）只负责把 body 放进
+  队列，绝不执行页面 JS —— 泵回调里 detach 节点会和正在进行的绘制/布局打架。
+- 入口 `<script type="module" src>`（非 async）用**单槽等待位**把解析挂起，等 body 到了再在
+  解析流程内 `scriptExecution()` 求值；这就是"模块执行先于 DOMContentLoaded"的来源。
+- `flushDeferredModules()` 在解析结束时执行延迟模块（`<script defer>` 与 DCL 前排队者），
+  随后才是 DCL / load（⚠ DCL 目前会派发两次，见 `handover.md` P0-c）。
+
+## 时序图
+
+```text
 入口模块管线（方案 A 落地版）：模块求值只在解析流程内发生
 ════════════════════════════════════════════════════════════════
 
@@ -53,9 +71,24 @@ file:// 模块的伪装层（不破坏 ant 限制模块https设定）：
   引擎 → agave：模块 fetcher 收到伪装 URL ──► 还原 file:/// ──► 本地读盘（同步完成）
   代价：import.meta.url 显示伪装 URL；percent-escape 在还原时解码
 
-已知限制（handover §5 R7）：
+已知限制（详见 docs/lessons.md 的 R7）：
   ① 动态插入/async 入口仍走 CachedScript
   ② 入口 script 元素的 load/error 事件暂不派发
   ③ import.meta.url 伪装形态
   ④ DCL 后到达的 inline 模块排队不执行
   ⑤ iframe 等待位单槽冲突时回退 CachedScript
+
+```
+
+## 代码锚点
+
+| 环节 | 位置 |
+|---|---|
+| 帧泵入口（paint 后泵异步） | `src/webview/WebEngine.cpp`：`macross_view_update()` → `paintView()` → `AntRuntime::pumpAsyncRequests()` |
+| 网络泵 | `AntRuntime.cpp`：`pumpAsyncRequests()`（`collectXhrJobs` → `g_moduleSession->pump()` → drain arrived → `antb_pump`） |
+| 模块下载完成 | `AntRuntime.cpp`：`ModuleFetchClient::onComplete()`（写磁盘缓存、扇出 `import`、投递 `ArrivedEntryBody`） |
+| 交给 tokenizer | `AntRuntime.cpp`：`notifyModuleEntry()` → `HTMLTokenizer::notifyModuleEntry()`（只传 body） |
+| 等待位 / 防重入 | `src/webcore/html/HTMLTokenizer.cpp`：`m_awaitingModuleEntry` / `m_pendingModuleUrl` / `m_pendingModuleNode` / `m_requestingScript` / `loadingExtScript()` |
+| 入口模块求值 | `HTMLTokenizer.cpp`：`scriptExecution()` → `AntRuntime::prefetchModuleGraph()` + `queueModule()` |
+| 延迟模块求值 | `AntRuntime.cpp`：`flushDeferredModules()`（`dispatchDidFinishDocumentLoad` 里调用） |
+| file: 伪装层 | `AntRuntime.cpp`：`kEngineFileUrlPrefix` = `http://file.ant/`、`engineUrlForFile()` / `fileUrlForEngine()` |

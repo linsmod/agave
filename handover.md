@@ -74,6 +74,10 @@ committedLoad → AntRuntime::beginNewRealm()   新 generation + 新 engine
 Web Worker 走另一条独立时间轴：`new Worker(url)` → prelude 包装类解析 URL（`data:`/`blob:`/`file:` 直接交给
 ant 原生构造器；http(s) 走异步桥取源码 + preamble 后包成 `data:` URL）→ ant 起独立线程 + 独立 isolate。
 
+**入口模块管线（方案 A）的完整调用栈**——三条泳道（宿主主线程 / 引擎线程 / WinHTTP worker）、
+入口模块的单槽等待位、"模块求值只在解析调用栈里发生"的约束、`file:` 模块的伪装层——
+见 [`docs/architecture/module-pipeline.md`](docs/architecture/module-pipeline.md)。
+
 ## 3. 怎么验证一个改动
 
 1. **单页**：`agave_shell.exe --probe <url> --eval "probeExit(<表达式>)" --wait <ms> --settle <ms> --timeout <ms>`，
@@ -141,7 +145,8 @@ ant 原生构造器；http(s) 走异步桥取源码 + preamble 后包成 `data:`
   （会变成 `file:///share/...` 而加载失败）。要支持得改 `ResourceHandle` 的 file 分支（R23）。
 - **入口模块管线的 5 条限制**：动态插入/async 入口仍走 CachedScript；入口 `<script>` 的 `load`/`error` 不派发；
   `import.meta.url` 对 file: 模块显示伪装 URL（`http://file.ant/...`）；DCL 之后到达的 inline 模块不再执行；
-  iframe 的模块入口回退 CachedScript（详见 `docs/lessons.md` R7）。
+  iframe 的模块入口回退 CachedScript（详见 `docs/lessons.md` R7；调用栈见
+  [`docs/architecture/module-pipeline.md`](docs/architecture/module-pipeline.md)）。
 - **一个 view 一个 realm**：`window` 对象每 engine 一个，iframe 与主 frame 共享它
   （`dispatchDidFinishDocumentLoad` 因此跳过非主 frame，见 `FrameLoaderClientMC.cpp`）。
 - **CSS 能力边界**：grid 布局、transform 绘制、非 `-webkit-` 的 box-shadow 未实现；
@@ -158,6 +163,7 @@ ant 原生构造器；http(s) 走异步桥取源码 + preamble 后包成 `data:`
 | generation / 在途资源 | `AntRuntime.cpp`：`currentGeneration()` / `cancelInFlightResources()`；XHR `XhrJob::m_generation`、模块 `ModuleEntry::generation`、延迟模块 `DeferredModule::generation` |
 | DOM pin / 文档 slot | `AntRuntime.cpp`：`releasePinnedNodes()` / `wrapNode()` / `slotForDocument()` / `activateSlot()` |
 | 模块调度 | `AntRuntime.cpp`：`moduleStart()` / `moduleFetch()`（同步等待）/ `modulePrefetchImports()`（字符串扫描）/ `queueDeferredScript()` / `flushDeferredModules()` |
+| 入口模块时序（三条泳道图） | [`docs/architecture/module-pipeline.md`](docs/architecture/module-pipeline.md) |
 | 桥接释放 | `AntBridge.c`：`antb_wrap_native_owner` / `antb_release_owner` / `agbReleaseEngineWrappers` / `agbReleaseEngineClasses` / `antb_engine_destroy` |
 | 页面时序挂点 | `FrameLoaderClientMC.cpp`：`dispatchWillClose` / `committedLoad` / `dispatchDidFinishDocumentLoad` / `dispatchDidFinishLoad` |
 | WebCore 侧限制 | `src/webcore/loader/FrameLoader.cpp`（unload 门禁）、`src/webcore/dom/EventTargetNode.cpp`（事件转发边界）、`src/webcore/dom/Document.cpp`（`finishedParsing` 的 DCL） |
