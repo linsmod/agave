@@ -8,6 +8,10 @@
 
 [cdb](tools/cdb.exe)
 
+[接手：handover.md](handover.md)（现状 / 待办 / 代码索引）
+
+[经验库：docs/lessons.md](docs/lessons.md)（每个缺陷的现象 → 根因 → 修法 → 验证，R1..R24）
+
 
 # rules
 

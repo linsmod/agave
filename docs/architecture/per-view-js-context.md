@@ -1,13 +1,15 @@
 # 每个 view 独立的 JS 上下文（per-view Ant engine）
 
-状态：**未实现**，本文是实施方案。当前所有 view 共享一个 Ant VM。
+状态：**已实现**（2026-11-03 起）。每个 view 一个 `RuntimeState` + 一个 `AntbEngine`（`AntRuntime::createContext()`），
+每个文档再换一个新 engine（`beginNewRealm()` / `stopRealm()`，见 `docs/lessons.md` R10/R17）。
+本文保留为当时的实施方案与权衡记录；下面「现状」「需要改的点」「工作量」都是**设计时**的表述。
 
-## 现状
+## 现状（设计时，2026-11-02）
 
 * `AntRuntime` 是进程级单例：`g_engine`（一个 `AntbEngine`）、`g_document`、
   `g_docObj`、`g_documentBound`、`g_nodeClass` 等全是文件级全局。
 * 文档隔离是用"槽位"模拟的：`g_docSlots[]` + `activateSlot()`，
-  定时器/XHR 回调进入前切回自己的文档（见 handover 第 38–40 节）。
+  定时器/XHR 回调进入前切回自己的文档（现状见 `AntRuntime.cpp` 的 `slotForDocument()` / `activateSlot()`）。
 * 所以 **DOM 层面**已经隔离，但 **JS 全局对象**没有：
   控件 A 执行 `window.foo = 1`，控件 B 能读到 `window.foo === 1`。
 
@@ -58,10 +60,9 @@ agave 的 CMake 只负责把它拷到输出目录。
 **不会**自动生效，必须：
 
 1. 把 `src/javascript/ant_backend/AntBridge.c` 同步到
-   `H:\ant-v16\bridge\AntBridge.c`；
-2. 重新编译并链接（配方见 handover 第 2 节的宿主链接配方，
-   把 `-o app.exe` 换成 `-shared -o antbridge.dll`，并加
-   `-DAGB_BUILD_DLL`）；
+   `H:\ant-v16\bridge\AntBridge.c`（`tools/build_antbridge.ps1` 会做这一步）；
+2. 重新编译并链接 —— 就是 `pwsh -File tools\build_antbridge.ps1 -Force`
+   （内部 `-shared -o antbridge.dll` + `-DAGB_BUILD_DLL`，见 `AGENTS.md`）；
 3. 把新 `antbridge.dll` / `antbridge.dll.a` 拷回
    `3rdparty/ant/{bin,lib}` 和 `build-zig-native\`、`host\nativerun\`；
 4. `cmake --build build-zig-native` 重新链接 libagave。
