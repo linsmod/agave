@@ -5621,7 +5621,13 @@ static const struct ReflectedAttribute {
     { "hidden",          "hidden",          REFLECT_BOOL   },
     { "spellcheck",      "spellcheck",      REFLECT_BOOL   },
     { "autofocus",       "autofocus",       REFLECT_BOOL   },
-    { "tabIndex",        "tabindex",        REFLECT_NUMBER }
+    { "tabIndex",        "tabindex",        REFLECT_NUMBER },
+    /* `iframe.frameBorder = "0"` is how WxLogin (DeepSeek QR code) removes the
+     * default 2px inset border of a dynamically created iframe. Without the
+     * reflection it was stored as a plain expando, so
+     * HTMLIFrameElement::parseMappedAttribute() never added the border-width:0
+     * presentational hint and the frame kept its visible 2px border. */
+    { "frameBorder",     "frameborder",     REFLECT_STRING }
 };
 
 static const struct ReflectedAttribute* reflectedAttribute(const char* name)

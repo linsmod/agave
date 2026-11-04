@@ -111,10 +111,11 @@ qsChild=3 qsDesc=3 qsAdj=1 qsSib=2 qsNth=1 qsOdd=2 qsNot=2 qsFirst=1 qsList2=4 q
 `cap_css.html` 当前输出：
 
 ```
-grid=block transform=[] boxShadow=rgb(255, 0, 0) 0px 0px 4px sticky=static aspectHeight=20px
-gap=undefined isColor=rgb(0, 0, 0) whereColor=rgb(0, 0, 0) varColor=rgb(7, 8, 9)
+grid=block transform=[] boxShadow=rgb(255, 0, 0) 0px 0px 4px sticky=static aspectHeight=90px
+gap=8px isColor=rgb(1, 2, 3) whereColor=rgb(4, 5, 6) varColor=rgb(7, 8, 9)
 varCascade=rgb(9, 8, 7) varInherit=rgb(1, 2, 3) boxSizing=border-box boxWidth=100 flexItemW=20
-bareMedia=2px schemeBg=rgb(0, 0, 200) mediaDark=1 mediaMin=1
+safeAlign=center safeItemY=427 absChildX=88 bareMedia=2px schemeBg=rgb(0, 0, 200)
+mediaDark=1 mediaMin=1
 ```
 
 （`schemeBg`/`mediaDark` 随系统深浅色变化：浅色时是 `rgb(200, 0, 0)` / `0`。要固定看某一种，
@@ -134,10 +135,15 @@ bareMedia=2px schemeBg=rgb(0, 0, 200) mediaDark=1 mediaMin=1
 | `@media (prefers-color-scheme: dark)` | 深色时匹配 | **已支持**（R39）：`AGB_COLOR_SCHEME` 由宿主按注册表 `AppsUseLightTheme` 设置；`matchMedia` 与 CSS 用同一答案 |
 | `matchMedia('(min-width: …)')` | `matches` 正确 | **已支持**（R39）：width/height/device-*/orientation/resolution/prefers-* 都按真实视口求值，`not`/`only`/媒体类型/逗号列表也处理；未做：`addListener` 的变更回调（返回的 list 是静态快照） |
 | `@media (min-width: 1px)`（无媒体类型） | 生效 | **已支持**（R39）：`rewriteBareMediaQueries()` 补 `all and `；2008 的语法要求媒体类型在前，否则整块丢弃 |
+| `align-items: safe center` | `center` | **已支持**（R42）：解析期删掉 `safe`/`unsafe` 溢出关键字，保留对齐关键字；否则两 token 会让整条声明被丢、`align-items` 退回 `stretch` |
+| column flex 里的 `position:absolute` 子项 | 按 `align-items` 定 staticX | **已支持**（R42）：`RenderFlexibleBox::layoutVerticalBox()` 的 positioned 分支按 `boxAlign()` 修正 static position（`BCENTER` 居中、`BEND` 右对齐）；此前无条件贴左 |
+| `iframe.frameBorder = "0"`（JS property） | `border-top-width: 0px` | **已支持**（R42）：`kReflectedAttributes` 加 `frameBorder→frameborder`，property 写入落到 `setAttribute()` → `parseMappedAttribute()` 的 `border-width:0` 呈现提示；静态 `frameborder="0"` 一直可用 |
 
 已确认可用的（别再当缺口重开）：块/inline-block/float/绝对定位/margin auto/padding/border-radius/
 opacity/渐变（R11）、`var()` 含 fallback 与元素级级联（R39）、`box-sizing`（R39）、
 `prefers-color-scheme` 与 `matchMedia` 的尺寸/方向查询（R39）、flex 子元素 blockify（R39）、
+`gap`/`aspect-ratio`/`:is()`/`:where()`（R41）、`safe`/`unsafe` 对齐前缀与 flex 绝对定位子项对齐、
+`frameBorder` 属性反射（R42）、
 `classList.add/toggle`、`matches`、`closest`、`dataset`、
 `append`、`remove`、`textContent`、`querySelectorAll`、`getElementsByClassName`、`document.cookie`。
 

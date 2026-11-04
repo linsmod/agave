@@ -824,12 +824,38 @@ void RenderFlexibleBox::layoutVerticalBox(bool relayoutChildren)
                         child->setStaticX(borderLeft()+paddingLeft());
                     else
                         child->setStaticX(borderRight()+paddingRight());
+
+                    /* An absolutely positioned child of a flex container
+                     * takes its static position from the container's alignment
+                     * (CSS Flexbox 1 §4.1). In a vertical box the cross axis is
+                     * X, so align-items controls the horizontal placement:
+                     * `align-items:center` must centre the child instead of
+                     * leaving it at the left edge (DeepSeek's ICP/footer block
+                     * is position:absolute;bottom:0 inside a column flex). */
+                    int cross = child->width();
+                    /* A positioned child is laid out later (layoutPositionedObjects),
+                     * so its final width may not be known yet. A fixed CSS width
+                     * is available immediately. */
+                    if (cross <= 0 && child->style()->width().isFixed())
+                        cross = child->style()->width().value();
+                    if (cross > 0) {
+                        int avail = contentWidth();
+                        int aligned = child->staticX();
+
+                        if (style()->boxAlign() == BCENTER)
+                            aligned = borderLeft() + paddingLeft() + (avail - cross) / 2;
+                        else if (style()->boxAlign() == BEND)
+                            aligned = borderLeft() + paddingLeft() + avail - cross;
+
+                        if (aligned >= 0)
+                            child->setStaticX(aligned);
+                    }
                 }
                 if (child->hasStaticY())
                     child->setStaticY(m_height);
                 child = iterator.next();
                 continue;
-            } 
+            }
     
             // Compute the child's vertical margins.
             child->calcVerticalMargins();

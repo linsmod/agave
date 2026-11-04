@@ -1308,10 +1308,46 @@ static int modernKeywordID(int propId, const Value* value)
     return 0;
 }
 
+/* CSS Box Alignment allows an overflow keyword before the alignment keyword:
+ * `align-items: safe center`, `justify-content: unsafe flex-end`. The 2008
+ * parser only knows a single keyword per alignment property, so a two-token
+ * value used to be rejected wholesale (DeepSeek's footer used
+ * `align-items: safe center` and its `center` was lost together with `safe`).
+ * Drop the overflow keyword and keep the alignment keyword: `safe` only
+ * changes behaviour when the item overflows, which this renderer does not
+ * model anyway. */
+static void stripAlignmentOverflowKeywords(ValueList* values, int propId)
+{
+    if (propId != CSS_PROP__WEBKIT_BOX_PACK &&    /* justify-content */
+        propId != CSS_PROP__WEBKIT_BOX_ALIGN &&   /* align-items */
+        propId != CSS_PROP__WEBKIT_BOX_LINES)     /* flex-wrap (paranoia) */
+        return;
+
+    if (!values || values->size() < 2)
+        return;
+
+    for (unsigned i = 0; i < values->size(); ) {
+        Value* v = values->valueAt(i);
+
+        if (v && v->unit == CSSPrimitiveValue::CSS_IDENT && !v->id) {
+            String word = domString(v->string).lower();
+
+            if (word == "safe" || word == "unsafe") {
+                values->deleteValueAt(i);
+                continue;
+            }
+        }
+
+        ++i;
+    }
+}
+
 bool CSSParser::parseValue(int propId, bool important)
 {
     if (!valueList)
         return false;
+
+    stripAlignmentOverflowKeywords(valueList, propId);
 
     Value *value = valueList->current();
 

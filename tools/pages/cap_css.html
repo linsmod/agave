@@ -23,6 +23,14 @@
 /* flex items are blockified: an inline <span> must get the width/height (R39). */
 #fxb { display: flex; width: 200px; height: 40px; align-items: center; }
 #fxb > span { width: 20px; height: 10px; background-color: rgb(0, 0, 0); }
+/* `safe center` must not make the whole declaration fail (R42): the alignment
+ * keyword after the overflow keyword is what this engine has to honour. */
+#safe { display: flex; width: 200px; height: 40px; align-items: safe center; }
+#safe > span { width: 20px; height: 10px; background-color: rgb(0, 0, 0); }
+/* Absolute children of a column flex container take their static position
+ * from align-items (R42) - the child must be horizontally centred. */
+#absParent { display: flex; flex-direction: column; align-items: center; position: relative; width: 200px; height: 60px; }
+#absChild { position: absolute; bottom: 0; width: 40px; height: 10px; }
 /* media queries: a bare expression and a colour-scheme one (R39). */
 #mq { width: 10px; height: 10px; }
 @media (min-width: 1px) { #mq { border-top: 2px solid rgb(3, 3, 3); } }
@@ -44,6 +52,8 @@
 <div id="varinherit">varinherit</div>
 <div id="bs">bs</div>
 <div id="fxb"><span></span></div>
+<div id="safe"><span></span></div>
+<div id="absParent"><div id="absChild"></div></div>
 <div id="mq">mq</div>
 <script>
 /* Same contract as cap_dom.html: report through document.title. */
@@ -64,6 +74,9 @@ document.title = [
   'boxSizing=' + cs('bs').boxSizing,
   'boxWidth=' + document.getElementById('bs').getBoundingClientRect().width,
   'flexItemW=' + document.querySelector('#fxb > span').getBoundingClientRect().width,
+  'safeAlign=' + cs('safe').getPropertyValue('align-items'),
+  'safeItemY=' + Math.round(document.querySelector('#safe > span').getBoundingClientRect().top),
+  'absChildX=' + Math.round(document.getElementById('absChild').getBoundingClientRect().left),
   'bareMedia=' + cs('mq').borderTopWidth,
   'schemeBg=' + cs('mq').backgroundColor,
   'mediaDark=' + (matchMedia('(prefers-color-scheme: dark)').matches ? 1 : 0),
