@@ -27,12 +27,20 @@ public:
     /* The clip that is currently in effect, in device space.
      *
      * picasso keeps its clip in the context state, but that state is shared
-     * with the owner of the ps_context (the view), so the rectangle that is
-     * really in effect is tracked here: clip() has to intersect with it, and
-     * the intersection has to happen in device space (see clip()). */
+     * with the owner of the ps_context (the view), so the clip that is really
+     * in effect is tracked here: clip() has to intersect with it, and the
+     * intersection has to happen in device space (see clip()).
+     *
+     * picasso's state holds EITHER a device rectangle (ps_scissor_rect) or a
+     * path (ps_clip_path), never both, and setting one drops the other. A
+     * path clip (border-radius backgrounds go through it) therefore has to be
+     * pre-intersected with the device rectangle here, otherwise the frame's
+     * damage rect is lost the moment a rounded box paints. */
     struct ClipState {
-        IntRect rect;
+        IntRect rect;        /* device space */
         bool valid;
+        ps_path* path;       /* world space, owned reference or 0 */
+        int rule;
     };
 
     Vector<AffineTransform> stack;
@@ -49,10 +57,18 @@ GraphicsContextPlatformPrivate::GraphicsContextPlatformPrivate()
 {
     clip.valid = false;
     clip.rect = IntRect();
+    clip.path = 0;
+    clip.rule = 0;
 }
 
 GraphicsContextPlatformPrivate::~GraphicsContextPlatformPrivate()
 {
+    if (clip.path)
+        ps_path_unref(clip.path);
+    for (unsigned i = 0; i < clipStack.size(); ++i) {
+        if (clipStack[i].path)
+            ps_path_unref(clipStack[i].path);
+    }
 }
  
 GraphicsContext::GraphicsContext(ps_context* context)
@@ -79,6 +95,8 @@ void GraphicsContext::savePlatformState()
 {
 	ps_save(m_data->context);
     m_data->stack.append(m_data->matrix);
+    if (m_data->clip.path)
+        ps_path_ref(m_data->clip.path);
     m_data->clipStack.append(m_data->clip);
 }
 
@@ -87,6 +105,8 @@ void GraphicsContext::restorePlatformState()
     m_data->matrix = m_data->stack.last();
     m_data->stack.removeLast();
     if (!m_data->clipStack.isEmpty()) {
+        if (m_data->clip.path)
+            ps_path_unref(m_data->clip.path);
         m_data->clip = m_data->clipStack.last();
         m_data->clipStack.removeLast();
     }
@@ -123,6 +143,27 @@ static inline void setBrushColor(ps_context* gc, const Color& col)
 {
 	ps_color fc = make_color(col);
 	ps_set_source_color(gc, &fc);
+}
+
+/* Builds a closed path for a device-space rectangle, expressed in the world
+ * space the context currently uses (paths are transformed by the world matrix
+ * when they are applied, so a device rect has to be mapped back). */
+static ps_path* worldRectPath(ps_context* gc, const IntRect& deviceRect)
+{
+    if (deviceRect.width() <= 0 || deviceRect.height() <= 0)
+        return 0;
+
+    ps_point p1 = {deviceRect.x(), deviceRect.y()};
+    ps_point p2 = {deviceRect.x() + deviceRect.width(), deviceRect.y() + deviceRect.height()};
+
+    ps_viewport_to_world(gc, &p1);
+    ps_viewport_to_world(gc, &p2);
+
+    ps_rect rt = {p1.x, p1.y, p2.x - p1.x, p2.y - p1.y};
+
+    ps_path* path = ps_path_create();
+    ps_path_add_rect(path, &rt);
+    return path;
 }
 // A fillRect helper
 static inline void fillRectSourceOver(ps_context* gc, const FloatRect& rect, const Color& col)
@@ -487,11 +528,27 @@ void GraphicsContext::clip(const IntRect& r)
     if (m_data->clip.valid)
         deviceRect.intersect(m_data->clip.rect);
 
-	ps_rect rt = {deviceRect.x(), deviceRect.y(), deviceRect.width(), deviceRect.height()};
-    ps_scissor_rect(m_data->context, &rt);
-
     m_data->clip.rect = deviceRect;
     m_data->clip.valid = true;
+
+    if (m_data->clip.path) {
+        /* A path clip is in effect: picasso can only hold one kind of clip, so
+         * the rectangle is folded into the path instead of replacing it. */
+        ps_path* rectPath = worldRectPath(m_data->context, deviceRect);
+
+        if (rectPath) {
+            ps_path* combined = ps_path_create();
+            ps_path_clipping(combined, PATH_OP_INTERSECT, m_data->clip.path, rectPath);
+            ps_path_unref(rectPath);
+            ps_path_unref(m_data->clip.path);
+            m_data->clip.path = combined;
+        }
+        ps_clip_path(m_data->context, m_data->clip.path, (ps_fill_rule)m_data->clip.rule);
+        return;
+    }
+
+	ps_rect rt = {deviceRect.x(), deviceRect.y(), deviceRect.width(), deviceRect.height()};
+    ps_scissor_rect(m_data->context, &rt);
 }
 
 void GraphicsContext::drawFocusRing(const Color& color)
@@ -691,7 +748,46 @@ void GraphicsContext::clip(const Path& path)
 {
     if (paintingDisabled())
         return;	
-	ps_clip_path(m_data->context, path.platformPath(), (ps_fill_rule)path.windingRule());
+
+    /* WebKit's clip(path) INTERSECTS with the clip already in effect. picasso
+     * keeps only one clip in its state (a device rect or a path), and
+     * ps_clip_path() replaces whatever is there, so the device rectangle that
+     * the frame's damage rect put in place was silently dropped by every
+     * rounded-rect clip (border-radius backgrounds, overflow clips). The
+     * element then repainted its background over the whole box, outside the
+     * dirty region: on chat.deepseek.com/sign_in focusing the phone field
+     * repainted the input's rounded background and wiped the '+86' prefix and
+     * the placeholder, and the button's label with it.
+     *
+     * Fold the tracked device rect into the path here, and keep the result so
+     * a later clip(IntRect) can fold itself in the same way. */
+    ps_path* clipped = 0;
+
+    if (m_data->clip.valid) {
+        ps_path* rectPath = worldRectPath(m_data->context, m_data->clip.rect);
+
+        if (rectPath) {
+            clipped = ps_path_create();
+            ps_path_clipping(clipped, PATH_OP_INTERSECT, path.platformPath(), rectPath);
+            ps_path_unref(rectPath);
+        }
+    }
+
+    if (!clipped)
+        clipped = ps_path_create_copy(path.platformPath());
+
+    if (m_data->clip.path) {
+        ps_path* combined = ps_path_create();
+
+        ps_path_clipping(combined, PATH_OP_INTERSECT, m_data->clip.path, clipped);
+        ps_path_unref(clipped);
+        ps_path_unref(m_data->clip.path);
+        m_data->clip.path = combined;
+    } else
+        m_data->clip.path = clipped;
+
+    m_data->clip.rule = path.windingRule();
+    ps_clip_path(m_data->context, m_data->clip.path, (ps_fill_rule)m_data->clip.rule);
 }
 
 void GraphicsContext::scale(const FloatSize& size) 

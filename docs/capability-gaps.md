@@ -111,9 +111,14 @@ qsChild=3 qsDesc=3 qsAdj=1 qsSib=2 qsNth=1 qsOdd=2 qsNot=2 qsFirst=1 qsList2=4 q
 `cap_css.html` 当前输出：
 
 ```
-grid=block transform=[] boxShadow=rgb(255, 0, 0) 0px 0px 4px sticky=static
-aspectHeight=20px gap=undefined isColor=rgb(0, 0, 0) whereColor=rgb(0, 0, 0) varColor=rgb(7, 8, 9)
+grid=block transform=[] boxShadow=rgb(255, 0, 0) 0px 0px 4px sticky=static aspectHeight=20px
+gap=undefined isColor=rgb(0, 0, 0) whereColor=rgb(0, 0, 0) varColor=rgb(7, 8, 9)
+varCascade=rgb(9, 8, 7) varInherit=rgb(1, 2, 3) boxSizing=border-box boxWidth=100 flexItemW=20
+bareMedia=2px schemeBg=rgb(0, 0, 200) mediaDark=1 mediaMin=1
 ```
+
+（`schemeBg`/`mediaDark` 随系统深浅色变化：浅色时是 `rgb(200, 0, 0)` / `0`。要固定看某一种，
+探针前设 `AGB_COLOR_SCHEME=dark` 或 `light`，宿主不会覆盖显式设置的值。）
 
 | 特性 | 当前 computed | 判定 / 建议 |
 |---|---|---|
@@ -124,10 +129,16 @@ aspectHeight=20px gap=undefined isColor=rgb(0, 0, 0) whereColor=rgb(0, 0, 0) var
 | `aspect-ratio: 16/9` + `width:160px` | `height=20px`（期望 90px） | **忽略**该属性；P2 |
 | flex `gap: 8px` | `undefined`（computed 里没有该属性） | **不支持**；flex 实为 2008 的 `-webkit-box` 体系（R11）；P2 |
 | `:is(p)` / `:where(p)` | `rgb(0, 0, 0)` | **选择器不解析**；P2 |
-| `var(--missing, rgb(7,8,9))` | `rgb(7, 8, 9)` | 支持（fallback 正常）；解析期展开的局限见 R11：跨 sheet 失效、同名取首次定义、无元素级作用域 |
+| `var(--missing, rgb(7,8,9))` | `rgb(7, 8, 9)` | 支持（fallback 正常）；**级联/继承已按规范工作**（R39：元素级覆盖、`!important`、继承都对，`getComputedStyle(el).getPropertyValue('--x')` 可读）；仍未做：`@property`、`var()` 在 `calc()` 里嵌套求值 |
+| `box-sizing: border-box` | `border-box` | **已支持**（R39）：无前缀名此前整条被丢（只有 `-webkit-box-sizing` 有词条），现在走别名表；布局按 border-box 计算，`getComputedStyle(el).boxSizing` 可读 |
+| `@media (prefers-color-scheme: dark)` | 深色时匹配 | **已支持**（R39）：`AGB_COLOR_SCHEME` 由宿主按注册表 `AppsUseLightTheme` 设置；`matchMedia` 与 CSS 用同一答案 |
+| `matchMedia('(min-width: …)')` | `matches` 正确 | **已支持**（R39）：width/height/device-*/orientation/resolution/prefers-* 都按真实视口求值，`not`/`only`/媒体类型/逗号列表也处理；未做：`addListener` 的变更回调（返回的 list 是静态快照） |
+| `@media (min-width: 1px)`（无媒体类型） | 生效 | **已支持**（R39）：`rewriteBareMediaQueries()` 补 `all and `；2008 的语法要求媒体类型在前，否则整块丢弃 |
 
 已确认可用的（别再当缺口重开）：块/inline-block/float/绝对定位/margin auto/padding/border-radius/
-opacity/渐变（R11）、`var()` 含 fallback、`classList.add/toggle`、`matches`、`closest`、`dataset`、
+opacity/渐变（R11）、`var()` 含 fallback 与元素级级联（R39）、`box-sizing`（R39）、
+`prefers-color-scheme` 与 `matchMedia` 的尺寸/方向查询（R39）、flex 子元素 blockify（R39）、
+`classList.add/toggle`、`matches`、`closest`、`dataset`、
 `append`、`remove`、`textContent`、`querySelectorAll`、`getElementsByClassName`、`document.cookie`。
 
 ## 3. 已知但另处详述（本页不重复）

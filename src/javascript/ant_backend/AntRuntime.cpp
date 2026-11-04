@@ -19,6 +19,8 @@
 
 #include "AgbLog.h"
 #include "AgbGapJsdom.h"
+
+namespace WebCore { bool prefersDarkColorScheme(); }
 #include "AgbSelector.h"
 #include "AntBridge.h"
 #include "../../webcore/platform/network/native/NetworkSession.h"
@@ -427,6 +429,7 @@ int globalStorageClear(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, vo
 int globalStorageKey(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalStorageCount(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalComputedStyle(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int globalPrefersDark(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalActivateSlot(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int imageConstructor(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 /* ------------------------------------------------------------------------- */
@@ -4838,6 +4841,7 @@ void bindDocument(void* document)
         antb_define_method(g_engine, global, "__agbStorageKey", globalStorageKey, NULL);
         antb_define_method(g_engine, global, "__agbStorageCount", globalStorageCount, NULL);
         antb_define_method(g_engine, global, "__agbComputedStyle", globalComputedStyle, NULL);
+        antb_define_method(g_engine, global, "__agbPrefersDark", globalPrefersDark, NULL);
 
         /* history: SPA routers and "go back" links use it. */
         {
@@ -8192,6 +8196,14 @@ static WebCore::RenderStyle::PseudoId pseudoIdFromName(const char* text)
     return WebCore::RenderStyle::NOPSEUDO;
 }
 
+/* __agbPrefersDark(): the same flag the (prefers-color-scheme) media query
+ * uses, so matchMedia and the stylesheet agree. */
+int globalPrefersDark(AntbEngine* engine, AntbValue*, AntbValue**, int, AntbValue* out, void*)
+{
+    antb_value_assign(out, antb_make_number(engine, WebCore::prefersDarkColorScheme() ? 1 : 0));
+    return 1;
+}
+
 /* getComputedStyle(el).getPropertyValue(name) -> computed value as a string.
  * Goes through WebCore's CSSComputedStyleDeclaration, so every property the
  * layout engine knows about comes back with a real value. A third argument is
@@ -8231,9 +8243,28 @@ int globalComputedStyle(AntbEngine* engine, AntbValue*, AntbValue** args, int ar
             }
         }
 
+        /* Custom properties ('--x') are not part of the generated property
+         * table, so answer them from the style's resolved map. */
+        bool isCustomProperty = (property[0] == '-' && property[1] == '-');
+
+        if (isCustomProperty) {
+            WebCore::RenderStyle* style = pseudoStyle ? pseudoStyle : node->computedStyle();
+
+            if (style && style->customProperties()) {
+                /* The sheet text renames '--x' to '-agb-x' so the CSS tokenizer
+                 * accepts the name; the map is keyed by that rewritten name. */
+                WebCore::String name = WebCore::String("-agb-") + WebCore::String(property + 2);
+                WebCore::String custom = style->customProperties()->getProperty(name);
+
+                if (!custom.isNull())
+                    value = std::string(custom.utf8().data());
+            }
+        }
+
         RefPtr<WebCore::CSSComputedStyleDeclaration> declaration =
-            pseudoStyle ? new WebCore::CSSComputedStyleDeclaration(node, pseudoStyle)
-                        : new WebCore::CSSComputedStyleDeclaration(node);
+            isCustomProperty ? 0 :
+            (pseudoStyle ? new WebCore::CSSComputedStyleDeclaration(node, pseudoStyle)
+                         : new WebCore::CSSComputedStyleDeclaration(node));
 
         if (declaration) {
             /* CSSComputedStyleDeclaration hides the name-based overload with its

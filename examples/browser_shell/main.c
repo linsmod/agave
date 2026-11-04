@@ -2551,6 +2551,31 @@ static void parseShellArgv(void)
     }
 }
 
+/* The engine answers `(prefers-color-scheme: dark)` from AGB_COLOR_SCHEME; the
+ * host is the only place that can ask Windows. Read once, before any view (and
+ * therefore any stylesheet) exists. Set it with SetEnvironmentVariableA, not
+ * putenv: the shell and the engine DLL each link their own static CRT, so a
+ * CRT-local environment would never reach the engine. */
+static void applySystemColorScheme(void)
+{
+    DWORD light = 1;
+    DWORD size = sizeof(light);
+
+    /* An explicit AGB_COLOR_SCHEME wins (probes and tests pin the scheme). */
+    if (GetEnvironmentVariableA("AGB_COLOR_SCHEME", NULL, 0) > 0)
+        return;
+
+    /* NOTE: the path must be a double-backslash C literal; with single
+     * backslashes the escapes are invalid and the key silently turns into
+     * "SoftwareMicrosoftWindows...", which reads as ERROR_FILE_NOT_FOUND. */
+    if (RegGetValueA(HKEY_CURRENT_USER,
+                     "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+                     "AppsUseLightTheme", RRF_RT_REG_DWORD, NULL, &light, &size) != ERROR_SUCCESS)
+        return;
+
+    SetEnvironmentVariableA("AGB_COLOR_SCHEME", light ? "light" : "dark");
+}
+
 int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, int show)
 {
     WNDCLASSA wc;
@@ -2565,6 +2590,8 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
 
     atexit(shellExitTrace);
     g_instance = instance;
+
+    applySystemColorScheme();
 
     /* Headless first: no window, no toolbar, no session/bookmark files. */
     parseShellArgv();

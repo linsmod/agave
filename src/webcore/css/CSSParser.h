@@ -45,6 +45,7 @@ namespace WebCore {
     class MediaList;
     class MediaQueryExp;
     class StyleBase;
+    class StyleCustomPropertyData;
     class StyleList;
     struct Function;
 
@@ -132,24 +133,26 @@ namespace WebCore {
         Document* document() const;
 
         void addProperty(int propId, PassRefPtr<CSSValue>, bool important);
+        /* Adds a declaration whose value must be resolved per element:
+         * '--x: value' (customName set) and properties whose value contains
+         * var() (rawValue set, expanded by CSSStyleSelector). The CSSValue is a
+         * placeholder and must never be applied directly. */
+        void addRawValueProperty(int propId, const String& rawValue, const String& customName, bool important);
         void rollbackLastProperties(int num);
         bool hasProperties() const { return numParsedProperties > 0; }
 
         /* --- CSS custom properties ('--x: value') and var() ---------------
-         * The table is process wide: var() is expanded while the sheet is
-         * parsed, i.e. before any element is known. Element scoping
-         * (`.theme { --x: ... }` overriding `:root { --x: ... }`) is therefore
-         * approximated by the last definition seen. */
-        static void setCustomProperty(const String& name, const String& value);
-        static String customPropertyValue(const String& name);
+         * Custom properties are resolved per element (cascade + inheritance) in
+         * CSSStyleSelector; the parser only records the raw text. */
         static void clearCustomProperties();
 
-        /* Serializes a parsed value list back to CSS text, and expands
-         * var(--x[, fallback]) in it. Returns a null String when a referenced
-         * variable is undefined and has no fallback (the declaration must be
-         * dropped, per spec). */
+        /* Expands var(--x[, fallback]) in `text` using the custom properties
+         * resolved for one element. Returns a null String when a referenced
+         * variable is undefined and has no fallback (the declaration is invalid
+         * at computed-value time and must be ignored). */
+        static String expandVariables(const String& text, StyleCustomPropertyData* properties);
+        /* Serializes a parsed value list back to CSS text. */
         String valueText(ValueList*);
-        String expandVariables(const String& text);
         /* True when the value list contains a var() call anywhere (cheap walk,
          * so declarations without variables skip the text round trip). */
         bool hasVarFunction(ValueList*);

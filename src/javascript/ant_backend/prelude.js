@@ -63,9 +63,80 @@
   if (!g.CSS.escape) g.CSS.escape = function (s) { return String(s); };
   if (!g.matchMedia) {
     g.matchMedia = function (query) {
+      /* The CSS side evaluates media queries in C++ (MediaQueryEvaluator); the
+         JS side needs the same answers because responsive pages branch on
+         matchMedia() before they ever read a computed style. Evaluate the
+         queries we can answer honestly and leave the rest false. */
+      var text = String(query);
+      var dark = false;
+      try { dark = !!g.__agbPrefersDark(); } catch (e) { dark = false; }
+      var vw = 0, vh = 0, dpr = 1;
+      try { vw = g.innerWidth | 0; vh = g.innerHeight | 0; } catch (e) {}
+      try { if (g.devicePixelRatio > 0) dpr = g.devicePixelRatio; } catch (e) {}
+
+      function evalFeature(raw) {
+        var f = raw.replace(/^\s+|\s+$/g, '').toLowerCase();
+        var colon = f.indexOf(':');
+        var name = (colon < 0 ? f : f.slice(0, colon)).replace(/\s+/g, '');
+        var value = colon < 0 ? '' : f.slice(colon + 1).replace(/^\s+|\s+$/g, '');
+        if (name === 'prefers-color-scheme')
+          return value === 'dark' ? dark : (value === 'light' ? !dark : false);
+        if (name === 'prefers-reduced-motion')
+          return value === 'no-preference';
+        if (name === 'orientation')
+          return value === 'portrait' ? vh >= vw : (value === 'landscape' ? vw > vh : false);
+        var min = false, max = false, base = name;
+        if (base.slice(0, 4) === 'min-') { min = true; base = base.slice(4); }
+        else if (base.slice(0, 4) === 'max-') { max = true; base = base.slice(4); }
+        if (base === 'resolution') {
+          var n = parseFloat(value);
+          if (isNaN(n)) return false;
+          var unit = value.replace(/^[-0-9.]+/, '');
+          var want = unit.indexOf('dpi') === 0 ? n / 96
+                   : (unit.indexOf('dpcm') === 0 ? n * 2.54 / 96 : n);
+          return min ? dpr >= want : (max ? dpr <= want : Math.abs(dpr - want) < 0.01);
+        }
+        var actual;
+        if (base === 'width' || base === 'device-width') actual = vw;
+        else if (base === 'height' || base === 'device-height') actual = vh;
+        else return false;
+        var wantPx = parseFloat(value);
+        if (isNaN(wantPx)) return false;
+        return min ? actual >= wantPx : (max ? actual <= wantPx : actual === wantPx);
+      }
+
+      function evalOne(q) {
+        var s = q.replace(/^\s+|\s+$/g, '').toLowerCase();
+        if (!s) return true;
+        var negate = false;
+        if (s.slice(0, 4) === 'not ') { negate = true; s = s.slice(4); }
+        var features = [], typeText = '', depth = 0, start = -1, i;
+        for (i = 0; i < s.length; ++i) {
+          var c = s.charAt(i);
+          if (c === '(') { if (depth === 0) start = i + 1; depth++; }
+          else if (c === ')') { depth--; if (depth === 0 && start >= 0) { features.push(s.slice(start, i)); start = -1; } }
+          else if (depth === 0) typeText += c;
+        }
+        var ok = true;
+        var types = typeText.replace(/\band\b/g, ' ').replace(/\bonly\b/g, ' ').replace(/\s+/g, ' ').replace(/^\s+|\s+$/g, '');
+        if (types) {
+          var t = types.split(' ')[0];
+          if (t === 'print' || t === 'speech') ok = false;
+        }
+        for (var k = 0; k < features.length; ++k) {
+          if (!evalFeature(features[k])) { ok = false; break; }
+        }
+        return negate ? !ok : ok;
+      }
+
+      var matches = false;
+      var parts = text.split(',');
+      for (var p = 0; p < parts.length; ++p) {
+        if (evalOne(parts[p])) { matches = true; break; }
+      }
       var list = {
         media: String(query),
-        matches: false,
+        matches: matches,
         onchange: null,
         addListener: function () {},
         removeListener: function () {},
@@ -119,7 +190,7 @@
       'borderLeftWidth','borderTopColor','borderColor','font','fontStyle','fontVariant','fontStretch',
       'fontSize','fontFamily','fontWeight','lineHeight',
       'opacity','visibility','overflow','zIndex','textAlign','verticalAlign','float','clear','cursor',
-      'whiteSpace','textDecoration','borderRadius','boxShadow','transform'];
+      'whiteSpace','textDecoration','borderRadius','boxShadow','transform','boxSizing'];
     /* Accessors live on one shared prototype: defining 40 properties per call
      * made every getComputedStyle() cost ~0.57ms; css3test calls it thousands
      * of times, which is what pinned a core. The raw bridge is ~0.003ms. */

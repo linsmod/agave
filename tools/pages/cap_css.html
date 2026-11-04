@@ -14,6 +14,20 @@
 #is:is(p) { color: rgb(1, 2, 3); }
 #wh:where(p) { color: rgb(4, 5, 6); }
 #var { color: var(--missing, rgb(7, 8, 9)); }
+/* Custom properties cascade per element and inherit (R39). */
+:root { --cap-c: rgb(1, 2, 3); }
+#varcascade { --cap-c: rgb(9, 8, 7); color: var(--cap-c); }
+#varinherit { color: var(--cap-c); }
+/* Unprefixed box-sizing used to be dropped entirely (R39). */
+#bs { box-sizing: border-box; width: 100px; padding: 10px; border: 1px solid rgb(0, 0, 0); }
+/* flex items are blockified: an inline <span> must get the width/height (R39). */
+#fxb { display: flex; width: 200px; height: 40px; align-items: center; }
+#fxb > span { width: 20px; height: 10px; background-color: rgb(0, 0, 0); }
+/* media queries: a bare expression and a colour-scheme one (R39). */
+#mq { width: 10px; height: 10px; }
+@media (min-width: 1px) { #mq { border-top: 2px solid rgb(3, 3, 3); } }
+@media (prefers-color-scheme: dark) { #mq { background-color: rgb(0, 0, 200); } }
+@media (prefers-color-scheme: light) { #mq { background-color: rgb(200, 0, 0); } }
 </style>
 </head>
 <body>
@@ -26,6 +40,11 @@
 <p id="is">is</p>
 <p id="wh">where</p>
 <div id="var">var</div>
+<div id="varcascade">varcascade</div>
+<div id="varinherit">varinherit</div>
+<div id="bs">bs</div>
+<div id="fxb"><span></span></div>
+<div id="mq">mq</div>
 <script>
 /* Same contract as cap_dom.html: report through document.title. */
 function cs(id) { return getComputedStyle(document.getElementById(id)); }
@@ -39,7 +58,16 @@ document.title = [
   'gap=' + cs('fx').gap,
   'isColor=' + cs('is').color,
   'whereColor=' + cs('wh').color,
-  'varColor=' + cs('var').color
+  'varColor=' + cs('var').color,
+  'varCascade=' + cs('varcascade').color,
+  'varInherit=' + cs('varinherit').color,
+  'boxSizing=' + cs('bs').boxSizing,
+  'boxWidth=' + document.getElementById('bs').getBoundingClientRect().width,
+  'flexItemW=' + document.querySelector('#fxb > span').getBoundingClientRect().width,
+  'bareMedia=' + cs('mq').borderTopWidth,
+  'schemeBg=' + cs('mq').backgroundColor,
+  'mediaDark=' + (matchMedia('(prefers-color-scheme: dark)').matches ? 1 : 0),
+  'mediaMin=' + (matchMedia('(min-width: 1px)').matches ? 1 : 0)
 ].join(' ');
 </script>
 </body>

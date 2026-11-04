@@ -33,8 +33,14 @@ iframe 的视口度量按帧求值（R30）、**每个 frame 自己的 `window` 
 `WM_IME_CHAR` 与 `WM_CHAR` 同一处理器、代理对配对成 4 字节 UTF-8；顺带修掉 grapheme 迭代器对
 emoji 的死循环和「emoji 之后光标退到它前面」；`--ime` 无头回归）。
 
+**CSS 主题化**（R39：自定义属性按元素级联并继承、`!important`、`getComputedStyle(el).getPropertyValue('--x')`；
+`display:flex` 的子元素按现代规范 blockify（inline 子项不再是 0×0）；`prefers-color-scheme` 由宿主按
+Windows `AppsUseLightTheme` 注入 `AGB_COLOR_SCHEME`，CSS 与 `matchMedia` 同一答案；`matchMedia` 另支持
+width/height/orientation/resolution；无媒体类型的 `@media (min-width: …)` 能解析；无前缀 `box-sizing` 生效）。
+**圆角裁剪不再吞掉脏矩形**（R40：`clip(path)` 与设备矩形求交，聚焦/局部重绘时不再把文字擦掉）。
+
 **已经被检查过的"看起来不能用"**（别再当缺陷重开）：ant 的 Worker 是真的（R22）、ant 的 wasm 引擎是真的
-（R19）、渐变/`var()`/flex 大多可用（R11）、滚动与 hover 重绘正确（R13/R14）、刷新后 realm/监听器会清理（R9/R10）。
+（R19）、渐变/`var()`/flex 大多可用（R11/R39）、滚动与 hover 重绘正确（R13/R14/R40）、刷新后 realm/监听器会清理（R9/R10）。
 
 **还没做**（§4 有验收标准）：模块图 flush 阻塞 engine 线程（P0-b）、DOMContentLoaded 双发（P0-c）、
 模块调度状态不是 per-realm（P1-a）、`g_documentParsed` 死标志（P1-c）、worker 里没有网络（P1-d）、

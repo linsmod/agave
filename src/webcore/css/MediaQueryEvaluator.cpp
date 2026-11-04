@@ -28,9 +28,16 @@
 #include "config.h"
 #include "MediaQueryEvaluator.h"
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 #include "Chrome.h"
 #include "CSSPrimitiveValue.h"
 #include "CSSValueList.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include "DeprecatedString.h"
 #include "FloatRect.h"
 #include "Frame.h"
@@ -255,6 +262,49 @@ static bool device_pixel_ratioMediaFeatureEval(CSSValue *value, RenderStyle* sty
     return page->chrome()->scaleFactor() != 0;
 }
 
+/* prefers-color-scheme: what the OS is set to, or AGB_COLOR_SCHEME=dark|light.
+ * Read once: a page re-evaluates media queries on resize, not on a theme flip. */
+bool prefersDarkColorScheme()
+{
+    static int dark = -1;
+
+    if (dark < 0) {
+        /* Read the process environment, not the CRT's copy of it: the host
+         * (agave_shell) and this DLL may each link their own static CRT, so a
+         * putenv() in the host is invisible to getenv() here. Win32 reads the
+         * single PEB copy, which both sides agree on. */
+        char setting[32];
+        DWORD length = GetEnvironmentVariableA("AGB_COLOR_SCHEME", setting, sizeof(setting));
+
+        dark = 0;
+        if (length > 0 && length < sizeof(setting) &&
+            (!_stricmp(setting, "dark") || !strcmp(setting, "1")))
+            dark = 1;
+    }
+
+    return dark != 0;
+}
+
+static bool prefers_color_schemeMediaFeatureEval(CSSValue* value, RenderStyle*, Page*, MediaFeaturePrefix)
+{
+    bool dark = prefersDarkColorScheme();
+
+    if (!value)
+        return true;   /* '(prefers-color-scheme)' matches either */
+
+    if (!value->isPrimitiveValue())
+        return false;
+
+    String wanted = static_cast<CSSPrimitiveValue*>(value)->getStringValue().lower();
+
+    if (wanted == "dark")
+        return dark;
+    if (wanted == "light")
+        return !dark;
+
+    return false;
+}
+
 static bool gridMediaFeatureEval(CSSValue* value, RenderStyle* style, Page* page,  MediaFeaturePrefix op)
 {
     // if output device is bitmap, grid: 0 == true
@@ -411,6 +461,7 @@ bool MediaQueryEvaluator::eval(const MediaQueryExp* expr) const
     // and let trampoline functions override the prefix if prefix is
     // used
     EvalFunc func = gFunctionMap->get(expr->mediaFeature().impl());
+
     if (func)
         return func(expr->value(), m_style, m_page, NoPrefix);
 

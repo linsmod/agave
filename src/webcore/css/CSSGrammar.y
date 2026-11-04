@@ -108,7 +108,8 @@ int getPropertyID(const char* tagStr, int len)
             { "flex-wrap", "-webkit-box-lines" },
             { "justify-content", "-webkit-box-pack" },
             { "align-items", "-webkit-box-align" },
-            { "order", "-webkit-box-ordinal-group" }
+            { "order", "-webkit-box-ordinal-group" },
+            { "box-sizing", "-webkit-box-sizing" }
         };
 
         for (size_t i = 0; i < sizeof(aliases) / sizeof(aliases[0]); ++i) {
@@ -1001,19 +1002,16 @@ declaration:
         CSSParser* p = static_cast<CSSParser*>(parser);
         if ($1 && $4) {
             if ($1 == CSS_PROP_CUSTOM_PROPERTY) {
-                /* '--x: value' defines a variable; the value stays text until
-                 * a var() reference is expanded. */
-                CSSParser::setCustomProperty(p->lastPropertyName, p->valueText($4));
+                /* '--x: value' defines a variable for the element the rule
+                 * matches; the text is kept and resolved during style
+                 * resolution (CSSStyleSelector), where the cascade is known. */
+                p->addRawValueProperty(CSS_PROP_CUSTOM_PROPERTY, p->valueText($4), p->lastPropertyName, $5);
                 $$ = true;
             } else if (p->hasVarFunction($4)) {
-                String text = p->valueText($4);
-                /* Expand now: the value cannot be parsed while var() is in
-                 * it. A null result means an unknown variable without a
-                 * fallback, which invalidates the declaration. */
-                String expanded = p->expandVariables(text);
-
-                if (!expanded.isNull())
-                    $$ = p->parseExpandedValue($1, expanded, $5);
+                /* Same for a normal property that references variables: the
+                 * value is expanded per element, not per sheet. */
+                p->addRawValueProperty($1, p->valueText($4), String(), $5);
+                $$ = true;
             } else {
                 p->valueList = p->sinkFloatingValueList($4);
                 int oldParsedProperties = p->numParsedProperties;

@@ -24,6 +24,7 @@
 #define CSSProperty_h
 
 #include "CSSValue.h"
+#include "PlatformString.h"
 #include <wtf/PassRefPtr.h>
 #include <wtf/RefPtr.h>
 
@@ -46,6 +47,8 @@ public:
         m_shorthandID = other.m_shorthandID;
         m_important = other.m_important;
         m_value = other.m_value;
+        m_rawValue = other.m_rawValue;
+        m_customName = other.m_customName;
         return *this;
     }
 
@@ -56,7 +59,17 @@ public:
     bool isImplicit() const { return m_implicit; }
 
     CSSValue* value() const { return m_value.get(); }
-    
+
+    /* A declaration whose value still contains var() keeps the raw text and is
+     * expanded when the style is resolved: the variables depend on the element
+     * (see CSSStyleSelector). */
+    const String& rawValue() const { return m_rawValue; }
+    void setRawValue(const String& text) { m_rawValue = text; }
+
+    /* For CSS_PROP_CUSTOM_PROPERTY ('--x: value'): the variable name. */
+    const String& customName() const { return m_customName; }
+    void setCustomName(const String& name) { m_customName = name; }
+
     String cssText() const;
 
     friend bool operator==(const CSSProperty&, const CSSProperty&);
@@ -68,6 +81,8 @@ public:
     bool m_implicit : 1; // Whether or not the property was set implicitly as the result of a shorthand.
 
     RefPtr<CSSValue> m_value;
+    String m_rawValue;
+    String m_customName;
 };
 
 } // namespace WebCore

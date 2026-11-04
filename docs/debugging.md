@@ -159,6 +159,7 @@ antbridge.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**�
 | JS 绑定 | `AGB_DOM_DEBUG=1` / `AGB_STYLE_DEBUG=1` / `AGB_EVT_DEBUG=1` | DOM 绑定 / style 访问 / realm·teardown 事件 |
 | 崩溃 | `AGB_TRACE_CRASH=1` | 记录最近 256 条内部 trace（崩溃后能回看走到哪） |
 | 性能 | `AGB_PROFILE=1` / `AGB_PERF_LOG=1` | RIP 采样直方图（退出时 dump `[profjs]`）/ 帧耗时（paint+js > 100ms 才打） |
+| 绘制诊断 | `AGB_PAINT_FULL=1` | 每帧整屏重绘（忽略脏矩形）；用来区分"失效/裁剪错"和"布局错"（见 §4） |
 | 页面 | `AGB_TITLE_DEBUG=1` / `AGB_SCRIPT_DEBUG=1` | `document.title` 轮询 / tokenizer 脚本加载 |
 | CSS/布局 | `AGB_CSS_DEBUG=1` / `AGB_LAYOUT_DEBUG=1` / `AGB_BG_DEBUG=1` | 未实现 CSS 属性日志 / 布局 / 背景层 |
 | 模块 | `AGB_MODULE_DEBUG=1` | 模块抓取/求值/预取（`[modfetch]`/`[modeval]`） |
@@ -197,6 +198,20 @@ antbridge.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**�
   从不 `ShowWindow`，抓的是控件的 mirror 缓冲（`agave_webview_paint_to`），所以屏幕上什么都不会出现。
   不要启动 GUI 壳截图、不要 `SetForegroundWindow`、不要抓屏（会抓到任务视图/别的窗口，也会打扰用户）。
   需要像素时优先用它；能只看数字就别截图。
+- **画面"少了一块"（文字/图标不见了）先分清是布局还是绘制**：三步定死，别猜。
+  ①**同一次运行里两处取样**：`--wait 6500` 与 `--wait 8000` 各截一张，比较同一像素区域
+  （例如 deepseek 登录页 `+86` 在 `(265..305, 100..125)`）的亮像素数量。数字从有到无 = 画上去后**被擦掉**，
+  两次都没有 = 从来没画（布局/样式问题）。
+  ②**抓"哪一帧擦的"**：在 `WebView::paintView()` 的 `paint()` 之后，直接读 `d->m_buffer`
+  （BGRA，pitch=`m_width*4`）采样同一像素并打时间戳，就能把"擦除"归到某一帧，同时把该帧的
+  `d->m_drawRect` 打出来；再在 `GraphicsContext::fillRect` / `clip` 里打请求矩形与当前 clip，
+  对照"请求超出 clip 却落笔了"就能判定是**裁剪丢失**（R40 就是这么抓到的：`[fill] r=262,103 336x35`
+  的 clip 只有 `309,103 3x22`）。
+  ③**`AGB_PAINT_FULL=1` 反向验证**：它把每帧的脏矩形强制成整个视口（`WebView::paintView`）。
+  开了之后画面正常 → 引擎的**失效/裁剪**有问题（脏区太小或 clip 被丢），**不是布局**；
+  开了还是不对 → 回头查布局/样式。这个开关只用于诊断，别留在默认路径上。
+  另注：本地复现页很容易"看起来正常"，因为整屏重绘时脏区永远够大 —— 要复现这类 bug 必须制造**局部重绘**
+  （光标闪烁、iframe 局部刷新、hover 变色都行）。
 - **"这个元素为什么是 0×0"**：先 `__agbLayoutInfo(node)`（不强制布局）——
   `renderer=0` 是"没有渲染树对象"（样式在最后一次重算时是 `display:none`），
   `renderer=1` 但 `w=0` 是"挂上了但从没布局"，两者的修法相反。配合 `[style]` 通道看时序。

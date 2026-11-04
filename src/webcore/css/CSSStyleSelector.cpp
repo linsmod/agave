@@ -36,6 +36,8 @@
 #include <stdlib.h>
 #include "CSSImportRule.h"
 #include "CSSMediaRule.h"
+#include "CSSMutableStyleDeclaration.h"
+#include "CSSParser.h"
 #include "CSSProperty.h"
 #include "CSSPropertyNames.h"
 #include "CSSRuleList.h"
@@ -870,6 +872,11 @@ RenderStyle* CSSStyleSelector::styleForElement(Element* e, RenderStyle* defaultP
     // The order is (1) high-priority not important, (2) high-priority important, (3) normal not important
     // and (4) normal important.
     m_lineHeightValue = 0;
+
+    /* Custom properties first: every var() below resolves against them. */
+    resolveCustomProperties(parentStyle == style ? 0 : parentStyle);
+    style->setCustomProperties(m_customProperties);
+
     applyDeclarations(true, false, 0, m_matchedDecls.size() - 1);
     if (!resolveForRootDefault) {
         applyDeclarations(true, true, firstAuthorRule, lastAuthorRule);
@@ -1123,6 +1130,22 @@ void CSSStyleSelector::adjustRenderStyle(RenderStyle* style, Element *e)
                 style->setDisplay(BLOCK);
         }
         
+        // Children of a flexible box are flex items, and the modern spec blockifies
+        // inline-level ones (display:flex must not leave an inline <span> with no
+        // box to size: its width/height are ignored and it measures 0x0). We map
+        // display:flex onto the old -webkit-box implementation, which predates
+        // that rule, so the blockification has to happen here.
+        if (e && parentStyle && style->position() == StaticPosition &&
+            (parentStyle->display() == BOX || parentStyle->display() == INLINE_BOX)) {
+            EDisplay display = style->display();
+            if (display == INLINE || display == INLINE_BLOCK)
+                style->setDisplay(BLOCK);
+            else if (display == INLINE_TABLE)
+                style->setDisplay(TABLE);
+            else if (display == INLINE_BOX)
+                style->setDisplay(BOX);
+        }
+
         // After performing the display mutation, check table rows.  We do not honor position:relative on
         // table rows or cells.  This has been established in CSS2.1 (and caused a crash in containingBlock()
         // on some sites).
@@ -1787,6 +1810,78 @@ static Length convertToLength(CSSPrimitiveValue *primitiveValue, RenderStyle *st
     return l;
 }
 
+/* Builds the custom property map of the element being resolved: the parent's
+ * map (inherited, shared until we write) updated by every '--x' declaration the
+ * element matched, in cascade order. m_matchedDecls is sorted from lowest to
+ * highest priority, so a later declaration overrides an earlier one; !important
+ * declarations are applied after the normal ones. */
+void CSSStyleSelector::resolveCustomProperties(RenderStyle* parentStyle)
+{
+    RefPtr<StyleCustomPropertyData> properties;
+
+    if (parentStyle && parentStyle->customProperties())
+        properties = parentStyle->customProperties();
+    else
+        properties = StyleCustomPropertyData::create();
+
+    bool copied = !parentStyle || !parentStyle->customProperties();
+
+    for (int importantPass = 0; importantPass < 2; ++importantPass) {
+        for (unsigned i = 0; i < m_matchedDecls.size(); ++i) {
+            CSSMutableStyleDeclaration* decl = m_matchedDecls[i];
+            DeprecatedValueListConstIterator<CSSProperty> end;
+
+            for (DeprecatedValueListConstIterator<CSSProperty> it = decl->valuesIterator(); it != end; ++it) {
+                const CSSProperty& current = *it;
+
+                if (current.id() != CSS_PROP_CUSTOM_PROPERTY)
+                    continue;
+                if (current.isImportant() != (importantPass != 0))
+                    continue;
+                if (!copied) {
+                    properties = properties->copy();
+                    copied = true;
+                }
+                fprintf(stderr, "[dbg] var set '%s' = '%s'\n", current.customName().utf8().data(),
+                        current.rawValue().utf8().data());
+                properties->setProperty(current.customName(), current.rawValue());
+            }
+        }
+    }
+
+    m_customProperties = properties;
+}
+
+/* Parses the var()-expanded text of a declaration and applies the resulting
+ * properties. The parse is cached per (property, text): the same expanded value
+ * repeats across elements and rules. */
+void CSSStyleSelector::applyExpandedProperty(int propId, const String& text)
+{
+    String key = String::number(propId) + "|" + text;
+    RefPtr<CSSMutableStyleDeclaration> parsed = m_expandedValues.get(key);
+
+    if (!parsed) {
+        parsed = new CSSMutableStyleDeclaration(0);
+        {
+            CSSParser parser;
+            parser.parseValue(parsed.get(), propId, text, false);
+        }
+
+        if (m_expandedValues.size() > 1024)
+            m_expandedValues.clear();
+        m_expandedValues.set(key, parsed);
+    }
+
+    DeprecatedValueListConstIterator<CSSProperty> end;
+
+    for (DeprecatedValueListConstIterator<CSSProperty> it = parsed->valuesIterator(); it != end; ++it) {
+        const CSSProperty& property = *it;
+
+        if (property.id() != CSS_PROP_CUSTOM_PROPERTY && property.value())
+            applyProperty(property.id(), property.value());
+    }
+}
+
 void CSSStyleSelector::applyDeclarations(bool applyFirst, bool isImportant,
                                          int startIndex, int endIndex)
 {
@@ -1796,6 +1891,9 @@ void CSSStyleSelector::applyDeclarations(bool applyFirst, bool isImportant,
         DeprecatedValueListConstIterator<CSSProperty> end;
         for (DeprecatedValueListConstIterator<CSSProperty> it = decl->valuesIterator(); it != end; ++it) {
             const CSSProperty& current = *it;
+            /* '--x: value' was already folded into m_customProperties. */
+            if (current.id() == CSS_PROP_CUSTOM_PROPERTY)
+                continue;
             // give special priority to font-xxx, color properties
             if (isImportant == current.isImportant()) {
                 bool first;
@@ -1822,8 +1920,17 @@ void CSSStyleSelector::applyDeclarations(bool applyFirst, bool isImportant,
                         first = false;
                         break;
                 }
-                if (first == applyFirst)
-                    applyProperty(current.id(), current.value());
+                if (first == applyFirst) {
+                    if (!current.rawValue().isEmpty()) {
+                        /* The value still contains var(): resolve it against
+                         * the custom properties of this element. */
+                        String expanded = CSSParser::expandVariables(current.rawValue(), m_customProperties.get());
+
+                        if (!expanded.isNull())
+                            applyExpandedProperty(current.id(), expanded);
+                    } else
+                        applyProperty(current.id(), current.value());
+                }
             }
         }
     }

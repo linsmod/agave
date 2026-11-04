@@ -43,6 +43,7 @@
 #include "CSSMutableStyleDeclaration.h"
 #include "CSSPrimitiveValue.h"
 #include "CSSProperty.h"
+#include "StyleCustomPropertyData.h"
 #include "CSSPropertyNames.h"
 #include "CSSQuirkPrimitiveValue.h"
 #include "CSSRuleList.h"
@@ -206,6 +207,7 @@ void CSSParser::setupParser(const char* prefix, const String& string, const char
 }
 
 static String rewriteCustomPropertyNames(const String& css);
+static String rewriteBareMediaQueries(const String& css);
 
 void CSSParser::parseSheet(CSSStyleSheet* sheet, const String& string)
 {
@@ -217,7 +219,7 @@ void CSSParser::parseSheet(CSSStyleSheet* sheet, const String& string)
      * next one) from inheriting a previous sheet's values. */
     clearCustomProperties();
     
-    setupParser("", rewriteCustomPropertyNames(string), "");
+    setupParser("", rewriteBareMediaQueries(rewriteCustomPropertyNames(string)), "");
 
     CSSParser* old = currentParser;
     currentParser = this;
@@ -244,51 +246,55 @@ PassRefPtr<CSSRule> CSSParser::parseRule(CSSStyleSheet *sheet, const String &str
 /* ------------------------------------------------------------------------- */
 /* CSS custom properties ('--x: value') and var()                            */
 /* ------------------------------------------------------------------------- */
-/* A page defines a few dozen variables at most, and sheet parsing is not hot
- * enough to justify a hash map here. */
-static std::vector<std::pair<String, String> >* customPropertyTable()
-{
-    static std::vector<std::pair<String, String> >* table = NULL;
-
-    if (!table)
-        table = new std::vector<std::pair<String, String> >();
-
-    return table;
-}
-
-void CSSParser::setCustomProperty(const String& name, const String& value)
-{
-    std::vector<std::pair<String, String> >* table = customPropertyTable();
-
-    if (getenv("AGB_CSS_DEBUG"))
-        fprintf(stderr, "[var] define %s = '%s'\n", name.utf8().data(), value.utf8().data());
-
-    for (size_t i = 0; i < table->size(); ++i) {
-        if ((*table)[i].first == name) {
-            /* First definition wins: declarations are expanded while the sheet
-             * is parsed, so letting a later rule overwrite the value would
-             * change what the rules above already resolved with. */
-            return;
-        }
-    }
-
-    table->push_back(std::make_pair(name, value));
-}
-
-String CSSParser::customPropertyValue(const String& name)
-{
-    std::vector<std::pair<String, String> >* table = customPropertyTable();
-
-    for (size_t i = 0; i < table->size(); ++i)
-        if ((*table)[i].first == name)
-            return (*table)[i].second;
-
-    return String();
-}
+/* Custom properties are NOT resolved here: their value depends on the
+ * cascade at the element (theme classes, per-component overrides) and on the
+ * parent element. The parser records '--x: value' as a declaration with the
+ * raw text, and any declaration whose value contains var() the same way;
+ * CSSStyleSelector resolves both while it computes the style of an element. */
 
 void CSSParser::clearCustomProperties(void)
 {
-    customPropertyTable()->clear();
+}
+
+/* The media-query grammar requires a media type before the first expression
+ * ('screen and (min-width: 1px)'). Modern pages write '@media (min-width: 1px)'
+ * without one, which the grammar rejects - the whole block was dropped. Give it
+ * the implied 'all and ' so those rules parse. */
+static String rewriteBareMediaQueries(const String& css)
+{
+    if (!css.contains("@media"))
+        return css;
+
+    std::vector<UChar> out;
+    const UChar* text = css.characters();
+    unsigned i = 0;
+    unsigned length = css.length();
+
+    out.reserve(length + 16);
+
+    while (i < length) {
+        if (text[i] == '@' && i + 6 <= length && css.substring(i, 6) == String("@media")) {
+            unsigned j = i + 6;
+
+            out.insert(out.end(), text + i, text + j);
+
+            while (j < length && (text[j] == ' ' || text[j] == '\t' || text[j] == '\n' || text[j] == '\r'))
+                out.push_back(text[j++]);
+
+            if (j < length && text[j] == '(') {
+                static const char prefix[] = "all and ";
+                out.insert(out.end(), prefix, prefix + 8);
+            }
+
+            i = j;
+            continue;
+        }
+
+        out.push_back(text[i]);
+        ++i;
+    }
+
+    return out.empty() ? css : String(&out[0], (unsigned)out.size());
 }
 
 static String charToString(UChar c)
@@ -354,7 +360,12 @@ static String rewriteCustomPropertyNames(const String& css)
             continue;
         }
 
-        if (c == '-' && i + 2 < length && text[i + 1] == '-' && isCssIdentChar(text[i + 2])) {
+        /* Only a token-initial '--' is a custom property name. A '--' inside
+         * an identifier is part of a class/name: '.ds-button--l' must stay
+         * '.ds-button--l', otherwise BEM-style class names (which is what real
+         * design systems use) stop matching. */
+        if (c == '-' && i + 2 < length && text[i + 1] == '-' && isCssIdentChar(text[i + 2])
+            && (i == 0 || !isCssIdentChar(text[i - 1]))) {
             out.push_back('-');
             out.push_back('a');
             out.push_back('g');
@@ -442,6 +453,17 @@ String CSSParser::valueText(ValueList* list)
         } else if (v->unit == Value::Q_EMS) {
             appendCssNumber(out, v->fValue);
             out += "em";
+        } else if (v->unit == CSSPrimitiveValue::CSS_RGBCOLOR) {
+            /* Hex colours keep the digits in `string` (the '#' is a token of
+             * its own); serializing them as a number produced garbage like
+             * "1.15761e-311" in custom property values. */
+            out += "#";
+            out += domString(v->string);
+        } else if (v->unit == CSSPrimitiveValue::CSS_DIMENSION) {
+            /* "10px" arrives as one dimension token; its text is the value. */
+            out += domString(v->string);
+        } else if (v->unit == CSSPrimitiveValue::CSS_UNKNOWN) {
+            /* Unicoderange and friends: nothing sensible to serialize. */
         } else {
             appendCssNumber(out, v->fValue);
             out += String(cssUnitSuffix(v->unit));
@@ -486,15 +508,13 @@ static String trimCopy(const String& text)
     return text.substring(begin, end - begin);
 }
 
-/* Replaces var(--x[, fallback]) with the value of --x. Returns a null String
- * when a variable is unknown and has no fallback: the declaration is invalid. */
-String CSSParser::expandVariables(const String& text)
+/* One pass over var(--x[, fallback]) using the custom properties of one
+ * element. `invalid` is set when a variable is unknown and has no fallback
+ * (the declaration is then invalid at computed-value time). */
+static String expandVariablesOnce(const String& text, WebCore::StyleCustomPropertyData* properties, bool& invalid)
 {
     String out;
     unsigned i = 0;
-
-    if (!text.contains("var("))
-        return text;
 
     while (i < text.length()) {
         if (text[i] == 'v' && i + 4 <= text.length() && text.substring(i, 4) == String("var(")) {
@@ -516,16 +536,25 @@ String CSSParser::expandVariables(const String& text)
                     comma = j;
             }
 
-            if (!found)
-                return text;   /* malformed: let the value parser judge it */
+            if (!found) {
+                /* Malformed: let the value parser judge it. */
+                out += charToString(text[i]);
+                ++i;
+                continue;
+            }
 
             {
                 String name = trimCopy(text.substring(i + 4, (comma ? comma : j) - (i + 4)));
-                String value = customPropertyValue(name);
+                String value;
+
+                if (properties)
+                    value = properties->getProperty(name);
 
                 if (value.isEmpty()) {
-                    if (!comma)
+                    if (!comma) {
+                        invalid = true;
                         return String();
+                    }
 
                     value = trimCopy(text.substring(comma + 1, j - comma - 1));
                 }
@@ -542,6 +571,31 @@ String CSSParser::expandVariables(const String& text)
     }
 
     return out;
+}
+
+/* Replaces var(--x[, fallback]) with the value of --x, recursively (a custom
+ * property may reference another one). Returns a null String when a variable is
+ * unknown and has no fallback: the declaration must be ignored. */
+String CSSParser::expandVariables(const String& text, StyleCustomPropertyData* properties)
+{
+    String current = text;
+
+    for (int depth = 0; depth < 16; ++depth) {
+        if (!current.contains("var("))
+            return current;
+
+        {
+            bool invalid = false;
+            String next = expandVariablesOnce(current, properties, invalid);
+
+            if (invalid)
+                return String();
+
+            current = next;
+        }
+    }
+
+    return String();
 }
 
 void CSSParser::appendProperties(CSSParser& other)
@@ -595,12 +649,14 @@ bool CSSParser::parseValue(CSSMutableStyleDeclaration *declaration, int _id, con
         String text = rewriteCustomPropertyNames(string);
 
         if (text.contains("var(")) {
-            String expanded = expandVariables(text);
-
-            if (expanded.isNull())
-                return false;
-
-            text = expanded;
+            /* The variables are only known once the cascade at the element is
+             * resolved, so keep the text and let CSSStyleSelector expand it.
+             * The property still has to reach the declaration: inline styles
+             * (el.style.x = 'var(--y)') go through here, not the grammar. */
+            addRawValueProperty(_id, text, String(), _important);
+            declaration->addParsedProperties(parsedProperties, numParsedProperties);
+            clearProperties();
+            return true;
         }
 
         setupParser("@-webkit-value{", text, "} ");
@@ -703,7 +759,20 @@ bool CSSParser::parseMediaQuery(MediaList* queries, const String& string)
     mediaQuery = 0;
     // can't use { because tokenizer state switches from mediaquery to initial state when it sees { token.
     // instead insert one " " (which is WHITESPACE in CSSGrammar.y)
-    setupParser ("@-webkit-mediaquery ", string, "} ");
+    {
+        /* A media attribute that starts with an expression has no type; the
+         * grammar needs one (same reason as rewriteBareMediaQueries). */
+        String text = string;
+        unsigned begin = 0;
+
+        while (begin < text.length() && (text[begin] == ' ' || text[begin] == '\t'))
+            ++begin;
+
+        if (begin < text.length() && text[begin] == '(')
+            text = String("all and ") + text.substring(begin);
+
+        setupParser("@-webkit-mediaquery ", text, "} ");
+    }
 
     CSSParser* old = currentParser;
     currentParser = this;
@@ -730,6 +799,21 @@ void CSSParser::addProperty(int propId, PassRefPtr<CSSValue> value, bool importa
                                                        maxParsedProperties*sizeof(CSSProperty *));
     }
     parsedProperties[numParsedProperties++] = prop;
+}
+
+/* Records a declaration whose value still needs the element's custom
+ * properties: '--x: value' (customName set) or 'prop: ... var(...) ...'
+ * (rawValue set). The placeholder value is never applied. */
+void CSSParser::addRawValueProperty(int propId, const String& rawValue, const String& customName, bool important)
+{
+    addProperty(propId, new CSSPrimitiveValue(), important);
+
+    if (numParsedProperties) {
+        CSSProperty* property = parsedProperties[numParsedProperties - 1];
+
+        property->setRawValue(rawValue);
+        property->setCustomName(customName);
+    }
 }
 
 void CSSParser::rollbackLastProperties(int num)
@@ -906,12 +990,19 @@ static int modernKeywordID(int propId, const Value* value)
     case CSS_PROP__WEBKIT_BOX_PACK:     /* justify-content */
         if (word == "flex-start") return CSS_VAL_START;
         if (word == "flex-end") return CSS_VAL_END;
+        if (word == "center") return CSS_VAL_CENTER;
         if (word == "space-between") return CSS_VAL_JUSTIFY;
         if (word == "space-around") return CSS_VAL_JUSTIFY;
         break;
     case CSS_PROP__WEBKIT_BOX_ALIGN:    /* align-items */
         if (word == "flex-start") return CSS_VAL_START;
         if (word == "flex-end") return CSS_VAL_END;
+        /* center/baseline/stretch are what every modern layout uses; they
+         * were missing, so `align-items:center` was dropped and content stuck
+         * to the top (the DeepSeek login button text, for instance). */
+        if (word == "center") return CSS_VAL_CENTER;
+        if (word == "baseline") return CSS_VAL_BASELINE;
+        if (word == "stretch") return CSS_VAL_STRETCH;
         break;
     case CSS_PROP__WEBKIT_BOX_LINES:    /* flex-wrap */
         if (word == "wrap") return CSS_VAL_MULTIPLE;

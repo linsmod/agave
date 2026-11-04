@@ -35,7 +35,8 @@ String CSSProperty::cssText() const
 
 bool operator==(const CSSProperty& a, const CSSProperty& b)
 {
-    return a.m_id == b.m_id && a.m_important == b.m_important && a.m_value == b.m_value;
+    return a.m_id == b.m_id && a.m_important == b.m_important && a.m_value == b.m_value
+        && a.m_rawValue == b.m_rawValue && a.m_customName == b.m_customName;
 }
 
 } // namespace WebCore

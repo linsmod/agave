@@ -775,6 +775,7 @@ RenderStyle::RenderStyle(const RenderStyle& o)
     , rareNonInheritedData(o.rareNonInheritedData)
     , rareInheritedData(o.rareInheritedData)
     , inherited(o.inherited)
+    , m_customProperties(o.m_customProperties)
     , pseudoStyle(0)
     , m_pseudoState(o.m_pseudoState)
     , m_affectedByAttributeSelectors(false)
@@ -792,6 +793,9 @@ void RenderStyle::inheritFrom(const RenderStyle* inheritParent)
     rareInheritedData = inheritParent->rareInheritedData;
     inherited = inheritParent->inherited;
     inherited_flags = inheritParent->inherited_flags;
+    /* Custom properties inherit: the child shares the parent's resolved map and
+     * CSSStyleSelector copies it only if the child declares its own. */
+    m_customProperties = inheritParent->m_customProperties;
 #if ENABLE(SVG)
     if (m_svgStyle != inheritParent->m_svgStyle)
         m_svgStyle.access()->inheritFrom(inheritParent->m_svgStyle.get());
@@ -813,7 +817,10 @@ bool RenderStyle::operator==(const RenderStyle& o) const
             surround == o.surround &&
             rareNonInheritedData == o.rareNonInheritedData &&
             rareInheritedData == o.rareInheritedData &&
-            inherited == o.inherited
+            inherited == o.inherited &&
+            /* Same object (shared parent map) or both unset. Two equal maps in
+             * different objects compare unequal, which only costs sharing. */
+            m_customProperties == o.m_customProperties
 #if ENABLE(SVG)
             && m_svgStyle == o.m_svgStyle
 #endif

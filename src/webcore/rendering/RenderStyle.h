@@ -48,6 +48,7 @@
 #include "Length.h"
 #include "Pair.h"
 #include "Shared.h"
+#include "StyleCustomPropertyData.h"
 #include "TextDirection.h"
 #include <wtf/HashMap.h>
 #include <wtf/Vector.h>
@@ -1172,6 +1173,11 @@ protected:
 // inherited attributes
     DataRef<StyleRareInheritedData> rareInheritedData;
     DataRef<StyleInheritedData> inherited;
+
+    /* Custom properties ('--x') resolved for this element. Inherited like the
+     * other inherited data; shared with the parent style until a child
+     * declares a property of its own (see CSSStyleSelector). */
+    RefPtr<StyleCustomPropertyData> m_customProperties;
     
 // list of associated pseudo styles
     RenderStyle* pseudoStyle;
@@ -1823,6 +1829,10 @@ public:
 
     bool unique() const { return m_unique; }
     void setUnique() { m_unique = true; }
+
+    /* Custom properties ('--x') of this style. Never null after resolution. */
+    StyleCustomPropertyData* customProperties() const { return m_customProperties.get(); }
+    void setCustomProperties(PassRefPtr<StyleCustomPropertyData> properties) { m_customProperties = properties; }
 
     // Initial values for all the properties
     static bool initialBackgroundAttachment() { return true; }

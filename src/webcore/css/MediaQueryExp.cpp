@@ -46,6 +46,12 @@ MediaQueryExp::MediaQueryExp(const AtomicString& mediaFeature, ValueList* valueL
                 m_value = new CSSPrimitiveValue(value->id);
             else if (value->unit == CSSPrimitiveValue::CSS_STRING)
                 m_value = new CSSPrimitiveValue(domString(value->string), (CSSPrimitiveValue::UnitTypes) value->unit);
+            else if (value->unit == CSSPrimitiveValue::CSS_IDENT)
+                /* Keyword-valued features (prefers-color-scheme: dark) are not in
+                 * the value keyword table, so `id` is 0 and the value used to be
+                 * dropped: the feature could not tell dark from light. Keep the
+                 * text and let the evaluator compare it. */
+                m_value = new CSSPrimitiveValue(domString(value->string), CSSPrimitiveValue::CSS_STRING);
             else if (value->unit >= CSSPrimitiveValue::CSS_NUMBER &&
                       value->unit <= CSSPrimitiveValue::CSS_KHZ)
                 m_value = new CSSPrimitiveValue(value->fValue, (CSSPrimitiveValue::UnitTypes) value->unit);

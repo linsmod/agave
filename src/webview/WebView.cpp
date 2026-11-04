@@ -277,6 +277,12 @@ void WebView::paintView(void)
 		d->m_frameView->layoutIfNeededRecursive();
 
 		QueryPerformanceCounter(&t1);
+		/* AGB_PAINT_FULL=1 repaints the whole viewport instead of the
+		 * accumulated dirty rect. Diagnostic for "stale text": if the page
+		 * looks right with this on, the invalidation rects are wrong, not the
+		 * layout. */
+		if (getenv("AGB_PAINT_FULL"))
+			d->m_drawRect = IntRect(0, 0, d->m_width, d->m_height);
 		//last draw update rect
 		if (!d->m_drawRect.isEmpty()) {
 			GraphicsContext gc(d->m_context);

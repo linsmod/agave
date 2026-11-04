@@ -181,7 +181,8 @@ int getPropertyID(const char* tagStr, int len)
             { "flex-wrap", "-webkit-box-lines" },
             { "justify-content", "-webkit-box-pack" },
             { "align-items", "-webkit-box-align" },
-            { "order", "-webkit-box-ordinal-group" }
+            { "order", "-webkit-box-ordinal-group" },
+            { "box-sizing", "-webkit-box-sizing" }
         };
 
         for (size_t i = 0; i < sizeof(aliases) / sizeof(aliases[0]); ++i) {
@@ -3124,18 +3125,17 @@ yyreduce:
         CSSParser* p = static_cast<CSSParser*>(parser);
         if ((yyvsp[(1) - (5)].prop_id) && (yyvsp[(4) - (5)].valueList)) {
             if ((yyvsp[(1) - (5)].prop_id) == CSS_PROP_CUSTOM_PROPERTY) {
-                /* '--x: value' defines a variable; the value stays text until
-                 * a var() reference is expanded. */
-                CSSParser::setCustomProperty(p->lastPropertyName, p->valueText((yyvsp[(4) - (5)].valueList)));
+                /* '--x: value' defines a variable for the element the rule
+                 * matches; the text is resolved during style resolution
+                 * (CSSStyleSelector), where the cascade is known. */
+                p->addRawValueProperty(CSS_PROP_CUSTOM_PROPERTY, p->valueText((yyvsp[(4) - (5)].valueList)),
+                                       p->lastPropertyName, (yyvsp[(5) - (5)].b));
                 (yyval.ok) = true;
             } else if (p->hasVarFunction((yyvsp[(4) - (5)].valueList))) {
-                String text = p->valueText((yyvsp[(4) - (5)].valueList));
-                /* A null result means an unknown variable without a fallback,
-                 * which invalidates the declaration. */
-                String expanded = p->expandVariables(text);
-
-                if (!expanded.isNull())
-                    (yyval.ok) = p->parseExpandedValue((yyvsp[(1) - (5)].prop_id), expanded, (yyvsp[(5) - (5)].b));
+                /* Same for a normal property that references variables. */
+                p->addRawValueProperty((yyvsp[(1) - (5)].prop_id), p->valueText((yyvsp[(4) - (5)].valueList)),
+                                       String(), (yyvsp[(5) - (5)].b));
+                (yyval.ok) = true;
             } else {
                 p->valueList = p->sinkFloatingValueList((yyvsp[(4) - (5)].valueList));
                 int oldParsedProperties = p->numParsedProperties;

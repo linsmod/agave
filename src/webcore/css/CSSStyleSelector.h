@@ -160,6 +160,14 @@ class StyledElement;
         void sortMatchedRules(unsigned start, unsigned end);
 
         void applyDeclarations(bool firstPass, bool important, int startIndex, int endIndex);
+
+        /* Custom properties ('--x') are resolved for the element before any
+         * property is applied: the map is inherited from the parent style and
+         * then updated by every '--x' declaration the element matched, in
+         * cascade order. Declarations that still contain var() are expanded
+         * with that map and re-parsed when they are applied. */
+        void resolveCustomProperties(RenderStyle* parentStyle);
+        void applyExpandedProperty(int propId, const String& text);
         
         static CSSStyleSheet* defaultSheet;
         static CSSStyleSheet* quirksSheet;
@@ -207,6 +215,12 @@ class StyledElement;
         // and then a second time for all the remaining properties.  We then do the same two passes
         // for any !important rules.
         Vector<CSSMutableStyleDeclaration*> m_matchedDecls;
+
+        /* Custom properties of the element being resolved (see
+         * resolveCustomProperties), and a small cache of var()-expanded values
+         * so a repeated declaration is parsed once, not once per element. */
+        RefPtr<StyleCustomPropertyData> m_customProperties;
+        HashMap<String, RefPtr<CSSMutableStyleDeclaration> > m_expandedValues;
         
         // A buffer used to hold the set of matched rules for an element, and a temporary buffer used for
         // merge sorting.

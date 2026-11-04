@@ -53,6 +53,7 @@ namespace WebCore {
     macro(min_height, "min-height") \
     macro(min_monochrome, "min-monochrome") \
     macro(min_width, "min-width") \
+    macro(prefers_color_scheme, "prefers-color-scheme") \
 // end of macro
 
 #ifndef CSS_MEDIAQUERY_NAMES_HIDE_GLOBALS
