@@ -1897,20 +1897,116 @@ static HWND makeButton(const char* text, int id)
 /* Exit forensics: if some library calls exit() from inside a callback, the
  * message loop never returns and we never see why. This handler runs on exit()
  * and prints who did it. */
-static void shellExitTrace(void)
+static void shellPrintFrames(int skip, int depth)
 {
-    void* frames[32];
-    unsigned short count = CaptureStackBackTrace(0, 32, frames, NULL);
+    void* frames[64];
+    unsigned short count = CaptureStackBackTrace((DWORD)skip, (DWORD)depth, frames, NULL);
     int i;
 
-    {
+    for (i = 0; i < (int)count; ++i) {
+        unsigned long long a = (unsigned long long)frames[i];
+        const char* mod = "?";
+        unsigned long long off = a;
         unsigned long long exe = (unsigned long long)GetModuleHandleA(NULL);
         unsigned long long av  = (unsigned long long)GetModuleHandleA("libagave.dll");
         unsigned long long ab  = (unsigned long long)GetModuleHandleA("antjsb.dll");
 
-        agbLog(AGB_LOG_SHELL, "atexit fired, bases exe=%llx agave=%llx ant=%llx", exe, av, ab);
+        if (av && a >= av && a < av + 0x2000000ULL) { mod = "libagave"; off = a - av; }
+        else if (ab && a >= ab && a < ab + 0x2000000ULL) { mod = "antjsb"; off = a - ab; }
+        else if (exe && a >= exe && a < exe + 0x100000ULL) { mod = "exe"; off = a - exe; }
+
+        fprintf(stderr, "  #%02d %s+0x%llx\n", i, mod, off);
+    }
+}
+
+/* The stderr stream may already be unusable when a crash happens on a worker
+ * thread, so keep a file copy next to the working directory. */
+static void shellWriteCrashFile(EXCEPTION_RECORD* rec)
+{
+    FILE* f = fopen("agb_crash.txt", "w");
+
+    if (!f)
+        return;
+
+    fprintf(f, "thread=%lu code=0x%08lx addr=0x%llx",
+            (unsigned long)GetCurrentThreadId(),
+            (unsigned long)(rec ? rec->ExceptionCode : 0),
+            (unsigned long long)(rec ? (unsigned long long)rec->ExceptionAddress : 0));
+
+    if (rec && rec->NumberParameters >= 2)
+        fprintf(f, " info0=%llu info1=0x%llx",
+                (unsigned long long)rec->ExceptionInformation[0],
+                (unsigned long long)rec->ExceptionInformation[1]);
+
+    fprintf(f, "\n");
+
+    {
+        void* frames[64];
+        unsigned short count = CaptureStackBackTrace(1, 48, frames, NULL);
+        int i;
 
         for (i = 0; i < (int)count; ++i) {
+            unsigned long long a = (unsigned long long)frames[i];
+            unsigned long long exe = (unsigned long long)GetModuleHandleA(NULL);
+            unsigned long long av  = (unsigned long long)GetModuleHandleA("libagave.dll");
+            unsigned long long ab  = (unsigned long long)GetModuleHandleA("antjsb.dll");
+            const char* mod = "?";
+            unsigned long long off = a;
+
+            if (av && a >= av && a < av + 0x2000000ULL) { mod = "libagave"; off = a - av; }
+            else if (ab && a >= ab && a < ab + 0x2000000ULL) { mod = "antjsb"; off = a - ab; }
+            else if (exe && a >= exe && a < exe + 0x100000ULL) { mod = "exe"; off = a - exe; }
+
+            fprintf(f, "  #%02d %s+0x%llx\n", i, mod, off);
+        }
+    }
+
+    fflush(f);
+    fclose(f);
+}
+
+/* First-chance dump: the unhandled-exception filter can be bypassed - ant
+ * installs its own handler and only chains to the previous filter once per
+ * process, and its own StackWalk can fault - so an AV on a worker thread can
+ * kill the process without any output. A vectored handler runs first, on every
+ * thread, before SEH/filters, and writes the faulting stack to a file with raw
+ * Win32 I/O (the CRT may be mid-crash). It never handles the exception. */
+static LONG WINAPI shellVehHandler(EXCEPTION_POINTERS* ep)
+{
+    static volatile LONG dumped;
+    EXCEPTION_RECORD* rec = ep ? ep->ExceptionRecord : NULL;
+    DWORD code = rec ? rec->ExceptionCode : 0;
+    char buf[8192];
+    int n = 0;
+    int i;
+
+    if (code != EXCEPTION_ACCESS_VIOLATION && code != EXCEPTION_IN_PAGE_ERROR &&
+        code != EXCEPTION_STACK_OVERFLOW && code != EXCEPTION_ILLEGAL_INSTRUCTION)
+        return EXCEPTION_CONTINUE_SEARCH;
+
+    if (InterlockedExchange(&dumped, 1) != 0)
+        return EXCEPTION_CONTINUE_SEARCH;
+
+    n += snprintf(buf + n, sizeof(buf) - (size_t)n,
+                  "[crash-firstchance] thread=%lu code=0x%08lx addr=0x%llx",
+                  (unsigned long)GetCurrentThreadId(), (unsigned long)code,
+                  (unsigned long long)(rec ? (unsigned long long)rec->ExceptionAddress : 0));
+
+    if (rec && rec->NumberParameters >= 2)
+        n += snprintf(buf + n, sizeof(buf) - (size_t)n, " info0=%llu info1=0x%llx",
+                      (unsigned long long)rec->ExceptionInformation[0],
+                      (unsigned long long)rec->ExceptionInformation[1]);
+
+    n += snprintf(buf + n, sizeof(buf) - (size_t)n, "\n");
+
+    {
+        void* frames[64];
+        unsigned short count = CaptureStackBackTrace(1, 48, frames, NULL);
+        unsigned long long exe = (unsigned long long)GetModuleHandleA(NULL);
+        unsigned long long av  = (unsigned long long)GetModuleHandleA("libagave.dll");
+        unsigned long long ab  = (unsigned long long)GetModuleHandleA("antjsb.dll");
+
+        for (i = 0; i < (int)count && n < (int)sizeof(buf) - 64; ++i) {
             unsigned long long a = (unsigned long long)frames[i];
             const char* mod = "?";
             unsigned long long off = a;
@@ -1919,10 +2015,81 @@ static void shellExitTrace(void)
             else if (ab && a >= ab && a < ab + 0x2000000ULL) { mod = "antjsb"; off = a - ab; }
             else if (exe && a >= exe && a < exe + 0x100000ULL) { mod = "exe"; off = a - exe; }
 
-            fprintf(stderr, "  #%02d %s+0x%llx\n", i, mod, off);
+            n += snprintf(buf + n, sizeof(buf) - (size_t)n, "  #%02d %s+0x%llx\n", i, mod, off);
         }
     }
 
+    {
+        HANDLE h = CreateFileA("agb_crash.txt", GENERIC_WRITE, FILE_SHARE_READ, NULL,
+                               CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+
+        if (h != INVALID_HANDLE_VALUE) {
+            DWORD wrote = 0;
+            WriteFile(h, buf, (DWORD)strlen(buf), &wrote, NULL);
+            CloseHandle(h);
+        }
+    }
+
+    /* Ask ant for the JS stack: without it the native frames only say
+     * "JIT code". Resolved dynamically - the shell does not link antjsb. */
+    {
+        HMODULE ant = GetModuleHandleA("antjsb.dll");
+
+        if (ant) {
+            typedef void (*DumpJsStackFn)(void);
+            DumpJsStackFn dump = (DumpJsStackFn)GetProcAddress(ant, "antb_print_last_js_stack");
+
+            if (dump)
+                dump();
+        }
+    }
+
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
+/* Crash forensics: an AV that only happens outside the debugger (timing
+ * sensitive UAFs, e.g. R67/R68) cannot be caught with cdb - attaching changes
+ * the schedule and the bug disappears. This filter prints the faulting address
+ * and the faulting thread's stack in the same "#NN module+0x..." shape as the
+ * atexit trace, so tools/cdb_stack.ps1 -Symbolize can resolve it afterwards. */
+static LONG WINAPI shellCrashFilter(EXCEPTION_POINTERS* ep)
+{
+    EXCEPTION_RECORD* rec = ep ? ep->ExceptionRecord : NULL;
+
+    fprintf(stderr, "[crash] thread=%lu code=0x%08lx addr=0x%llx",
+            (unsigned long)GetCurrentThreadId(),
+            (unsigned long)(rec ? rec->ExceptionCode : 0),
+            (unsigned long long)(rec ? (unsigned long long)rec->ExceptionAddress : 0));
+
+    if (rec && (rec->ExceptionCode == EXCEPTION_ACCESS_VIOLATION ||
+                rec->ExceptionCode == EXCEPTION_IN_PAGE_ERROR) &&
+        rec->NumberParameters >= 2) {
+        fprintf(stderr, " %s 0x%llx",
+                rec->ExceptionInformation[0] == 0 ? "read" :
+                rec->ExceptionInformation[0] == 1 ? "write" : "exec",
+                (unsigned long long)rec->ExceptionInformation[1]);
+    }
+
+    fprintf(stderr, "\n");
+    fflush(stderr);
+
+    shellPrintFrames(1, 48);
+    fflush(stderr);
+    shellWriteCrashFile(rec);
+
+    /* Keep the OS behaviour (exit code 0xC0000005 etc.): let the default
+     * handler / WER terminate the process. */
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
+static void shellExitTrace(void)
+{
+    unsigned long long exe = (unsigned long long)GetModuleHandleA(NULL);
+    unsigned long long av  = (unsigned long long)GetModuleHandleA("libagave.dll");
+    unsigned long long ab  = (unsigned long long)GetModuleHandleA("antjsb.dll");
+
+    agbLog(AGB_LOG_SHELL, "atexit fired, bases exe=%llx agave=%llx ant=%llx", exe, av, ab);
+    shellPrintFrames(1, 32);
     fflush(stderr);
 }
 
@@ -3046,6 +3213,16 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
     (void)previous;
     (void)show;
     (void)commandLine;
+
+    /* Exception filter first: it only fires when no debugger is attached, which
+     * is exactly the case where these crashes happen. */
+    SetUnhandledExceptionFilter(shellCrashFilter);
+    AddVectoredExceptionHandler(1, shellVehHandler);
+
+    /* AGB_TEST_CRASH=1 proves the filter and the symbolize round-trip still
+     * work (the handler only matters when no debugger is attached). */
+    if (getenv("AGB_TEST_CRASH"))
+        *(volatile int*)0 = 1;
 
     atexit(shellExitTrace);
     g_instance = instance;

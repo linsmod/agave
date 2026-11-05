@@ -145,6 +145,24 @@
   `bench_hot` ns 上限）；`run_jit_loop_tests.ps1`、nav/typing/worker/layout 全绿；
   v.qq.com 在 `AGB_HANG_WATCH=1` 下不再报 5 s `[hang]`。
 
+### P0-h v.qq.com 载入 AV：superplayer 混淆循环（R68，**未修**）
+
+- 现象：`--probe https://v.qq.com/` 约 8–9 s `exit -1073741819`（3/5–5/5，`--eval` 无关）；
+  `AGB_GC_OFF=1` 3/3 不崩（对象被提前回收的判据）；`AGB_PAGE_EVAL=eval` 同样崩
+  → **与本轮 script 语义/R67 无关**，把 R67 的 pin 修回退后仍 2/3 崩（原有缺陷，页面当天版本把它暴露出来）。
+- 取证（见 dev-debugging「只在非调试器下复现的 AV」）：VEH + `agb_crash.txt` + ant JS 栈 → 崩在
+  `superplayer.js:10:606395`，即那段字符串数组轮转/反混淆 IIFE
+  （`!function(e,t){for(var n=TE,i=CE();;)try{ if(766013==…) break; t.push(t.shift()) }catch(e){} }()`）；
+  该循环里 `UL()` 会做 `e[r] = decode(...)`（`r = 数字 + 字符串` 拼接键）。两条原生栈：
+  ①`hash_key ← intern_find ← js_setprop_keyed ← jit_put_elem ← jit_helper_put_elem_strict`
+  （键 8 字符，`extra_*` 无异常）；②直接崩在 JIT 代码里，读的地址在字符串数据附近。
+- 已排除：非字符串键（`AGB_PUT_TRACE` 实测 0 次）、类型混淆、`AGB_GUARD_MALLOC` WTF 侧（guard 下同样崩）。
+- 下一步：在 `str_materialize`/`coerce_to_str`（拼接产生 rope，`vstr` 现场 materialize，**分配可触发 GC**）
+  与 `js_setprop_keyed` 之间加"键内容在 setprop 前后一致"的断言，定位是 rope 物化后内容被回收、
+  还是 key 指针在 `intern_string` 前就被前一次 GC 失效；同时确认 `e[r]=o` 里 `e` 是 Array 还是
+  原始值包装（两条分支一个走 `js_setprop_array_fast`，一个走 primitive 原型 setter）。
+- 验收：`--probe https://v.qq.com/` 连续 6 次 exit 0 且 `rs=complete`；`AGB_GUARD_MALLOC=512-4096` 下 2/2 干净。
+
 ## P2：增强
 
 ### P2 prefetch 换真解析

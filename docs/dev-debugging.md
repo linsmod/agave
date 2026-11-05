@@ -243,6 +243,16 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
   栈就是写入者（会被 `tools/cdb_stack.ps1` 符号化）；②`tools/cdb_heap_probe.ps1 -Url <url>` ——
   cdb **启动**（堆校验才生效），从管道里读 HEAP 消息的地址，现场 `db/dq/dps/ln` dump 被写坏的块
   和它的 vtable，用来判断"这块是什么"。
+- **只在非调试器下复现的 AV**：先用 `AGB_TEST_CRASH=1` 跑一次
+  （`agave_shell.exe --probe about:blank`）确认取证链路没坏，然后正常复现。壳里装了两道：
+  ①`AddVectoredExceptionHandler` 在**任何** SEH/filter 之前抓首次异常，写 `agb_crash.txt`
+  （`[crash-firstchance] thread/code/addr/info0/info1` + `#NN module+0x...` 帧，原始 Win32 I/O，
+  CRT 挂了也能写）；②`shellCrashFilter`（`SetUnhandledExceptionFilter`）再打一遍 `[crash]` 到 stderr。
+  VEH 拿到帧后会**动态调用 antjsb 的 `antb_print_last_js_stack()`**，所以日志里能直接看到
+  `at <anonymous> (https://…/x.js:10:606395)` —— 没有这一条时，JIT 里的崩溃只会显示 `?+0x…`。
+  取到文件后：`pwsh -File tools/cdb_stack.ps1 -Symbolize build-zig-native/agb_crash.txt`。
+  注意 ant 自己也装了 crash handler（`src/crash.c`），它只往 previous filter 链一次、且会用
+  StackWalk64，二次异常时会静默吞掉整个进程 —— 这就是"cdb 一挂就不崩、不挂又没输出"的形状。
 - **一条命令跑脚本语义/性能回归**：`pwsh -File tools/run_script_mode_tests.ps1`
   —— `ant_pin_repro.exe`（C 侧 `antb_retain` 住一个函数后强制 GC 再调用，R67）、
   `cap_script_semantics.html`（`window.pageVar=number`）、`AGB_PAGE_EVAL=eval` 回退、
