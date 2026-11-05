@@ -83,6 +83,9 @@ private:
 
     bool m_frameCountValid;
     bool m_currentBufferSawAlpha;
+    /* gifComplete() runs inside GIFImageReader::decode(); the reader and the
+     * m_data buffer it walks must outlive that call (R62). */
+    bool m_complete;
     mutable GIFImageDecoderPrivate* m_reader;
 };
 

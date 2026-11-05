@@ -87,7 +87,7 @@ private:
 };
 
 GIFImageDecoder::GIFImageDecoder()
-: m_frameCountValid(true), m_reader(0)
+: m_frameCountValid(true), m_complete(false), m_reader(0)
 {}
 
 GIFImageDecoder::~GIFImageDecoder()
@@ -179,7 +179,10 @@ void GIFImageDecoder::decode(GIFQuery query, unsigned haltAtFrame)
 
     m_failed = !m_reader->decode(m_data, query, haltAtFrame);
     
-    if (m_failed) {
+    /* gifComplete() only records completion now: it runs inside the reader's
+     * decode() call, so destroying the reader (or clearing m_data, which the
+     * reader is still walking) belongs here, after the call returns (R62). */
+    if (m_failed || m_complete) {
         delete m_reader;
         m_reader = 0;
         m_data.clear();
@@ -411,9 +414,10 @@ void GIFImageDecoder::frameComplete(unsigned frameIndex, unsigned frameDuration,
 
 void GIFImageDecoder::gifComplete()
 {
-    delete m_reader;
-    m_reader = 0;
-    m_data.clear();
+    /* Inside GIFImageReader::decode(): record only. decode() destroys the
+     * reader and clears m_data after the call returns (R62 - doing it here
+     * wrote through freed memory). */
+    m_complete = true;
 }
 
 }

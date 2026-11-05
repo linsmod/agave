@@ -512,7 +512,9 @@ void JPEGImageDecoder::jpegComplete()
     // Hand back an appropriately sized buffer, even if the image ended up being empty.
     PixelsBuffer& buffer = m_frameBufferCache[0];
     buffer.setStatus(PixelsBuffer::FrameComplete);
-    m_data.clear();
+    /* term_source() runs inside the reader's decode(): m_data is what libjpeg
+     * is reading from, so it may only be cleared by decode() after the call
+     * returns (R62). */
 }
 
 }

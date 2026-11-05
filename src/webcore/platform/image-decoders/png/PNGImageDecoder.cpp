@@ -102,6 +102,9 @@ public:
         if (m_png && m_info)
             png_destroy_read_struct(&m_png, &m_info, 0);
         delete []m_interlaceBuffer;
+        /* Null it: close() is also the error path and the destructor calls it
+         * again, which used to double-delete the interlace buffer. */
+        m_interlaceBuffer = 0;
         m_readOffset = 0;
     }
 
@@ -147,7 +150,7 @@ private:
 };
 
 PNGImageDecoder::PNGImageDecoder()
-: m_reader(0)
+: m_reader(0), m_complete(false)
 {}
 
 PNGImageDecoder::~PNGImageDecoder()
@@ -209,7 +212,12 @@ void PNGImageDecoder::decode(bool sizeOnly)
 
     m_reader->decode(m_data, sizeOnly);
     
-    if (m_failed || (!m_frameBufferCache.isEmpty() && m_frameBufferCache[0].status() == PixelsBuffer::FrameComplete)) {
+    /* Cleanup happens here, after png_process_data() has returned. Doing it in
+     * pngComplete() was a use-after-free: that callback runs *inside*
+     * png_process_data(), which keeps using png_ptr after the callback, and
+     * the input buffer it was handed is m_data - deleting the reader and
+     * clearing m_data there freed both under libpng (heap corruption, R62). */
+    if (m_failed || m_complete || (!m_frameBufferCache.isEmpty() && m_frameBufferCache[0].status() == PixelsBuffer::FrameComplete)) {
         delete m_reader;
         m_reader = 0;
         m_data.clear();
@@ -413,15 +421,21 @@ void pngComplete(png_structp png, png_infop info)
 
 void PNGImageDecoder::pngComplete()
 {
+    /* This callback runs inside libpng's png_process_data() stack: png_ptr is
+     * still in use by libpng after we return, and the bytes libpng is reading
+     * belong to m_data. Do NOT delete the reader or clear m_data here - that
+     * is the use-after-free behind R62 (it corrupted the heap and surfaced
+     * later as "Free Heap block ... modified after it was freed", or as a
+     * crash in PNGImageDecoder::frameBufferAtIndex). Only record the state;
+     * decode() cleans up once png_process_data() has returned. */
+    m_complete = true;
+
     if (m_frameBufferCache.isEmpty())
         return;
 
     // Hand back an appropriately sized buffer, even if the image ended up being empty.
     PixelsBuffer& buffer = m_frameBufferCache[0];
     buffer.setStatus(PixelsBuffer::FrameComplete);
-    delete m_reader;
-    m_reader = 0;
-    m_data.clear();
 }
 
 }

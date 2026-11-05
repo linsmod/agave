@@ -63,6 +63,9 @@ public:
 
 private:
     mutable PNGImageReader* m_reader;
+    /* Completion is recorded by pngComplete(), which runs *inside* libpng's
+     * png_process_data(); the reader may only be destroyed afterwards (R62). */
+    bool m_complete;
 };
 
 }

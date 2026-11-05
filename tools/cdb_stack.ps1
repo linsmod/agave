@@ -197,7 +197,7 @@ function Invoke-Run {
     $cmd = @('.lines')
     foreach ($d in $symDirs) { $cmd += ".sympath+ `"$d`"" }
     $cmd += '.reload'
-    $h = ".echo ===FAULT===;.lastevent;kb $Frames;~*kb 30;lm;q"
+    $h = ".echo ===FAULT===;.lastevent;.exr -1;r;kb $Frames;~*kb 30;lm;q"
     $cmd += ('sxe -c "{0}" av' -f $h)
     $cmd += ('sxe -c "{0}" 0xc0000409' -f $h)
     $cmd += ('sxe -c "{0}" 0xc0000374' -f $h)

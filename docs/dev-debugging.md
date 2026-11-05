@@ -235,8 +235,12 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
   （编译/运行见文件头），它在 `f68ba03c` 和 HEAD 上都 exit 0。
 - **`HEAP: Free Heap block ... modified ... after it was freed`**（调试器下）：这是**堆破坏**，
   不是当前栈的错 —— NT 堆在**下一次分配**时才发现某块释放后被写，faulting stack 只是"发现点"。
-  别顺着那条栈去修（R62 的 `PNGImageDecoder` 栈就是这样把人带偏的）。用 **cdb 启动**（`-o`，
-  堆校验才生效；附加/`-g` 行为不同）复现，先确认破坏存在，再按"谁释放的块"查所有权与线程边界。
+  别顺着那条栈去修（R62 的 `PNGImageDecoder`/`WinHttpSession` 栈就是这样把人带偏的）。两条工具：
+  ①`AGB_GUARD_MALLOC=<all|512-4096|0>` —— WTF 分配器守卫（`src/wtf/FastMalloc.cpp`）：页对齐 +
+  尾部保护页，`free` 后整块 `VirtualFree`，于是"释放后写/读"和"越界写"立刻在**肇事指令**上 AV，
+  栈就是写入者（会被 `tools/cdb_stack.ps1` 符号化）；②`tools/cdb_heap_probe.ps1 -Url <url>` ——
+  cdb **启动**（堆校验才生效），从管道里读 HEAP 消息的地址，现场 `db/dq/dps/ln` dump 被写坏的块
+  和它的 vtable，用来判断"这块是什么"。
 - **一条命令跑布局回归**：`pwsh -File tools/run_layout_tests.ps1`
   —— 对 `tools/pages/layout/*.html` 逐个跑 `layout_diff.py`（几何对拍 Chrome），再对
   `transform_repaint.html` 做像素断言、对 `scrollbar_hidden.html` 断言 `::-webkit-scrollbar`

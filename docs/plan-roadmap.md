@@ -15,6 +15,10 @@
   （UAF）。修法在控件层（命令持引用、销毁推迟到引擎线程）与探针层（`--settle` 从 eval 返回计时）；
   判据 `tools/run_jit_loop_tests.ps1`。ant 侧交叉验证：`tools/ant_loop_repro.c` 在 `f68ba03c`/HEAD
   上同一脚本均 exit 0。
+- **v.qq.com 载入期崩溃**（R62 + R63，2026-11-05）：两条独立根因——图像解码器在 libpng/GIF/JPEG
+  回调里销毁自己（UAF → 堆破坏），以及 callback builtin 的回调没被 GC 扎根（`AGB_GC_OFF=1` 可判）。
+  工具：`AGB_GUARD_MALLOC`（WTF 页守卫分配器）、`tools/cdb_heap_probe.ps1`；判据
+  `ANT_GC_STRESS=1` + `tests/array_callback_gc.cjs`。
 
 ## P0：先修正确性
 
@@ -62,12 +66,12 @@
   入口打日志（vendor-vue chunk 内），确认是 `normalizeContainer` 之后哪一步返回。
   **结论（R58）**：module 脚本在解析流程内执行，`mount("#channel-app")` 跑在元素解析出来之前，
   Vue 静默返回；改走 `queueDeferredModule`（parse 后 flush）后 `__vue_app__` 出现、header 片段
-  被请求。**新的阻塞**：v.qq 载入约 10 s 后 `0xC0000005`。R62 已把现场抓下来：
-  不是 decoder，是**堆破坏**——cdb 启动（堆校验生效）时在 `WinHttpSession::run` 的
-  `ev->data.assign()` 报 `HEAP: Free Heap block ... modified ... after it was freed`
-  （[hist-lessons.md](hist-lessons.md) R62）。早先 `PNGImageDecoder::frameBufferAtIndex()`
-  的栈只是受害点。下一步按 R62 的三条候选（`pump()` 回调后用 `deliveryJob`、`shutdown()`
-  在 pumping 时自毁、`cancel/finish` 并发删除）逐个排除。
+  被请求。**曾经的阻塞已清（R62 + R63）**：v.qq 载入约 10 s 的 `0xC0000005` 是两个独立缺陷——
+  ①图像解码器在自己的 libpng/libjpeg/GIF 回调里 `delete m_reader` 并清空输入缓冲（use-after-free
+  → 堆破坏，早先 `PNGImageDecoder::frameBufferAtIndex` / `WinHttpSession::run` 的栈都只是发现点）；
+  ②ant 的 callback builtin（`Array.map` 等）没把回调 GC 扎根，JIT 传参走 alloca 缓冲、不在根集合里，
+  回调里一次 GC 就把函数收了。修法与判据见 [hist-lessons.md](hist-lessons.md) R62/R63。
+  v.qq 现在 `--wait 12000` 得到 `rs=complete len=173733 nav=57`，连续 30 s 不再崩（此前 8–10 s 必崩）。
 - **M2 布局级 CSS（P1）**：①8 位 hex `#RRGGBBAA`（颜色解析）**已做（R51）**；②`transform` 的
   translate/scale/rotate（绘制 + 命中）**绘制与失效已完成（R52 绘制、R55 变换感知脏矩形），hit-test 与 stacking context 未做**；
   ③视口单位 `vw`/`vh`（本站 209×100vw、8×100vh）**已做（R53）**；④`calc()` 混合单位
