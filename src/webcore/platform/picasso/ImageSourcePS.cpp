@@ -188,6 +188,23 @@ NativeImagePtr ImageSource::createFrameAtIndex(size_t index)
     if (!m_decoder || m_decoder->failed())
         return 0;
 
+    /* Defensive: a corrupt/absurd image header (ad beacons, truncated PNG)
+     * used to reach the decoder with dimensions that make it allocate an
+     * enormous frame buffer - the process died with an access violation inside
+     * PNGImageDecoder::frameBufferAtIndex while painting v.qq.com. Refuse
+     * anything beyond what a browser viewport can plausibly show. */
+    {
+        IntSize frameSize = size();
+        double pixels = (double)frameSize.width() * (double)frameSize.height();
+
+        if (frameSize.width() <= 0 || frameSize.height() <= 0
+            || frameSize.width() > 16384 || frameSize.height() > 16384
+            || pixels > 40000000.0) {
+            agbLog(AGB_LOG_CACHE, "frame rejected size=%dx%d", frameSize.width(), frameSize.height());
+            return 0;
+        }
+    }
+
     PixelsBuffer* buffer = m_decoder->frameBufferAtIndex(index);
 
     /* [cache]: which frame a paint is about to use. FramePartial with fewer rows

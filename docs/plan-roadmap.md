@@ -56,6 +56,11 @@
   `hydration:start/end` 相差 26ms —— 说明 `mount("#channel-app")` 返回了，但 Vue 的挂载标记
   一个都没落下，挂载在 Vue 内部被跳过或提前返回。下一步：在 Vue runtime 的 `mount`/`render`
   入口打日志（vendor-vue chunk 内），确认是 `normalizeContainer` 之后哪一步返回。
+  **结论（R58）**：module 脚本在解析流程内执行，`mount("#channel-app")` 跑在元素解析出来之前，
+  Vue 静默返回；改走 `queueDeferredModule`（parse 后 flush）后 `__vue_app__` 出现、header 片段
+  被请求。**新的阻塞**：hydration mismatch 之后，绘制阶段 `PNGImageDecoder::frameBufferAtIndex()`
+  的 `m_frameBufferCache.resize(1)` 里访问违例（疑似 decoder 生命周期/堆破坏），v.qq 探针当前
+  在 `RenderImage::paint` 崩溃；下一步查 `ImageSource`/`BitmapImage` 的 decoder 释放时机。
 - **M2 布局级 CSS（P1）**：①8 位 hex `#RRGGBBAA`（颜色解析）**已做（R51）**；②`transform` 的
   translate/scale/rotate（绘制 + 命中）**绘制与失效已完成（R52 绘制、R55 变换感知脏矩形），hit-test 与 stacking context 未做**；
   ③视口单位 `vw`/`vh`（本站 209×100vw、8×100vh）**已做（R53）**；④`calc()` 混合单位

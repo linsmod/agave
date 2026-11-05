@@ -77,6 +77,12 @@ void flushDeferredModules(void* document);
  * immediately. */
 void queueDeferredScript(void* document, const char* url, const char* source);
 
+/* Module scripts (external entry, inline, or fetched while parsing) are
+ * deferred by spec: they run after the document is parsed, in document order
+ * together with classic defer scripts. Running them in the parse flow made
+ * v.qq.com mount its Vue app before #channel-app existed. */
+void queueDeferredModule(void* document, const char* url, const char* source);
+
 /* External <script type="module" src>: loads the body through the module
  * fetcher (the same cache and cancel owner as its imports) and hands it to
  * the notifier below when it arrives - the tokenizer keeps parsing blocked

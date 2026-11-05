@@ -638,9 +638,18 @@ HTMLTokenizer::State HTMLTokenizer::scriptExecution(const DeprecatedString& str,
 #if ENABLE(KJS)
     if (isModule && getenv("AGB_SCRIPT_DEBUG"))
         fprintf(stderr, "[script] module eval url=%s head=%.60s\n", url.utf8().data(), str.utf8().data());
-    if (isModule)
-        m_doc->frame()->loader()->executeModule(url, str);
-    else
+    if (isModule) {
+        /* Module scripts are deferred by spec: they execute after the document
+         * has been parsed (before DOMContentLoaded), in document order with
+         * classic defer scripts. Running them inline in the parse flow made
+         * v.qq.com's Vue entry call mount("#channel-app") while that element
+         * was still unparsed, so the app never mounted and the header slice was
+         * never fetched. */
+        if (m_doc->parsing() && !m_parserStopped)
+            AntRuntime::queueDeferredModule(m_doc, url.utf8().data(), str.utf8().data());
+        else
+            m_doc->frame()->loader()->executeModule(url, str);
+    } else
 #endif
         m_doc->frame()->loader()->executeScript(url, baseLine, str);
     state = m_state;

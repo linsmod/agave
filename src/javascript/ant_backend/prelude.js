@@ -514,6 +514,13 @@
       if (!base || !/^[a-zA-Z][a-zA-Z0-9+.\-]*:\/\//.test(base)) return s;
       var origin = base.replace(/^([a-zA-Z][a-zA-Z0-9+.\-]*:\/\/[^\/]*).*$/, '$1');
       if (s.charAt(0) === '#') return base.split('#')[0] + s;
+      /* Protocol-relative (`//v.qq.com/x`): keep the page's scheme. It used to
+       * fall into the single-slash branch and became
+       * `https://v.qq.com//v.qq.com/x`, so v.qq's header slice 404'd. */
+      if (s.substring(0, 2) === '//') {
+        var scheme = base.match(/^([a-zA-Z][a-zA-Z0-9+.\-]*):/);
+        return (scheme ? scheme[1] + ':' : '') + s;
+      }
       if (s.charAt(0) === '/') return origin + s;
       var path = base.split('#')[0].split('?')[0];
       path = path.substring(0, path.lastIndexOf('/') + 1);

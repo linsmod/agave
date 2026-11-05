@@ -376,6 +376,7 @@ int nodeCloneNode(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int docCreateDocumentFragment(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeReplaceChild(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeHasAttribute(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeHasChildNodes(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeContains(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeCompareDocumentPosition(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeRemove(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
@@ -3913,6 +3914,41 @@ void flushDeferredModules(void* document)
     }
 }
 
+void queueDeferredModule(void* document, const char* url, const char* source)
+{
+    /* The post-parse flush already ran for this document: execute now, like a
+     * defer script that arrives late. */
+    if (g_lastFlushDocument && g_lastFlushDocument == document) {
+        char* err = NULL;
+
+        if (document && document != g_document)
+            bindDocument(document);
+
+        setFilename(url ? url : "");
+        evaluateModule(source ? source : "", source ? strlen(source) : 0,
+                       url ? url : "", NULL, &err);
+        if (err) {
+            fprintf(stderr, "[antjs] %s: %s\n", url ? url : "", err);
+            free(err);
+        }
+        return;
+    }
+
+    if (!g_deferredModules)
+        g_deferredModules = new std::vector<DeferredModule>();
+
+    DeferredModule module;
+
+    module.url = url ? url : "";
+    module.source = source ? source : "";
+    module.generation = currentGeneration();
+    module.document = document ? document : g_document;
+    module.isClassic = false;
+    g_deferredModules->push_back(module);
+
+    modulePrefetchImports(module.url, module.source);
+}
+
 void queueDeferredScript(void* document, const char* url, const char* source)
 {
     /* The post-parse flush already ran for this document: nothing will consume
@@ -4376,6 +4412,7 @@ AntbValue* documentObjectFor(AntbEngine* engine, WebCore::Document* document)
          * methods have to be installed on it explicitly. */
         antb_define_method(engine, docObj, "getElementsByTagName", nodeGetElementsByTagName, NULL);
         antb_define_method(engine, docObj, "getElementsByClassName", nodeGetElementsByClassName, NULL);
+        antb_define_method(engine, docObj, "hasChildNodes", nodeHasChildNodes, NULL);
         antb_define_method(engine, docObj, "querySelector", nodeQuerySelector, NULL);
         antb_define_method(engine, docObj, "querySelectorAll", nodeQuerySelectorAll, NULL);
         antb_define_method(engine, docObj, "appendChild", nodeAppendChild, NULL);
@@ -4755,6 +4792,7 @@ void bindDocument(void* document)
                 antb_class_add_method(g_engine, g_nodeClass, "cloneNode", nodeCloneNode, NULL);
                 antb_class_add_method(g_engine, g_nodeClass, "replaceChild", nodeReplaceChild, NULL);
                 antb_class_add_method(g_engine, g_nodeClass, "hasAttribute", nodeHasAttribute, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "hasChildNodes", nodeHasChildNodes, NULL);
                 antb_class_add_method(g_engine, g_nodeClass, "contains", nodeContains, NULL);
                 antb_class_add_method(g_engine, g_nodeClass, "compareDocumentPosition", nodeCompareDocumentPosition, NULL);
                 antb_class_add_method(g_engine, g_nodeClass, "getElementsByClassName", nodeGetElementsByClassName, NULL);
@@ -6276,6 +6314,13 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
         v = wrapNode(engine, sibling);
     } else if (!strcmp(name, "isConnected")) {
         v = antb_make_number(engine, nodeIsConnected(n) ? 1 : 0);
+    } else if (!strcmp(name, "namespaceURI")) {
+        /* Vue's hydration picks the render namespace (svg/mathml/html) from
+         * element.namespaceURI; without it `hydrate()` threw on
+         * `undefined.includes`. HTML documents use the xhtml URI. */
+        const WebCore::AtomicString& ns = n->namespaceURI();
+        v = antb_make_string(engine, ns.isEmpty() ? "http://www.w3.org/1999/xhtml"
+                                                  : ns.deprecatedString().utf8().data());
     } else if (!strcmp(name, "nodeValue")) {
         /* Text/Comment carry data; every other node type is null. */
         if (n->isTextNode() || n->isCommentNode()) {
@@ -6463,7 +6508,8 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
         else
             return 1;
     } else if (!strcmp(name, "hasChildNodes")) {
-        v = antb_make_number(engine, n->hasChildNodes() ? 1 : 0);
+        /* Real DOM exposes this as a method; nodeHasChildNodes() serves it. */
+        return 1;
     } else if (!strcmp(name, "nextSibling")) {
         if (n->nextSibling()) {
             v = wrapNode(engine, n->nextSibling());
@@ -6857,6 +6903,17 @@ int nodeSetter(AntbEngine* engine, AntbValue* self, const char* name, const Antb
     WebCore::Node* n = nodeOf(self);
 
     (void)engine;
+
+    /* Diagnostic: AGB_PROP_DEBUG=1 logs framework marker assignments
+     * (__vue_app__/_vnode) with the node they land on. */
+    if (name && getenv("AGB_PROP_DEBUG")
+        && (!strcmp(name, "__vue_app__") || !strcmp(name, "_vnode"))) {
+        const char* tag = (n && n->isElementNode()) ? static_cast<WebCore::Element*>(n)->tagName().deprecatedString().utf8().data() : "?";
+        const char* id = (n && n->isElementNode()) ? static_cast<WebCore::Element*>(n)->getAttribute(WebCore::String("id")).deprecatedString().utf8().data() : "";
+        fprintf(stderr, "[prop] set %s on <%s id=%s>", name, tag, id);
+        fputc(10, stderr);
+    }
+
 
     /* Event handler properties are listeners, not expandos: `script.onload = f`
      * has to fire when the script finishes. Placed before the null-value guard
@@ -7527,6 +7584,25 @@ int nodeReplaceChild(AntbEngine* engine, AntbValue* self, AntbValue** args, int 
     return 1;
 }
 
+/* DOM level 1 method. It used to be a numeric property, which broke every
+ * caller that does `node.hasChildNodes()` - Vue 3's hydration calls exactly
+ * that and the TypeError aborted mount(). */
+int nodeHasChildNodes(AntbEngine* engine, AntbValue* self, AntbValue**, int,
+                      AntbValue* out, void*)
+{
+    WebCore::Node* n = nodeOf(self);
+
+    if (n) {
+        AntbValue* v = antb_make_number(engine, n->hasChildNodes() ? 1 : 0);
+
+        if (v) {
+            antb_value_assign(out, v);
+            antb_value_release(v);
+        }
+    }
+    return 1;
+}
+
 int nodeHasAttribute(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
                      AntbValue* out, void*)
 {
@@ -7883,10 +7959,12 @@ int nodeGetBoundingClientRect(AntbEngine* engine, AntbValue* self, AntbValue**, 
     WebCore::Node* n = nodeOf(self);
     WebCore::IntRect rect(0, 0, 0, 0);
 
-    if (!n || !n->renderer())
-        return 1;   /* detached / display:none → zero rect */
-
-    rect = n->renderer()->absoluteBoundingBoxRect();
+    /* A detached / display:none node still has to yield a zero rect: returning
+     * without filling `out` handed JS `undefined`, so the ordinary
+     * `el.getBoundingClientRect().height` threw a TypeError (vConsole measures
+     * its own hidden panel that way while booting). */
+    if (n && n->renderer())
+        rect = n->renderer()->absoluteBoundingBoxRect();
 
     {
         struct { const char* name; double value; } fields[] = {
