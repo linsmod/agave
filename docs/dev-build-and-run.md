@@ -30,6 +30,10 @@ pwsh -File tools\build_antjsb.ps1        # 编 libant.a + 重链 antjsb.dll
 # 只有改了本仓库 C++ 才需要再 cmake --build build-zig-native
 ```
 
+**构建变体（引擎层）**：默认脚本固定 `-DOPT_JS_ANT=ON`。`OFF` 时 `AntRuntime.cpp` 不进源列表、
+不链 `antjsb`，脚本入口落到 `OPT_USE_KJS`（默认 ON）的 KJS 分支；这是结构裁剪/验证用的变体，
+当前发布与回归矩阵只覆盖 ON。
+
 **编译配置（别乱改，否则 attach 只剩模块+偏移）**
 
 | 产物 | 配置 | 说明 |
@@ -47,6 +51,7 @@ pwsh -File tools\build_antjsb.ps1        # 编 libant.a + 重链 antjsb.dll
 | `AntRuntime.cpp` / `AntBridge.c` | `build_antjsb.ps1` + `cmake --build` | 1 ~ 3 分钟 |
 | ant 的 1-2 个 `.c` | `build_antjsb.ps1`（内含 libant + 桥） | ~1 分钟 |
 | ant 的**头文件** | 同上，但 libant 会重编 200+ 个对象 | ~10 分钟 |
+| 改 `OPT_JS_ANT` / `OPT_USE_KJS` | 重新 configure + 全量重编（开关改变整个源列表） | 全量 |
 | 加/删源文件、改 CMakeLists | `src/` 下的源文件由 `file(GLOB_RECURSE ... CONFIGURE_DEPENDS)` 收集，ninja 会自己重跑 configure；改 `CMakeLists.txt` 仍要手动 configure | 秒级 ~ 数分钟 |
 
 ## 4. 产物与运行拓扑

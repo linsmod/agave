@@ -42,6 +42,10 @@ cmake --build build-zig-native --target agave_embed     # 双控件演示
 宿主编译时定义 `AGW_USE_DLL` 并链接 `libagave.dll.a`；运行时把
 `libagave.dll`、`antjsb.dll` 放到 exe 旁边。不再有单独的 `libagave_webview.dll`。
 
+三个物理件对应三层：`libagave.dll`（渲染内核 + 控件）、`antjsb.dll`（JS 引擎层）、
+exe 旁的 `prelude.js` / `polyfills.js`（运行时 JS 资产，可热替换）。分层与依赖方向见
+[arch-overview.md](arch-overview.md) §2.1。
+
 ## API 一览
 
 | 分类 | 函数 |

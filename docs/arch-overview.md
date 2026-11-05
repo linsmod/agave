@@ -49,6 +49,30 @@
 
 WebCore 内部的渲染管线（DOM → 样式 → 渲染树 → 布局 → 绘制）见 [arch-rendering.md](arch-rendering.md)。
 
+### 2.1 三层：内核 / 引擎 / 运行时 JS
+
+```text
+宿主 exe
+  ├─ libagave.dll
+  │    ├─ 渲染内核（WebCore 移植）      HTML/CSS/DOM/布局/绘制/网络
+  │    ├─ 脚本接缝（#if ENABLE(ANTJS)） Frame / tokenizer / event / loader 的少量挂点
+  │    └─ AntRuntime（引擎适配层）      realm、桥外观、模块/XHR/定时器
+  ├─ antjsb.dll（由 libagave 加载）     VM + JS↔C 桥（源码在 ant 仓库）
+  └─ prelude.js / polyfills.js（由 AntRuntime 按 realm 读取）  把桥补成 Web API
+```
+
+- **依赖方向单一**：内核 → 接缝 → 适配层 → 引擎。内核不在普通代码里 include `AntRuntime`，
+  只在 `#if ENABLE(ANTJS)` 守卫内引用；把 `OPT_JS_ANT` 关掉时，脚本入口落到 `OPT_USE_KJS`
+  （默认 ON）的 2008 KJS 实现。
+- **引擎是构建期选项**：`OPT_JS_ANT` 决定是否编 `AntRuntime.cpp`、是否链 `antjsb.dll`
+  （[src.cmake](../src/src.cmake)）；不是运行期可插拔的 DLL 插件。
+- **运行时 JS 是资产**：`prelude.js` / `polyfills.js` 从 exe 旁按 realm 加载，可独立替换/裁剪；
+  `internal.js` 只注入 `agave://` 内部页。它们不参与链接，也不属于内核。
+- **能力随层叠加**：内核层 = 文档能解析/排版/绘制；引擎层 = 脚本能执行、DOM 能操作；
+  运行时 JS 层 = `fetch`/XHR/定时器/console/computed style 等 Web API 表面。
+- **换引擎的改动面**收在接缝与适配层：桥的 `antb_*` 契约见 [ref-ant-engine.md](ref-ant-engine.md)，
+  适配层职责见 [dev-onboarding.md](dev-onboarding.md) §3。
+
 ## 3. realm、所有权、进程级共享
 
 - **每个 view 一个 `RuntimeState`**（`AntRuntime::createContext()`，在 `macross_view_create` 时建；
