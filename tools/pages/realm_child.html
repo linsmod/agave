@@ -3,6 +3,9 @@
 <body><div id="c">child</div>
 <script>
   window.childVar = 'from-child';
+  /* The child's own view of its body: with per-realm wrappers this object must
+     differ from what the parent gets for the same node. */
+  window.__selfBody = document.body;
 
   var r = [];
   r.push('selfIsParent=' + (window.parent === window));

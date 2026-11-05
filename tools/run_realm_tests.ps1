@@ -48,7 +48,9 @@ probeExit([
   'parentSelf=' + (window.parent === window),
   'parentTopArraySame=' + (window.top.Array === Array),
   'childReachable=' + (cw ? (typeof cw.childVar) : 'n/a'),
-  'childTopIsParent=' + (cw ? (cw.top === window) : 'n/a')
+  'childTopIsParent=' + (cw ? (cw.top === window) : 'n/a'),
+  'sameBody=' + (cd && cd.body && cw && cw.__selfBody
+      ? (cd.body === cw.__selfBody) : 'n/a')
 ].join('|'));
 '@ | Set-Content -Path $checkJs -Encoding ascii
 
@@ -132,7 +134,8 @@ if ($perFrame.Code -ne 0) {
         @{ Name = 'child has own Array';      Want = 'topArraySame=false';       Ok = ($perFrameText -match 'topArraySame=false') },
         @{ Name = 'child top is parent';      Want = 'childTopIsParent=true';    Ok = ($perFrameText -match 'childTopIsParent=true') },
         @{ Name = 'parent globals reachable'; Want = 'parentFn=PF-ok';           Ok = ($perFrameText -match 'parentFn=PF-ok') },
-        @{ Name = 'contentWindow reachable';  Want = 'childReachable=string';    Ok = ($perFrameText -match 'childReachable=string') }
+        @{ Name = 'contentWindow reachable';  Want = 'childReachable=string';    Ok = ($perFrameText -match 'childReachable=string') },
+        @{ Name = 'node wrappers per realm';  Want = 'sameBody=false';           Ok = ($perFrameText -match 'sameBody=false') }
     )
 
     foreach ($c in $checks) {

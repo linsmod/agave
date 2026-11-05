@@ -5221,6 +5221,12 @@ void forgetFrameRealm(void* document)
 
     for (size_t i = 0; i < entries.size(); ) {
         if (entries[i].document == doc) {
+            /* Wrapper objects created in this realm (and their permanent pins)
+             * go first: with the pins left behind the realm could never be
+             * collected. */
+            if (entries[i].realm && g_engine)
+                antb_release_realm(g_engine, entries[i].realm);
+
             /* Dropping the keeper makes the realm unreachable: ant's collector
              * frees it on the next GC (no ant unpin exists). */
             if (entries[i].keeper) {
