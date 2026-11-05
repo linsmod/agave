@@ -172,10 +172,11 @@
   两份同一 bundle 在共享全局里互相覆盖单例。
 - 关键前提（已验证）：ant 的 realm 是**同一 VM 内的独立全局**，`ant_realm_create/enter` 可用，
   Node 的 `vm.createContext` 就是这套；跨 realm 对象引用不需要序列化。
-- 阶段：S0 桥接 realm API（**已完成**，`tools/ant_realm_probe.c` 全绿）→ S1 每 document 一个 realm
-  （**已完成并默认开启**；`AGB_PER_FRAME_REALM=0` 回退旧模型；`tools/run_realm_tests.ps1` 8/8）→
-  S2 wrapper 按 realm（**已完成**，ant `4494171c`）→ S3 事件/定时器/模块按 realm（待做：模块表仍按
-  引擎、iframe DCL 未单独派发）→ S4 WindowProxy 转发 → S5 回归与文档。
+- 阶段：S0 桥接 realm API（**已完成**）→ S1 每 document 一个 realm（**已完成并默认开启**，
+  `AGB_PER_FRAME_REALM=0` 回退旧模型）→ S2 wrapper 按 realm（**已完成**，ant `4494171c`）→
+  S3 事件/定时器/模块按 realm（**部分完成**：iframe 的 DCL 与单次 DCL 已修，见 P0-c；
+  ES module map 仍按引擎）→ S4 WindowProxy 转发（待做）→ S5 回归与文档（**已完成**：
+  `tools/run_realm_tests.ps1` 10 项并入常规矩阵）。
 - 验收：新增 `cap_realm_identity.html`（iframe `var` 不可见、`top.Array !== Array`、
   `parent !== self`、`parent.fn()` 可用）；`cap_dom`/`cap_window_identity` 不退化；
   nav/typing/worker/layout/jit/script-mode 全绿。

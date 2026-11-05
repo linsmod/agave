@@ -30,9 +30,10 @@ ant 的反直觉行为（字面量属性名、`typeof`、`delete` 等）见 [ref
 - **入口模块管线的 5 条限制**：动态插入/async 入口仍走 CachedScript；入口 `<script>` 的 `load`/`error` 不派发；
   `import.meta.url` 对 file: 模块显示伪装 URL（`http://file.ant/...`）；DCL 之后到达的 inline 模块不再执行；
   iframe 的模块入口回退 CachedScript。详见 [arch-module-loading.md](arch-module-loading.md)。
-- **一个 view 一个 engine**：同一时刻只有一个 `AntbEngine` / realm；iframe 与主 frame 共享这个 engine
-  和全局对象，但每个 frame 有自己的 `window` 代理（R31）。因此顶层 `var x` 仍写进共享全局；
-  iframe 的 DOMContentLoaded 也仍不单独派发（`dispatchDidFinishDocumentLoad` 只处理主 frame）。
+- **一个 view 一个 engine，多个 frame 多个 realm**：同一进程的控件共用一条引擎线程；每个 frame 文档
+  有自己的 realm（独立全局/intrinsics/wrapper，默认开启），模块 map 仍按引擎共享（S3 待做），
+  `parent`/`top` 是父/顶层 realm 的全局对象而不是 WindowProxy（S4 待做）。细节见
+  [design-per-frame-realm.md](design-per-frame-realm.md)；旧模型用 `AGB_PER_FRAME_REALM=0` 回退。
 - **CSS 边界**：grid 布局、`position:sticky` 未实现（按 static 降级）；transform 做了
   translate/scale/rotate 的绘制与变换感知的脏矩形（hit-test、stacking context 未做，R52/R55）；`vw/vh` 在解析期换算成 px
   （窗口 resize 不重算）；含 `%` 的混合 `calc()` 已支持（R54，`Length::Calculated`），

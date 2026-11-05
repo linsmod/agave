@@ -77,20 +77,22 @@ WebCore 内部的渲染管线（DOM → 样式 → 渲染树 → 布局 → 绘�
 
 - **每个 view 一个 `RuntimeState`**（`AntRuntime::createContext()`，在 `macross_view_create` 时建；
   从 C API 进入引擎线程时 `activateContext()` 切回自己的状态）。
-- **每个文档一个 realm**：文档提交时 `beginNewRealm()` 接手——首个文档复用 view 创建时建好的
-  realm，之后每次换文档 `generation++` 并新建 `AntbEngine`；willClose → `documentWillUnload()` →
-  `stopRealm()`（取消在途资源、释放 wrapper/pins/history、销毁 engine）。
-  所以"一个 view 在同一时刻只有一个 engine"。
-- **generation**：进程级递增的 realm id。所有可能活过文档的资源（XHR、模块下载、待执行模块、
-  DOM pin、文档 slot）都带它；卸载时按它精确取消。
+- **每个 frame 文档一个 realm**（`docs/design-per-frame-realm.md`，默认开启）：主 frame 的文档用
+  engine 创建时的主 realm，**每个 iframe 文档首次 bind 时建自己的 realm**（独立全局、独立 intrinsics、
+  独立 wrapper），`AGB_PER_FRAME_REALM=0` 回退到"共享 realm + per-frame window 代理"的旧模型。
+  顶层文档换文档时 `beginNewRealm()` 新建 `AntbEngine`（新 realm）；iframe 掉帧时
+  `detachedFromParent3` → `forgetFrameRealm()` 释放该 realm 的 wrapper 并让 GC 回收。
+- **generation**：进程级递增的资源 id。所有可能活过文档的资源（XHR、模块下载、待执行模块、
+  DOM pin、文档 slot）都带它；卸载时按它精确取消。realm 与 generation 目前不是一一对应：
+  一个 view 的 generation 对应顶层文档，iframe 的 realm 共用 view 的 generation（S3 待细化）。
 - **owner**：桥接 wrapper 的归属文档。文档卸载时按 owner 释放（`antb_release_owner`），避免下一个文档拿到旧节点。
 - **slot**：同一 engine 内多个文档（iframe）的 DOM 上下文编号；从定时器/XHR/事件回调进入前
   `activateSlot()` 切回对应文档。
-- **frame 与 window**：每个文档有自己的 `document` 对象，每个 frame 有自己的 Window 代理（R31）；
-  顶层页的 `window` 仍是全局对象本身，代理的未知属性转发给共享全局。
-  **engine 不是一个 frame 一个**，所以顶层 `var x` 仍写进共享全局（已知限制）。
+- **frame 与 window**：每个 realm 的 `window`/`self` 就是该 realm 的全局对象；`parent`/`top` 是
+  父/顶层 realm 的全局对象（同 VM，属性访问和调用照常，`parent !== self`、`top.Array !== Array`）。
+  ES module map 仍是引擎级（两个 frame import 同一模块共享实例，S3 待做）。
 - **进程级共享**：模块会话（`g_moduleSession`）、`DownloadManager` 单例、generation 计数器、
-  桥的 wrapper/class 表（表是进程级的，条目随 engine 销毁释放）。
+  桥的 wrapper/class 表（wrapper 按 `(js, realm, ptr, tag)` 存，class 表仍是引擎级）。
 
 ## 4. 一次导航
 
@@ -101,7 +103,7 @@ navigate → commit → beginNewRealm（换文档即新 generation；通常也�
        ├─ 经典 script     → 解析调用栈内求值
        ├─ 入口 module     → 单槽等待位挂起解析 → body 到达后回到解析调用栈求值
        └─ defer/module 队列 → 解析结束 flushDeferredModules()
-  → DOMContentLoaded（当前会发两次，P0-c）→ load
+  → DOMContentLoaded（只发一次；deferred module 先跑）→ load
   → willClose → documentWillUnload → stopRealm
 ```
 
