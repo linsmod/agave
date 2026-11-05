@@ -135,11 +135,12 @@
   计算在 ant 里要分钟级 → GUI 表现为假死（R60）。
 - **已完成**：`obj[key]` 动态字符串键的属性 IC（R65，script 模式下 66→28ns / 63→25ns / 75→52ns）；
   长循环/销毁竞态（R61）不再干扰基准。
-- **真正的瓶颈已定位（R64）**：agave 页面脚本走 direct-eval 语义，函数内每次读顶层绑定都过
-  `jit_helper_get_eval_global`；同一份代码换成 script 模式快 20–60×，但 script 模式的顶层
-  `var`/`function` 不落 `window`（浏览器语义要求必须落），所以不能直接切。
-- 下一步（二选一）：①script 模式执行后把顶层 var/function 发布到 global（编译器记录绑定）；
-  ②保持 eval 语义，给 `GET_EVAL_GLOBAL` 发 JIT 内联快路径（shape+slot 守卫，命中不调 helper）。
+- **已实现（R66，默认关闭）**：script 模式的顶层 `var`/`function` 现在发布到 global
+  （编译器登记 + `sv_global_declare`），`AGB_PAGE_EVAL=script` 打开后探针基准 20–60×
+  （`empty 210→3ns`、`static-key 618→5.5`、`dyn-key 515→27`），v.qq `nav=57`（eval 模式 22）。
+  **阻塞翻默认**：该模式下 chat.deepseek.com 3/4 AV（eval 模式 4/4 正常），是又一处跨 JS 调用
+  未扎根的 UAF（同类已修：`jit_put_elem` 的 key）。下一步用 `AGB_GUARD_MALLOC` + cdb 抓写入者，
+  清零后把 `AGB_PAGE_EVAL` 默认改为 `script`。
 - 验收：探针跑 `debug/bench_hot.js` 时 `static-key`/`vm-dispatch` 进个位数 ns，且
   `tools/pages/cap_script_semantics.html` 的 `window.pageVar=number`；`run_jit_loop_tests.ps1`、
   nav/typing/worker/layout 全绿；v.qq.com 在 `AGB_HANG_WATCH=1` 下不再报 5 s `[hang]`。
@@ -171,3 +172,4 @@
 5. `document.scripts` 空 → 脚本扫描型库会误判。
 6. canvas `fillText`/`measureText` → 图表/文字库画不出字或排版错位。
 7. `WebSocket`/`EventSource` 存在但不可用 → 要么接通，要么显式 `undefined`。
+

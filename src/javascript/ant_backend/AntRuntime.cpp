@@ -3676,6 +3676,26 @@ static bool g_documentParsed = false;
  * dispatched, the VM is re-entering and that is worth knowing. */
 static int g_evalDepth = 0;
 
+/* Page scripts are classic <script>: top-level var/function belong to the
+ * global object. antb_eval_script() implements that (R66). Opt-in until the
+ * remaining lifetime bugs exposed by the faster path are fixed; AGB_PAGE_EVAL
+ * =script turns it on for measuring. */
+static bool pageEvalScriptMode()
+{
+    static int cached = -1;
+    if (cached < 0) {
+        const char* v = getenv("AGB_PAGE_EVAL");
+        cached = (v && !strcmp(v, "script")) ? 1 : 0;
+    }
+    return cached == 1;
+}
+
+static AntbValue* antbEvalPage(const char* src, int len, char** err)
+{
+    return pageEvalScriptMode()
+        ? antb_eval_script(g_engine, src, len, err)
+        : antb_eval(g_engine, src, len, err);
+}
 int evaluate(const char* src, size_t len, char** out, char** err)
 {
     AntbValue* value;
@@ -3734,7 +3754,7 @@ int evaluate(const char* src, size_t len, char** out, char** err)
                                    (int)len, src);
             if (written <= 0 || (size_t)written >= wrappedLen) {
                 free(wrapped);
-                value = antb_eval(g_engine, src, (int)len, err);
+                value = antbEvalPage(src, (int)len, err);
                 if (!value)
                     return 0;
                 if (out)
@@ -3743,7 +3763,7 @@ int evaluate(const char* src, size_t len, char** out, char** err)
                 return 1;
             }
 
-            value = antb_eval(g_engine, wrapped, written, err);
+            value = antbEvalPage(wrapped, written, err);
         }
         free(wrapped);
     }
@@ -4146,7 +4166,7 @@ static bool evalScriptFile(const char* envName, const char* fileName)
             buffer[read] = 0;
 
             /* antb_eval returns the completion value, NULL only on an error. */
-            AntbValue* result = g_engine ? antb_eval(g_engine, buffer, (int)read, NULL) : NULL;
+            AntbValue* result = g_engine ? antbEvalPage(buffer, (int)read, NULL) : NULL;
 
             if (result) {
                 ok = true;
@@ -4229,7 +4249,7 @@ static void loadPolyfills(void)
 
             buffer[read] = 0;
 
-            if (g_engine && !antb_eval(g_engine, buffer, (int)read, NULL))
+            if (g_engine && !antbEvalPage(buffer, (int)read, NULL))
                 fprintf(stderr, "[agave] polyfills.js failed to evaluate\n");
 
             free(buffer);
@@ -10297,6 +10317,8 @@ void setDialogHook(DialogHook hook)
 }
 
 } /* namespace AntRuntime */
+
+
 
 
 
