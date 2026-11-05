@@ -2157,6 +2157,9 @@ static char g_probeIme[512];        /* --ime: posted as WM_IME_CHAR           */
 static int  g_probePreDone;       /* --pre-eval was executed                   */
 static char g_probeInject[512];   /* --inject: script asset to run before eval */
 static int  g_probeInjectDone;    /* --inject already ran for this document    */
+static int  g_probeResizeW;       /* --resize WxH: control size before --eval   */
+static int  g_probeResizeH;
+static int  g_probeResizeDone;    /* the probe window was resized already      */
 
 /* Offscreen capture. A hidden window gets no WM_PAINT, so PrintWindow has
  * nothing to render; the control keeps its own mirror buffer, and
@@ -2788,6 +2791,24 @@ static int probeRun(const char* url)
                     continue;
                 }
 
+                /* --resize WxH: resize the control once before --eval, so a run
+                 * can measure what the page does when the window changes size
+                 * (relayout, viewport units, media queries, resize event). The
+                 * parent popup is resized too, so the control's own WM_SIZE is
+                 * what drives the engine - the same path a dragged window takes,
+                 * minus the visible window. */
+                if (g_probeResizeW > 0 && g_probeResizeH > 0 && !g_probeResizeDone) {
+                    g_probeResizeDone = 1;
+                    probePrint("[probe]", "resizing control");
+                    SetWindowPos(g_probeWnd, NULL, 0, 0,
+                                 g_probeResizeW, g_probeResizeH,
+                                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+                    agave_webview_set_rect(g_probeView, 0, 0,
+                                           g_probeResizeW, g_probeResizeH);
+                    SetTimer(g_probeWnd, PROBE_TIMER_EVAL, 400, NULL);
+                    continue;
+                }
+
                 g_probeEvalDone = 1;
 
                 /* --shot: capture what the page painted and leave. The window
@@ -3030,6 +3051,9 @@ static void probeUsage(void)
             "            field: \"document.querySelector('input').focus()\")\n"
             "  --ime <text>  deliver text the way an IME does: WM_IME_CHAR per\n"
             "            UTF-16 code unit (surrogate pairs included), no keydown\n"
+            "  --resize <WxH>  resize the control (and its hidden parent) once\n"
+            "            after the page settled, then wait 400ms so the engine can\n"
+            "            relayout before --eval reads the new viewport\n"
             "  --reload <n>  reload the page n times and run the eval after\n"
             "                every round (page lifecycle comparison)\n"
             "  --offline module fetches are served from the cache only\n"
@@ -3134,6 +3158,18 @@ static void parseShellArgv(void)
         } else if (!strcmp(argv[i], "--inject") && i + 1 < argc) {
             strncpy(g_probeInject, argv[++i], sizeof(g_probeInject) - 1);
             g_probeInject[sizeof(g_probeInject) - 1] = 0;
+        } else if (!strcmp(argv[i], "--resize") && i + 1 < argc) {
+            int rw = 0, rh = 0;
+
+            /* WxH, the same spelling the desktop uses for window sizes. */
+            if (sscanf(argv[++i], "%dx%d", &rw, &rh) == 2 && rw > 0 && rh > 0) {
+                g_probeResizeW = rw;
+                g_probeResizeH = rh;
+            } else {
+                fprintf(stderr, "[shell] --resize wants WxH (e.g. 500x400), got %s\n", argv[i]);
+                g_argError = 1;
+                return;
+            }
         } else if (!strcmp(argv[i], "--wait") && i + 1 < argc) {
             g_probeWaitMs = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--settle") && i + 1 < argc) {

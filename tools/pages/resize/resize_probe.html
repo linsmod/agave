@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>resize probe</title>
+<style>
+  html, body { margin: 0; padding: 0; }
+  /* 100vw/50vh are rewritten to px at parse time (R53); this box shows whether
+   * a window resize recomputes them. */
+  #vw { width: 100vw; height: 50vh; background: rgb(0, 0, 200); }
+  /* Percentages resolve during layout, so this one must follow a resize. */
+  #pct { width: 50%; height: 10px; background: rgb(0, 200, 0); }
+  /* A media breakpoint: does the CSS cascade re-evaluate @media on resize? */
+  #mq { width: 10px; height: 10px; background: rgb(10, 20, 30); }
+  @media (max-width: 600px) {
+    #mq { background: rgb(200, 30, 40); }
+  }
+  /* The mirror case: matches at the initial 1100px viewport and must stop
+   * matching after a shrink to 500px, if @media is live at all. */
+  #mq-wide { width: 10px; height: 10px; background: rgb(40, 30, 20); }
+  @media (min-width: 900px) {
+    #mq-wide { background: rgb(30, 200, 40); }
+  }
+</style>
+</head>
+<body onresize="window.__attrLog = (window.__attrLog || []); window.__attrLog.push(window.innerWidth);">
+<div id="vw"></div>
+<div id="pct"></div>
+<div id="mq"></div>
+<div id="mq-wide"></div>
+<script>
+  window.__resizeLog = [];
+  window.addEventListener('resize', function () {
+    window.__resizeLog.push(window.innerWidth + 'x' + window.innerHeight);
+  });
+  window.onresize = function () {
+    window.__propLog = window.__propLog || [];
+    window.__propLog.push(window.innerWidth);
+  };
+</script>
+</body>
+</html>
