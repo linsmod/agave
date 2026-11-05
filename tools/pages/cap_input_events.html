@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>cap input events</title>
+<style>
+  input, textarea { display: block; width: 260px; margin: 4px 0; }
+</style>
+</head>
+<body>
+<!--
+  Every input-related event binding, in one page.
+
+  Two ways to drive it:
+
+    agave_shell.exe --probe file:///.../cap_input_events.html?focus=a \
+        --keys "abc" --eval "probeExit(window.reportInputEvents())"
+
+  `?focus=<id>` picks the element the real typing goes into (default `a`).
+  The probe types real WM_KEYDOWN/WM_CHAR, so the event stream is the engine's
+  own, not something this page fabricated.
+
+  A synthetic suite also runs on load (dispatchEvent through the bridge), so a
+  plain `--eval` with no typing still exercises the listener plumbing:
+      --eval "probeExit(window.reportInputEvents())"
+
+  What each element pins down:
+    #a  baseline: all types, bubble phase, target identity, value snapshot
+    #b  keydown preventDefault on 'x'  -> the character must NOT be inserted
+    #c  beforeinput preventDefault on 'y' -> must not be inserted (if supported)
+    #d  `on*` property handlers only (no addEventListener)
+    #e  capture vs bubble order on the same element
+    #f  addEventListener(..., {once:true}) -> exactly one call per listener
+    #g  stopPropagation -> the wrapper must not see the event
+    #h  delegation only: no direct listener, #root must see it (React's model)
+    #i  textarea (same stream as input)
+    #j  removeEventListener -> the removed listener must never run
+-->
+<div id="root">
+  <div id="wrapA"><input id="a" type="text" placeholder="baseline"></div>
+  <div id="wrapB"><input id="b" type="text" placeholder="keydown-block-x"></div>
+  <div id="wrapC"><input id="c" type="text" placeholder="beforeinput-block-y"></div>
+  <div id="wrapD"><input id="d" type="text" placeholder="on* handlers"></div>
+  <div id="wrapE"><input id="e" type="text" placeholder="capture+bubble"></div>
+  <div id="wrapF"><input id="f" type="text" placeholder="once"></div>
+  <div id="wrapG"><input id="g" type="text" placeholder="stopPropagation"></div>
+  <div id="wrapH"><input id="h" type="text" placeholder="delegation"></div>
+  <textarea id="i" placeholder="textarea"></textarea>
+  <div id="wrapJ"><input id="j" type="text" placeholder="removeEventListener"></div>
+  <!-- never typed into: the synthetic suite fires on this one, so `never=[...]`
+       keeps reporting only what real typing produced. -->
+  <input id="s" type="text" placeholder="synthetic-only">
+</div>
+<div id="out"></div>
+<script>
+(function () {
+  var TYPES = ['focus', 'blur', 'keydown', 'keypress', 'keyup', 'beforeinput', 'input',
+               'change', 'select', 'selectionchange', 'compositionstart',
+               'compositionupdate', 'compositionend', 'paste', 'cut', 'copy'];
+
+  var log = window.__evlog = [];
+  var fired = {};        /* el.id -> { type: count } */
+  var order = {};        /* el.id -> [type, ...] in arrival order */
+  var checks = window.__evchecks = {};
+
+  function el(id) { return document.getElementById(id); }
+
+  function note(id, type) {
+    if (!fired[id]) { fired[id] = {}; order[id] = []; }
+    fired[id][type] = (fired[id][type] || 0) + 1;
+    order[id].push(type);
+  }
+
+  /* Records one event. `phase` is 'bubble' unless a capture listener says
+   * otherwise; `tag` distinguishes listeners that share a type. */
+  function rec(phase, tag, node, e) {
+    var id = (node && node.id) || (node && node.tagName ? node.tagName.toLowerCase() : '?');
+    var row = {
+      el: id, tag: tag || '', t: e.type, phase: phase,
+      target: (e.target && e.target.id) || null,
+      cur: (e.currentTarget && e.currentTarget.id) || null,
+      trusted: !!e.isTrusted,
+      prevented: !!e.defaultPrevented,
+      bubbles: !!e.bubbles,
+      cancelable: !!e.cancelable,
+      targetIsSelf: (e.target === node)
+    };
+    if (e.key !== undefined) row.key = e.key;
+    if (e.code !== undefined) row.code = e.code;
+    if (e.keyCode !== undefined) row.keyCode = e.keyCode;
+    if (e.charCode !== undefined) row.charCode = e.charCode;
+    if (e.data !== undefined) row.data = e.data;
+    if (e.inputType !== undefined) row.inputType = e.inputType;
+    if (e.isComposing !== undefined) row.isComposing = e.isComposing;
+    if (e.ctrlKey !== undefined) row.mods = (e.ctrlKey ? 'c' : '') + (e.shiftKey ? 's' : '') +
+                                           (e.altKey ? 'a' : '') + (e.metaKey ? 'm' : '');
+    /* Value *at the moment the event arrives*: keydown must still see the old
+     * value (the character is inserted by the default action afterwards). */
+    if (node && node.value !== undefined) row.value = node.value;
+    log.push(row);
+    note(id, e.type);
+    return row;
+  }
+
+  /* Attach a recording listener for every type, bubble phase. */
+  function bindAll(node, tag) {
+    for (var i = 0; i < TYPES.length; i++) {
+      (function (t) {
+        node.addEventListener(t, function (e) { rec('bubble', tag, node, e); });
+      })(TYPES[i]);
+    }
+  }
+
+  var a = el('a'), b = el('b'), c = el('c'), d = el('d'), e = el('e'),
+      f = el('f'), g = el('g'), h = el('h'), i = el('i'), j = el('j');
+
+  /* ---- #a baseline: full stream, plus root/document delegation ---------- */
+  bindAll(a, 'a');
+  el('root').addEventListener('input', function (ev) {
+    if (ev.target === h) checks.delegation = (checks.delegation || 0) + 1;
+    if (ev.target === a) checks.rootSawA = (checks.rootSawA || 0) + 1;
+  });
+  document.addEventListener('keydown', function (ev) {
+    if (ev.target === a) checks.docSawKeydownA = (checks.docSawKeydownA || 0) + 1;
+  });
+
+  /* ---- #b keydown preventDefault must suppress the character ----------- */
+  bindAll(b, 'b');
+  b.addEventListener('keydown', function (ev) {
+    if (ev.key === 'x' || ev.keyCode === 88) {
+      ev.preventDefault();
+      checks.bPrevented = (checks.bPrevented || 0) + 1;
+    }
+  });
+
+  /* ---- #c beforeinput preventDefault ----------------------------------- */
+  bindAll(c, 'c');
+  c.addEventListener('beforeinput', function (ev) {
+    if (ev.data === 'y') {
+      ev.preventDefault();
+      checks.cPrevented = (checks.cPrevented || 0) + 1;
+    }
+  });
+
+  /* ---- #d property handlers only --------------------------------------- */
+  var propHits = checks.propHits = {};
+  function prop(name, t) {
+    d[name] = function (ev) { propHits[t] = (propHits[t] || 0) + 1; rec('bubble', 'prop:' + name, d, ev); };
+  }
+  prop('onfocus', 'focus'); prop('onblur', 'blur');
+  prop('onkeydown', 'keydown'); prop('onkeypress', 'keypress'); prop('onkeyup', 'keyup');
+  prop('oninput', 'input'); prop('onchange', 'change'); prop('onselect', 'select');
+  prop('onbeforeinput', 'beforeinput');
+  /* Returning false from a property handler must cancel the default action. */
+  d.onkeydown = function (ev) {
+    propHits.keydown = (propHits.keydown || 0) + 1;
+    rec('bubble', 'prop:onkeydown', d, ev);
+    if (ev.key === 'z') { ev.preventDefault(); return false; }
+  };
+
+  /* ---- #e capture vs bubble on the same element ------------------------ */
+  for (var ti = 0; ti < TYPES.length; ti++) {
+    (function (t) {
+      e.addEventListener(t, function (ev) { rec('capture', 'e-cap', e, ev); }, true);
+      e.addEventListener(t, function (ev) { rec('bubble', 'e-bub', e, ev); });
+    })(TYPES[ti]);
+  }
+
+  /* ---- #f once --------------------------------------------------------- */
+  f.addEventListener('input', function (ev) { rec('bubble', 'f-once1', f, ev); },
+                     { once: true });
+  f.addEventListener('input', function (ev) { rec('bubble', 'f-once2', f, ev); },
+                     { once: true });
+
+  /* ---- #g stopPropagation ---------------------------------------------- */
+  g.addEventListener('input', function (ev) {
+    rec('bubble', 'g-stop', g, ev);
+    ev.stopPropagation();
+  });
+  el('wrapG').addEventListener('input', function () { checks.wrapGSaw = 1; });
+
+  /* ---- #h delegation only (no listener on h itself) -------------------- */
+  /* The #root listener above is the only one; nothing is attached to h. */
+
+  /* ---- #i textarea ----------------------------------------------------- */
+  bindAll(i, 'i');
+
+  /* ---- #j removeEventListener ------------------------------------------ */
+  var ghost = function () { checks.ghostRan = 1; };
+  j.addEventListener('input', ghost);
+  j.removeEventListener('input', ghost);
+  j.addEventListener('input', function (ev) { rec('bubble', 'j-live', j, ev); });
+
+  /* ---- #s synthetic-only target: every type bound, never typed into ---- */
+  var s = el('s');
+  bindAll(s, 's');
+
+  /* ===================================================================== */
+  /* Synthetic suite: exercise the listener plumbing without real typing.   */
+  /* ===================================================================== */
+  window.__synth = function () {
+    var res = window.__synthRes = {};
+    function fire(node, type, init) {
+      var ev;
+      try {
+        ev = new Event(type, { bubbles: true, cancelable: true });
+      } catch (err) { return 'noEvent'; }
+      if (init) for (var k in init) { try { ev[k] = init[k]; } catch (e2) {} }
+      var ret;
+      try { ret = node.dispatchEvent(ev); } catch (e3) { return 'throw:' + e3; }
+      return (ret === false ? 'cancelled' : 'ok') + (ev.defaultPrevented ? '/prevented' : '');
+    }
+    /* Listener plumbing: every type must reach a listener on the element. */
+    for (var k = 0; k < TYPES.length; k++) {
+      var t = TYPES[k];
+      var before = (fired.s && fired.s[t]) || 0;
+      var r = fire(s, t);
+      res[t] = r + ((fired.s && fired.s[t]) > before ? '/seen' : '/MISS');
+    }
+    /* beforeinput data/inputType plumbing */
+    res.beforeinputData = fire(s, 'beforeinput', { data: 'q', inputType: 'insertText' });
+    /* change / select / selectionchange reach the document too */
+    res.changeOnDoc = fire(document, 'change');
+    res.selectionchangeOnDoc = fire(document, 'selectionchange');
+    /* Property handler: does returning false cancel? */
+    var dBefore = (propHits.keydown || 0);
+    var r2 = fire(d, 'keydown', { key: 'z', keyCode: 90 });
+    res.propFalseReturn = r2 + ((propHits.keydown || 0) > dBefore ? '/called' : '/NOTCALLED');
+    /* Programmatic value assignment must NOT emit an input event (spec). */
+    var iBefore = (fired.a && fired.a.input) || 0;
+    a.value = 'programmatic';
+    res.inputOnProgrammaticSet = ((fired.a && fired.a.input) || 0) > iBefore ? 'EMITTED' : 'none';
+    a.value = '';
+    return res;
+  };
+
+  /* ===================================================================== */
+  /* Report                                                                */
+  /* ===================================================================== */
+  function typesOf(id) {
+    var f2 = fired[id], out = [];
+    for (var t in f2) if (f2.hasOwnProperty(t)) out.push(t);
+    return out;
+  }
+
+  window.reportInputEvents = function () {
+    var r = [];
+    /* Which types arrived on the baseline element, in first-arrival order. */
+    r.push('a=[' + typesOf('a').join(',') + ']');
+    r.push('aOrder=' + ((order.a || []).join('>')));
+    /* Event object fields, from the first keydown and the first input. */
+    var kd = null, inp = null, l;
+    for (l = 0; l < log.length; l++) {
+      if (!kd && log[l].el === 'a' && log[l].t === 'keydown') kd = log[l];
+      if (!inp && log[l].el === 'a' && log[l].t === 'input') inp = log[l];
+    }
+    if (kd) {
+      r.push('kd[key=' + kd.key + ',code=' + kd.code + ',kc=' + kd.keyCode +
+             ',trusted=' + (kd.trusted ? 1 : 0) + ',tgtSelf=' + (kd.targetIsSelf ? 1 : 0) +
+             ',value="' + (kd.value === undefined ? '?' : kd.value) + '"]');
+    } else r.push('kd=MISSING');
+    if (inp) {
+      r.push('in[key=' + inp.key + ',inputType=' + inp.inputType + ',data=' + inp.data +
+             ',tgtSelf=' + (inp.targetIsSelf ? 1 : 0) + ']');
+    } else r.push('in=MISSING');
+    /* beforeinput anywhere? (2008 WebCore may not have it) */
+    var bi = 0;
+    for (l = 0; l < log.length; l++) if (log[l].t === 'beforeinput') bi++;
+    r.push('beforeinputHits=' + bi);
+    /* preventDefault actually suppressing insertion. */
+    r.push('b[val="' + b.value + '",prevented=' + (checks.bPrevented || 0) + ']');
+    r.push('c[val="' + c.value + '",prevented=' + (checks.cPrevented || 0) + ']');
+    /* Property handlers. */
+    var ph = [];
+    for (var k in propHits) if (propHits.hasOwnProperty(k)) ph.push(k + ':' + propHits[k]);
+    r.push('prop={' + ph.join(',') + '}');
+    /* once: exactly one call per once-listener. */
+    var once1 = 0, once2 = 0;
+    for (l = 0; l < log.length; l++) {
+      if (log[l].tag === 'f-once1') once1++;
+      if (log[l].tag === 'f-once2') once2++;
+    }
+    r.push('once=' + once1 + '/' + once2 + '(want 1/1)');
+    /* capture before bubble. */
+    var capOrder = [];
+    for (l = 0; l < log.length; l++) {
+      if (log[l].tag === 'e-cap' || log[l].tag === 'e-bub')
+        capOrder.push(log[l].tag === 'e-cap' ? 'c' : 'b');
+    }
+    r.push('capOrder=' + capOrder.slice(0, 4).join(''));
+    /* stopPropagation + delegation + removal + textarea. */
+    r.push('stop=' + (checks.wrapGSaw ? 'LEAKED' : 'ok'));
+    r.push('deleg=' + (checks.delegation || 0) + (checks.rootSawA ? ',rootA=' + checks.rootSawA : '') +
+           (checks.docSawKeydownA ? ',docA=' + checks.docSawKeydownA : ''));
+    r.push('ghost=' + (checks.ghostRan ? 'RAN' : 'ok'));
+    r.push('i=[' + typesOf('i').join(',') + ']');
+    /* Which types never arrived from *real* input anywhere (engine gaps).
+     * `s` is the synthetic target and is excluded on purpose. */
+    var everFired = {}, miss = [];
+    for (var id2 in fired) if (fired.hasOwnProperty(id2)) {
+      if (id2 === 's') continue;
+      for (var t2 in fired[id2]) if (fired[id2].hasOwnProperty(t2)) everFired[t2] = 1;
+    }
+    for (var m = 0; m < TYPES.length; m++) if (!everFired[TYPES[m]]) miss.push(TYPES[m]);
+    r.push('never=[' + miss.join(',') + ']');
+    if (window.__synthRes) {
+      var s = [];
+      for (var sk in window.__synthRes) if (window.__synthRes.hasOwnProperty(sk))
+        s.push(sk + '=' + window.__synthRes[sk]);
+      r.push('synth{' + s.join(',') + '}');
+    } else r.push('synth=notRun');
+    var text = r.join(' ');
+    document.title = text;
+    return text;
+  };
+
+  /* Synthetic suite runs on load so a plain --eval still has data; the real
+   * typing (--keys) arrives after load and appends to the same log. */
+  var focusId = 'a';
+  var m2 = /[?&]focus=([A-Za-z0-9_-]+)/.exec(location.search);
+  if (m2) focusId = m2[1];
+  try { window.__synth(); } catch (e4) { checks.synthError = String(e4); }
+  try {
+    var ft = el(focusId);
+    if (ft && ft.focus) ft.focus();
+  } catch (e5) {}
+})();
+</script>
+</body>
+</html>

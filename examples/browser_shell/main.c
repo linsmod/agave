@@ -970,6 +970,47 @@ static void appendUrlEncoded(char* out, size_t outSize, size_t* written, const c
     *written = o;
 }
 
+/* Splits "path?query#fragment" into the on-disk path and the URL suffix.
+ * The suffix is appended to the file: URL verbatim - a query or fragment is
+ * not part of the file name, and percent-encoding its '?' would make the path
+ * point at a file called "x.html%3Ffocus=b" (which never exists). */
+static void splitLocalSuffix(const char* text, char* pathOut, size_t pathSize,
+                             const char** suffixOut)
+{
+    const char* mark = text ? strpbrk(text, "?#") : NULL;
+    size_t len;
+
+    if (!pathOut || !pathSize)
+        return;
+
+    if (!mark) {
+        strncpy(pathOut, text ? text : "", pathSize - 1);
+        pathOut[pathSize - 1] = 0;
+        *suffixOut = "";
+        return;
+    }
+
+    len = (size_t)(mark - text);
+    if (len >= pathSize)
+        len = pathSize - 1;
+    memcpy(pathOut, text, len);
+    pathOut[len] = 0;
+    *suffixOut = mark;
+}
+
+/* Appends a query/fragment verbatim (no percent-encoding). */
+static void appendLocalSuffix(char* out, size_t outSize, const char* suffix)
+{
+    size_t o = strlen(out);
+
+    if (!suffix || !*suffix)
+        return;
+
+    while (*suffix && o + 1 < outSize)
+        out[o++] = *suffix++;
+    out[o] = 0;
+}
+
 /* "E:\deepseek-webui\index.html" (also with forward slashes, a UNC path or a
  * relative path) -> "file:///E:/deepseek-webui/index.html". GetFullPathNameW
  * normalizes separators, "." and ".." against the shell's working directory. */
@@ -1074,7 +1115,12 @@ static void normalizeUrl(const char* input, char* out, size_t outSize)
         rest = text + (startsWithNoCase(text, "https://") ? 8 : 7);
 
         if (isDrivePath(rest) || isUncPath(rest)) {
-            fileUrlFromLocalPath(rest, out, outSize);
+            char localPath[MAX_PATH_CHARS];
+            const char* suffix;
+
+            splitLocalSuffix(rest, localPath, sizeof(localPath), &suffix);
+            fileUrlFromLocalPath(localPath, out, outSize);
+            appendLocalSuffix(out, outSize, suffix);
             return;
         }
 
@@ -1093,18 +1139,27 @@ static void normalizeUrl(const char* input, char* out, size_t outSize)
         q = p + slashes;
 
         /* Windows separators, or a drive/UNC path without the third slash:
-         * rebuild the canonical file:/// form (the engine needs it). */
+         * rebuild the canonical file:/// form (the engine needs it). A
+         * ?query / #fragment rides along verbatim. */
         if (strchr(p, '\\') || (slashes < 3 && (isDrivePath(q) || isUncPath(q)))) {
-            if (strchr(p, '\\') && slashes == 0)
-                fileUrlFromLocalPath(p, out, outSize);
-            else
-                fileUrlFromLocalPath(q, out, outSize);
+            char localPath[MAX_PATH_CHARS];
+            const char* suffix;
+            const char* candidate = (strchr(p, '\\') && slashes == 0) ? p : q;
+
+            splitLocalSuffix(candidate, localPath, sizeof(localPath), &suffix);
+            fileUrlFromLocalPath(localPath, out, outSize);
+            appendLocalSuffix(out, outSize, suffix);
             return;
         }
 
         if (slashes < 2 && q[0]) {
             /* file:C:/x */
-            fileUrlFromLocalPath(q, out, outSize);
+            char localPath[MAX_PATH_CHARS];
+            const char* suffix;
+
+            splitLocalSuffix(q, localPath, sizeof(localPath), &suffix);
+            fileUrlFromLocalPath(localPath, out, outSize);
+            appendLocalSuffix(out, outSize, suffix);
             return;
         }
 
@@ -1121,15 +1176,28 @@ static void normalizeUrl(const char* input, char* out, size_t outSize)
         return;
     }
 
-    if (isDrivePath(text) || isUncPath(text)) {
-        fileUrlFromLocalPath(text, out, outSize);
-        return;
-    }
+    {
+        /* A local path may carry a ?query / #fragment ("page.html?focus=b").
+         * The suffix is not part of the file name: test and canonicalize the
+         * path alone, then append the suffix verbatim. */
+        char localPath[MAX_PATH_CHARS];
+        const char* suffix;
 
-    /* Relative path that resolves to something on disk ("./x.html", "debug\a.html"). */
-    if ((strchr(text, '\\') || strchr(text, '/')) && localPathExists(text)) {
-        fileUrlFromLocalPath(text, out, outSize);
-        return;
+        splitLocalSuffix(text, localPath, sizeof(localPath), &suffix);
+
+        if (isDrivePath(localPath) || isUncPath(localPath)) {
+            fileUrlFromLocalPath(localPath, out, outSize);
+            appendLocalSuffix(out, outSize, suffix);
+            return;
+        }
+
+        /* Relative path that resolves to something on disk ("./x.html",
+         * "debug/a.html"), optionally with a query. */
+        if ((strchr(localPath, '\\') || strchr(localPath, '/')) && localPathExists(localPath)) {
+            fileUrlFromLocalPath(localPath, out, outSize);
+            appendLocalSuffix(out, outSize, suffix);
+            return;
+        }
     }
 
     /* "localhost:8971/x" has no dot but is a host, not a search term. */
@@ -1624,6 +1692,7 @@ static int g_probeWaitMs    = 3000;   /* after load finished, before eval   */
 static int g_probeSettleMs  = 1000;   /* after eval, before exit            */
 static int g_probeTimeoutMs = 60000;  /* hard cap from start                */
 static int g_probeFinished;
+static int g_probeLoadArmed;   /* the load-finished signal already scheduled --eval */
 static int g_probeEvalDone;
 static int g_probeGotExit;
 static int g_probeSawError;
@@ -1752,8 +1821,14 @@ static void probeOnMessage(AgaveWebView* view, const char* message, void* user)
      * Route through the main thread (PostMessage) - never SetTimer from the
      * engine thread. */
     if (message && !strncmp(message, "__agb_loaded__", 14)) {
+        const char* href = message + 14;
+
         if (!g_probeFinished) {
-            probePrint("[probe]", "window load event");
+            char line[768];
+
+            _snprintf(line, sizeof(line), "window load event url=%s", href);
+            line[sizeof(line) - 1] = 0;
+            probePrint("[probe]", line);
             PostMessageA(g_probeWnd, AGW_PROBE_MSG, g_probeWaitMs, 0);
         }
         return;
@@ -1832,12 +1907,17 @@ static void probeOnProgress(AgaveWebView* view, int percent, int finished, void*
 
     /* Engine-thread callback: never SetTimer here (the probe window is owned
      * by the main thread; cross-thread window timers are undefined). Post the
-     * request to the main loop instead; progress finished is only a FALLBACK
-     * trigger with a longer delay - the real schedule comes from the page's
-     * window load event. */
-    if (finished && !g_probeFinished && !g_probeReloadMode) {
+     * request to the main loop instead.
+     *
+     * "progress finished" is the engine's own "the document loaded" signal and
+     * fires exactly once, for the requested document - a frame now gets its one
+     * document from its first commit, so there is no initial empty document to
+     * report early. --wait is therefore measured from the real load, and no JS
+     * hook or readyState poll is needed. */
+    if (finished && !g_probeFinished && !g_probeLoadArmed) {
+        g_probeLoadArmed = 1;
         probePrint("[probe]", g_probeSawError ? "progress finished (with error)" : "progress finished");
-        PostMessageA(g_probeWnd, AGW_PROBE_MSG, g_probeWaitMs + 10000, 0);
+        PostMessageA(g_probeWnd, AGW_PROBE_MSG, g_probeWaitMs, 0);
     }
 }
 
@@ -2119,14 +2199,9 @@ static int probeRun(const char* url)
 
     agave_webview_navigate(g_probeView, url);
 
-    /* Load hook: the page reports its own window load event; --eval runs on
-     * that (plus --wait), not on the network-layer progress callback. */
-    agave_webview_eval(g_probeView,
-        "(function () {"
-        " var f = function () { agavePostMessage('__agb_loaded__' + location.href); };"
-        " if (document.readyState === 'complete') { f(); return; }"
-        " window.addEventListener('load', f);"
-        "})();");
+    /* Nothing is injected here any more: the engine's on_progress(finished)
+     * callback is the single "the requested document loaded" signal, and --wait
+     * is measured from it. */
 
     while (GetMessageW(&msg, NULL, 0, 0)) {
         /* Only our own window's timers: the webview control runs internal
@@ -2234,18 +2309,23 @@ static int probeRun(const char* url)
                  * the run ends with the SANITY exit code instead of a
                  * misleading OK. */
                 agave_webview_eval(g_probeView,
-                    /* A failed navigation can commit an empty document under
-                     * the requested URL (host check alone can't catch that);
-                     * a parsed page always has children under <body>. */
-                    "window.__agbDocOk = ((typeof document.body === 'object') "
-                    "&& (document.body !== null) "
-                    "&& (document.body.children.length > 0));"
+                    /* A failed navigation can commit a document that never got
+                     * parsed. Judge it by the document itself: it must carry a
+                     * URL String, be a real document tree, and have something
+                     * in it. Counting element children under <body> was wrong:
+                     * a page whose body holds only text is a perfectly good
+                     * document and was reported as "empty". */
+                    "window.__agbDocOk = ((typeof document.URL === 'string') "
+                    "&& (document.URL.length > 0) "
+                    "&& (document.URL !== 'about:blank') "
+                    "&& (document.documentElement !== null) "
+                    "&& (document.documentElement.innerHTML.length > 0));"
                     "if (window.__agbDocOk) {"
                     " window.probeExit = function (result) {"
                     "  agavePostMessage('__agb_exit__' + (result === undefined ? '' : String(result)));"
                     " };"
                     "} else {"
-                    " agavePostMessage('__agb_sanity__ document is empty (page never parsed?)');"
+                    " agavePostMessage('__agb_sanity__ document is empty (page never parsed?) url=' + document.URL);"
                     " window.probeExit = function (result) {"
                     "  agavePostMessage('__agb_sanity__ skipped eval: ' + (result === undefined ? '' : String(result)));"
                     " };"
@@ -2268,32 +2348,22 @@ static int probeRun(const char* url)
             if (msg.wParam == PROBE_TIMER_SETTLE) {
                 KillTimer(g_probeWnd, PROBE_TIMER_SETTLE);
 
-                /* --reload: start the next round. The new document has no
-                 * load hook yet, so poll its readyState; each poll eval that
-                 * sees 'complete' posts __agb_loaded__, which stops the poll
-                 * (KillTimer in probeWndProc) and schedules the next eval. */
+                /* --reload: start the next round; its load reports through
+                 * on_progress(finished) like any other load. */
                 if (g_probeReloadsLeft > 0) {
-                    char mark[128];
-
                     g_probeReloadsLeft--;
                     g_probeRound++;
                     g_probeFinished = 0;
+                    g_probeLoadArmed = 0;
                     g_probeEvalDone = 0;
                     g_probePollCount = 0;
                     probePrint("[probe]", "reloading");
 
-                    /* Mark the CURRENT document. The poll only fires on a
-                     * document that does NOT carry the marker, i.e. on the
-                     * freshly loaded one. If a reload reuses the old
-                     * document, the poll never fires and the run says so
-                     * instead of silently testing the stale document. */
-                    snprintf(g_probeToken, sizeof(g_probeToken),
-                             "R%d_%lu", g_probeRound, (unsigned long)GetTickCount());
-                    snprintf(mark, sizeof(mark),
-                             "window.__agbPreReload='%s';", g_probeToken);
-                    agave_webview_eval(g_probeView, mark);
-
-                    SetTimer(g_probeWnd, PROBE_TIMER_POLL, 400, NULL);
+                    /* The reloaded document reports its own load through
+                     * on_progress(finished), exactly like the first one: no
+                     * marker or readyState poll is needed, and a stale
+                     * document cannot pass for the new one because the
+                     * signal comes from the engine per load. */
                     agave_webview_reload(g_probeView);
                     continue;
                 }

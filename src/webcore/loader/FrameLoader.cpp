@@ -307,19 +307,20 @@ FrameLoader::~FrameLoader()
 
 void FrameLoader::init()
 {
-    // this somewhat odd set of steps is needed to give the frame an initial empty document
+    /* A frame owns exactly one document: the one its first load parses.
+     *
+     * This used to commit an "initial empty document" (blank substitute data)
+     * before the host's navigation ran. Every consumer then had to special-case
+     * it: document.readyState said "complete" for it, it dispatched a window
+     * load event, document.URL read about:blank, and the headless probe armed
+     * its "page is ready" wait on it. The host creates a view and navigates
+     * immediately, so that document existed only to be replaced a few
+     * milliseconds later. Leave the frame without a document; the first
+     * begin()/commit creates the real one. */
     m_isDisplayingInitialEmptyDocument = false;
-    m_creatingInitialEmptyDocument = true;
-    setPolicyDocumentLoader(m_client->createDocumentLoader(ResourceRequest(String("")), SubstituteData()).get());
-    setProvisionalDocumentLoader(m_policyDocumentLoader.get());
-    setState(FrameStateProvisional);
-    m_provisionalDocumentLoader->setResponse(ResourceResponse(KURL(), "text/html", 0, String(), String()));
-    m_provisionalDocumentLoader->finishedLoading();
-    begin(KURL(), false);
-    end();
-    m_frame->document()->cancelParsing();
     m_creatingInitialEmptyDocument = false;
     m_didCallImplicitClose = true;
+    setState(FrameStateProvisional);
 }
 
 void FrameLoader::setDefersLoading(bool defers)
@@ -3982,7 +3983,8 @@ void FrameLoader::saveDocumentState()
         return;
 
     Document* document = m_frame->document();
-    ASSERT(document);
+    /* The first load has no previous document to save form state from: a
+     * frame's document is created by its first commit. */
     
     if (document && item->isCurrentDocument(document)) {
         LOG(Loading, "WebCoreLoading %s: saving form state to %p", m_frame->tree()->name().domString().utf8().data(), item);

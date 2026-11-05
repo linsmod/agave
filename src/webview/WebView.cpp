@@ -555,7 +555,20 @@ void WebView::loadUrl(const char* url, bool lc)
 
 	KURL Url;
 	if (0 == strncasecmp(url, "file://", 7)) {
-		DeprecatedString UrlStr = KURL::encode_string(DeprecatedString::fromUtf8(url));
+		/* A file: URL may carry a ?query / #fragment ("page.html?focus=b").
+		 * encode_string() escapes everything that is not a safe path byte,
+		 * '?' included, which turned the query into part of the file name
+		 * ("...html%3Ffocus=b") and the load came back as an empty document.
+		 * Only the path is escaped; the suffix is structural and goes through
+		 * verbatim. */
+		DeprecatedString raw = DeprecatedString::fromUtf8(url);
+		int qmark = raw.find('?');
+		int hash = raw.find('#');
+		int suffixAt = (qmark < 0) ? hash : ((hash < 0) ? qmark : (qmark < hash ? qmark : hash));
+
+		DeprecatedString UrlStr = suffixAt >= 0
+			? KURL::encode_string(raw.left((unsigned)suffixAt)) + raw.mid((unsigned)suffixAt)
+			: KURL::encode_string(raw);
 		Url = KURL(UrlStr);
 	} else {
 		Url = KURL(url);
