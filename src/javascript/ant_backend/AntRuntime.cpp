@@ -2252,18 +2252,71 @@ static volatile LONG      g_profStop = 0;
 static DWORD              g_profThreadId = 0;
 static HANDLE             g_profWatcher = NULL;
 static int                g_profSamplerOn = -1;
+static int                g_hangWatchOn = -1;
 
+/* Hang watchdog: the engine thread burning a full core for N seconds with no
+ * progress is a JS busy loop (v.qq.com froze the GUI this way). The signal is
+ * CPU time, not wall time: a blocked thread stays idle. When it triggers, the
+ * engine thread is suspended (VM state frozen) and the bridge prints the live
+ * JS stack, so the report names the function and file:line that loops. */
 static DWORD WINAPI profilerWatcher(LPVOID)
 {
-    HANDLE thread = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT, FALSE, g_profThreadId);
+    HANDLE thread = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION,
+                               FALSE, g_profThreadId);
+    ULONGLONG lastCpu = 0;
+    ULONGLONG lastCheck = GetTickCount64();
+    int busySeconds = 0;
+    int hangSeconds = 5;
+    bool sampling = getenv("AGB_PROFILE") != NULL;
 
     if (!thread)
         return 0;
+
+    if (const char* seconds = getenv("AGB_HANG_SECONDS"))
+        hangSeconds = atoi(seconds);
 
     while (!g_profStop) {
         CONTEXT context;
 
         Sleep(1);
+
+        /* Sleep(1) is ~15 ms on Windows, so count iterations would stretch the
+         * window to ~15 s; use the clock instead. */
+        if (GetTickCount64() - lastCheck >= 1000) {
+            lastCheck = GetTickCount64();
+            FILETIME creation, exitTime, kernel, user;
+            ULONGLONG cpu = 0;
+
+            if (GetThreadTimes(thread, &creation, &exitTime, &kernel, &user)) {
+                cpu = (((ULONGLONG)kernel.dwHighDateTime << 32) | kernel.dwLowDateTime)
+                    + (((ULONGLONG)user.dwHighDateTime << 32) | user.dwLowDateTime);
+            }
+
+            if (lastCpu && cpu > lastCpu && (cpu - lastCpu) >= 9000000ULL)   /* >= 0.9 s of a second */
+                ++busySeconds;
+            else
+                busySeconds = 0;
+
+            lastCpu = cpu;
+
+            if (hangSeconds > 0 && busySeconds >= hangSeconds) {
+                fprintf(stderr, "\n[hang] engine thread busy for %ds, JS stack:\n", busySeconds);
+                fflush(stderr);
+
+                if (SuspendThread(thread) != (DWORD)-1) {
+                    if (g_engine)
+                        antb_print_js_stack(g_engine);
+                    ResumeThread(thread);
+                }
+
+                /* Report once per busy streak; reset so a second streak reports again. */
+                busySeconds = 0;
+                lastCpu = 0;
+            }
+        }
+
+        if (!sampling)
+            continue;
 
         if (SuspendThread(thread) == (DWORD)-1)
             continue;
@@ -2336,8 +2389,9 @@ static void startSampler(void)
         return;
 
     g_profSamplerOn = getenv("AGB_PROFILE") ? 1 : 0;
+    g_hangWatchOn = getenv("AGB_HANG_WATCH") ? 1 : 0;
 
-    if (!g_profSamplerOn)
+    if (!g_profSamplerOn && !g_hangWatchOn)
         return;
 
     g_profThreadId = GetCurrentThreadId();

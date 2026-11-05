@@ -218,6 +218,10 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
 - **未处理 Promise 拒绝**：`window.onunhandledrejection` 的 polyfill 会打印
   stack → `name: message` → 对象前几个自有属性，不再是 `[object Object]`；
   CLI 侧 ant 的 `print_error_value` 对普通对象也走同一套渲染。
+- **卡死/假死**：设 `AGB_HANG_WATCH=1`（`AGB_HANG_SECONDS` 默认 5）——引擎线程连续 N 秒
+  满核就打印 `[hang]` + JS 栈（`file:line`）；窗口无响应但 CPU 不高则是 UI 线程/等待问题，
+  用 `tools/cdb_stack.ps1 -Attach <pid>` 看全线程。栈里 `intern_find/hash_key` 说明是
+  属性/数组访问热点（脚本 VM），不是死锁。
 - **一条命令跑布局回归**：`pwsh -File tools/run_layout_tests.ps1`
   —— 对 `tools/pages/layout/*.html` 逐个跑 `layout_diff.py`（几何对拍 Chrome），再对
   `transform_repaint.html` 做像素断言、对 `scrollbar_hidden.html` 断言 `::-webkit-scrollbar`

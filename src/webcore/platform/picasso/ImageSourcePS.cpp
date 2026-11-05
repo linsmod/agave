@@ -197,8 +197,10 @@ NativeImagePtr ImageSource::createFrameAtIndex(size_t index)
         IntSize frameSize = size();
         double pixels = (double)frameSize.width() * (double)frameSize.height();
 
-        if (frameSize.width() <= 0 || frameSize.height() <= 0
-            || frameSize.width() > 16384 || frameSize.height() > 16384
+        /* size() is 0x0 before the header is decoded: that must go through to
+         * the decoder, otherwise the image never appears (and a later paint
+         * can crash on the missing frame). Only reject *known* absurd sizes. */
+        if (frameSize.width() > 16384 || frameSize.height() > 16384
             || pixels > 40000000.0) {
             agbLog(AGB_LOG_CACHE, "frame rejected size=%dx%d", frameSize.width(), frameSize.height());
             return 0;
