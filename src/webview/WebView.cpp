@@ -639,12 +639,20 @@ void WebView::loadUrl(const char* url, bool lc)
         }
     }
     if (0 == strncasecmp(url, "about:blank", 11)) {
-        if (cb_set_location)
-            cb_set_location(d->m_view, url);
-
-        if (cb_set_title)
-            cb_set_title(d->m_view, url);
-
+        /* A tab navigated to about:blank must own a document: since R44 the
+         * main frame has none until its first load, which left
+         * document.documentElement null and page scripts without a body.
+         * Commit a skeleton through the substitute-data path (the one internal
+         * pages use). The commit lands on the next timer tick - nothing runs in
+         * between, and document.URL stays about:blank. The location and title
+         * callbacks still fire from the load pipeline (dispatchDidSetLocation
+         * synchronously, <title> after the parse), so no manual cb_set_* here.
+         *
+         * The early return matters: falling through would run the URL through
+         * the KURL branch and start a second about:blank load, whose
+         * stopAllLoaders() cancels the skeleton that is still waiting for its
+         * timer tick - ending with an empty document and a duplicate request. */
+        loadHtml("<html><head><title>about:blank</title></head><body></body></html>", url);
         return;
     }
 

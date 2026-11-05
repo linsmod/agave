@@ -63,6 +63,9 @@ sheet 级常量代入；表单 feedback 的 `min-height` 由 4px 恢复 22px；�
 **内部页 runtime**（R48：下载面板是 `agave://downloads` 的 HTML 页 + 标签页（`Ctrl+J`）；
 `agave.*` 只在内部 realm 注册，普通页 `typeof agave === 'undefined'` —— 能力按 realm 隔离；
 `agave://` 由引擎用 `SubstituteData` 供给，`document.URL` 就是 agave 地址）。
+**about:blank 同步建文档**（R49：`about` 进内置 scheme 表；空加载没有数据块，`begin()` 从不被触发，
+现在在 `DocumentLoader::finishedLoading()` 提交之后显式 `createEmptyDocument()` ——
+`appendChild(iframe)` 返回时 `contentDocument` 就有文档，`window.open('about:blank')` 同样）。
 
 **已经被检查过的"看起来不能用"**（别再当缺陷重开）：ant 的 Worker 是真的（R22）、ant 的 wasm 引擎是真的
 （R19）、渐变/`var()`/flex 大多可用（R11/R39）、滚动与 hover 重绘正确（R13/R14/R40）、刷新后 realm/监听器会清理（R9/R10）。
@@ -173,7 +176,8 @@ ant 原生构造器；http(s) 走异步桥取源码 + preamble 后包成 `data:`
 
 ### P0-d iframe 的 `contentWindow` / `contentDocument`（✅ 2026-11-04 完成，R34）
 - `contentWindow` 返回该 frame 的 window 对象（顶层是全局、frame 是 `Window` 代理），
-  `contentDocument` 返回它的 document 对象；子文档还没建好时是 `null`。
+  `contentDocument` 返回它的 document 对象；子文档还没建好时是 `null`（`about:blank` 例外：
+  R49 之后 `appendChild(iframe)` 返回时已经同步有文档）。
 - 验证：`cap_dom.html` → `iframeCw=yes`；`cap_window_identity.html` 里 `contentWindow.document === contentDocument`。
 
 ### P0-b 图就绪与执行解耦

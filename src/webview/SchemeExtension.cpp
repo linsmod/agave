@@ -15,8 +15,16 @@ bool isSupportedInternalScheme(const char *scheme)
 	/* "agave" is the browser's own page scheme (agave://downloads and future
 	 * internal pages). It has no network backend: WebView::loadUrl turns it
 	 * into a synthetic document, so accepting it here only means "the
-	 * navigation policy does not reject it as an unknown scheme". */
-	static const char *builtinSchemes[] = {"http", "ftp", "https", "ftps", "file", "data", "agave"};
+	 * navigation policy does not reject it as an unknown scheme".
+	 *
+	 * "about" must pass for the same class of reason: about:blank is served
+	 * by MainResourceLoader's empty-document path (handleEmptyLoad), never by
+	 * the network, but the navigation policy runs first and used to reject it
+	 * with cannotShowURL (406002). That is why an <iframe> without src (or a
+	 * window.open("about:blank")) never got a document at all. This table only
+	 * answers "can the engine handle this scheme"; the document still comes
+	 * from the loader. */
+	static const char *builtinSchemes[] = {"http", "ftp", "https", "ftps", "file", "data", "about", "agave"};
     for (size_t i=0; i<TABLE_SIZE(builtinSchemes); i++) {
         if (!strcasecmp(builtinSchemes[i], scheme))
             return true;

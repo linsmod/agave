@@ -312,6 +312,7 @@ namespace WebCore {
 
         void begin();
         void begin(const KURL&, bool dispatchWindowObjectAvailable = true);
+        void createEmptyDocument(const KURL&);
 
         void write(const char* str, int len = -1, bool flush = false);
         void write(const String&);

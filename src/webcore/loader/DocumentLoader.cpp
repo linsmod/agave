@@ -315,6 +315,13 @@ void DocumentLoader::finishedLoading()
     m_gotFirstByte = true;   
     commitIfReady();
     if (FrameLoader* loader = frameLoader()) {
+        /* No data chunk ever arrived (about:blank, or an empty URL), so the
+         * first-data chain that creates the document (committedLoad ->
+         * setEncoding -> receivedFirstData) never ran. Create it now that the
+         * load is committed - but before the load completes, so a script that
+         * appends an <iframe> can read contentDocument on the next line. */
+        if (m_frame && !m_frame->document())
+            loader->createEmptyDocument(request().url());
         loader->finishedLoadingDocument(this);
         loader->end();
     }

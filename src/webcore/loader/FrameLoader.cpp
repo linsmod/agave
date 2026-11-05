@@ -934,6 +934,28 @@ void FrameLoader::receivedFirstData()
     scheduleHTTPRedirection(delay, URL);
 }
 
+/* An empty document (about:blank, or an empty URL) never delivers a data
+ * chunk, so the normal "first data" chain that creates the document
+ * (committedLoad -> setEncoding -> receivedFirstData) never runs. The frame
+ * would commit the load and still have no document: an <iframe> with no src
+ * had contentDocument == null, an about:blank tab had no body. Create it
+ * explicitly, still inside the navigation call, so script that appends an
+ * iframe can read contentDocument on the very next line.
+ *
+ * Safe on the normal path: returns when a document already exists. */
+void FrameLoader::createEmptyDocument(const KURL& url)
+{
+    if (m_frame->document())
+        return;
+
+    /* didOpenURL() stored the committed URL in m_workingURL, and
+     * receivedFirstData() uses it as begin()'s base URL. */
+    if (m_workingURL.isEmpty())
+        m_workingURL = url;
+
+    receivedFirstData();
+}
+
 const String& FrameLoader::responseMIMEType() const
 {
     return m_responseMIMEType;
