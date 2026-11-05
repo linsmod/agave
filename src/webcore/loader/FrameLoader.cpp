@@ -3400,7 +3400,10 @@ void FrameLoader::receivedMainResourceError(const ResourceError& error, bool isC
         // We might have made a page cache item, but now we're bailing out due to an error before we ever
         // transitioned to the new page (before WebFrameState == commit).  The goal here is to restore any state
         // so that the existing view (that wenever got far enough to replace) can continue being used.
-        m_frame->document()->setInPageCache(false);
+        // A frame has no document until its first load commits, and that first load is exactly the one that can
+        // fail here - there is no previous view to restore.
+        if (Document* document = m_frame->document())
+            document->setInPageCache(false);
         invalidateCurrentItemCachedPage();
         
         // Call clientRedirectCancelledOrFinished here so that the frame load delegate is notified that the redirect's

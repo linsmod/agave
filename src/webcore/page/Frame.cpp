@@ -1630,6 +1630,13 @@ void Frame::setIsActive(bool flag)
         return;
     d->m_isActive = flag;
 
+    /* A frame has no document until its first load commits (FrameLoader::init()
+     * no longer creates an empty one). Focus can arrive before that - the host
+     * focuses the view while the navigation is still in flight - and there is
+     * no selection, caret or renderer to refresh yet. */
+    if (!d->m_doc)
+        return;
+
     // Because RenderObject::selectionBackgroundColor() and
     // RenderObject::selectionForegroundColor() check if the frame is active,
     // we have to update places those colors were painted.

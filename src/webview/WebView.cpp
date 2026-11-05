@@ -390,6 +390,8 @@ bool WebView::contextMenu(unsigned m, int x, int y)
 void WebView::setFocus(void)
 {
     ChromeClientMC * client = static_cast<ChromeClientMC *>(d->m_frame->page()->chrome()->client());
+	if (!d->m_frame->document())
+		return;
 	if (!client->isFocused()) {
     	Frame* frame = d->m_frame->page()->focusController()->focusedOrMainFrame();
     	d->m_frame->page()->focusController()->setFocusedFrame(frame);
@@ -400,6 +402,8 @@ void WebView::setFocus(void)
 void WebView::killFocus(void)
 {
     ChromeClientMC * client = static_cast<ChromeClientMC *>(d->m_frame->page()->chrome()->client());
+	if (!d->m_frame->document())
+		return;
 	if (client->isFocused()) {
     	d->m_frame->page()->focusController()->setFocusedFrame(0);
     	client->setFocused(false);

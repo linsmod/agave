@@ -1844,6 +1844,15 @@ static void probeOnError(AgaveWebView* view, int code, const char* url, void* us
 
     g_probeSawError = 1;
     agbLog(AGB_LOG_PROBE, "load error code=%d url=%s", code, url ? url : "");
+
+    /* A failed navigation commits no document, so on_progress(finished) never
+     * arrives. Arm the eval here or the run would sit until --timeout; the
+     * eval then reports the empty document and the run ends with the load
+     * error code. */
+    if (!g_probeFinished && !g_probeReloadMode && !g_probeLoadArmed) {
+        g_probeLoadArmed = 1;
+        PostMessageA(g_probeWnd, AGW_PROBE_MSG, g_probeWaitMs, 0);
+    }
 }
 
 static int probeOnNewWindow(AgaveWebView* view, AgaveWebView* newView,
@@ -2429,7 +2438,9 @@ static int probeRun(const char* url)
     {
         int code;
 
-        if (g_probeSanityFailed)
+        if (g_probeSawError)
+            code = PROBE_EXIT_LOADERROR;   /* nothing was committed: say why */
+        else if (g_probeSanityFailed)
             code = PROBE_EXIT_SANITY;
         else if (g_probeGotExit)
             code = PROBE_EXIT_OK;
@@ -2439,8 +2450,6 @@ static int probeRun(const char* url)
             code = PROBE_EXIT_TIMEOUT_LOAD;
         else if (g_probeTimedOut)
             code = PROBE_EXIT_TIMEOUT_NOEXIT;
-        else if (g_probeSawError)
-            code = PROBE_EXIT_LOADERROR;
         else
             code = PROBE_EXIT_NOEXIT;
 
