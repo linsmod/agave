@@ -51,6 +51,7 @@ char* (*cb_user_agent_custom)(const char*);
 int (*cb_save_submit_form)(const char*, const char*, const char*, const char*, const char*, int);
 
 int (*cb_write_file_data)(int, const char*, const void*, unsigned long, unsigned long);
+int (*cb_download)(int, const MC_DOWNLOAD_INFO*);
 
 void (*cb_clipboard_set_data)(void*, unsigned int);
 unsigned int (*cb_clipboard_data_len)(void);
@@ -94,6 +95,7 @@ void _init_callback(void)
 	cb_user_agent_custom	 = 0;
 	cb_save_submit_form		 = 0;
 	cb_write_file_data		 = 0;
+	cb_download				 = 0;
 	cb_clipboard_set_data	 = 0;
 	cb_clipboard_data_len	 = 0;
 	cb_clipboard_get_data	 = 0;
@@ -132,6 +134,7 @@ void _set_callback(const _mc_callback_t* cb)
 	cb_user_agent_custom	 = cb->cb_user_agent_custom;
 	cb_save_submit_form		 = cb->cb_save_submit_form;
 	cb_write_file_data		 = cb->cb_write_file_data;
+	cb_download				 = cb->cb_download;
 	cb_clipboard_set_data	 = cb->cb_clipboard_set_data;
 	cb_clipboard_data_len	 = cb->cb_clipboard_data_len;
 	cb_clipboard_get_data	 = cb->cb_clipboard_get_data;

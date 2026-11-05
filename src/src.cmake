@@ -3,7 +3,11 @@
 # Copyright (C) 2024 Zhang Ji Peng
 # Contact: onecoolx@gmail.com
 
-file(GLOB_RECURSE SOURCES ${PROJ_ROOT}/src/webcore/css/*.cpp
+# CONFIGURE_DEPENDS: tools/build_project.ps1 only runs cmake when the cache is
+# missing, so without this a newly added .cpp under these directories is
+# silently left out of the build (undefined symbols at link time).
+file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS
+                          ${PROJ_ROOT}/src/webcore/css/*.cpp
                           ${PROJ_ROOT}/src/webcore/dom/*.cpp
                           ${PROJ_ROOT}/src/webcore/editing/*.cpp
                           ${PROJ_ROOT}/src/webcore/history/*.cpp

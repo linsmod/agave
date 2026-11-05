@@ -989,6 +989,44 @@ typedef struct _mc_popup_menu {
 }MC_POPUP_MENU;
 
 /**
+ * \\brief State of a download job. \\sa cb_download
+ */
+typedef enum _mc_download_state {
+    /** The job was accepted and its target file was chosen. */
+    MC_DL_STARTED = 0,
+    /** Bytes are arriving; `received`/`total` are meaningful. */
+    MC_DL_PROGRESS,
+    /** The file is complete and renamed from `<name>.part` to `<name>`. */
+    MC_DL_FINISHED,
+    /** The transfer failed; `error` carries an MC_ERROR_CODE. */
+    MC_DL_FAILED,
+    /** The host (or the page going away) cancelled it; no file is left behind. */
+    MC_DL_CANCELLED,
+} MC_DOWNLOAD_STATE;
+
+/**
+ * \\brief Snapshot of one download job. \\sa cb_download
+ */
+typedef struct _mc_download_info {
+    /** The download job ID. */
+    int                id;
+    /** One of MC_DOWNLOAD_STATE. */
+    int                state;
+    /** MC_ERROR_CODE when state is MC_DL_FAILED, 0 otherwise. */
+    int                error;
+    /** Source URL, UTF-8. */
+    const char*        utf8_url;
+    /** Destination file, UTF-8 (empty if the name could not be resolved). */
+    const char*        utf8_path;
+    /** Response MIME type, UTF-8. */
+    const char*        utf8_mime;
+    /** Bytes written so far. */
+    unsigned long long received;
+    /** Expected total bytes, 0 when unknown. */
+    unsigned long long total;
+} MC_DOWNLOAD_INFO;
+
+/**
  * \brief The callback functions information structure, which contains notify callback functions. 
  */
 typedef struct _mc_callback_t {
@@ -1400,6 +1438,22 @@ typedef struct _mc_callback_t {
      * \param buffer_len   The length of the buffer.
      */
 	unsigned int (*cb_clipboard_get_data)(void* data_buffer, unsigned int buffer_len);
+
+    /**
+     * \\fn MC_BOOL (*cb_download)(int id, const MC_DOWNLOAD_INFO* info)
+     * \\brief The callback function.
+	 * \t\t\t reports the state of a download job started by the engine (a
+	 * \t\t\t top-level navigation that cannot be displayed, or an attachment).
+	 *
+	 * \\note Called on the engine thread. A host that owns a window must not
+	 * \t\t touch it here - copy the info and post it to the UI thread.
+     *
+     * \\param id    The download job ID (same id for every state of one job).
+     * \\param info  The job state; valid only for the duration of the call.
+     *
+     * \\return FALSE to cancel the download, TRUE to keep it going.
+     */
+    MC_BOOL (*cb_download)(int id, const MC_DOWNLOAD_INFO* info);
 }MC_CALLBACK_INFO;
 
 /**
@@ -1413,6 +1467,26 @@ typedef struct _mc_callback_t {
  * 		- Other status code on failed.
  */
 MACROSS_API MC_STATUS macross_set_callback(const MC_CALLBACK_INFO* info);
+
+/**
+ * \\fn MC_STATUS macross_set_download_dir(const char* utf8_directory)
+ * \\brief Set the directory download jobs are written to.
+ *
+ * \\param utf8_directory The directory (UTF-8). It is created on demand.
+ *
+ * \\return MC_STATUS_SUCCESS on success, MC_STATUS_FAILED on bad arguments.
+ */
+MACROSS_API MC_STATUS macross_set_download_dir(const char* utf8_directory);
+
+/**
+ * \\fn MC_STATUS macross_cancel_download(int id)
+ * \\brief Cancel a running download job.
+ *
+ * \\param id The download job ID reported by cb_download.
+ *
+ * \\return MC_STATUS_SUCCESS when the job was found and cancelled.
+ */
+MACROSS_API MC_STATUS macross_cancel_download(int id);
 
 /** @} end of notify*/
 

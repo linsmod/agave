@@ -56,6 +56,7 @@ extern _mc_popup_menu* (*cb_create_popup_menu)(const _mc_rect*);
 extern void (*cb_destroy_popup_menu)(_mc_popup_menu*);
 
 extern int (*cb_write_file_data)(int, const char*, const void*, unsigned long, unsigned long);
+extern int (*cb_download)(int, const MC_DOWNLOAD_INFO*);
 
 extern void (*cb_clipboard_set_data)(void*, unsigned int);
 extern unsigned int (*cb_clipboard_data_len)(void);

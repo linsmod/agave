@@ -60,7 +60,7 @@ UI 线程**从不**直接调用引擎 API：
 | Ctrl+F | 查找栏（回车执行 `macross_view_search_text`） |
 | 右键菜单 | 后退/前进/刷新/停止/新标签/查找 |
 | 滚轮、点击、键盘 | 全部转发给页面（中文经 `WM_CHAR` 转 UTF-8） |
-| 下载 | `cb_write_file_data` 直接写入 `%USERPROFILE%\Downloads` |
+| 下载 | 引擎 DownloadManager 写盘，状态栏显示进度/结果；保存到 `%USERPROFILE%\Downloads` |
 | Ctrl+D | 加书签（存 `<数据目录>\bookmarks.txt`） |
 | `=` 按钮 / 菜单 | 书签、历史、缩放 |
 | Ctrl+= / Ctrl+- / Ctrl+0 | 放大 / 缩小 / 重置（25% 步进，状态栏显示百分比） |

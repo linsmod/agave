@@ -41,6 +41,8 @@
 #endif
 
 #include "WebCallback.h"
+#include "DownloadManager.h"
+#include "ResourceHandle.h"
 #include "WebEngine.h"
 #include "WebView.h"
 
@@ -120,12 +122,59 @@ void FrameLoaderClientMC::dispatchDidReceiveResponse(DocumentLoader* loader, uns
     }
 }
 
+/* A response the server marked as an attachment is a download whatever it
+ * contains; anything the engine cannot render is a download too. */
+static bool isAttachmentResponse(const ResourceResponse& response)
+{
+    String header = response.httpHeaderField("Content-Disposition");
+
+    if (header.isEmpty())
+        return false;
+
+    CString value = header.utf8();
+    const char* s = value.data();
+    static const char attachment[] = "attachment";
+
+    while (*s == ' ' || *s == '\t')
+        ++s;
+
+    for (unsigned i = 0; attachment[i]; ++i) {
+        char c = s[i];
+
+        if (c >= 'A' && c <= 'Z')
+            c = (char)(c - 'A' + 'a');
+
+        if (c != attachment[i])
+            return false;
+    }
+
+    return true;
+}
+
 void FrameLoaderClientMC::dispatchDecidePolicyForMIMEType(FramePolicyFunction policyFunction, 
-                                                                    const String& MIMEType, const ResourceRequest&)
+                                                                    const String& MIMEType, const ResourceRequest& request)
 {
     if (!policyFunction || !m_frame)
         return;
-    (m_frame->loader()->*policyFunction)(PolicyUse);
+
+    PolicyAction policy = PolicyUse;
+    DocumentLoader* loader = m_frame->loader()->activeDocumentLoader();
+    const ResourceResponse* response = loader ? &loader->response() : 0;
+
+    if (response && isAttachmentResponse(*response))
+        policy = PolicyDownload;
+    else if (!MIMEType.isEmpty() && !canShowMIMEType(MIMEType))
+        /* An empty MIME type must stay on the display path: the content
+         * sniffer decides, and isSupportedNonImageMIMEType() reports false for
+         * "" - which would turn an untyped HTML page into a download. */
+        policy = PolicyDownload;
+
+    if (policy == PolicyDownload)
+        agbLog(AGB_LOG_NAV, "download mime=%s url=%s",
+               MIMEType.isEmpty() ? "(none)" : MIMEType.utf8().data(),
+               request.url().url().utf8().data());
+
+    (m_frame->loader()->*policyFunction)(policy);
 }
 
 void FrameLoaderClientMC::dispatchDecidePolicyForNewWindowAction(FramePolicyFunction policyFunction, const NavigationAction& action,
@@ -929,9 +978,12 @@ bool FrameLoaderClientMC::canCachePage() const
     return false;
 }
 
-void FrameLoaderClientMC::download(ResourceHandle*, const ResourceRequest&, const ResourceRequest&, const ResourceResponse&)
+void FrameLoaderClientMC::download(ResourceHandle* handle, const ResourceRequest& request, const ResourceRequest&, const ResourceResponse& response)
 {
-    notImplemented();
+    if (!handle)
+        return;
+
+    DownloadManager::shared().start(handle, request, response);
 }
 
 void FrameLoaderClientMC::redirectDataToPlugin(Widget* pluginWidget)

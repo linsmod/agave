@@ -56,6 +56,10 @@ sheet 级常量代入；表单 feedback 的 `min-height` 由 4px 恢复 22px；�
 **加载失败一定通知宿主**（R46：`FrameLoaderClientMC` 的错误工厂不再返回 null —— null 在 FrameLoader 里
 是"没有错误"的哨兵，阻塞端口/不支持的 URL/不支持的 MIME 因此全都静默；`MC_ERROR_CODE` 新增
 `ERR_NET_POLICY_*` 一族区分"浏览器主动拒绝"与网络故障；`cancelledError` 故意保持 null）。
+**下载管理器**（R47：二进制/附件不再报错而是落盘 —— 决策在 `dispatchDecidePolicyForMIMEType`，
+`ResourceLoader::detachHandle()` 把活着的连接交给进程级 `DownloadManager`，`.part` 写完再 rename，
+文件名支持 `filename*`/中文/去重；`cb_download` + `on_download` 三层状态，探针下载 → exit 0。
+设计见 [docs/download-manager.md](docs/download-manager.md)，回归服务器 `tools/download_server.py`）。
 
 **已经被检查过的"看起来不能用"**（别再当缺陷重开）：ant 的 Worker 是真的（R22）、ant 的 wasm 引擎是真的
 （R19）、渐变/`var()`/flex 大多可用（R11/R39）、滚动与 hover 重绘正确（R13/R14/R40）、刷新后 realm/监听器会清理（R9/R10）。

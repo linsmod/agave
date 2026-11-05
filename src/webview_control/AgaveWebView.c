@@ -25,12 +25,31 @@
 #define AGW_QUEUE_SIZE 256
 #define AGW_MSG_STATE  (WM_APP + 0x51)
 #define AGW_MSG_REPAINT (WM_APP + 0x52)
+#define AGW_MSG_DOWNLOAD (WM_APP + 0x53)
+
+#define AGW_MAX_DOWNLOADS 32
+
+/* Per-view mirror of one engine download job. Fixed buffers: the engine's
+ * strings are only valid during cb_download, and the UI thread reads this
+ * copy later. */
+typedef struct {
+    int                id;
+    int                state;
+    int                error;
+    unsigned long long received;
+    unsigned long long total;
+    char               url[1024];
+    char               path[768];
+    char               mime[96];
+    int                pending;   /* state changed, UI thread has not seen it */
+} AgwDownloadEntry;
 
 enum {
     AGW_CMD_NAVIGATE, AGW_CMD_LOAD_HTML, AGW_CMD_BACK, AGW_CMD_FORWARD,
     AGW_CMD_RELOAD, AGW_CMD_STOP, AGW_CMD_EVAL, AGW_CMD_ZOOM,
     AGW_CMD_RESIZE, AGW_CMD_UA, AGW_CMD_DL_DIR, AGW_CMD_MOUSE, AGW_CMD_KEY,
-    AGW_CMD_CHAR, AGW_CMD_FOCUS, AGW_CMD_SEARCH, AGW_CMD_CONTEXT
+    AGW_CMD_CHAR, AGW_CMD_FOCUS, AGW_CMD_SEARCH, AGW_CMD_CONTEXT,
+    AGW_CMD_DL_CANCEL
 };
 
 typedef struct {
@@ -80,6 +99,7 @@ struct AgaveWebView {
 
     char               downloadDir[MAX_PATH];
     char               userAgent[256];
+    AgwDownloadEntry   downloads[AGW_MAX_DOWNLOADS];
 
     AgaveWebViewCallback callbacks;
     void*              user;
@@ -110,6 +130,20 @@ static int              g_classRegistered;
 
 static void agwLock(void)   { if (g_lockReady) EnterCriticalSection(&g_lock); }
 static void agwUnlock(void) { if (g_lockReady) LeaveCriticalSection(&g_lock); }
+
+static void agwCopyString(char* to, size_t cch, const char* from)
+{
+    if (!cch)
+        return;
+
+    if (!from) {
+        to[0] = 0;
+        return;
+    }
+
+    strncpy(to, from, cch - 1);
+    to[cch - 1] = 0;
+}
 
 static int agwIndexOf(AgaveWebView* view)
 {
@@ -461,70 +495,100 @@ static void agwOnCursor(MC_CURSOR cursor)
 }
 
 
-static MC_BOOL agwOnWriteFile(int id, const char* url, const void* data,
-                              unsigned long dataLen, unsigned long totalLen)
+/* Downloads are process-global in the engine (they outlive the page), so the
+ * control keeps a per-view copy of every job's latest state and hands it to the
+ * host on the UI thread. The engine never touches an HWND. */
+static MC_BOOL agwOnDownload(int id, const MC_DOWNLOAD_INFO* info)
 {
-    static FILE* file = NULL;
-    static int   currentId = -1;
-    (void)totalLen;
+    int v, i;
 
-    if (currentId != id) {
-        char name[512];
-        char path[MAX_PATH];
-        const char* slash = url ? strrchr(url, '/') : NULL;
-        size_t i, n = 0;
+    if (!info)
+        return TRUE;
 
-        if (file) {
-            fclose(file);
-            file = NULL;
+    agwLock();
+
+    for (v = 0; v < g_viewCount; ++v) {
+        AgaveWebView* item = g_views[v];
+        AgwDownloadEntry* slot = NULL;
+
+        if (!item || item->destroyed)
+            continue;
+
+        for (i = 0; i < AGW_MAX_DOWNLOADS; ++i) {
+            if (item->downloads[i].id == id) {
+                slot = &item->downloads[i];
+                break;
+            }
         }
 
-        currentId = id;
-        name[0] = 0;
-
-        if (slash && slash[1]) {
-            for (i = 0; slash[1 + i] && i < sizeof(name) - 1; ++i) {
-                char c = slash[1 + i];
-
-                if (c == '?' || c == '#' || c == '\\' || c == ':' ||
-                    c == '*' || c == '"' || c == '<' || c == '>' || c == '|')
+        if (!slot) {
+            for (i = 0; i < AGW_MAX_DOWNLOADS; ++i) {
+                if (!item->downloads[i].id) {
+                    slot = &item->downloads[i];
                     break;
-                name[n++] = c;
+                }
             }
         }
-        name[n] = 0;
 
-        if (!name[0])
-            strcpy(name, "download.bin");
+        if (!slot)
+            continue;   /* table full: the job still runs, the UI just misses it */
 
-        {
-            const char* home = getenv("USERPROFILE");
-            const char* dir = home ? home : ".";
+        slot->id = id;
+        slot->state = info->state;
+        slot->error = info->error;
+        slot->received = info->received;
+        slot->total = info->total;
+        agwCopyString(slot->url, sizeof(slot->url), info->utf8_url);
+        agwCopyString(slot->path, sizeof(slot->path), info->utf8_path);
+        agwCopyString(slot->mime, sizeof(slot->mime), info->utf8_mime);
+        slot->pending = 1;
 
-            _snprintf(path, sizeof(path), "%s\\Downloads\\%s", dir, name);
-        }
-        path[sizeof(path) - 1] = 0;
-
-        file = fopen(path, "wb");
-
-        if (file) {
-            int i2;
-
-            agbLog(AGB_LOG_NAV, "download url=%s path=%s", url ? url : "", path);
-
-            for (i2 = 0; i2 < g_viewCount; ++i2) {
-                AgaveWebView* item = g_views[i2];
-
-                if (item && item->callbacks.on_download)
-                    item->callbacks.on_download(item, url, path, item->user);
-            }
-        }
+        PostMessageA(item->hwnd, AGW_MSG_DOWNLOAD, 0, 0);
     }
 
-    if (file && data && dataLen)
-        fwrite(data, 1, dataLen, file);
+    agwUnlock();
 
-    return file ? TRUE : FALSE;
+    return TRUE;
+}
+
+/* UI thread: deliver every state change the engine queued for this view. */
+static void agwDeliverDownloads(AgaveWebView* item)
+{
+    AgwDownloadEntry snapshot[AGW_MAX_DOWNLOADS];
+    MC_DOWNLOAD_INFO info;
+    int count = 0;
+    int i;
+
+    if (!item)
+        return;
+
+    agwLock();
+    for (i = 0; i < AGW_MAX_DOWNLOADS; ++i) {
+        if (item->downloads[i].id && item->downloads[i].pending) {
+            item->downloads[i].pending = 0;
+            snapshot[count++] = item->downloads[i];
+        }
+    }
+    agwUnlock();
+
+    for (i = 0; i < count; ++i) {
+        memset(&info, 0, sizeof(info));
+        info.id = snapshot[i].id;
+        info.state = snapshot[i].state;
+        info.error = snapshot[i].error;
+        info.utf8_url = snapshot[i].url;
+        info.utf8_path = snapshot[i].path;
+        info.utf8_mime = snapshot[i].mime;
+        info.received = snapshot[i].received;
+        info.total = snapshot[i].total;
+
+        agbLog(AGB_LOG_DL, "state id=%d state=%d received=%llu total=%llu path=%s",
+               info.id, info.state, info.received, info.total,
+               snapshot[i].path[0] ? snapshot[i].path : "(none)");
+
+        if (item->callbacks.on_download)
+            item->callbacks.on_download(item, &info, item->user);
+    }
 }
 
 /* ------------------------------------------------------------------------- */
@@ -705,6 +769,15 @@ static void agwDrainCommands(void)
                 strncpy(g_userAgent, command.text, sizeof(g_userAgent) - 1);
                 g_userAgent[sizeof(g_userAgent) - 1] = 0;
             }
+            break;
+
+        case AGW_CMD_DL_DIR:
+            if (command.text[0])
+                macross_set_download_dir(command.text);
+            break;
+
+        case AGW_CMD_DL_CANCEL:
+            macross_cancel_download(command.x);
             break;
 
         case AGW_CMD_MOUSE:
@@ -1049,6 +1122,11 @@ static LRESULT CALLBACK agwProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
         return 0;
 
     case AGW_MSG_STATE:
+        return 0;
+
+    case AGW_MSG_DOWNLOAD:
+        agwDeliverDownloads(item);
+        InvalidateRect(hwnd, NULL, FALSE);
         return 0;
 
     case WM_SIZE:
@@ -1470,7 +1548,7 @@ static void agwInstallCallbacks(void)
     info.cb_context_menu     = agwOnContextMenu;
     info.cb_error            = agwOnError;
     info.cb_set_cursor       = agwOnCursor;
-    info.cb_write_file_data  = agwOnWriteFile;
+    info.cb_download         = agwOnDownload;
     info.cb_user_agent_custom = agwOnUserAgent;
     info.cb_open_window      = agwOnOpenWindow;
     info.cb_close_window     = agwOnCloseWindow;
@@ -1756,6 +1834,17 @@ void agave_webview_set_download_dir(AgaveWebView* item, const char* directory)
 
     strncpy(item->downloadDir, directory, sizeof(item->downloadDir) - 1);
     item->downloadDir[sizeof(item->downloadDir) - 1] = 0;
+
+    /* The engine owns the job, so the directory is set there, on its thread. */
+    agwPost(AGW_CMD_DL_DIR, item, directory, 0, 0, 0, 0);
+}
+
+void agave_webview_cancel_download(AgaveWebView* item, int id)
+{
+    if (!item || id <= 0)
+        return;
+
+    agwPost(AGW_CMD_DL_CANCEL, item, NULL, id, 0, 0, 0);
 }
 
 void agave_webview_set_log(const char* path)

@@ -113,6 +113,7 @@ antbridge.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**�
 | `[flag]` 引擎开关 | 桥接开关（`uncaught_nonfatal` 等），来自 antbridge.dll | — | — |
 | `[style]` 渲染树 | 指定元素的 attach / detach / recalcStyle（是否拿到 renderer、computed display）。**opt-in** | 默认关 | `AGB_STYLE_LOG=1` 打开，`AGB_STYLE_FILTER=<子串>` 按 tag/id/class 过滤 |
 | `[cache]` 资源缓存 | 内存缓存 hit/miss、HTTP 缓存 hit/miss、图片 `data`/`notify` 生命周期、绘制时用到的帧状态（`FrameComplete`/`rows=n/m`） | `AGB_CACHE_LOG=0` | — |
+| `[dl]` 下载 | `start`/`state`（控制层派发给宿主）/`finish`/`fail`/`cancel`，带 id、字节数、落盘路径 | `AGB_DL_LOG=0` | — |
 
 注意：
 - `[ui]` 主要是 GUI 模式的输入（focus/blur/mouse/wheel/key/char）：输入事件在控件窗口过程里产生。
@@ -146,6 +147,7 @@ antbridge.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**�
 | 组 | 变量 | 作用 |
 |---|---|---|
 | 日志 | `AGB_GAP_LOG=0` | 关掉 `[gap-jsdom]`（默认开启：每个已知缺口只在**第一次被访问**时打一行） |
+| 日志 | `AGB_DL_LOG=0` | 关掉 `[dl]`（下载任务的 start/progress/finish/fail/cancel） |
 | 探针 | `AGB_PROBE_SHOW=1` | 显示探针窗口（调试可见性相关的差异；截图不需要它） |
 | 探针 | `AGB_PROBE_ALLOW_UNLOAD=1` | beforeunload 守卫直接放行（默认拒绝） |
 | 日志 | `AGB_EVT_LOG=0` | **关掉默认开启的页面生命周期日志**（`[evt]`） |

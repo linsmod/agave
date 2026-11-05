@@ -21,6 +21,9 @@
 #ifndef AGAVE_WEBVIEW_H
 #define AGAVE_WEBVIEW_H
 
+/* MC_DOWNLOAD_INFO (download callbacks) and the _mc_error codes. */
+#include "macross.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -56,8 +59,11 @@ typedef struct AgaveWebViewCallback {
                          const char* url, void* user);
     /* Navigation failed. */
     void (*on_error)(AgaveWebView* view, int code, const char* url, void* user);
-    /* A download finished, path is the file written by the control. */
-    void (*on_download)(AgaveWebView* view, const char* url, const char* path, void* user);
+    /* A download job changed state (started / progress / finished / failed /
+     * cancelled). `info` is only valid during the call; copy what you keep.
+     * Runs on the UI thread, but the job itself lives in the engine, so it
+     * survives the page navigating away. */
+    void (*on_download)(AgaveWebView* view, const MC_DOWNLOAD_INFO* info, void* user);
     /* The page called window.agavePostMessage(text). */
     void (*on_message)(AgaveWebView* view, const char* message, void* user);
     /* alert()/confirm()/prompt(). type is 0/1/2. Return non-zero to accept
@@ -141,6 +147,8 @@ AGW_API int agave_webview_can_forward(AgaveWebView* view);
 /* Per-control overrides (thread safe, queued). */
 AGW_API void agave_webview_set_user_agent(AgaveWebView* view, const char* user_agent);
 AGW_API void agave_webview_set_download_dir(AgaveWebView* view, const char* directory);
+/* Cancel a download job by the id on_download reported (thread safe, queued). */
+AGW_API void agave_webview_cancel_download(AgaveWebView* view, int id);
 
 /* Process-wide net log / debug switches (optional, call before create). */
 AGW_API void agave_webview_set_log(const char* path_or_null);

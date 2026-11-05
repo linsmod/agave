@@ -197,10 +197,19 @@ void MainResourceLoader::continueAfterContentPolicy(PolicyAction contentPolicy, 
         break;
     }
 
-    case PolicyDownload:
-        frameLoader()->client()->download(m_handle.get(), request(), m_handle.get()->request(), r);
-        receivedError(interruptionForPolicyChangeError());
+    case PolicyDownload: {
+        /* Hand the live connection to the download manager before the loader
+         * tears down: releaseResources() only clears the handle's client, so an
+         * un-detached handle would simply stop delivering bytes. The null error
+         * below says "this load ended, and it is not a failure" - a download
+         * must not surface as a load error (R46 would otherwise report
+         * ERR_NET_INTERRUPTED_BY_POLICY for every download). */
+        RefPtr<ResourceHandle> handle = detachHandle();
+        ResourceRequest handleRequest = handle ? handle->request() : request();
+        frameLoader()->client()->download(handle.get(), request(), handleRequest, r);
+        receivedError(ResourceError());
         return;
+    }
 
     case PolicyIgnore:
         stopLoadingForPolicyChange();

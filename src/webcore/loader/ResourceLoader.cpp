@@ -110,12 +110,22 @@ void ResourceLoader::releaseResources()
     m_deferredRequest = ResourceRequest();
 }
 
+PassRefPtr<ResourceHandle> ResourceLoader::detachHandle()
+{
+    if (m_reachedTerminalState || !m_handle)
+        return 0;
+
+    RefPtr<ResourceHandle> handle = m_handle;
+    m_handle = 0;
+    return handle.release();
+}
+
 bool ResourceLoader::load(const ResourceRequest& r)
 {
     ASSERT(!m_handle);
     ASSERT(m_deferredRequest.isNull());
     ASSERT(!frameLoader()->isArchiveLoadPending(this));
-    
+
     m_originalURL = r.url();
     
     ResourceRequest clientRequest(r);

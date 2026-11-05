@@ -793,15 +793,64 @@ static int onNewWindow(AgaveWebView* from, AgaveWebView* popup,
     return 1;
 }
 
-static void onDownload(AgaveWebView* view, const char* url, const char* path, void* user)
+/* Downloads are engine jobs; the control mirrors their state into the UI
+ * thread. The shell only renders it - the file is already on disk. */
+static void onDownload(AgaveWebView* view, const MC_DOWNLOAD_INFO* info, void* user)
 {
-    (void)view;
-    (void)user;
-    (void)url;
+    Tab* tab = (Tab*)user;
+    const char* name = info && info->utf8_path ? info->utf8_path : "";
+    const char* slash = strrchr(name, '\\');
+    char text[512];
 
-    _snprintf(g_status, sizeof(g_status), "Downloaded: %s", path ? path : "");
-    g_status[sizeof(g_status) - 1] = 0;
-    InvalidateRect(g_hwnd, NULL, FALSE);
+    (void)view;
+
+    if (!tab || !info)
+        return;
+
+    if (slash && slash[1])
+        name = slash + 1;
+
+    switch (info->state) {
+    case MC_DL_STARTED:
+    case MC_DL_PROGRESS: {
+        char size[64];
+
+        if (info->total)
+            _snprintf(size, sizeof(size), "%d%% (%.1f/%.1f MB)",
+                      (int)(info->received * 100 / info->total),
+                      info->received / 1048576.0, info->total / 1048576.0);
+        else
+            _snprintf(size, sizeof(size), "%.1f MB", info->received / 1048576.0);
+        size[sizeof(size) - 1] = 0;
+
+        _snprintf(text, sizeof(text), "Downloading %s %s", name, size);
+        break;
+    }
+    case MC_DL_FINISHED:
+        _snprintf(text, sizeof(text), "Downloaded: %s", info->utf8_path ? info->utf8_path : "");
+        break;
+    case MC_DL_FAILED:
+        _snprintf(text, sizeof(text), "Download failed (%d): %s", info->error,
+                  info->utf8_url ? info->utf8_url : "");
+        break;
+    default:
+        _snprintf(text, sizeof(text), "Download cancelled: %s", name);
+        break;
+    }
+
+    text[sizeof(text) - 1] = 0;
+    strncpy(tab->status, text, sizeof(tab->status) - 1);
+    tab->status[sizeof(tab->status) - 1] = 0;
+
+    /* A download navigation commits no document, so on_progress(finished) never
+     * arrives and the tab would stay "loading" forever. */
+    if (info->state != MC_DL_PROGRESS) {
+        tab->loading = 0;
+        tab->progress = 100;
+    }
+
+    if (tab == &g_tabs[g_activeTab])
+        updateStatus();
 }
 
 /* Right click: the control reports the hit-test; the shell owns the menu. */
@@ -1263,6 +1312,20 @@ static void createTab(const char* url)
     strncpy(tab->url, url, MAX_PATH_CHARS - 1);
     ShowWindow(tab->hwnd, SW_HIDE);
 
+    /* The GUI saves where a user expects to find downloads; the probe keeps the
+     * engine default (<AGB_USERDATA>/downloads) so tests never touch this. */
+    {
+        const char* home = getenv("USERPROFILE");
+
+        if (home && home[0]) {
+            char downloads[MAX_PATH_CHARS];
+
+            _snprintf(downloads, sizeof(downloads), "%s\\Downloads", home);
+            downloads[sizeof(downloads) - 1] = 0;
+            agave_webview_set_download_dir(tab->view, downloads);
+        }
+    }
+
     agave_webview_set_zoom(tab->view, g_zoom);
     setActiveTab(index);
     agave_webview_navigate(tab->view, url);
@@ -1696,6 +1759,7 @@ static int g_probeLoadArmed;   /* the load-finished signal already scheduled --e
 static int g_probeEvalDone;
 static int g_probeGotExit;
 static int g_probeSawError;
+static int g_probeSawDownload;   /* a download finished: that IS the outcome */
 static int g_probeClosed;        /* window.close() reached the host */
 static int g_probeTimedOut;
 static int g_probeSanityFailed;
@@ -1906,6 +1970,39 @@ static void probeOnCloseWindow(AgaveWebView* view, void* user)
     g_probeGotExit = 1;
     probePrint("[close]", "window.close() reached the host");
     PostMessageA(g_probeWnd, WM_CLOSE, 0, 0);
+}
+
+/* A download is a successful navigation outcome with no document behind it:
+ * nothing commits, so on_progress(finished) never fires and there is nothing to
+ * eval. Report the file and leave with the OK exit code. */
+static void probeOnDownload(AgaveWebView* view, const MC_DOWNLOAD_INFO* info, void* user)
+{
+    (void)view;
+    (void)user;
+
+    if (!info)
+        return;
+
+    if (info->state == MC_DL_FINISHED) {
+        g_probeSawDownload = 1;
+
+        printf("[%9.1fms] [probe] download path=%s bytes=%llu total=%llu\n",
+               agbLogElapsedMs(), info->utf8_path ? info->utf8_path : "",
+               info->received, info->total);
+        fflush(stdout);
+
+        if (!g_probeFinished)
+            PostMessageA(g_probeWnd, WM_CLOSE, 0, 0);
+    } else if (info->state == MC_DL_FAILED) {
+        g_probeSawError = 1;
+
+        printf("[%9.1fms] [probe] download failed code=%d url=%s\n",
+               agbLogElapsedMs(), info->error, info->utf8_url ? info->utf8_url : "");
+        fflush(stdout);
+
+        if (!g_probeFinished)
+            PostMessageA(g_probeWnd, WM_CLOSE, 0, 0);
+    }
 }
 
 static void probeOnProgress(AgaveWebView* view, int percent, int finished, void* user)
@@ -2178,6 +2275,7 @@ static int probeRun(const char* url)
     callbacks.on_message = probeOnMessage;
     callbacks.on_progress = probeOnProgress;
     callbacks.on_error = probeOnError;
+    callbacks.on_download = probeOnDownload;
     callbacks.on_new_window = probeOnNewWindow;
     callbacks.on_close_window = probeOnCloseWindow;
     callbacks.on_dialog = probeOnDialog;
@@ -2440,6 +2538,8 @@ static int probeRun(const char* url)
 
         if (g_probeSawError)
             code = PROBE_EXIT_LOADERROR;   /* nothing was committed: say why */
+        else if (g_probeSawDownload)
+            code = PROBE_EXIT_OK;          /* a download IS the outcome */
         else if (g_probeSanityFailed)
             code = PROBE_EXIT_SANITY;
         else if (g_probeGotExit)

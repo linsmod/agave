@@ -48,7 +48,7 @@ pwsh -File tools\build_antbridge.ps1 -Force      # 重链 dll 并同步四处副
 | `AntRuntime.cpp` / `AntBridge.c` | `build_antbridge.ps1 -Force` + `cmake --build` | 1 ~ 3 分钟 |
 | ant 的 1-2 个 `.c` | `ninja libant.a` + 重链 dll | ~1 分钟 |
 | ant 的**头文件** | 同上，但 libant 会重编 200+ 个对象 | ~10 分钟 |
-| 加/删源文件、改 CMakeLists | 重新 configure（脚本带 `-NoTouchWeb` 等参数会改目标集） | 数分钟 |
+| 加/删源文件、改 CMakeLists | `src/` 下的源文件由 `file(GLOB_RECURSE ... CONFIGURE_DEPENDS)` 收集，ninja 会自己重跑 configure；改 `CMakeLists.txt` 仍要手动 configure | 秒级 ~ 数分钟 |
 
 ## 4. 产物与运行拓扑
 

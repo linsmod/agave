@@ -31,6 +31,7 @@
 #include <stdio.h>
 #include "WebEncoding.h"
 #include "WebCallback.h"
+#include "DownloadManager.h"
 #include "Language.h"
 #include "SchemeExtension.h"
 #if ENABLE(JSNATIVEBINDING)
@@ -211,6 +212,20 @@ MC_STATUS macross_set_callback(const MC_CALLBACK_INFO* info)
 
 	_set_callback(info);
 	return MC_STATUS_SUCCESS;
+}
+
+MC_STATUS macross_set_download_dir(const char* utf8_directory)
+{
+	if (!utf8_directory || !utf8_directory[0])
+		return MC_STATUS_FAILED;
+
+	DownloadManager::shared().setDirectory(String::fromUTF8(utf8_directory));
+	return MC_STATUS_SUCCESS;
+}
+
+MC_STATUS macross_cancel_download(int id)
+{
+	return DownloadManager::shared().cancel(id) ? MC_STATUS_SUCCESS : MC_STATUS_FAILED;
 }
 
 MC_STATUS macross_keyboard_event(MaCrossView* view, const MC_KEY_EVENT *event)

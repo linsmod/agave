@@ -68,6 +68,17 @@ namespace WebCore {
         unsigned long identifier() const { return m_identifier; }
 
         virtual void releaseResources();
+
+        /* Hands the live ResourceHandle to the caller and forgets it.
+         *
+         * releaseResources() clears the handle's client but does not cancel it,
+         * so a policy decision that wants to keep the connection alive (a
+         * download) has to take ownership *before* the loader tears down -
+         * otherwise the loader's setClient(0) silently kills the transfer.
+         * Returns null when there is no handle or the load already reached a
+         * terminal state; the caller owns the returned reference. */
+        PassRefPtr<ResourceHandle> detachHandle();
+
         const ResourceResponse& response() const;
 
         virtual void addData(const char*, int, bool allAtOnce);
