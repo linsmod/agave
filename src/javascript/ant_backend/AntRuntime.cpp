@@ -350,17 +350,21 @@ static void activateSlot(int slot)
         antb_set_native(g_docObj, g_document, AGB_TAG_NODE);
 }
 
-/* ---- per-frame realms (design-per-frame-realm.md, stage S1) ------------- */
-/* Off until the wrapper/class tables are realm-scoped too (S2): while they are
- * engine-scoped a node wrapper created in one realm is handed out to another,
- * which is usable (one VM) but keeps `parent.document.body === document.body`
- * true where the spec says it is not. */
+/* ---- per-frame realms (design-per-frame-realm.md, stages S1/S2) --------- */
+/* On by default: every frame document runs in its own realm, so `var` does not
+ * leak across frames and `top.Array !== Array`. `AGB_PER_FRAME_REALM=0` goes
+ * back to the shared-realm model (one realm per engine + per-frame window
+ * proxy) for A/B work. Module maps are still per engine (S3) and `parent`
+ * is the parent realm's global rather than a WindowProxy (S4). */
 static bool perFrameRealmEnabled()
 {
     static int cached = -1;
 
-    if (cached < 0)
-        cached = getenv("AGB_PER_FRAME_REALM") ? 1 : 0;
+    if (cached < 0) {
+        const char* v = getenv("AGB_PER_FRAME_REALM");
+
+        cached = (v && !strcmp(v, "0")) ? 0 : 1;
+    }
 
     return cached == 1;
 }

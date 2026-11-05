@@ -104,8 +104,8 @@ if ($LASTEXITCODE -ne 0 -or $realmOut -notmatch 'ALL REALM CHECKS PASSED') {
     Write-Host "PASS  bare realm invariants (isolated globals + intrinsics)"
 }
 
-# 2. shared realm (default): cross-frame access works
-$shared = Invoke-Probe -PageEval $null
+# 2. shared realm (AGB_PER_FRAME_REALM=0): the old model, kept as A/B fallback
+$shared = Invoke-Probe -PageEval '0'
 $sharedText = $shared.Stdout
 
 if ($shared.Code -ne 0) {
@@ -121,7 +121,7 @@ if ($shared.Code -ne 0) {
     Write-Host "PASS  shared realm baseline (parent.foo / contentWindow)"
 }
 
-# 3. per-frame realms: isolation + cross-frame access both hold
+# 3. per-frame realms (now the default): isolation + cross-frame access both hold
 $perFrame = Invoke-Probe -PageEval '1'
 $perFrameText = $perFrame.Stdout
 
