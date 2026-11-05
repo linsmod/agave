@@ -62,9 +62,12 @@
   入口打日志（vendor-vue chunk 内），确认是 `normalizeContainer` 之后哪一步返回。
   **结论（R58）**：module 脚本在解析流程内执行，`mount("#channel-app")` 跑在元素解析出来之前，
   Vue 静默返回；改走 `queueDeferredModule`（parse 后 flush）后 `__vue_app__` 出现、header 片段
-  被请求。**新的阻塞**：hydration mismatch 之后，绘制阶段 `PNGImageDecoder::frameBufferAtIndex()`
-  的 `m_frameBufferCache.resize(1)` 里访问违例（疑似 decoder 生命周期/堆破坏），v.qq 探针当前
-  在 `RenderImage::paint` 崩溃；下一步查 `ImageSource`/`BitmapImage` 的 decoder 释放时机。
+  被请求。**新的阻塞**：v.qq 载入约 10 s 后 `0xC0000005`。R62 已把现场抓下来：
+  不是 decoder，是**堆破坏**——cdb 启动（堆校验生效）时在 `WinHttpSession::run` 的
+  `ev->data.assign()` 报 `HEAP: Free Heap block ... modified ... after it was freed`
+  （[hist-lessons.md](hist-lessons.md) R62）。早先 `PNGImageDecoder::frameBufferAtIndex()`
+  的栈只是受害点。下一步按 R62 的三条候选（`pump()` 回调后用 `deliveryJob`、`shutdown()`
+  在 pumping 时自毁、`cancel/finish` 并发删除）逐个排除。
 - **M2 布局级 CSS（P1）**：①8 位 hex `#RRGGBBAA`（颜色解析）**已做（R51）**；②`transform` 的
   translate/scale/rotate（绘制 + 命中）**绘制与失效已完成（R52 绘制、R55 变换感知脏矩形），hit-test 与 stacking context 未做**；
   ③视口单位 `vw`/`vh`（本站 209×100vw、8×100vh）**已做（R53）**；④`calc()` 混合单位
