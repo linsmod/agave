@@ -772,22 +772,12 @@ void FrameLoaderClientMC::dispatchDidFinishDocumentLoad()
 {
     Net::logEvent("page.domready", "");
 
-    /* Frames share this view's engine and its global object, and
-     * dispatchWindowEvent() goes to that shared global. Letting an iframe
-     * finish here would re-run the embedding page's DOMContentLoaded/onload
-     * handlers. Per-frame window proxies exist (R31), but per-frame DCL
-     * dispatch is not implemented yet. css3test has ad iframes and used to
-     * run its whole suite twice. */
-    if (!isMainFrameClient(m_frame))
-        return;
-
-#if ENABLE(ANTJS)
-    /* Deferred module scripts run when parsing finishes, before DOMContentLoaded. */
-    AntRuntime::flushDeferredModules(m_frame ? m_frame->document() : 0);
-
-    /* jQuery-style ready queues hang off DOMContentLoaded. */
-    AntRuntime::dispatchWindowEvent("DOMContentLoaded");
-#endif
+    /* The document's own DOMContentLoaded event is dispatched by
+     * Document::finishedParsing() (which also flushes the deferred modules
+     * first, so the order is modules -> DCL). Dispatching another one here was
+     * the known double-DCL (P0-c) and also re-ran the parent's handlers for an
+     * iframe; frames are now covered by the same document event. */
+    (void)m_frame;
 }
 
 void FrameLoaderClientMC::dispatchDidFinishLoad()
@@ -796,6 +786,8 @@ void FrameLoaderClientMC::dispatchDidFinishLoad()
 #if ENABLE(ANTJS)
     if (isMainFrameClient(m_frame))
         AntRuntime::dispatchWindowEvent("load");
+    else
+        AntRuntime::dispatchFrameDocumentEvent(m_frame ? m_frame->document() : 0, "load");
 #endif
 
     /* Report progress 100 / finished: hosts use this to stop their frame loop,

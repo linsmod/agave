@@ -29,13 +29,15 @@
 - 动作：改成"图就绪回调触发执行"，或把等待移出 engine 线程。
 - 验收：154 模块图的 `load` 事件不再被推迟几十秒；解析不被网络阻塞。
 
-### P0-c DOMContentLoaded 双发
+### P0-c DOMContentLoaded 双发（**已完成**）
 
 - 现状：`Document::finishedParsing()` 派发一次（进 ant 监听表），`FrameLoaderClientMC::dispatchDidFinishDocumentLoad()`
   又 `AntRuntime::dispatchWindowEvent("DOMContentLoaded")` 一次，且 `flushDeferredModules()` 夹在两者之间
   → 页面看到 **DCL → 模块执行 → DCL**，标准是 **模块执行 → DCL**。
-- 动作：二选一——WebCore 侧那次不再进 ant 监听表，或去掉 ant 侧那次。
-- 验收：`life.html` 日志里 DCL 只出现一次，且出现在模块求值之后。
+- **修法（per-frame realm 期间顺手修掉）**：`Document::finishedParsing()` 里先
+  `AntRuntime::bindDocument(this)` + `flushDeferredModules(this)`，再派发那一个 WebCore DCL 事件；
+  删掉 `FrameLoaderClientMC` 那次手写派发。iframe 因此天然获得自己的 DCL（以前直接 return）。
+- 验收：`run_realm_tests.ps1` → `childDcl=1`、`parentDcl=1`；nav/typing/worker/layout/jit/script 全绿。
 
 ### P0-e 站点对齐：v.qq.com 布局与 Chrome 一致（M1–M4，2026-11-05 起）
 

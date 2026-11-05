@@ -139,6 +139,9 @@
 #endif
 
 #include "ResourceHandle.h"
+#if ENABLE(ANTJS)
+#include "AntRuntime.h"
+#endif
 
 using namespace std;
 using namespace WTF;
@@ -3529,6 +3532,16 @@ bool Document::load(const String& url)
 void Document::finishedParsing()
 {
     setParsing(false);
+
+#if ENABLE(ANTJS)
+    /* Modules must run before DOMContentLoaded (the spec order), and the event
+     * has to be dispatched while this document's realm is the active one -
+     * with per-frame realms the engine may still be in the realm of whichever
+     * frame ran last. This is also the single DOMContentLoaded for frames:
+     * FrameLoaderClientMC used to dispatch a second one by hand (P0-c). */
+    AntRuntime::bindDocument(this);
+    AntRuntime::flushDeferredModules(this);
+#endif
 
     ExceptionCode ec = 0;
     dispatchEvent(new Event(DOMContentLoadedEvent, true, false), ec);

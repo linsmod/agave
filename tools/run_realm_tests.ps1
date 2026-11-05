@@ -50,7 +50,9 @@ probeExit([
   'childReachable=' + (cw ? (typeof cw.childVar) : 'n/a'),
   'childTopIsParent=' + (cw ? (cw.top === window) : 'n/a'),
   'sameBody=' + (cd && cd.body && cw && cw.__selfBody
-      ? (cd.body === cw.__selfBody) : 'n/a')
+      ? (cd.body === cw.__selfBody) : 'n/a'),
+  'childDcl=' + (cw ? cw.__childDcl : 'n/a'),
+  'parentDcl=' + window.__parentDcl
 ].join('|'));
 '@ | Set-Content -Path $checkJs -Encoding ascii
 
@@ -135,7 +137,9 @@ if ($perFrame.Code -ne 0) {
         @{ Name = 'child top is parent';      Want = 'childTopIsParent=true';    Ok = ($perFrameText -match 'childTopIsParent=true') },
         @{ Name = 'parent globals reachable'; Want = 'parentFn=PF-ok';           Ok = ($perFrameText -match 'parentFn=PF-ok') },
         @{ Name = 'contentWindow reachable';  Want = 'childReachable=string';    Ok = ($perFrameText -match 'childReachable=string') },
-        @{ Name = 'node wrappers per realm';  Want = 'sameBody=false';           Ok = ($perFrameText -match 'sameBody=false') }
+        @{ Name = 'node wrappers per realm';  Want = 'sameBody=false';           Ok = ($perFrameText -match 'sameBody=false') },
+        @{ Name = 'frame DOMContentLoaded';   Want = 'childDcl=1';               Ok = ($perFrameText -match 'childDcl=1') },
+        @{ Name = 'parent DCL ran once';      Want = 'parentDcl=1';              Ok = ($perFrameText -match 'parentDcl=1') }
     )
 
     foreach ($c in $checks) {

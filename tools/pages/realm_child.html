@@ -7,6 +7,12 @@
      differ from what the parent gets for the same node. */
   window.__selfBody = document.body;
 
+  /* Frame DOMContentLoaded must fire in the frame's own realm (S3). */
+  window.__childDcl = 0;
+  document.addEventListener('DOMContentLoaded', function () {
+    window.__childDcl = (window.__childDcl || 0) + 1;
+  });
+
   var r = [];
   r.push('selfIsParent=' + (window.parent === window));
   r.push('topArraySame=' + (window.top.Array === Array));

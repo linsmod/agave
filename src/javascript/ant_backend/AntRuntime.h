@@ -115,7 +115,14 @@ void dispatchEvent(void* node, void* event);
 
 /* Fires a synthetic event on the window/document listeners (used for
  * DOMContentLoaded and load, which jQuery's ready queue waits for). */
+/* Dispatches a window event (DOMContentLoaded, load, ...) at the current
+ * document's listeners. */
 void dispatchWindowEvent(const char* type);
+
+/* Frame documents only: runs the frame's deferred modules and dispatches the
+ * event on the frame's own window (per-frame realms), then restores the parent
+ * binding. No-op for the main frame or when realms are disabled. */
+void dispatchFrameDocumentEvent(void* document, const char* type);
 
 /* The document is about to be replaced: fires the outgoing page's teardown
  * events (pagehide, unload) at its own listeners and stops its realm. Call it

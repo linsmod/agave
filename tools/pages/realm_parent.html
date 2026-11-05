@@ -5,6 +5,13 @@
   window.parentVar = 'from-parent';
   window.parentFn = function () { return 'PF-ok'; };
 
+  /* The parent's DCL must run exactly once: an iframe finishing must not
+     re-run it (that used to double-run suites on pages with ad iframes). */
+  window.__parentDcl = 0;
+  document.addEventListener('DOMContentLoaded', function () {
+    window.__parentDcl = (window.__parentDcl || 0) + 1;
+  });
+
   var f = document.createElement('iframe');
   f.id = 'fr';
   f.src = 'realm_child.html';

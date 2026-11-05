@@ -10039,6 +10039,31 @@ void dispatchWindowEvent(const char* type)
     dispatchWindowEventState(type, NULL);
 }
 
+/* A frame document reached DOMContentLoaded / load: with per-frame realms each
+ * frame gets its own event on its own window. Bind the frame (which enters its
+ * realm), run its deferred modules first for DOMContentLoaded, dispatch, then
+ * bind the parent again so the embedding page continues in its own realm. */
+void dispatchFrameDocumentEvent(void* document, const char* type)
+{
+    WebCore::Document* doc = (WebCore::Document*)document;
+
+    if (!doc || !type || !doc->parentDocument() || !g_engine || !perFrameRealmEnabled())
+        return;
+
+    if (!realmForFrameDocument(g_engine, doc))
+        return;
+
+    bindDocument(doc);
+
+    if (!strcmp(type, "DOMContentLoaded"))
+        flushDeferredModules(doc);
+
+    dispatchWindowEvent(type);
+
+    if (doc->parentDocument())
+        bindDocument(doc->parentDocument());
+}
+
 /* Same, but the event object carries `state`: popstate hands back the value
  * that pushState/replaceState stored for the entry being restored. */
 void dispatchWindowEventState(const char* type, AntbValue* state)
