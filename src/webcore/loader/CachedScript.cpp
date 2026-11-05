@@ -58,6 +58,14 @@ CachedScript::CachedScript(DocLoader* dl, const String& url, const String& chars
         m_encoding = Latin1Encoding();
 #endif
     }
+
+    /* AGB_SCRIPT_CHARSET=1: which encoding did each script get? The same URL
+     * decoded per-document means one frame can see mojibake where another sees
+     * UTF-8 (v.qq console duplicates, R68). */
+    if (getenv("AGB_SCRIPT_CHARSET"))
+        fprintf(stderr, "[script-charset] %s doc=%s\n",
+                m_encoding.isValid() ? m_encoding.name() : "(none)",
+                dl->doc()->charset().utf8().data());
 }
 
 CachedScript::~CachedScript()
