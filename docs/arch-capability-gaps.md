@@ -25,6 +25,8 @@ build-zig-native\agave_shell.exe --probe tools\pages\cap_window_identity.html --
 # [gap-jsdom] 自检：六个缺口各打一行，值不变（innerText=undefined submit=undefined complete=undefined
 # forms=0 attr=0 state=undefined）
 build-zig-native\agave_shell.exe --probe tools\pages\cap_gap_log.html --wait 500 --eval "probeExit(document.title)"
+# 窗口 resize：改控件尺寸再量（布局/百分比跟随；vw/vh、@media 断点、resize 事件不跟随）
+build-zig-native\agave_shell.exe --probe tools\pages\resize\resize_probe.html --resize 500x400 --eval-file tools\pages\resize\check_resize.js
 ```
 
 退出码 0 且 `[exit]` 行就是当前值。要加一项探测：在 `cap_dom.html` / `cap_css.html`
@@ -67,8 +69,8 @@ qsChild=3 qsDesc=3 qsAdj=1 qsSib=2 qsNth=1 qsOdd=2 qsNot=2 qsFirst=1 qsList2=4 q
 | `localStorage` 跨文档 | A 页写入 → 导航到 B → `null`；同一跑的 cookie 正常（`cookie=true`） | 用 localStorage 存 token/购物车的多页流程会丢状态；测试也不能拿它当跨页标记（用 cookie） | 缺口，P1 |
 | `window.postMessage` / `message` 事件 | **已支持**：同窗口/跨 frame 都能投递（`{data, origin, source}`，`origin` 取发送方文档的 scheme://host[:port]）；`cap_postmessage.html` → `postMessage=function sent=yes got=1` | —— | 已支持 |
 | iframe 的 `contentWindow` / `contentDocument` | **已支持（R34）**：`iframeCw=yes`，`contentWindow.document === contentDocument` 成立；子文档还没建好时是 `null` | —— | 已支持 |
-| 每个 frame 的 `window` 身份（`parent`/`top`/`self`/`frames`/`length`/`name`/`frameElement`） | **已支持（R31）**：frame 有自己的 `Window` 代理，`parent !== self`、`parent.document` 是父文档、`frames.length`/`frames[i]`/`name`/`frameElement` 都按 frame tree 回答，未知属性委托给共享全局 | —— | 已支持（`cap_window_identity.html`） |
-| 子 frame 的顶层 `var` 污染父页 | 仍是共享全局：子 frame 里 `var x = 1` 父页也能读到（`window.foo` 同理） | 依赖「全局隔离」的 polyfill 会互相看见；规范上这是每个 browsing context 独立的全局对象 | 已知限制，要修只能每个 frame 一个 engine（方案 A，不做；见 `docs/design-frame-window.md`） |
+| 每个 frame 的 `window` 身份（`parent`/`top`/`self`/`frames`/`length`/`name`/`frameElement`） | **已支持**：每个 frame 文档有自己的 **realm**（默认开启，`AGB_PER_FRAME_REALM=0` 回退旧模型），`window`/`self` 就是该 realm 的全局对象，`parent !== self`、`parent.document` 是父 realm 的 document 对象、`top.Array !== Array`、`frames.length`/`name`/`frameElement` 按 frame tree 回答。旧模型（回退时）是 `Window` 代理 + 共享全局（R31） | `parent.location` 这类 getter 在子 realm 执行时仍读当前 `g_document`（S4 WindowProxy 未做） | 已支持（`design-per-frame-realm.md`） |
+| 子 frame 的顶层 `var` 污染父页 | **已隔离**：每个 frame 一个 realm，子 frame 的 `var x = 1` 父页读不到；跨帧调用 `parent.fn()`、读 `parent.someVar` 仍可用（同 VM 跨 realm 引用，不序列化） | ES module map 仍按引擎共享（两个 frame import 同一模块会拿到同一实例，S3 待做） | 已支持（`run_realm_tests.ps1` → `childVarLeak=undefined`） |
 | `HTMLImageElement.complete` / `naturalWidth` / `naturalHeight` / `width` / `height` / `decode()` | **已支持（R34）**：`imgComplete=0 imgNatural=0 imgWidth=1 imgDecode=function`（`decode()` 立即 resolve） | —— | 已支持 |
 | `document.querySelector(All)` 的选择器引擎 | **已支持（R35）**：选择器列表、组合器（后代/`>`/`+`/`~`）、属性选择器六个操作符、常用伪类（`nth-child`/`not`/`first-child`/`checked`/…）。实现是 `src/javascript/ant_backend/AgbSelector.h`（WebCore 2008 没有 `Node::querySelectorAll`） | —— | 已支持（`cap_selectors.html`） |
 | `Element.insertAdjacentHTML` / `insertAdjacentElement` / `insertAdjacentText` / `replaceChildren` | **已支持（R34）**：四个插入位置都走 `insertBefore/appendChild`，HTML 走 `createFragmentFromMarkup` | —— | 已支持 |
@@ -162,6 +164,7 @@ bareMedia=2px schemeBg=rgb(0, 0, 200) mediaDark=1 mediaMin=1
 | `box-sizing: border-box` | `border-box` | **已支持**（R39）：无前缀名此前整条被丢（只有 `-webkit-box-sizing` 有词条），现在走别名表；布局按 border-box 计算，`getComputedStyle(el).boxSizing` 可读 |
 | `@media (prefers-color-scheme: dark)` | 深色时匹配 | **已支持**（R39）：`AGB_COLOR_SCHEME` 由宿主按注册表 `AppsUseLightTheme` 设置；`matchMedia` 与 CSS 用同一答案 |
 | `matchMedia('(min-width: …)')` | `matches` 正确 | **已支持**（R39）：width/height/device-*/orientation/resolution/prefers-* 都按真实视口求值，`not`/`only`/媒体类型/逗号列表也处理；未做：`addListener` 的变更回调（返回的 list 是静态快照） |
+| 窗口 resize（`--resize WxH` / 拖窗口；1100x800 → 500x400） | `inner=484x384`、`pct=242`（50%）、`vwBox=1100x400`、`mediaCSS` 仍是桌面值、`matchMedia` 变 true、三种 `resize` 监听全为 none | **布局跟随，CSS 视口语义和 resize 事件不跟随**。跟随的部分：`WM_SIZE → AGW_CMD_RESIZE → macross_view_resize` 走 `FrameView::resize` + `setNeedsLayout`，布局期按尺寸变化 `doFullRepaint`，百分比、`innerWidth`/`clientWidth`、滚动条按新视口重算，放大后新区域画满（1400x900 角像素是白的，不是未初始化的黑）。三个不跟随：①`100vw/50vh` 在**解析期**就被 `rewriteViewportUnits()` 换成 px（R53），resize 不重算；②`@media` 断点在 `CSSStyleSelector` 构造时按当时的视口过滤进 `CSSRuleSet`（`CSSRuleSet::addRulesFromSheet()`），resize 不重建 selector → 断点不切换，而 `matchMedia()` 是实时求值，于是 JS 判成移动端、CSS 仍是桌面；③`Frame::sendResizeEvent()` 只派发 WebCore 的窗口监听（`m_windowEventListeners`），没有调 `AntRuntime::dispatchWindowEvent("resize")`，`addEventListener('resize')`、`window.onresize`、`<body onresize>` 三条路都不会触发 |
 | `@media (min-width: 1px)`（无媒体类型） | 生效 | **已支持**（R39）：`rewriteBareMediaQueries()` 补 `all and `；2008 的语法要求媒体类型在前，否则整块丢弃 |
 | `align-items: safe center` | `center` | **已支持**（R42）：解析期删掉 `safe`/`unsafe` 溢出关键字，保留对齐关键字；否则两 token 会让整条声明被丢、`align-items` 退回 `stretch` |
 | column flex 里的 `position:absolute` 子项 | 按 `align-items` 定 staticX | **已支持**（R42）：`RenderFlexibleBox::layoutVerticalBox()` 的 positioned 分支按 `boxAlign()` 修正 static position（`BCENTER` 居中、`BEND` 右对齐）；此前无条件贴左 |

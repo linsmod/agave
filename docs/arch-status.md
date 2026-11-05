@@ -1,6 +1,6 @@
 # agave 现状：能力、已知限制与验证入口
 
-> 状态：**当前态，最后核对 2026-11-05**。本文只回答"现在能做什么、哪些是已知限制"。
+> 状态：**当前态，最后核对 2026-11-06**。本文只回答"现在能做什么、哪些是已知限制"。
 > 架构与所有权见 [arch-overview.md](arch-overview.md)；待办与验收标准见 [plan-roadmap.md](plan-roadmap.md)；
 > 历史根因与设计取舍见 [hist-lessons.md](hist-lessons.md)；API 级缺口见
 > [arch-capability-gaps.md](arch-capability-gaps.md)；函数级锚点见 [ref-code-index.md](ref-code-index.md)。

@@ -1,6 +1,6 @@
 # agave 计划：待办与验收标准
 
-> 状态：**向前看，最后核对 2026-11-05**。完成项保留验收记录，未完成项按 P0/P1/P2 排。
+> 状态：**向前看，最后核对 2026-11-06**。完成项保留验收记录，未完成项按 P0/P1/P2 排。
 > 当前能力见 [arch-status.md](arch-status.md)；历史根因见 [hist-lessons.md](hist-lessons.md)；
 > 架构约束见 [arch-overview.md](arch-overview.md)。
 
@@ -19,6 +19,10 @@
   回调里销毁自己（UAF → 堆破坏），以及 callback builtin 的回调没被 GC 扎根（`AGB_GC_OFF=1` 可判）。
   工具：`AGB_GUARD_MALLOC`（WTF 页守卫分配器）、`tools/cdb_heap_probe.ps1`；判据
   `ANT_GC_STRESS=1` + `tests/array_callback_gc.cjs`。
+- **P0-i 每 frame 一个 realm**（S0–S2 + S5）：一侧 VM、每 frame 文档一个独立全局（S1 默认开启）、
+  wrapper 按 realm（S2）、iframe 自己的 DCL 且 DCL 只发一次（顺带修 P0-c）、prelude/polyfills 每
+  realm 一次且 eval 漏斗兜底装宿主 API。设计见 [design-per-frame-realm.md](design-per-frame-realm.md)，
+  验收 `tools/run_realm_tests.ps1`；未完成项（模块 map 按 realm、WindowProxy 转发）仍列在 P0-i。
 
 ## P0：先修正确性
 
@@ -167,9 +171,9 @@
 
 ### P0-i 每 frame 一个 realm（规范对齐，设计见 [design-per-frame-realm.md](design-per-frame-realm.md)）
 
-- 现状：一个 view 一个 realm，iframe 与主 frame 共享全局/intrinsics，只有 `WindowProxy`（R31）。
-  后果：顶层 `var` 跨 frame 污染、`top.Array === Array`、跨 frame `instanceof` 恒真、
-  两份同一 bundle 在共享全局里互相覆盖单例。
+- 现状：**已完成**。默认是"一个 engine + 每 frame 文档一个 realm"：iframe 有独立全局与
+  intrinsics（`top.Array !== Array`）、独立 `var` 作用域、独立 DOM wrapper，iframe 有自己的
+  DCL；旧模型（共享 realm + per-frame Window 代理）保留为 `AGB_PER_FRAME_REALM=0` 回退。
 - 关键前提（已验证）：ant 的 realm 是**同一 VM 内的独立全局**，`ant_realm_create/enter` 可用，
   Node 的 `vm.createContext` 就是这套；跨 realm 对象引用不需要序列化。
 - 阶段：S0 桥接 realm API（**已完成**）→ S1 每 document 一个 realm（**已完成并默认开启**，

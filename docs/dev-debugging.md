@@ -3,7 +3,7 @@
 ## 1. 无头探针（主力度量工具）
 
 ```powershell
-agave_shell.exe --probe <url> [--eval <js>] [--wait ms] [--settle ms] [--timeout ms] [--reload n] [--offline]
+agave_shell.exe --probe <url> [--eval <js>] [--wait ms] [--settle ms] [--timeout ms] [--reload n] [--offline] [--resize WxH]
 ```
 
 - **eval 时机** = 页面 `window load` 事件 + `--wait`；`on_progress finished` 只是长延迟兜底
@@ -24,6 +24,12 @@ agave_shell.exe --probe <url> [--eval <js>] [--wait ms] [--settle ms] [--timeout
   `--ime "<text>"` 走**输入法**那条路：每个 UTF-16 码元发一条 `WM_IME_CHAR`（星平面字符是两个，
   即代理对），用来复测中文/emoji 输入；`--keys` 则走 `WM_KEYDOWN → TranslateMessage → WM_CHAR`。
   回归：`pwsh -File tools/run_typing_tests.ps1`（8 个用例，页面 `tools/pages/cap_typing.html`）。
+- `--resize WxH`：页面 settle 后把控件（连同隐藏的父窗口）改成新尺寸，等 400ms 再跑 eval ——
+  复测"窗口变化时页面怎么反应"（重排、百分比、`innerWidth`、`vw/vh`、`@media` 断点、`resize` 事件）。
+  这正是拖窗口走的 `WM_SIZE → AGW_CMD_RESIZE → macross_view_resize` 路径，只是窗口从不显示。
+  页面与复测命令：`tools/pages/resize/resize_probe.html` +
+  `--eval-file tools/pages/resize/check_resize.js`（现状见
+  [arch-capability-gaps.md](arch-capability-gaps.md) §2「窗口 resize」）。
 - URL 参数走**地址栏同一套规则**（`normalizeUrl`），所以可以直接传本地路径 / 文件 URL。
 
 **退出码（先看它，再翻日志）**
@@ -255,6 +261,10 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
   取到文件后：`pwsh -File tools/cdb_stack.ps1 -Symbolize build-zig-native/agb_crash.txt`。
   注意 ant 自己也装了 crash handler（`src/crash.c`），它只往 previous filter 链一次、且会用
   StackWalk64，二次异常时会静默吞掉整个进程 —— 这就是"cdb 一挂就不崩、不挂又没输出"的形状。
+- **一条命令跑站点冒烟**：`pwsh -File tools/run_site_smoke.ps1`
+  —— deepseek / baidu / v.qq 各跑一次探针，输出退出码、耗时、元素数与 title；退出码 0 且元素数
+  达到下限才算过。**需要网络**：exit 5/6 先确认站点可达再当引擎问题查。v.qq 目前带
+  `AGB_GC_OFF=1`（R68/P0-h 未修），修掉后去掉。改了 realm/loader/DCL/GC 之后跑它。
 - **一条命令跑脚本语义/性能回归**：`pwsh -File tools/run_script_mode_tests.ps1`
   —— `ant_pin_repro.exe`（C 侧 `antb_retain` 住一个函数后强制 GC 再调用，R67）、
   `cap_script_semantics.html`（`window.pageVar=number`）、`AGB_PAGE_EVAL=eval` 回退、
