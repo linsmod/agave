@@ -132,6 +132,11 @@ bool beforeUnloadGuard(std::string& text);
  * timers). */
 void beginNewRealm(void);
 
+/* A frame was detached: drop its realm (the JS world of that frame goes away
+ * with its document). No-op unless the frame had its own realm
+ * (AGB_PER_FRAME_REALM). `document` may be NULL. */
+void forgetFrameRealm(void* document);
+
 } /* namespace AntRuntime */
 
 #endif /* ANT_RUNTIME_H */

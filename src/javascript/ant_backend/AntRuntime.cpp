@@ -368,6 +368,7 @@ static bool perFrameRealmEnabled()
 struct FrameRealmEntry {
     WebCore::Document* document;
     AntbRealm*         realm;
+    AntbValue*         keeper;     /* pinned closure: keeps the realm marked */
     bool               installed;
 };
 
@@ -405,7 +406,25 @@ static AntbRealm* realmForFrameDocument(AntbEngine* engine, WebCore::Document* d
 
     entry.document = document;
     entry.realm = realm;
+    entry.keeper = NULL;
     entry.installed = false;
+
+    /* A realm is only kept alive while something in it is reachable: ant marks
+     * a realm when a closure or builtin of it is marked, not when its global
+     * object is. Pin an empty closure inside the realm so it cannot be
+     * collected from under FrameRealmEntry (released with the engine). */
+    {
+        AntbRealm* prev = antb_realm_enter(engine, realm);
+        AntbValue* keeper = antb_eval(engine, "(function(){})", 14, NULL);
+
+        if (keeper) {
+            entry.keeper = antb_retain(keeper);
+            antb_value_release(keeper);
+        }
+
+        antb_realm_enter(engine, prev);
+    }
+
     entries.push_back(entry);
 
     agbLog(AGB_LOG_EVT, "frame realm %p for document %p", (void*)realm, (void*)document);
@@ -430,8 +449,14 @@ static AntbRealm* realmOfDocument(AntbEngine* engine, WebCore::Document* documen
 
 static void forgetFrameRealms()
 {
-    if (g_frameRealms)
-        g_frameRealms->clear();
+    if (!g_frameRealms)
+        return;
+
+    for (size_t i = 0; i < g_frameRealms->size(); ++i)
+        if ((*g_frameRealms)[i].keeper)
+            antb_value_release((*g_frameRealms)[i].keeper);
+
+    g_frameRealms->clear();
 }
 
 /* Which realms already evaluated prelude.js / polyfills.js. Keyed by realm, not
@@ -4519,6 +4544,9 @@ static void stopRealm(void)
     g_docSlotCount = 0;
     g_currentSlot = -1;
 
+    /* Release the per-frame realms' keepers before the engine goes away. */
+    forgetFrameRealms();
+
     if (state->engine) {
         antb_engine_destroy(state->engine);
         state->engine = 0;
@@ -4526,7 +4554,6 @@ static void stopRealm(void)
 
     /* The realms (and their prelude/polyfills markers) died with the engine. */
     state->mainRealm = NULL;
-    forgetFrameRealms();
     forgetRealmScripts();
 
     if (getenv("AGB_EVT_DEBUG"))
@@ -5183,10 +5210,35 @@ static void bindFrameRealm(AntbEngine* engine, WebCore::Document* document)
     loadPolyfills();
 }
 
+void forgetFrameRealm(void* document)
+{
+    WebCore::Document* doc = (WebCore::Document*)document;
+
+    if (!doc || !g_frameRealms)
+        return;
+
+    std::vector<FrameRealmEntry>& entries = frameRealms();
+
+    for (size_t i = 0; i < entries.size(); ) {
+        if (entries[i].document == doc) {
+            /* Dropping the keeper makes the realm unreachable: ant's collector
+             * frees it on the next GC (no ant unpin exists). */
+            if (entries[i].keeper) {
+                antb_value_release(entries[i].keeper);
+                entries[i].keeper = NULL;
+            }
+
+            entries.erase(entries.begin() + i);
+            agbLog(AGB_LOG_EVT, "frame realm dropped for document %p", (void*)doc);
+        } else {
+            ++i;
+        }
+    }
+}
+
 void bindDocument(void* document)
 {
     WebCore::Document* previous = g_document;
-
     /* The Document object is replaced on every navigation, so always refresh
      * the pointer; only the JS shim objects are created once. */
     g_document = (WebCore::Document*)document;

@@ -643,7 +643,16 @@ void FrameLoaderClientMC::detachedFromParent2()
 
 void FrameLoaderClientMC::detachedFromParent3()
 {
+#if ENABLE(ANTJS)
+    /* The frame's document is going away: drop its realm (a no-op unless the
+     * frame has its own realm under AGB_PER_FRAME_REALM). Doing it here means
+     * an iframe that is removed or navigates away does not keep a whole JS
+     * world (global + intrinsics) alive until the next main-frame navigation. */
+    if (m_frame && !isMainFrameClient(m_frame))
+        AntRuntime::forgetFrameRealm(m_frame->document());
+#else
     notImplemented();
+#endif
 }
 
 void FrameLoaderClientMC::detachedFromParent4()
