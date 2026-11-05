@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <wchar.h>
 
 #include "agave_webview.h"
 #include "../../src/webview/AgbLog.h"
@@ -857,6 +858,205 @@ static void onDownload(AgaveWebView* view, const MC_DOWNLOAD_INFO* info, void* u
 static void navigateActive(const char* text, int newTab);
 static void addBookmarkCurrent(void);
 
+/* ------------------------------------------------------------------------- */
+/* script injection (inspector.js / vConsole)                                */
+/* ------------------------------------------------------------------------- */
+
+/* Menu labels are UTF-8 (the shell speaks UTF-8 everywhere); the menu itself
+ * has to be filled through the wide API or a Chinese label turns into
+ * mojibake under the ANSI code page. */
+static void appendMenuUtf8(HMENU menu, UINT flags, UINT_PTR id, const char* text)
+{
+    wchar_t wide[256];
+
+    utf8ToWide(text, wide, 256);
+    AppendMenuW(menu, flags, id, wide);
+}
+
+static char* readFileUtf8(const wchar_t* path, size_t* lengthOut)
+{
+    FILE* file;
+    long length;
+    char* buffer;
+
+    if (lengthOut)
+        *lengthOut = 0;
+
+    file = _wfopen(path, L"rb");
+    if (!file)
+        return NULL;
+
+    if (fseek(file, 0, SEEK_END) != 0) {
+        fclose(file);
+        return NULL;
+    }
+
+    length = ftell(file);
+    if (length < 0 || length > 16 * 1024 * 1024 ||
+        fseek(file, 0, SEEK_SET) != 0) {
+        fclose(file);
+        return NULL;
+    }
+
+    buffer = (char*)malloc((size_t)length + 1);
+    if (!buffer) {
+        fclose(file);
+        return NULL;
+    }
+
+    if (length > 0 && fread(buffer, 1, (size_t)length, file) != (size_t)length) {
+        free(buffer);
+        fclose(file);
+        return NULL;
+    }
+
+    buffer[length] = 0;
+    fclose(file);
+
+    if (lengthOut)
+        *lengthOut = (size_t)length;
+
+    return buffer;
+}
+
+/* Runs a JS file in the page. The file is looked up next to agave_shell.exe
+ * first (the build copies inspector.js / vconsole.min.js there), then in the
+ * current directory; $AGB_INSPECTOR overrides the inspector.js path. Keeping
+ * the injection as a file on disk means it can be edited and re-injected
+ * without relinking, the same deal as prelude.js/polyfills.js.
+ *
+ * `suffix` (optional) is appended after a newline and evaluated in the same
+ * script: a UMD bundle needs its bootstrap to run only after the bundle has
+ * registered itself, and one eval keeps that ordering independent of the
+ * command queue. */
+static int injectScriptAsset(AgaveWebView* view, const char* fileName,
+                             const char* envName, const char* suffix)
+{
+    wchar_t path[MAX_PATH_CHARS];
+    char* script = NULL;
+    size_t length = 0;
+    size_t fileLength = 0;
+    Tab* tab = &g_tabs[g_activeTab];
+
+    if (!view)
+        return 0;
+
+    path[0] = 0;
+
+    if (envName) {
+        const char* override = getenv(envName);
+
+        if (override && override[0])
+            utf8ToWide(override, path, MAX_PATH_CHARS);
+    }
+
+    if (!path[0]) {
+        wchar_t module[MAX_PATH_CHARS];
+        wchar_t name[MAX_PATH_CHARS];
+        wchar_t* slash;
+
+        if (!GetModuleFileNameW(NULL, module, MAX_PATH_CHARS))
+            return 0;
+
+        slash = wcsrchr(module, L'\\');
+        if (slash)
+            *(slash + 1) = 0;
+
+        utf8ToWide(fileName, name, MAX_PATH_CHARS);
+
+        wcsncpy(path, module, MAX_PATH_CHARS - 1);
+        path[MAX_PATH_CHARS - 1] = 0;
+        if (wcslen(path) + wcslen(name) < MAX_PATH_CHARS - 1)
+            wcscat(path, name);
+    }
+
+    script = readFileUtf8(path, &length);
+
+    if (!script) {
+        /* Also accept a path relative to the working directory, which is how
+         * the shell is usually launched while editing the repo. */
+        utf8ToWide(fileName, path, MAX_PATH_CHARS);
+        script = readFileUtf8(path, &length);
+    }
+
+    if (!script) {
+        if (tab->used) {
+            _snprintf(tab->status, sizeof(tab->status),
+                      "Cannot read %s (put it next to agave_shell.exe)", fileName);
+            tab->status[sizeof(tab->status) - 1] = 0;
+            updateStatus();
+        }
+        agbLog(AGB_LOG_SHELL, "inject: cannot read %s", fileName);
+        return 0;
+    }
+
+    fileLength = length;
+
+    if (suffix && suffix[0]) {
+        size_t extra = strlen(suffix);
+        char* grown = (char*)realloc(script, length + extra + 3);
+
+        if (grown) {
+            script = grown;
+            /* Start a fresh statement: the asset may end without a semicolon,
+             * and a suffix beginning with "(" would otherwise chain onto it. */
+            script[length] = '\n';
+            script[length + 1] = ';';
+            memcpy(script + length + 2, suffix, extra);
+            script[length + 2 + extra] = 0;
+            length += extra + 2;
+        }
+    }
+
+    agave_webview_eval(view, script);
+    agave_webview_set_focus(view);
+    free(script);
+
+    agbLog(AGB_LOG_SHELL, "inject: %s (%lu bytes, eval %lu)",
+           fileName, (unsigned long)fileLength, (unsigned long)length);
+
+    if (tab->used && tab->view == view) {
+        _snprintf(tab->status, sizeof(tab->status),
+                  "Injected %s (%lu bytes)", fileName, (unsigned long)fileLength);
+        tab->status[sizeof(tab->status) - 1] = 0;
+        updateStatus();
+    }
+
+    return 1;
+}
+
+static int injectScriptFile(AgaveWebView* view, const char* fileName, const char* envName)
+{
+    return injectScriptAsset(view, fileName, envName, NULL);
+}
+
+/* vConsole is the default payload for now; inspector.js is the built-in
+ * hover inspector. Both are optional: the menu reports a missing file. */
+static void injectVConsole(AgaveWebView* view)
+{
+    /* The page realm has an AMD `define` (prelude's loader), so the UMD bundle
+     * registers itself as the module "VConsole" instead of setting
+     * window.VConsole. The launcher is appended to the bundle and evaluated in
+     * the same script, so registration has already happened when it runs;
+     * instantiate once so clicking the menu twice does not stack panels. */
+    injectScriptAsset(view, "vconsole.min.js", NULL,
+        "(function () {"
+        " var VC = window.VConsole ||"
+        "   (typeof require === 'function' ? require('VConsole') : null);"
+        " if (typeof VC !== 'function' || window.__agaveVConsole) return;"
+        " try { window.__agaveVConsole = new VC(); }"
+        " catch (e) {"
+        "  if (window.console && console.error)"
+        "   console.error('[vconsole] ' + (e && e.message));"
+        " }"
+        "})();");
+}
+
+static void injectInspector(AgaveWebView* view)
+{
+    injectScriptFile(view, "inspector.js", "AGB_INSPECTOR");
+}
+
 static void onContextMenu(AgaveWebView* view, int x, int y,
                           const char* linkUrl, const char* imageUrl,
                           const char* text, void* user)
@@ -866,7 +1066,6 @@ static void onContextMenu(AgaveWebView* view, int x, int y,
     Tab* tab = (Tab*)user;
     int choice;
 
-    (void)view;
     (void)text;
 
     point.x = x;
@@ -890,6 +1089,9 @@ static void onContextMenu(AgaveWebView* view, int x, int y,
 
     AppendMenuA(menu, MF_STRING, 8, "Bookmark this page");
     AppendMenuA(menu, MF_STRING, 9, "View page source (eval)");
+    AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
+    appendMenuUtf8(menu, MF_STRING, 10, "注入 vConsole");
+    appendMenuUtf8(menu, MF_STRING, 11, "注入 inspector.js");
 
     choice = (int)TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN,
                                  point.x, point.y, 0, g_hwnd, NULL);
@@ -922,6 +1124,8 @@ static void onContextMenu(AgaveWebView* view, int x, int y,
         break;
     case 8: addBookmarkCurrent(); break;
     case 9: if (tab->used) agave_webview_eval(tab->view, "document.documentElement.outerHTML.slice(0,2000)"); break;
+    case 10: injectVConsole(view); break;
+    case 11: injectInspector(view); break;
     default: break;
     }
 }
@@ -1446,6 +1650,9 @@ static void showMainMenu(void)
     AppendMenuA(menu, MF_STRING, 5, "New tab\tCtrl+T");
     AppendMenuA(menu, MF_STRING, 6, "Find\tCtrl+F");
     AppendMenuA(menu, MF_STRING, 7, "Reload\tF5");
+    AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
+    appendMenuUtf8(menu, MF_STRING, 8, "注入 vConsole");
+    appendMenuUtf8(menu, MF_STRING, 9, "注入 inspector.js");
 
     GetCursorPos(&point);
     choice = (int)TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN,
@@ -1476,6 +1683,8 @@ static void showMainMenu(void)
     case 5: navigateActive("about:blank", 1); break;
     case 6: toggleFind(); break;
     case 7: if (g_tabs[g_activeTab].used) agave_webview_reload(g_tabs[g_activeTab].view); break;
+    case 8: injectVConsole(g_tabs[g_activeTab].view); break;
+    case 9: injectInspector(g_tabs[g_activeTab].view); break;
     default: break;
     }
 }
@@ -1777,6 +1986,8 @@ static int  g_probeKeysDone;      /* the --keys list was typed out             *
 static char g_probePreScript[2048]; /* --pre-eval: runs once before --keys     */
 static char g_probeIme[512];        /* --ime: posted as WM_IME_CHAR           */
 static int  g_probePreDone;       /* --pre-eval was executed                   */
+static char g_probeInject[512];   /* --inject: script asset to run before eval */
+static int  g_probeInjectDone;    /* --inject already ran for this document    */
 
 /* Offscreen capture. A hidden window gets no WM_PAINT, so PrintWindow has
  * nothing to render; the control keeps its own mirror buffer, and
@@ -2339,6 +2550,25 @@ static int probeRun(const char* url)
                 if (g_probeEvalDone)
                     continue;
 
+                /* --inject: run a script asset exactly the way the shell menus
+                 * do, before --keys/--eval. The queue is FIFO, so waiting one
+                 * tick is enough for the injected script to have run. */
+                if (g_probeInject[0] && !g_probeInjectDone) {
+                    g_probeInjectDone = 1;
+                    probePrint("[probe]", "injecting script");
+                    /* The names go through the same functions the menus call, so
+                     * a probe covers the real injection path (including the
+                     * vConsole instantiation step). */
+                    if (!strcmp(g_probeInject, "vconsole"))
+                        injectVConsole(g_probeView);
+                    else if (!strcmp(g_probeInject, "inspector"))
+                        injectInspector(g_probeView);
+                    else
+                        injectScriptFile(g_probeView, g_probeInject, NULL);
+                    SetTimer(g_probeWnd, PROBE_TIMER_EVAL, 250, NULL);
+                    continue;
+                }
+
                 /* --keys / --ime run before the eval: one key per tick so the
                  * character of a key is processed before the next key, then a
                  * short pause for the last one, then the eval. */
@@ -2471,6 +2701,7 @@ static int probeRun(const char* url)
                     g_probeLoadArmed = 0;
                     g_probeEvalDone = 0;
                     g_probePollCount = 0;
+                    g_probeInjectDone = 0;
                     probePrint("[probe]", "reloading");
 
                     /* The reloaded document reports its own load through
@@ -2579,6 +2810,10 @@ static void probeUsage(void)
             "  --eval-file  same as --eval, but read the script from a file: the\n"
             "            command line parser treats \" and \\ specially, so any JS\n"
             "            containing string literals belongs in a file\n"
+            "  --inject <name|path>  run a script asset before --eval, exactly like\n"
+            "            the shell menus: \"inspector\" (inspector.js) or \"vconsole\"\n"
+            "            (vconsole.min.js) resolve next to the exe, anything else is\n"
+            "            a file path (next to the exe first, then the cwd)\n"
             "  --wait    settle time after 'load finished' before eval (default 3000)\n"
             "  --settle  time after eval before exit (default 1000)\n"
             "  --timeout hard cap from start (default 60000)\n"
@@ -2694,6 +2929,9 @@ static void parseShellArgv(void)
         } else if (!strcmp(argv[i], "--ime") && i + 1 < argc) {
             strncpy(g_probeIme, argv[++i], sizeof(g_probeIme) - 1);
             g_probeIme[sizeof(g_probeIme) - 1] = 0;
+        } else if (!strcmp(argv[i], "--inject") && i + 1 < argc) {
+            strncpy(g_probeInject, argv[++i], sizeof(g_probeInject) - 1);
+            g_probeInject[sizeof(g_probeInject) - 1] = 0;
         } else if (!strcmp(argv[i], "--wait") && i + 1 < argc) {
             g_probeWaitMs = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--settle") && i + 1 < argc) {

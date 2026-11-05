@@ -58,12 +58,36 @@ UI 线程只负责窗口/消息循环；引擎线程、命令队列和回调线�
 | 滚轮、点击、键盘 | 全部转发给页面（中文经 `WM_CHAR` 转 UTF-8） |
 | 下载 | 引擎 DownloadManager 写盘，状态栏显示进度/结果；保存到 `%USERPROFILE%\Downloads` |
 | Ctrl+D | 加书签（存 `<数据目录>\bookmarks.txt`） |
-| `=` 按钮 / 菜单 | 书签、历史、缩放 |
+| `=` 按钮 / 菜单 | 书签、历史、缩放、注入调试脚本 |
+| 右键菜单 → 注入 vConsole | 从 exe 同目录读 `vconsole.min.js` 注入当前页（默认注入目标） |
+| 右键菜单 → 注入 inspector.js | 从 exe 同目录读 `inspector.js` 注入当前页：hover 高亮元素 + 半透明信息浮层 |
+| 探针 `--inject <name\|path>` | `--probe` 时在 `--eval` 之前注入（`inspector` / `vconsole` / 文件路径） |
 | Ctrl+= / Ctrl+- / Ctrl+0 | 放大 / 缩小 / 重置（25% 步进，状态栏显示百分比） |
 | 会话恢复 | 退出时把打开的标签写 `session.txt`，下次无参启动自动恢复 |
 
 数据目录优先 `%APPDATA%\AgaveShell`，不可写时退回 exe 同目录的
 `AgaveShellData`（便携模式）。
+
+## 注入调试脚本
+
+右键菜单和 `=` 菜单各有两个入口：`注入 vConsole`（默认）和 `注入 inspector.js`。
+两者都是**把 exe 同目录下的文件读出来，再 `agave_webview_eval` 到当前页**，所以：
+
+- 改脚本不用重编：改 `build-zig-native\inspector.js`，再点一次菜单即可（等价于 prelude 的热改）；
+- 文件缺失时状态栏会提示 `Cannot read ...`，不是静默失败；
+- `AGB_INSPECTOR=<path>` 可以换 `inspector.js` 的读取路径（探针/多份副本用）；
+- 脚本长度不再受 8192 字节限制：控件队列对超长 payload 走堆分配（`AgwCommand.heapText`）。
+- 探针复现：`agave_shell.exe --probe <url> --inject inspector --eval "..."`；
+  `--inject inspector|vconsole` 走的就是菜单那两个函数，所以连实例化步骤一起覆盖。
+- vConsole 是 UMD：本页 realm 有 prelude 的 AMD `define`，bundle 会注册成模块
+  `VConsole` 而不是 `window.VConsole`。外壳把 `require('VConsole')` 的实例化语句
+  **拼在同一个 eval 的末尾**（`injectScriptAsset` 的 `suffix`），注册与实例化之间
+  不依赖命令队列的时序。
+
+`inspector.js` 的行为：hover 时在 `<html>` 下放一个绝对定位的框 + 半透明信息浮层
+（`z-index` 最大），**不参与文档流**；Esc 退出；再次注入等于关闭。它靠
+`elementFromPoint` 命中元素，命中前把自己的浮层 `display:none`（本引擎的 HTML
+不认 `pointer-events`，否则浮层会挡住 hover）。
 
 ## 踩过的坑
 

@@ -241,3 +241,31 @@ if (EXISTS ${AGB_INTERNAL_JS} AND EXISTS ${AGB_INTERNAL_HTML})
 else()
     message(WARNING "internal.js / downloads.html not found; agave://downloads will be blank")
 endif()
+
+# Injected diagnostics: inspector.js (the hover element inspector) and the
+# vendored vConsole bundle are read and evaluated by the shell on demand
+# (context menu / "=" menu). Ship them next to the binaries like prelude.js so
+# the menu works from the build directory without any install step.
+set(AGB_INJECT_ASSETS "")
+foreach (agb_asset
+         ${PROJ_ROOT}/src/javascript/ant_backend/inspector.js
+         ${PROJ_ROOT}/src/javascript/ant_backend/vendor/vconsole.min.js)
+    if (EXISTS ${agb_asset})
+        get_filename_component(agb_asset_name ${agb_asset} NAME)
+        add_custom_command(
+            OUTPUT ${PROJ_OUT}/${agb_asset_name}
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different ${agb_asset} ${PROJ_OUT}/${agb_asset_name}
+            DEPENDS ${agb_asset}
+            COMMENT "Copying ${agb_asset_name} next to the binaries"
+            VERBATIM)
+        list(APPEND AGB_INJECT_ASSETS ${PROJ_OUT}/${agb_asset_name})
+    endif()
+endforeach()
+if (AGB_INJECT_ASSETS)
+    add_custom_target(injectassets ALL DEPENDS ${AGB_INJECT_ASSETS})
+    foreach (agb_target agave_shell agave_embed agave_view_host touchweb)
+        if (TARGET ${agb_target})
+            add_dependencies(${agb_target} injectassets)
+        endif()
+    endforeach()
+endif()

@@ -56,11 +56,14 @@ typedef struct {
     int  type;
     int  index;
     int  x, y, a, b;
-    /* Payload for navigate/eval/search. Must be at least as large as the
-     * host's script buffer (agave_shell --eval-file is 8 KB): a shorter buffer
-     * silently truncated long eval scripts, and the engine then reported a
-     * bogus SyntaxError in the middle of the script. */
-    char text[8192];
+    /* Payload for navigate/eval/search. Short payloads stay inline (the
+     * engine thread uses the buffer synchronously); anything that does not
+     * fit moves to heapText, which the queue owns until the command has run.
+     * The old fixed 8 KB buffer silently truncated long eval scripts - an
+     * injected inspector.js / vConsole is far larger than that - and the
+     * engine then reported a bogus SyntaxError in the middle of the script. */
+    char  text[8192];
+    char* heapText;
 } AgwCommand;
 
 struct AgaveWebView {
@@ -215,6 +218,7 @@ static void agwPost(int type, AgaveWebView* view, const char* text,
                     int x, int y, int a, int b)
 {
     AgwCommand command;
+    int queued = 0;
 
     if (!g_lockReady)
         return;
@@ -229,16 +233,22 @@ static void agwPost(int type, AgaveWebView* view, const char* text,
     if (text) {
         size_t len = strlen(text);
 
-        if (len >= sizeof(command.text)) {
-            /* Never truncate silently: a cut-off eval script parses as a
-             * syntax error somewhere in the middle, which looks like an engine
-             * bug. Say so and keep the prefix. */
-            agbLog(AGB_LOG_SHELL, "command %d payload truncated: %lu > %lu bytes",
-                   type, (unsigned long)len, (unsigned long)sizeof(command.text) - 1);
-            len = sizeof(command.text) - 1;
+        if (len < sizeof(command.text)) {
+            memcpy(command.text, text, len);
+            command.text[len] = 0;
+        } else {
+            /* Long scripts (injected JS) do not fit the inline buffer. */
+            command.heapText = (char*)malloc(len + 1);
+            if (command.heapText) {
+                memcpy(command.heapText, text, len + 1);
+            } else {
+                agbLog(AGB_LOG_SHELL, "command %d out of memory for %lu-byte payload",
+                       type, (unsigned long)len);
+                len = sizeof(command.text) - 1;
+                memcpy(command.text, text, len);
+                command.text[len] = 0;
+            }
         }
-        memcpy(command.text, text, len);
-        command.text[len] = 0;
     }
 
     agwLock();
@@ -247,10 +257,14 @@ static void agwPost(int type, AgaveWebView* view, const char* text,
         ((g_queueTail + 1) % AGW_QUEUE_SIZE) != g_queueHead) {
         g_queue[g_queueTail] = command;
         g_queueTail = (g_queueTail + 1) % AGW_QUEUE_SIZE;
+        queued = 1;
     }
     agwUnlock();
 
-    if (command.index >= 0 && view->hwnd)
+    if (!queued && command.heapText)
+        free(command.heapText);
+
+    if (queued && view->hwnd)
         PostMessageA(view->hwnd, AGW_MSG_STATE, 0, 0);
 }
 
@@ -699,12 +713,14 @@ static void agwDrainCommands(void)
 {
     for (;;) {
         AgwCommand command;
+        const char* payload;
         int have = 0;
         AgaveWebView* item;
 
         agwLock();
         if (g_queueHead != g_queueTail) {
             command = g_queue[g_queueHead];
+            g_queue[g_queueHead].heapText = NULL;
             g_queueHead = (g_queueHead + 1) % AGW_QUEUE_SIZE;
             have = 1;
         }
@@ -713,22 +729,28 @@ static void agwDrainCommands(void)
         if (!have)
             break;
 
-        if (command.index < 0 || command.index >= g_viewCount)
+        payload = command.heapText ? command.heapText : command.text;
+
+        if (command.index < 0 || command.index >= g_viewCount) {
+            free(command.heapText);
             continue;
+        }
 
         item = g_views[command.index];
 
-        if (!item || item->destroyed)
+        if (!item || item->destroyed) {
+            free(command.heapText);
             continue;
+        }
 
         switch (command.type) {
         case AGW_CMD_NAVIGATE:
             item->navigatePending = 0;
 
             if (item->view) {
-                macross_view_open_url(item->view, command.text);
+                macross_view_open_url(item->view, payload);
             } else {
-                strncpy(item->url, command.text, sizeof(item->url) - 1);
+                strncpy(item->url, payload, sizeof(item->url) - 1);
                 item->url[sizeof(item->url) - 1] = 0;
                 agwEnsureSurface(item, item->wantWidth, item->wantHeight);
             }
@@ -736,8 +758,8 @@ static void agwDrainCommands(void)
 
         case AGW_CMD_LOAD_HTML:
             if (item->view)
-                macross_view_load_html(item->view, command.text,
-                                       command.text[0] ? NULL : NULL);
+                macross_view_load_html(item->view, payload,
+                                       payload[0] ? NULL : NULL);
             break;
 
         case AGW_CMD_BACK:    if (item->view) macross_view_backward(item->view); break;
@@ -747,7 +769,7 @@ static void agwDrainCommands(void)
 
         case AGW_CMD_EVAL:
             if (item->view)
-                macross_view_eval_script(item->view, command.text);
+                macross_view_eval_script(item->view, payload);
             break;
 
         case AGW_CMD_ZOOM:
@@ -765,15 +787,15 @@ static void agwDrainCommands(void)
             break;
 
         case AGW_CMD_UA:
-            if (command.text[0]) {
-                strncpy(g_userAgent, command.text, sizeof(g_userAgent) - 1);
+            if (payload[0]) {
+                strncpy(g_userAgent, payload, sizeof(g_userAgent) - 1);
                 g_userAgent[sizeof(g_userAgent) - 1] = 0;
             }
             break;
 
         case AGW_CMD_DL_DIR:
-            if (command.text[0])
-                macross_set_download_dir(command.text);
+            if (payload[0])
+                macross_set_download_dir(payload);
             break;
 
         case AGW_CMD_DL_CANCEL:
@@ -807,7 +829,7 @@ static void agwDrainCommands(void)
 
         case AGW_CMD_CHAR:
             if (item->view)
-                macross_view_input_text(item->view, command.text);
+                macross_view_input_text(item->view, payload);
             break;
 
         case AGW_CMD_FOCUS:
@@ -816,8 +838,8 @@ static void agwDrainCommands(void)
             break;
 
         case AGW_CMD_SEARCH:
-            if (item->view && command.text[0])
-                macross_view_search_text(item->view, command.text,
+            if (item->view && payload[0])
+                macross_view_search_text(item->view, payload,
                                          command.a ? TRUE : FALSE,
                                          command.b ? TRUE : FALSE, TRUE);
             break;
@@ -837,6 +859,8 @@ static void agwDrainCommands(void)
         default:
             break;
         }
+
+        free(command.heapText);
     }
 }
 

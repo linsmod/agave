@@ -47,6 +47,7 @@ pwsh -File tools\build_antjsb.ps1        # 编 libant.a + 重链 antjsb.dll
 | 改动 | 需要做 | 经验耗时 |
 |---|---|---|
 | `prelude.js` / `polyfills.js` | 拷到 `build-zig-native\`（或 `cmake --build` 会顺带拷） | 0（下次绑文档生效） |
+| `inspector.js` / `vconsole.min.js` | 拷到 `build-zig-native\`（或 `cmake --build` 会顺带拷） | 0（菜单每次点击重新读文件；`AGB_INSPECTOR` 可换 inspector.js 路径） |
 | 一个 `webcore/*.cpp` / `webview/*.cpp` | `cmake --build build-zig-native` | 10 秒 ~ 1 分钟 |
 | `AntRuntime.cpp` / `AntBridge.c` | `build_antjsb.ps1` + `cmake --build` | 1 ~ 3 分钟 |
 | ant 的 1-2 个 `.c` | `build_antjsb.ps1`（内含 libant + 桥） | ~1 分钟 |
@@ -66,6 +67,7 @@ pwsh -File tools\build_antjsb.ps1        # 编 libant.a + 重链 antjsb.dll
 | `libagave.dll` | 引擎 + Win32 控件（`macross_*` 和 `agave_webview_*`） |
 | `antjsb.dll` (+ `antjsb.pdb`) | JS 桥 + 引擎（ant 侧构建，见 [ref-ant-engine.md](ref-ant-engine.md)） |
 | `prelude.js` / `polyfills.js` | 运行时从 exe 旁加载的 JS shim（可热改） |
+| `inspector.js` / `vconsole.min.js` | 外壳菜单注入的调试脚本：从 exe 旁读取后 eval（可热改，见 `examples/browser_shell/README.md`） |
 | `%LOCALAPPDATA%\Agave\probe\` / `...\view-host\` | 无头工具自己的 profile（cookies/cache），由 `AGB_USERDATA` 决定，见 [dev-debugging.md](dev-debugging.md) |
 
 - `3rdparty/ant/bin/antjsb.dll` 是**预编译回落副本**（plain clone 也能构建/运行）；运行时仍读 `build-zig-native/` 里的那份。

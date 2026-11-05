@@ -190,6 +190,11 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
 
 ## 4. 定位手段
 
+- **想在页面里看 console / 网络 / 元素**：右键菜单或 `=` 菜单 → `注入 vConsole`
+  （默认）或 `注入 inspector.js`（hover 高亮 + 半透明信息浮层，Esc 退出）。脚本从
+  exe 同目录读，改完再点一次即可；`AGB_INSPECTOR` 换 inspector.js 路径。探针等价：
+  `--probe <url> --inject vconsole|inspector`。细节见
+  [browser_shell/README.md](../examples/browser_shell/README.md#注入调试脚本)。
 - **未捕获/被页面吞掉的错误**：`AGB_ERR_SNIPPET=1`（ant `src/errors.c`）。引擎创建内部错误
   （`js_mkerr_typed`）时，若消息含 `length` / `not a function`，往 stderr 打
   `[snippet] line=<行> col=<列> msg=<消息> | <出错点前 60 字符起的 130 字符源码>`
