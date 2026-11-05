@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>eval semantics</title></head>
+<body>
+<div id="x">semantics</div>
+<script>
+  var pageVar = 42;
+  window.pageOnWindow = 7;
+  let pageLet = 9;
+  function pageFn() { return pageVar + pageLet; }
+  var topThis = (this === window);
+  var topGlobalThis = (globalThis === window);
+  var hoisted = typeof earlyFn;
+  function earlyFn() { return 1; }
+</script>
+</body></html>

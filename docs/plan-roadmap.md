@@ -129,15 +129,20 @@
 - 验收：`tools/pages/cap_dom.html` / `cap_history.html` / `cap_storage_a.html` / `cap_selectors.html` /
   `cap_postmessage.html` 的 `[exit]` 值与 [arch-capability-gaps.md](arch-capability-gaps.md) 的"已支持"一致。
 
-### P1-g `obj[key]` / `G[idx]` 访问快路径（R60 的性能前置，R61 已解除阻塞）
+### P1-g `obj[key]` / `G[idx]` 访问快路径（R60 的性能前置）
 
-- 现状：QIMEI 的字节码 VM 每步 `G[T[++P]]` 都走通用属性路径（数字键转字符串 + `intern_find` 哈希 +
-  原型链遍历），实测约 6M 次/秒；Chrome 里百毫秒级的计算在 ant 里要分钟级 → GUI 表现为假死（R60）。
-- 动作：①先有**可信基线**（R61 修好后长循环才跑得到 1M+，此前基准本身就会 AV）；
-  ②数组下标/整数键的内联快路径、字符串键的 intern 记忆化；③每次优化用探针 A/B（退出码 + 毫秒），
-  不做"看起来更快"的改动。
-- 验收：`debug/bench_elem.js` / `debug/bench_strkey.js` 同脚本比现在快 ≥2×；
-  `run_jit_loop_tests.ps1`、nav/typing/worker 全绿；v.qq.com 在 `AGB_HANG_WATCH=1` 下不再报 5 s `[hang]`。
+- 现状：QIMEI 的字节码 VM 每步 `G[T[++P]]` 都走通用属性路径，实测约 6M 次/秒；Chrome 里百毫秒级的
+  计算在 ant 里要分钟级 → GUI 表现为假死（R60）。
+- **已完成**：`obj[key]` 动态字符串键的属性 IC（R65，script 模式下 66→28ns / 63→25ns / 75→52ns）；
+  长循环/销毁竞态（R61）不再干扰基准。
+- **真正的瓶颈已定位（R64）**：agave 页面脚本走 direct-eval 语义，函数内每次读顶层绑定都过
+  `jit_helper_get_eval_global`；同一份代码换成 script 模式快 20–60×，但 script 模式的顶层
+  `var`/`function` 不落 `window`（浏览器语义要求必须落），所以不能直接切。
+- 下一步（二选一）：①script 模式执行后把顶层 var/function 发布到 global（编译器记录绑定）；
+  ②保持 eval 语义，给 `GET_EVAL_GLOBAL` 发 JIT 内联快路径（shape+slot 守卫，命中不调 helper）。
+- 验收：探针跑 `debug/bench_hot.js` 时 `static-key`/`vm-dispatch` 进个位数 ns，且
+  `tools/pages/cap_script_semantics.html` 的 `window.pageVar=number`；`run_jit_loop_tests.ps1`、
+  nav/typing/worker/layout 全绿；v.qq.com 在 `AGB_HANG_WATCH=1` 下不再报 5 s `[hang]`。
 
 ## P2：增强
 
