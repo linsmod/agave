@@ -163,6 +163,20 @@
   原始值包装（两条分支一个走 `js_setprop_array_fast`，一个走 primitive 原型 setter）。
 - 验收：`--probe https://v.qq.com/` 连续 6 次 exit 0 且 `rs=complete`；`AGB_GUARD_MALLOC=512-4096` 下 2/2 干净。
 
+### P0-i 每 frame 一个 realm（规范对齐，设计见 [design-per-frame-realm.md](design-per-frame-realm.md)）
+
+- 现状：一个 view 一个 realm，iframe 与主 frame 共享全局/intrinsics，只有 `WindowProxy`（R31）。
+  后果：顶层 `var` 跨 frame 污染、`top.Array === Array`、跨 frame `instanceof` 恒真、
+  两份同一 bundle 在共享全局里互相覆盖单例。
+- 关键前提（已验证）：ant 的 realm 是**同一 VM 内的独立全局**，`ant_realm_create/enter` 可用，
+  Node 的 `vm.createContext` 就是这套；跨 realm 对象引用不需要序列化。
+- 阶段：S0 桥接 realm API（**已完成**，`tools/ant_realm_probe.c` 全绿）→ S1 每 document 一个 realm
+  （engine 保留）→ S2 wrapper 按 realm → S3 事件/定时器/模块按 realm → S4 WindowProxy 转发 →
+  S5 回归与文档。
+- 验收：新增 `cap_realm_identity.html`（iframe `var` 不可见、`top.Array !== Array`、
+  `parent !== self`、`parent.fn()` 可用）；`cap_dom`/`cap_window_identity` 不退化；
+  nav/typing/worker/layout/jit/script-mode 全绿。
+
 ## P2：增强
 
 ### P2 prefetch 换真解析

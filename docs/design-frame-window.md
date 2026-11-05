@@ -5,6 +5,11 @@
 > **正文中的"现状/我们现在的行为"指 2026-11-04 改造前**；当前实现在
 > [arch-overview.md](arch-overview.md) §3。相关：[plan-roadmap.md](plan-roadmap.md) P0-a、
 > [hist-lessons.md](hist-lessons.md) R30、[arch-capability-gaps.md](arch-capability-gaps.md) §1。
+>
+> ⚠ **方案 A（每 frame 一个 engine）不再被否决**：ant 的 realm 是同一 VM 内的独立全局
+> （`ant_realm_create` / `ant_realm_enter`），所以"每 frame 一个 realm"既能隔离又不牺牲
+> `parent.foo`。正在进行的设计见 [design-per-frame-realm.md](design-per-frame-realm.md)；
+> 本文的 §2/§3 是当时（只有单 realm）的取舍记录。
 
 ## 1. 规范要求（我们差在哪）
 

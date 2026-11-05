@@ -28,6 +28,7 @@
 | [arch-web-font.md](arch-web-font.md) | `@font-face` 链路与坑 | 字体问题 |
 | [design-per-view-js-context.md](design-per-view-js-context.md) | 每 view 独立 JS 上下文（设计记录，已实现） | 改 realm / 多 view / iframe |
 | [design-frame-window.md](design-frame-window.md) | iframe 与 window 对象（设计记录）：规范差距、方案对比、实施 | 改 frame / window 身份 / 跨 frame 通信 |
+| [design-per-frame-realm.md](design-per-frame-realm.md) | **每 frame 一个 realm**（设计记录）：ant realm 机制、影响面、S0–S5 迁移与验收 | 改 realm / iframe 隔离 / window 身份 |
 | [dev-onboarding.md](dev-onboarding.md) | 代码在哪、**我要改 X 去哪**、症状→先查哪 | 第一次改代码，或换子系统 |
 | [dev-build-and-run.md](dev-build-and-run.md) | 工具链、构建路径、改什么重编什么、产物拓扑、环境坑 | 编不动 / 跑不起来 |
 | [dev-debugging.md](dev-debugging.md) | 无头探针、日志、环境变量全表、cdb、噪音对照、回归清单、A/B | 页面不对、崩了、卡住 |
