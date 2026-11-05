@@ -8,6 +8,9 @@ agave_shell.exe --probe <url> [--eval <js>] [--wait ms] [--settle ms] [--timeout
 
 - **eval 时机** = 页面 `window load` 事件 + `--wait`；`on_progress finished` 只是长延迟兜底
   （**加载失败也会报 finished**，别拿它当成功判据）。
+- `--settle` 从 **eval 脚本返回**开始计时，不是从投递开始：脚本比 settle 慢时探针会等它跑完
+  （之前按投递计时，长脚本会在运行中被销毁视图 → `0xC0000005`，见 R61）。
+  `--timeout` 仍是硬上限（中途销毁视图是安全的，命令持引用、销毁推迟到引擎线程）。
 - 页面 JS 调 `probeExit(result)` 带结果退出；页面 `console.*` 进 stderr（console guard 自动节流重复警告）。
 - `--reload n` 语义：eval → reload → 轮询新文档就绪 → 再 eval，共 n+1 轮。
 - `--offline`：模块只从磁盘缓存取，未命中立刻失败；先在线跑一次暖缓存，再确定性重放模块图。
@@ -222,6 +225,14 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
   满核就打印 `[hang]` + JS 栈（`file:line`）；窗口无响应但 CPU 不高则是 UI 线程/等待问题，
   用 `tools/cdb_stack.ps1 -Attach <pid>` 看全线程。栈里 `intern_find/hash_key` 说明是
   属性/数组访问热点（脚本 VM），不是死锁。
+- **`0xC0000005` 且只跟"时长"有关**（长循环、大 eval、注入脚本）：先排除**视图生命周期**，
+  不要先怀疑 JIT/优化器。判据：①崩溃点是否固定在某个墙钟时间而不是迭代次数
+  （把循环体加 `console.log`，看最后一条进度；R61 里 5M 和 1M 在同一个时间点崩）；
+  ②失败帧最后一行是不是 `[probe] main url=...`（探针打断消息循环 → `agave_webview_destroy()`）；
+  ③把 `--settle` 调大就"好了" —— 这三条基本就是"引擎线程还在跑 EVAL，宿主把视图销毁了"。
+  回归：`pwsh -File tools/run_jit_loop_tests.ps1`（含"超时路径"在 eval 中途销毁视图的用例）。
+  要证明与浏览器无关：`tools/ant_loop_repro.c` 直接 `antb_engine_create + antb_eval` 跑同一脚本
+  （编译/运行见文件头），它在 `f68ba03c` 和 HEAD 上都 exit 0。
 - **一条命令跑布局回归**：`pwsh -File tools/run_layout_tests.ps1`
   —— 对 `tools/pages/layout/*.html` 逐个跑 `layout_diff.py`（几何对拍 Chrome），再对
   `transform_repaint.html` 做像素断言、对 `scrollbar_hidden.html` 断言 `::-webkit-scrollbar`
@@ -333,9 +344,10 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
 
 - 一条命令级回归：`tools/run_worker_tests.ps1`（Worker 九项）；`tools/run_nav_tests.ps1`
   （`[nav]` 八项：链接/脚本跳转/历史后退/meta refresh/window.open/表单提交/302 重定向/关日志）；
-  `debug/csscheck.html`（CSS 能力矩阵）；`debug/life.html`（生命周期）；`debug/defercheck.html`；
-  deepseek 登录页（`inp=2 all=129`）。回归清单与基线以本文为准；状态总结见
-  [arch-status.md](arch-status.md)。
+  `tools/run_typing_tests.ps1`（键盘/IME 八项）；`tools/run_jit_loop_tests.ps1`（长循环 +
+  引擎线程运行期间销毁视图）；`debug/csscheck.html`（CSS 能力矩阵）；`debug/life.html`（生命周期）；
+  `debug/defercheck.html`；deepseek 登录页（`inp=2 all=129`）。回归清单与基线以本文为准；
+  状态总结见 [arch-status.md](arch-status.md)。
 - **页面清单**：`debug/` 下 `life.html`、`evalenv_test.html`、`expando_test.html`、`sched.html`、
   `font_test.html`、`csscheck.html`、`clipcheck.html`、`scrollcheck.html`、`beforeunload.html`、
   `defercheck.html`、`newtab.html`、`worker_support.html`；大图 `chat.deepseek.com`、

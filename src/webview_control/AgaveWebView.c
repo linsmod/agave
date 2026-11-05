@@ -54,7 +54,11 @@ enum {
 
 typedef struct {
     int  type;
-    int  index;
+    /* Stable identity of the target view, not its slot in g_views: destroy()
+     * swap-removes the slot, so an index captured when the command was posted
+     * can point at a different view (or past the end) by the time the engine
+     * thread drains the queue. */
+    int  viewId;
     int  x, y, a, b;
     /* Payload for navigate/eval/search. Short payloads stay inline (the
      * engine thread uses the buffer synchronously); anything that does not
@@ -86,6 +90,9 @@ struct AgaveWebView {
     int                wantHeight;
     int                zoom;
     int                pendingResize;
+    /* Identity used by queued commands. Slots in g_views move when a view is
+     * destroyed; this does not. */
+    int                id;
     volatile int       destroyed;
     int                refs;
 
@@ -122,6 +129,7 @@ static AgaveWebView*    g_lastActive;
 static AgwCommand       g_queue[AGW_QUEUE_SIZE];
 static int              g_queueHead;
 static int              g_queueTail;
+static int              g_nextViewId = 1;
 static volatile int     g_engineQuit;
 static HANDLE           g_engineThread;
 static volatile int     g_engineStarted;
@@ -201,6 +209,8 @@ static void agwRelease(AgaveWebView* item)
          * to go away: the engine view can be destroyed here. This runs on the
          * engine thread, which is the only place it may be freed - the host
          * thread can be inside macross_view_update() on it. */
+        if (g_lastActive == item)
+            g_lastActive = NULL;
         if (item->view) {
             macross_view_destroy(item->view);
             item->view = NULL;
@@ -252,8 +262,8 @@ static void agwPost(int type, AgaveWebView* view, const char* text,
     }
 
     agwLock();
-    command.index = agwIndexOf(view);
-    if (command.index >= 0 &&
+    command.viewId = view ? view->id : 0;
+    if (command.viewId > 0 &&
         ((g_queueTail + 1) % AGW_QUEUE_SIZE) != g_queueHead) {
         g_queue[g_queueTail] = command;
         g_queueTail = (g_queueTail + 1) % AGW_QUEUE_SIZE;
@@ -715,6 +725,7 @@ static void agwDrainCommands(void)
         AgwCommand command;
         const char* payload;
         int have = 0;
+        int i;
         AgaveWebView* item;
 
         agwLock();
@@ -731,14 +742,26 @@ static void agwDrainCommands(void)
 
         payload = command.heapText ? command.heapText : command.text;
 
-        if (command.index < 0 || command.index >= g_viewCount) {
-            free(command.heapText);
-            continue;
+        /* Resolve the target and pin it for the whole command. EVAL can run
+         * arbitrary JS for an arbitrarily long time, and the host may call
+         * agave_webview_destroy() meanwhile: without the pin it would see
+         * refs == 0 and free the engine under the running script, which is
+         * exactly the 0xC0000005 that looked like a JIT loop crash (R61).
+         * The same lookup also keeps a queued command from running against
+         * whichever view now occupies the destroyed view's slot. */
+        item = NULL;
+        agwLock();
+        for (i = 0; i < g_viewCount; ++i) {
+            if (g_views[i] && g_views[i]->id == command.viewId &&
+                !g_views[i]->destroyed) {
+                item = g_views[i];
+                item->refs++;
+                break;
+            }
         }
+        agwUnlock();
 
-        item = g_views[command.index];
-
-        if (!item || item->destroyed) {
+        if (!item) {
             free(command.heapText);
             continue;
         }
@@ -861,6 +884,10 @@ static void agwDrainCommands(void)
         }
 
         free(command.heapText);
+        /* Drop the pin: if the host destroyed the control while the command
+         * was running, this is where the engine view is finally torn down
+         * (on the engine thread, never under a running script). */
+        agwRelease(item);
     }
 }
 
@@ -1632,8 +1659,10 @@ AgaveWebView* agave_webview_create(void* parent, int x, int y, int width, int he
     SetWindowLongPtrW(item->hwnd, GWLP_USERDATA, (LONG_PTR)item);
 
     agwLock();
-    if (g_viewCount < AGW_MAX_VIEWS)
+    if (g_viewCount < AGW_MAX_VIEWS) {
+        item->id = g_nextViewId++;
         g_views[g_viewCount++] = item;
+    }
     agwUnlock();
 
     /* The engine thread creates the surface on first resize. */

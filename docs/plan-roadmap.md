@@ -11,6 +11,10 @@
 - **P0-d `contentWindow` / `contentDocument`**（R34）：`cap_dom.html` → `iframeCw=yes`；
   子文档未建好时为 `null`（`about:blank` 例外，R49）。
 - **下载 P0 + P1**：引擎/API/控制层/探针 + `agave://downloads` 面板；见 [arch-downloads.md](arch-downloads.md)。
+- **长循环探针 `0xC0000005`**（R61）：不是 JIT —— 引擎线程还在跑 `AGW_CMD_EVAL` 时宿主销毁了视图
+  （UAF）。修法在控件层（命令持引用、销毁推迟到引擎线程）与探针层（`--settle` 从 eval 返回计时）；
+  判据 `tools/run_jit_loop_tests.ps1`。ant 侧交叉验证：`tools/ant_loop_repro.c` 在 `f68ba03c`/HEAD
+  上同一脚本均 exit 0。
 
 ## P0：先修正确性
 
@@ -117,6 +121,16 @@
   ③History 建真实条目并派发 `popstate`；④storage 改成每次读取都走磁盘/共享表。
 - 验收：`tools/pages/cap_dom.html` / `cap_history.html` / `cap_storage_a.html` / `cap_selectors.html` /
   `cap_postmessage.html` 的 `[exit]` 值与 [arch-capability-gaps.md](arch-capability-gaps.md) 的"已支持"一致。
+
+### P1-g `obj[key]` / `G[idx]` 访问快路径（R60 的性能前置，R61 已解除阻塞）
+
+- 现状：QIMEI 的字节码 VM 每步 `G[T[++P]]` 都走通用属性路径（数字键转字符串 + `intern_find` 哈希 +
+  原型链遍历），实测约 6M 次/秒；Chrome 里百毫秒级的计算在 ant 里要分钟级 → GUI 表现为假死（R60）。
+- 动作：①先有**可信基线**（R61 修好后长循环才跑得到 1M+，此前基准本身就会 AV）；
+  ②数组下标/整数键的内联快路径、字符串键的 intern 记忆化；③每次优化用探针 A/B（退出码 + 毫秒），
+  不做"看起来更快"的改动。
+- 验收：`debug/bench_elem.js` / `debug/bench_strkey.js` 同脚本比现在快 ≥2×；
+  `run_jit_loop_tests.ps1`、nav/typing/worker 全绿；v.qq.com 在 `AGB_HANG_WATCH=1` 下不再报 5 s `[hang]`。
 
 ## P2：增强
 

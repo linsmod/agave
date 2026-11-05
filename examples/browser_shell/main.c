@@ -1938,6 +1938,8 @@ static void shellExitTrace(void)
 /* Engine-thread callbacks post this to the probe window (main thread) to arm
  * the eval timer: window timers must be installed by the owning thread. */
 #define AGW_PROBE_MSG (WM_APP + 77)
+/* Engine thread -> main thread: the --eval script has finished. */
+#define AGW_PROBE_EVALDONE (WM_APP + 78)
 
 /* Probe exit codes (process exit status): scripts and CI can tell failure
  * classes apart without parsing the log.
@@ -2109,6 +2111,17 @@ static void probeOnMessage(AgaveWebView* view, const char* message, void* user)
         return;
     }
 
+    /* The --eval script has returned (the probe posts a follow-up eval that
+     * sends this). Only now may --settle start counting: it used to be armed
+     * when the eval was *posted*, so any script slower than --settle had the
+     * view destroyed underneath it - the 0xC0000005 that looked like a JIT
+     * crash (R61). Still a timer on the main thread: the message arrives from
+     * the engine thread. */
+    if (message && !strncmp(message, "__agb_evaldone__", 16)) {
+        PostMessageA(g_probeWnd, AGW_PROBE_EVALDONE, 0, 0);
+        return;
+    }
+
     probePrint("[msg]", message);
 }
 
@@ -2259,6 +2272,16 @@ static LRESULT CALLBACK probeWndProc(HWND hwnd, UINT message, WPARAM wParam, LPA
              * wait only exists for pages that paint after load. */
             SetTimer(g_probeWnd, PROBE_TIMER_EVAL,
                      (UINT)(g_probeRound > 1 ? 150 : wParam), NULL);
+        }
+        return 0;
+    }
+
+    if (message == AGW_PROBE_EVALDONE) {
+        /* The eval finished. A probeExit()/sanity abort already closed the
+         * window; otherwise the settle delay starts here. */
+        if (!g_probeGotExit && !g_probeSanityFailed) {
+            KillTimer(g_probeWnd, PROBE_TIMER_SETTLE);
+            SetTimer(g_probeWnd, PROBE_TIMER_SETTLE, g_probeSettleMs, NULL);
         }
         return 0;
     }
@@ -2685,7 +2708,18 @@ static int probeRun(const char* url)
                              g_probeRound, g_probeTotalRounds, g_probeScript);
                     agave_webview_eval(g_probeView, script);
                 }
-                SetTimer(g_probeWnd, PROBE_TIMER_SETTLE, g_probeSettleMs, NULL);
+                /* Eval-completion signal. The engine drains commands in order,
+                 * so this marker runs right after the script returns - and it
+                 * still runs when the script threw or failed to compile, which
+                 * is why it is a second eval instead of a wrapper around the
+                 * first one (a syntax error in the user script would take the
+                 * wrapper down with it). --settle starts counting only from
+                 * here: it used to be armed when the eval was posted, so a
+                 * script slower than --settle had its view destroyed while it
+                 * was still running (R61). */
+                agave_webview_eval(g_probeView,
+                    "if (typeof agavePostMessage === 'function')"
+                    " agavePostMessage('__agb_evaldone__');");
                 continue;
             }
 
@@ -2815,7 +2849,8 @@ static void probeUsage(void)
             "            (vconsole.min.js) resolve next to the exe, anything else is\n"
             "            a file path (next to the exe first, then the cwd)\n"
             "  --wait    settle time after 'load finished' before eval (default 3000)\n"
-            "  --settle  time after eval before exit (default 1000)\n"
+            "  --settle  time after the eval script returns before exit (default 1000;\n"
+            "            a script slower than settle is still allowed to finish)\n"
             "  --timeout hard cap from start (default 60000)\n"
             "  --shot <path>  write a BMP of what the page painted and exit; the\n"
             "            window stays hidden, so this is the headless screenshot\n"

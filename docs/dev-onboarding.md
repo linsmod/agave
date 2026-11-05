@@ -14,7 +14,7 @@ agave 是**从零移植的浏览器**：**WebKit 2008 的 WebCore**（HTML/CSS �
 | 层 | 位置 | 职责 |
 |---|---|---|
 | 宿主壳 | `examples/browser_shell/main.c` | 标签页/地址栏/查找/书签/快捷键；`--probe` 真无头探针 |
-| Win32 控件 | `src/webview_control/AgaveWebView.c` | 控件窗口、引擎线程、`AGW_CMD_*` 队列、剪贴板/IME |
+| Win32 控件 | `src/webview_control/AgaveWebView.c` | 控件窗口、引擎线程、`AGW_CMD_*` 队列、剪贴板/IME。**命令执行期间持有视图引用**，`agave_webview_destroy()` 因此会推迟到引擎线程释放（见 R61） |
 | 视图 + WebCore | `src/webview/`、`src/webcore/` | MaCross 适配、帧泵、页面时序；WebKit 2008 解析/DOM/CSS/布局/绘制/网络 |
 | JS 桥 + 运行时 | `src/javascript/ant_backend/` + ant 的 `bridge/` | `AntRuntime.cpp`（realm/桥外观）、`prelude.js`/`polyfills.js`/`internal.js`；`AntBridge.c` 在 ant 仓库 |
 | ant 引擎 | `H:\ant-v16`（独立仓库） | silver VM/编译、ESM loader、Worker、wasm、antjsb；见 [ref-ant-engine.md](ref-ant-engine.md) |
@@ -66,6 +66,7 @@ agave 是**从零移植的浏览器**：**WebKit 2008 的 WebCore**（HTML/CSS �
 | 布局不对（位置/间距/元素 0×0/滚动区） | [arch-rendering.md](arch-rendering.md) §7；先用 `__agbLayoutInfo()` 分清"没 renderer"和"有 renderer 没布局" |
 | 画错 / 残影 / 不重绘 | 隐藏窗口没有 WM_PAINT（用 `--probe AGB_PROBE_SHOW=1` 或 `agave_view_host` 出 BMP）；再看 clip/repaint |
 | 卡住 / CPU 100% | `AGB_PROFILE=1` 直方图 + `cdb` 抓忙线程栈（[dev-debugging.md](dev-debugging.md)） |
+| 崩溃 / `0xC0000005`，尤其**只与时长相关**（长循环、长 eval、大脚本） | 先查**生命周期**不是优化器：宿主是否在引擎线程还在跑 `AGW_CMD_EVAL` 时销毁了视图（`tools/run_jit_loop_tests.ps1`，[hist-lessons.md](hist-lessons.md) R61）；再 `cdb` 断首次异常 |
 | 网络没提交 / 一直重试 | `AGB_NET_LOG=1` 看 stage；`progress finished=1` **不代表**加载成功 |
 | 崩溃 | `cdb` 断在首次异常抓全线程栈；worker 崩在**非主线程**（`worker_thread_main`） |
 | 刷新后行为变了 | realm/监听器泄漏（[hist-lessons.md](hist-lessons.md) R10/R17） |
