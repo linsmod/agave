@@ -13,12 +13,12 @@ agave 是**从零移植的浏览器**：WebKit 2008 的 WebCore（解析/布局/
 | 全部文档索引 | [docs/README.md](docs/README.md) |
 | 分层架构 / 目录地图 / **我要改 X 去哪** / 症状→先查哪 | [docs/onboarding.md](docs/onboarding.md) |
 | 工具链、构建、产物与运行拓扑、环境坑 | [docs/build-and-run.md](docs/build-and-run.md) |
-| 探针、默认日志（`[evt]`/`[nav]`/`[ui]`/`[con-call]`/`[cache]`/`[gap-jsdom]`）、环境变量全表、cdb、噪音对照、A/B 验证 | [docs/debugging.md](docs/debugging.md) |
+| 探针、默认日志（`[evt]`/`[nav]`/`[ui]`/`[con-*]`/`[cache]`/`[gap-jsdom]`）、环境变量全表、cdb、噪音对照、A/B 验证 | [docs/debugging.md](docs/debugging.md) |
 | JS/DOM/CSS **能力缺口**（不支持清单 + 一条命令复测） | [docs/capability-gaps.md](docs/capability-gaps.md) |
 | ant/桥接哪份是真的、改引擎链路、ant 的反直觉 | [docs/ant-engine.md](docs/ant-engine.md) |
 | 提交/回归页/文档/代码风格约定 | [docs/conventions.md](docs/conventions.md) |
 | 现状、待办（含验收标准）、已知限制、代码索引 | [handover.md](handover.md) |
-| 历史缺陷：现象 → 根因 → 修法 → 验证（R1..R47） | [docs/lessons.md](docs/lessons.md) |
+| 历史缺陷：现象 → 根因 → 修法 → 验证（R1..R48） | [docs/lessons.md](docs/lessons.md) |
 | 入口模块管线三条泳道时序图 | [docs/architecture/module-pipeline.md](docs/architecture/module-pipeline.md) |
 
 ## rules

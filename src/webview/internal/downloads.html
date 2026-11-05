@@ -1,0 +1,157 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>下载</title>
+<style>
+:root {
+  --fg: #1f2328;
+  --dim: #6b7280;
+  --line: #e5e7eb;
+  --accent: #3b82f6;
+  --bg: #ffffff;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font: 14px/1.5 "Segoe UI", system-ui, sans-serif;
+  color: var(--fg);
+  background: var(--bg);
+}
+header {
+  display: flex;
+  align-items: baseline;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--line);
+}
+h1 { margin: 0; font-size: 16px; font-weight: 600; }
+#count { margin-left: 8px; color: var(--dim); font-size: 13px; }
+table { width: 100%; border-collapse: collapse; }
+th, td {
+  text-align: left;
+  padding: 10px 24px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+}
+th { color: var(--dim); font-size: 12px; font-weight: 500; }
+td.name { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+td.size { color: var(--dim); white-space: nowrap; }
+.bar { width: 120px; height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
+.bar > i { display: block; height: 100%; background: var(--accent); }
+td.act { text-align: right; white-space: nowrap; }
+button {
+  font: inherit;
+  padding: 3px 10px;
+  margin-left: 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  cursor: pointer;
+}
+button:hover { border-color: var(--accent); color: var(--accent); }
+#empty { padding: 48px 24px; color: var(--dim); text-align: center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>下载</h1>
+  <span id="count"></span>
+</header>
+<table>
+  <thead>
+    <tr><th>文件</th><th>大小</th><th>状态</th><th></th></tr>
+  </thead>
+  <tbody id="rows"></tbody>
+</table>
+<div id="empty">还没有下载</div>
+<script>
+(function () {
+  var STATES = ['下载中', '下载中', '已完成', '失败', '已取消'];
+
+  function baseName(path) {
+    if (!path) return '(未命名)';
+    var cut = path.lastIndexOf('\\');
+    return cut >= 0 ? path.slice(cut + 1) : path;
+  }
+
+  function mb(bytes) {
+    return (bytes / 1048576).toFixed(1) + ' MB';
+  }
+
+  function sizeText(job) {
+    if (job.total > 0) return mb(job.received) + ' / ' + mb(job.total);
+    return mb(job.received);
+  }
+
+  function row(job) {
+    var tr = document.createElement('tr');
+    tr.className = 'dl';
+
+    var name = document.createElement('td');
+    name.className = 'name';
+    name.textContent = baseName(job.path);
+    name.title = job.url;
+    tr.appendChild(name);
+
+    var size = document.createElement('td');
+    size.className = 'size';
+    size.textContent = sizeText(job);
+    tr.appendChild(size);
+
+    var state = document.createElement('td');
+    if (job.state === 0 || job.state === 1) {
+      var bar = document.createElement('div');
+      bar.className = 'bar';
+      var fill = document.createElement('i');
+      fill.style.width = (job.total > 0 ? Math.round(job.received * 100 / job.total) : 0) + '%';
+      bar.appendChild(fill);
+      state.appendChild(bar);
+    } else {
+      state.textContent = STATES[job.state] || '';
+    }
+    tr.appendChild(state);
+
+    var act = document.createElement('td');
+    act.className = 'act';
+
+    if (job.state === 0 || job.state === 1) {
+      var cancel = document.createElement('button');
+      cancel.textContent = '取消';
+      cancel.onclick = function () { window.agave.cancelDownload(job.id); };
+      act.appendChild(cancel);
+    } else if (job.state === 2) {
+      var open = document.createElement('button');
+      open.textContent = '打开';
+      open.onclick = function () { window.agave.openDownload(job.id); };
+      act.appendChild(open);
+    }
+    tr.appendChild(act);
+
+    return tr;
+  }
+
+  function render() {
+    var jobs = window.agave ? window.agave.downloads() : [];
+    var body = document.getElementById('rows');
+    var empty = document.getElementById('empty');
+
+    while (body.firstChild)
+      body.removeChild(body.firstChild);
+
+    for (var i = 0; i < jobs.length; i++)
+      body.appendChild(row(jobs[i]));
+
+    document.getElementById('count').textContent =
+      jobs.length ? '(' + jobs.length + ')' : '';
+    empty.style.display = jobs.length ? 'none' : 'block';
+  }
+
+  if (window.agave)
+    window.agave.onchange = render;
+
+  render();
+})();
+</script>
+</body>
+</html>

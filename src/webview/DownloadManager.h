@@ -40,6 +40,14 @@ public:
 
     int id() const { return m_id; }
     bool isActive() const { return m_state == StateActive; }
+    const String& path() const { return m_path; }
+    const String& url() const { return m_url; }
+    const String& mime() const { return m_mime; }
+    long long received() const { return m_received; }
+    long long total() const { return m_total; }
+    /* Raw internal state; mcState() is the value hosts and pages see. */
+    int state() const { return (int)m_state; }
+    int mcState() const;
 
     /* ResourceHandleClient */
     virtual void didReceiveResponse(ResourceHandle*, const ResourceResponse&);
@@ -83,6 +91,15 @@ public:
     bool cancel(int id);
     int cancelAll();
     int activeCount() const;
+
+    /* Destination of a job (empty when unknown), and "open it with the shell". */
+    String pathFor(int id) const;
+    bool openFile(int id);
+
+    /* Filled by the JS layer so the internal page can redraw on change; the
+     * engine thread calls it from DownloadJob::emit(). */
+    int jobCount() const { return (int)m_jobs.size(); }
+    DownloadJob* jobAt(int index) const;
 
 private:
     DownloadManager();

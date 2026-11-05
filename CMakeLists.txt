@@ -211,3 +211,33 @@ if (EXISTS ${AGB_PRELUDE})
 else()
     message(WARNING "prelude.js not found at ${AGB_PRELUDE}; pages will run without the window shims")
 endif()
+
+# internal.js / downloads.html: the internal page runtime (agave://downloads).
+# internal.js is evaluated only for an agave:// document (AntRuntime::
+# bindDocument), downloads.html is served by WebView::loadUrl for
+# agave://downloads. Both are runtime assets next to the binaries, like
+# prelude.js, so they can be edited without relinking.
+set(AGB_INTERNAL_JS ${PROJ_ROOT}/src/javascript/ant_backend/internal.js)
+set(AGB_INTERNAL_HTML ${PROJ_ROOT}/src/webview/internal/downloads.html)
+if (EXISTS ${AGB_INTERNAL_JS} AND EXISTS ${AGB_INTERNAL_HTML})
+    add_custom_command(
+        OUTPUT ${PROJ_OUT}/internal.js
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${AGB_INTERNAL_JS} ${PROJ_OUT}/internal.js
+        DEPENDS ${AGB_INTERNAL_JS}
+        COMMENT "Copying internal.js next to the binaries"
+        VERBATIM)
+    add_custom_command(
+        OUTPUT ${PROJ_OUT}/downloads.html
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${AGB_INTERNAL_HTML} ${PROJ_OUT}/downloads.html
+        DEPENDS ${AGB_INTERNAL_HTML}
+        COMMENT "Copying downloads.html next to the binaries"
+        VERBATIM)
+    add_custom_target(internalpages ALL DEPENDS ${PROJ_OUT}/internal.js ${PROJ_OUT}/downloads.html)
+    foreach (agb_target agave_shell agave_embed agave_view_host touchweb)
+        if (TARGET ${agb_target})
+            add_dependencies(${agb_target} internalpages)
+        endif()
+    endforeach()
+else()
+    message(WARNING "internal.js / downloads.html not found; agave://downloads will be blank")
+endif()

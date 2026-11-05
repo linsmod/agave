@@ -411,15 +411,23 @@
                     args.push(shorten(arguments[i]));
 
                 /* Route through the engine log sink so page console output gets
-                 * the same "[ 123.4ms]" prefix as [evt]/[nav] and the
-                 * [con-call] tag. Fallback: tag by hand if the sink is missing
-                 * (old engine build). */
+                 * the same "[ 123.4ms]" prefix as [evt]/[nav]. The level is
+                 * part of the tag ([con-error] ...), so errors can be grepped
+                 * without reading the message. __agbConsoleLineEx is the
+                 * level-aware sink; __agbConsoleLine is the older one-argument
+                 * sink (kept for engine/JS skew). Fallback: tag by hand if the
+                 * sink is missing (old engine build). */
+                if (typeof g.__agbConsoleLineEx === 'function') {
+                    g.__agbConsoleLineEx(level, args.join(' '));
+                    return;
+                }
+
                 if (typeof g.__agbConsoleLine === 'function') {
                     g.__agbConsoleLine(args.join(' '));
                     return;
                 }
 
-                args.unshift('[con-call]');
+                args.unshift('[con-' + level + ']');
                 return original.apply(g.console, args);
             };
         }

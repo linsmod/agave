@@ -133,34 +133,70 @@ DownloadManager                     AgaveWebView 下载表(32 槽, 加锁)
 2. 控制层只做**深拷贝 + PostMessage**，回调在 UI 线程派发（沿用 `AGW_MSG_STATE` 那套）。
 3. 取消/改目录走 `agwPost` 命令队列，UI 线程不直接碰 `DownloadManager`。
 
-## 8. GUI（`examples/browser_shell`）
+## 8. 面板 = 内部页（`agave://downloads`）
+
+面板不是一个 Win32 列表窗口，而是一张 **HTML 页面 + 标签页**：浏览器自己就是渲染器，
+列表样式改起来不用重编。
 
 | 元素 | 行为 |
 |---|---|
-| 状态栏 | `下载中 name 45% (1.2/2.7 MB)` / `已下载 name` / `下载失败(code) url` |
-| 下载面板（P1） | `Ctrl+J` 独立窗口，`LISTBOX`（user32，不引 comctl32）：`文件名 · 状态 · 大小`；`打开 / 取消 / 清空`；双击打开 |
+| 状态栏 | `Downloading name 45% (1.2/2.7 MB)` / `Downloaded: path` / `Download failed (code) url` |
+| `Ctrl+J` | 新标签页导航到 `agave://downloads` |
+| 面板 | `src/webview/internal/downloads.html`：文件 / 大小 / 状态（进度条）/ 取消 · 打开 |
 
-面板只读控制层的下载表，不直接问引擎 —— 引擎可能已经销毁了某个 job。
+### 8.1 为什么面板要自己的 runtime
+
+`agave.downloads()` 会暴露用户的下载路径，`agave.cancelDownload()` 能取消传输 —— 这是
+**能力**，不是 DOM 特性。挂在每个页面的 `window` 上，任何站点一行 `if (window.agave)`
+就能枚举、取消。所以：
+
+```
+agave://downloads
+   │ WebView::loadUrl → loadInternalPage() 读 <exe>/downloads.html
+   │                  → loadHtml(html, "agave://downloads")   (SubstituteData.responseURL)
+   ▼
+Document（自己的 realm，document.URL = agave://downloads）
+   │ AntRuntime::bindDocument：
+   │    isInternalDocument() ? 注册 __agbDownloadList/Cancel/Open + eval internal.js
+   │    否则                    只有 prelude.js / polyfills.js
+   ▼
+internal.js → window.agave = { downloads(), cancelDownload(id), openDownload(id), onchange }
+事件：DownloadManager::emit → g_agbDownloadEventSink → 仅内部 realm 派发 agavedownloadchange
+```
+
+| 文件 | 作用 |
+|---|---|
+| `src/javascript/ant_backend/internal.js` | 内部页 JS 门面（运行时加载，`AGB_INTERNAL` 可覆盖） |
+| `src/webview/internal/downloads.html` | 面板页面（运行时资产，拷到 exe 旁） |
+| `src/webview/DownloadEvents.h` | `DownloadManager` → JS 的单一 hook（函数指针，避免 webview 依赖 JS 后端） |
+
+**不给内部页再开一个 VM**：realm 本来就是"一份文档一个 engine"，内部页天然独立；真正要
+独立的是**绑定面**。两个 VM 同时活跃会把 `AntRuntime` 的进程级 `g_engine`/`g_document`
+全量改成实例化，收益为零。
+
+面板只读 `DownloadManager` 的快照，不缓存状态；引擎销毁某个 job 后列表自然变短。
 
 ## 9. 探针
 
 - 顶层导航变成下载时**没有文档提交**，`on_progress(finished)` 不会来。新增
-  `probeOnDownload()`：`MC_DL_FINISHED` → 打印 `[probe] download path=… bytes=…` → **exit 0**
-  （下载是成功的导航结果，不是 exit 5）。
+  `probeOnDownload()`：`MC_DL_FINISHED` 且**尚无文档** → 打印 `[probe] download path=… bytes=…`
+  → **exit 0**（下载是成功的导航结果，不是 exit 5）。已有文档时（页面自己触发下载）只记日志，
+  退出码仍由 `--eval`/`probeExit` 决定。
 - 探针模式下载目录强制 `<AGB_USERDATA>/downloads`，绝不写 `%USERPROFILE%\Downloads`（同 R25）。
 
 ## 10. 已知限制
 
 无断点续传/Range；无"另存为"对话框；无 `<a download>` 与 `blob:` 下载；`fwrite` 在
 引擎线程（大文件会顶一下页面，P2 改异步写线程）；401/重定向中途只做 FAILED。
+内部页目前仍是普通 realm（没有独立生命周期），面板每次打开重新读快照。
 
 ## 11. 分期
 
 | 期 | 内容 | 验收 |
 |---|---|---|
 | P0 ✅ | 决策 + `detachHandle` + DownloadManager + API + 控制层下载表 + 探针 | 见下 §11.1 |
-| P1 | GUI 面板 + 取消/打开 + 状态栏 | 手工点 3 个下载（中文名、同名两次）、取消一个、失败一个 |
-| P2 | 异步写、并发上限、断点续传、另存为、`<a download>` | — |
+| P1 ✅ | `agave://` 内部页 runtime + 面板 + `Ctrl+J` + 状态栏 | 见下 §11.2 |
+| P2 | 异步写、并发上限、断点续传、另存为、`<a download>`、`agave://history` | — |
 
 ### 11.1 P0 验证（2026-11-05）
 
@@ -184,6 +220,16 @@ AGB_USERDATA=<临时目录> agave_shell.exe --probe http://127.0.0.1:8975/blob.b
 `--probe` 的下载落盘目录跟随 `AGB_USERDATA`（`<userdata>/downloads`），不碰
 `%USERPROFILE%\Downloads`。
 
+### 11.2 P1 验证（2026-11-05）
+
+| 用例 | 命令 | 实测 |
+|---|---|---|
+| 内部页能开 | `--probe agave://downloads --eval "probeExit(typeof agave + ' url=' + document.URL)"` | `object url=agave://downloads`，exit 0 |
+| **隔离**：网页拿不到 | `--probe tools/pages/cap_dom.html --eval "probeExit('agave=' + typeof agave)"` | `agave=undefined`（deepseek 上同样） |
+| 面板渲染真实任务 | 面板里 `appendChild(iframe)` 指向 `…/report`，1.2 s 后读 DOM | `rows=1 state=2 cells=4` |
+| 下载矩阵不回退 | `/blob.bin`、`/cjk` | exit 0，md5/文件名不变 |
+| 回归 | nav 8/8、typing 8/8、worker 9/9、deepseek `rs=complete inputs=2` | 全绿 |
+
 ## 12. 代码索引
 
 | 位置 | 作用 |
@@ -194,4 +240,9 @@ AGB_USERDATA=<临时目录> agave_shell.exe --probe http://127.0.0.1:8975/blob.b
 | `src/webcore/loader/MainResourceLoader.cpp` | `PolicyDownload` 分支 |
 | `src/webview/WebCallback.cpp` | `cb_download` 全局指针 |
 | `src/webview_control/AgaveWebView.c` | 下载表 + `AGW_MSG_DOWNLOAD` + `AGW_CMD_DL_CANCEL` |
-| `examples/browser_shell/main.c` | 状态栏 / 探针退出码 |
+| `examples/browser_shell/main.c` | 状态栏 / 探针退出码 / `Ctrl+J` |
+| `src/webview/SchemeExtension.cpp` | `agave` 加进内置 scheme（否则导航策略以 406002 拒掉） |
+| `src/webview/WebView.cpp` | `agave://` → 读 `downloads.html` → `loadHtml(html, "agave://…")` |
+| `src/javascript/ant_backend/AntRuntime.cpp` | `isInternalDocument()` 分叉 + `__agbDownload*` |
+| `src/javascript/ant_backend/internal.js` | `window.agave` 门面 |
+| `src/webview/internal/downloads.html` | 面板页面 |

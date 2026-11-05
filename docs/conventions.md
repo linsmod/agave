@@ -43,9 +43,11 @@
 - `prelude.js` / `polyfills.js`：2 空格缩进、`var`（要兼容老引擎）、IIFE 包裹；
   改完 `node --check` 一下（`tools/check_prelude_lines.py` 专门查"字符串内换行"）。
 - 不许 `clang-format` 全量刷文件（会把 diff 变成几千行）；只格式化自己改的片段。
-- 默认日志（`[evt]/[nav]/[ui]/[shell]/[probe]/[flag]/[con-call]`）必须走 `src/webview/AgbLog.h` 的
+- 默认日志（`[evt]/[nav]/[ui]/[shell]/[probe]/[flag]/[con-*]`）必须走 `src/webview/AgbLog.h` 的
   `agbLog(AGB_LOG_*, ...)`，不要在调用点自己 `fprintf(stderr, "[tag] ...")`：时间戳、通道开关、
-  跨 DLL 共用时钟都在收口处统一。页面 console 由 polyfills 守卫转 `__agbConsoleLine`（`AGB_LOG_CONSOLE`）。
+  跨 DLL 共用时钟都在收口处统一。页面 console 由 polyfills 守卫转 `__agbConsoleLineEx(level, text)`
+  （`agbLogConsole`，级别进 tag：`con-log`/`con-info`/`con-warn`/`con-error`/`con-debug`；一个通道
+  `AGB_LOG_CONSOLE`，开关 `AGB_CON_LOG=0`）。
   可选调试通道（`[netlog]` 等）另说。
 
 ## 5. 提交前 checklist

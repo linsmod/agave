@@ -12,7 +12,11 @@ bool isSupportedInternalScheme(const char *scheme)
     if (!scheme)
         return false;
 
-	static const char *builtinSchemes[] = {"http", "ftp", "https", "ftps", "file", "data"};
+	/* "agave" is the browser's own page scheme (agave://downloads and future
+	 * internal pages). It has no network backend: WebView::loadUrl turns it
+	 * into a synthetic document, so accepting it here only means "the
+	 * navigation policy does not reject it as an unknown scheme". */
+	static const char *builtinSchemes[] = {"http", "ftp", "https", "ftps", "file", "data", "agave"};
     for (size_t i=0; i<TABLE_SIZE(builtinSchemes); i++) {
         if (!strcasecmp(builtinSchemes[i], scheme))
             return true;

@@ -60,6 +60,9 @@ sheet 级常量代入；表单 feedback 的 `min-height` 由 4px 恢复 22px；�
 `ResourceLoader::detachHandle()` 把活着的连接交给进程级 `DownloadManager`，`.part` 写完再 rename，
 文件名支持 `filename*`/中文/去重；`cb_download` + `on_download` 三层状态，探针下载 → exit 0。
 设计见 [docs/download-manager.md](docs/download-manager.md)，回归服务器 `tools/download_server.py`）。
+**内部页 runtime**（R48：下载面板是 `agave://downloads` 的 HTML 页 + 标签页（`Ctrl+J`）；
+`agave.*` 只在内部 realm 注册，普通页 `typeof agave === 'undefined'` —— 能力按 realm 隔离；
+`agave://` 由引擎用 `SubstituteData` 供给，`document.URL` 就是 agave 地址）。
 
 **已经被检查过的"看起来不能用"**（别再当缺陷重开）：ant 的 Worker 是真的（R22）、ant 的 wasm 引擎是真的
 （R19）、渐变/`var()`/flex 大多可用（R11/R39）、滚动与 hover 重绘正确（R13/R14/R40）、刷新后 realm/监听器会清理（R9/R10）。
@@ -134,7 +137,7 @@ ant 原生构造器；http(s) 走异步桥取源码 + preamble 后包成 `data:`
    （`[evt]`：commit/realm/bindDocument/DCL/load/teardown）、导航动作日志
    （`[nav]`：open/request/submit/client-redirect/redirect/popup）与 GUI 输入日志（`[ui]`），
    关掉用 `AGB_EVT_LOG=0` / `AGB_NAV_LOG=0` / `AGB_UI_LOG=0`（详见 [docs/debugging.md](docs/debugging.md)）。
-   这些日志（以及 `[shell]`/`[probe]`/`[flag]`/页面 console 的 `[con-call]`）统一经 `src/webview/AgbLog.h`
+   这些日志（以及 `[shell]`/`[probe]`/`[flag]`/页面 console 的 `[con-*]`）统一经 `src/webview/AgbLog.h`
    输出，行首是 `[<进程内相对ms>]` 时间戳，跨 DLL 共享同一个原点，所以 stderr 直接就是一条时间线。
 2. **多轮/生命周期**：加 `--reload n`（每轮 eval 一次）；`AGB_EVT_DEBUG=1` + `AGB_NET_LOG=1` 拼时间线。
 3. **回归清单**（`debug/` 下的页面，全部可 `--probe` 直接跑）：

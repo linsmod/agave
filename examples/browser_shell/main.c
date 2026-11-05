@@ -1984,15 +1984,22 @@ static void probeOnDownload(AgaveWebView* view, const MC_DOWNLOAD_INFO* info, vo
         return;
 
     if (info->state == MC_DL_FINISHED) {
-        g_probeSawDownload = 1;
+        /* Only a download that *is* the navigation counts as the outcome: if a
+         * document already committed, this was a side effect of the page (an
+         * iframe, a link) and the run must end the way it normally does. */
+        if (!g_probeFinished) {
+            g_probeSawDownload = 1;
 
-        printf("[%9.1fms] [probe] download path=%s bytes=%llu total=%llu\n",
-               agbLogElapsedMs(), info->utf8_path ? info->utf8_path : "",
-               info->received, info->total);
-        fflush(stdout);
+            printf("[%9.1fms] [probe] download path=%s bytes=%llu total=%llu\n",
+                   agbLogElapsedMs(), info->utf8_path ? info->utf8_path : "",
+                   info->received, info->total);
+            fflush(stdout);
 
-        if (!g_probeFinished)
             PostMessageA(g_probeWnd, WM_CLOSE, 0, 0);
+        } else {
+            agbLog(AGB_LOG_PROBE, "download finished path=%s bytes=%llu",
+                   info->utf8_path ? info->utf8_path : "", info->received);
+        }
     } else if (info->state == MC_DL_FAILED) {
         g_probeSawError = 1;
 
@@ -2896,6 +2903,7 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
                 int shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
 
                 if (msg.wParam == 'D' && !shift) { addBookmarkCurrent(); continue; }
+                if (msg.wParam == 'J' && !shift) { navigateActive("agave://downloads", 1); continue; }
                 if (msg.wParam == 'F' && !shift) { toggleFind(); continue; }
                 if (msg.wParam == 'T') {
                     /* ctrl+shift+T reopens the last closed tab, ctrl+T a new one. */

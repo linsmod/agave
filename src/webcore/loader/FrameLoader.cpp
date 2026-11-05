@@ -512,9 +512,16 @@ Frame* FrameLoader::loadSubframe(HTMLFrameOwnerElement* ownerElement, const KURL
     if (url.isEmpty() || url == "about:blank") {
 #if 1
         // FIXME: fire iframe.onload when src is empty. 
-        if (!frame->document()->tokenizer()) {
-            frame->document()->open();
-            frame->document()->close();
+        /* A subframe has no document until its first load commits (R44): for an
+         * empty/about:blank src that load is the one starting right now, so the
+         * document may legitimately be absent here. Touching it unconditionally
+         * crashed (Document::tokenizer on a null document) as soon as a page
+         * appended an <iframe> without a src. */
+        if (Document* document = frame->document()) {
+            if (!document->tokenizer()) {
+                document->open();
+                document->close();
+            }
         }
 #endif
         frame->loader()->completed();

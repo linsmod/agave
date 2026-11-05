@@ -18,6 +18,8 @@
 #include <map>
 
 #include "AgbLog.h"
+#include "DownloadEvents.h"
+#include "DownloadManager.h"
 #include "AgbGapJsdom.h"
 
 namespace WebCore { bool prefersDarkColorScheme(); }
@@ -95,6 +97,14 @@ int windowSetter(AntbEngine*, AntbValue*, const char*, const AntbValue*, void*);
 namespace {
 static std::string cookieHeaderForCurrentDocument();
 static void setCookieForCurrentDocument(const std::string& text);
+
+/* Defined with the other internal-page bindings; bindDocument installs it as
+ * the download manager's change hook. */
+static void downloadEventSink(int id, int state);
+static bool isInternalDocument();
+int globalDownloadList(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int globalDownloadCancel(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int globalDownloadOpen(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 
 
 #define AGB_TAG_NODE 0x4E4F4431u   /* 'NOD1' */
@@ -421,6 +431,7 @@ int globalOpenWindow(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void
 int globalPostMessage(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalFramePostMessage(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalConsoleLine(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int globalConsoleLineEx(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalLayoutInfo(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalDialog(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalCloseWindow(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
@@ -4834,6 +4845,7 @@ void bindDocument(void* document)
         antb_define_method(g_engine, global, "__agbPostMessage", globalPostMessage, NULL);
         antb_define_method(g_engine, global, "__agbFramePostMessage", globalFramePostMessage, NULL);
         antb_define_method(g_engine, global, "__agbConsoleLine", globalConsoleLine, NULL);
+        antb_define_method(g_engine, global, "__agbConsoleLineEx", globalConsoleLineEx, NULL);
         antb_define_method(g_engine, global, "__agbLayoutInfo", globalLayoutInfo, NULL);
         antb_define_method(g_engine, global, "__agbDialog", globalDialog, NULL);
         antb_define_method(g_engine, global, "__agbCloseWindow", globalCloseWindow, NULL);
@@ -4923,6 +4935,28 @@ void bindDocument(void* document)
     /* Polyfills live in polyfills.js next to the binary (or at AGB_POLYFILLS)
      * so they can be edited without rebuilding the engine. */
     loadPolyfills();
+
+    /* Internal pages (agave://...) are the browser's own UI: they get the
+     * download API and internal.js, and nothing else does. A web page must not
+     * be able to enumerate the user's files or cancel their downloads, so the
+     * names below are simply not defined outside this branch. */
+    if (isInternalDocument()) {
+        AntbValue* global = 0;
+
+        g_agbDownloadEventSink = downloadEventSink;
+
+        global = antb_global(g_engine);
+
+        if (global) {
+            antb_define_method(g_engine, global, "__agbDownloadList", globalDownloadList, NULL);
+            antb_define_method(g_engine, global, "__agbDownloadCancel", globalDownloadCancel, NULL);
+            antb_define_method(g_engine, global, "__agbDownloadOpen", globalDownloadOpen, NULL);
+            antb_value_release(global);
+        }
+
+        if (!evalScriptFile("AGB_INTERNAL", "internal.js"))
+            fprintf(stderr, "[agave] internal page without internal.js\n");
+    }
 
     g_documentBound = true;
 
@@ -7900,6 +7934,119 @@ int globalDialog(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
     return makeNumberResult(engine, out, accepted ? 1.0 : 0.0) ? 1 : 0;
 }
 
+/* ---- internal pages (agave://) ------------------------------------------
+ *
+ * An internal page runs in its own realm like any document, but its realm gets
+ * the browser's own API: listing, cancelling and opening downloads. A web page
+ * must never see these names - they expose the user's file paths - so they are
+ * registered only when the document being bound is an agave:// page
+ * (bindDocument) and internal.js is the only script that uses them. */
+static bool isInternalDocument()
+{
+    if (!g_document)
+        return false;
+
+    return equalIgnoringCase(WebCore::KURL(g_document->URL()).protocol(), "agave");
+}
+
+static void setNumberProp(AntbEngine* engine, AntbValue* object, const char* name, double value)
+{
+    AntbValue* v = antb_make_number(engine, value);
+
+    if (!v)
+        return;
+
+    antb_set_prop(engine, object, name, v);
+    antb_value_release(v);
+}
+
+static void setStringProp(AntbEngine* engine, AntbValue* object, const char* name, const WebCore::String& value)
+{
+    WebCore::CString bytes = value.utf8();
+    AntbValue* v = antb_make_string(engine, bytes.data());
+
+    if (!v)
+        return;
+
+    antb_set_prop(engine, object, name, v);
+    antb_value_release(v);
+}
+
+int globalDownloadList(AntbEngine* engine, AntbValue*, AntbValue**, int, AntbValue* out, void*)
+{
+    WebCore::DownloadManager& manager = WebCore::DownloadManager::shared();
+    AntbValue* array;
+    int i;
+
+    if (!engine || !out)
+        return 1;
+
+    array = antb_make_array(engine);
+
+    if (!array)
+        return 1;
+
+    for (i = 0; i < manager.jobCount(); ++i) {
+        WebCore::DownloadJob* job = manager.jobAt(i);
+        AntbValue* item;
+
+        if (!job)
+            continue;
+
+        item = antb_make_object(engine);
+
+        if (!item)
+            continue;
+
+        setNumberProp(engine, item, "id", job->id());
+        setNumberProp(engine, item, "state", job->mcState());
+        setNumberProp(engine, item, "received", (double)job->received());
+        setNumberProp(engine, item, "total", (double)job->total());
+        setStringProp(engine, item, "url", job->url());
+        setStringProp(engine, item, "path", job->path());
+        setStringProp(engine, item, "mime", job->mime());
+
+        antb_array_push(engine, array, item);
+        antb_value_release(item);
+    }
+
+    antb_value_assign(out, array);
+    antb_value_release(array);
+    return 1;
+}
+
+int globalDownloadCancel(AntbEngine* engine, AntbValue*, AntbValue** args, int argc, AntbValue* out, void*)
+{
+    int id = (argc > 0) ? (int)antb_to_number(args[0]) : 0;
+    bool ok = WebCore::DownloadManager::shared().cancel(id);
+
+    if (engine && out)
+        makeNumberResult(engine, out, ok ? 1.0 : 0.0);
+
+    return 1;
+}
+
+int globalDownloadOpen(AntbEngine* engine, AntbValue*, AntbValue** args, int argc, AntbValue* out, void*)
+{
+    int id = (argc > 0) ? (int)antb_to_number(args[0]) : 0;
+    bool ok = WebCore::DownloadManager::shared().openFile(id);
+
+    if (engine && out)
+        makeNumberResult(engine, out, ok ? 1.0 : 0.0);
+
+    return 1;
+}
+
+/* DownloadManager::emit -> here. Only an internal realm gets the DOM event:
+ * a web page must not even learn that a download changed. */
+static void downloadEventSink(int, int)
+{
+    if (!isInternalDocument())
+        return;
+
+    AntRuntime::dispatchWindowEventState("agavedownloadchange", NULL);
+}
+
 int globalPostMessage(AntbEngine*, AntbValue*, AntbValue** args, int argc,
                       AntbValue* out, void*)
 {
@@ -7994,16 +8141,41 @@ int globalFramePostMessage(AntbEngine* engine, AntbValue*, AntbValue** args, int
 
 /* window.console.*: the polyfills guard formats the arguments and passes one
  * line here, so page console output shares the engine timeline
- * ("[ 123.4ms] [con-call] ...") instead of going straight to ant's console. */
+ * ("[ 123.4ms] [con-error] ...") instead of going straight to ant's console.
+ *
+ * Two entry points on purpose: __agbConsoleLineEx(level, text) carries the
+ * level and becomes the tag ([con-log]/[con-info]/[con-warn]/[con-error]/
+ * [con-debug]); the one-argument __agbConsoleLine is the older sink and stays
+ * for engine/JS skew (a new polyfills.js next to an old engine must still
+ * print the text, and an old polyfills.js next to this engine must not lose
+ * it either). */
 int globalConsoleLine(AntbEngine*, AntbValue*, AntbValue** args, int argc,
                       AntbValue* out, void*)
 {
     char* text = (argc > 0) ? antb_to_utf8(args[0]) : NULL;
 
     if (text) {
-        agbLog(AGB_LOG_CONSOLE, "%s", text);
+        agbLogConsole(NULL, "%s", text);
         antb_free(text);
     }
+
+    (void)out;
+    return 1;
+}
+
+int globalConsoleLineEx(AntbEngine*, AntbValue*, AntbValue** args, int argc,
+                        AntbValue* out, void*)
+{
+    char* level = (argc > 1) ? antb_to_utf8(args[0]) : NULL;
+    char* text = (argc > 1) ? antb_to_utf8(args[1])
+                            : (argc > 0 ? antb_to_utf8(args[0]) : NULL);
+
+    if (text) {
+        agbLogConsole(level, "%s", text);
+        antb_free(text);
+    }
+    if (level)
+        antb_free(level);
 
     (void)out;
     return 1;

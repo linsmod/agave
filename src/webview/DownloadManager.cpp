@@ -6,6 +6,7 @@
 #include "DownloadManager.h"
 
 #include "AgbLog.h"          /* before windows.h: it sets NOMINMAX */
+#include "DownloadEvents.h"
 #include "HTTPParsers.h"
 #include "KURL.h"
 #include "PlatformString.h"
@@ -16,8 +17,11 @@
 #include "WebCallback.h"
 #include "macross.h"
 
+#include <shellapi.h>
 #include <string.h>
 #include <windows.h>
+
+AgbDownloadEventSink g_agbDownloadEventSink = 0;
 
 namespace WebCore {
 
@@ -463,6 +467,18 @@ bool DownloadJob::start(PassRefPtr<ResourceHandle> handle, const ResourceRequest
     return true;
 }
 
+int DownloadJob::mcState() const
+{
+    switch (m_state) {
+    case StateFinished:  return MC_DL_FINISHED;
+    case StateFailed:    return MC_DL_FAILED;
+    case StateCancelled: return MC_DL_CANCELLED;
+    default:             break;
+    }
+
+    return m_received ? MC_DL_PROGRESS : MC_DL_STARTED;
+}
+
 void DownloadJob::closeFile(bool keep)
 {
     if (m_file) {
@@ -513,25 +529,33 @@ void DownloadJob::cancel()
 
 bool DownloadJob::emit(int state, int error)
 {
-    if (!cb_download)
-        return true;
+    bool keepGoing = true;
 
-    CString url = m_url.utf8();
-    CString path = m_path.utf8();
-    CString mime = m_mime.utf8();
+    if (cb_download) {
+        CString url = m_url.utf8();
+        CString path = m_path.utf8();
+        CString mime = m_mime.utf8();
 
-    MC_DOWNLOAD_INFO info;
-    memset(&info, 0, sizeof(info));
-    info.id = m_id;
-    info.state = state;
-    info.error = error;
-    info.utf8_url = url.data();
-    info.utf8_path = path.data();
-    info.utf8_mime = mime.data();
-    info.received = (unsigned long long)(m_received > 0 ? m_received : 0);
-    info.total = (unsigned long long)(m_total > 0 ? m_total : 0);
+        MC_DOWNLOAD_INFO info;
+        memset(&info, 0, sizeof(info));
+        info.id = m_id;
+        info.state = state;
+        info.error = error;
+        info.utf8_url = url.data();
+        info.utf8_path = path.data();
+        info.utf8_mime = mime.data();
+        info.received = (unsigned long long)(m_received > 0 ? m_received : 0);
+        info.total = (unsigned long long)(m_total > 0 ? m_total : 0);
 
-    return cb_download(m_id, &info) != 0;
+        keepGoing = cb_download(m_id, &info) != 0;
+    }
+
+    /* The internal page redraws from this; it is independent of the host
+     * callback (a probe sets no cb_download but still wants the event). */
+    if (g_agbDownloadEventSink)
+        g_agbDownloadEventSink(m_id, state);
+
+    return keepGoing;
 }
 
 void DownloadJob::didReceiveResponse(ResourceHandle*, const ResourceResponse& response)
@@ -709,6 +733,41 @@ int DownloadManager::activeCount() const
             ++active;
 
     return active;
+}
+
+String DownloadManager::pathFor(int id) const
+{
+    for (unsigned i = 0; i < m_jobs.size(); ++i)
+        if (m_jobs[i]->id() == id)
+            return m_jobs[i]->path();
+
+    return String();
+}
+
+DownloadJob* DownloadManager::jobAt(int index) const
+{
+    if (index < 0 || (unsigned)index >= m_jobs.size())
+        return 0;
+
+    return m_jobs[index].get();
+}
+
+bool DownloadManager::openFile(int id)
+{
+    String path = pathFor(id);
+    wchar_t wide[1024];
+
+    if (path.isEmpty() || !toWide(path, wide, 1024))
+        return false;
+
+    /* Runs on the engine thread on purpose: ShellExecuteW is an out-of-process
+     * shell call and does not need the UI thread's message pump. */
+    HINSTANCE result = ShellExecuteW(0, L"open", wide, 0, 0, SW_SHOWNORMAL);
+
+    agbLog(AGB_LOG_DL, "open id=%d path=%s ok=%d", id, path.utf8().data(),
+           (INT_PTR)result > 32);
+
+    return (INT_PTR)result > 32;
 }
 
 void DownloadManager::purgeFinished()

@@ -100,7 +100,7 @@ antbridge.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**�
 [    901.5ms] [ui] key down vk=0x41
 [    901.5ms] [ui] char 'a'
 [    901.6ms] [ui] blur
-[   2986.8ms] [con-call] Error:
+[   2986.8ms] [con-error] Error:
 ```
 
 | 通道 | 内容 | 关掉 | 更详细 |
@@ -131,12 +131,15 @@ antbridge.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**�
   `[nav] redirect from=... to=...`，再按新 URL 打一条 `[nav] request`；地址栏和 `[probe] main url`
   随之变成最终 URL。同一 URL 的自重定向（循环）不会打 redirect 行（`DocumentLoader` 只在 URL
   变化时通知），20 跳后以 `[nav] fail provisional code=-3`（too many redirects）结束。
-- 页面自己的 `console.*` 输出由 polyfills 的控制台守卫收口到 **`[con-call]`** 通道
-  （`__agbConsoleLine` → `agbLog`），和 `[evt]`/`[nav]` 一样带 `[ 123.4ms]` 时间前缀、走 stderr；
-  `%c` 之类的样式参数按原样文本输出；单行超过 ~2KB 会被行缓冲截断。控制台守卫安装之前
-  （页面脚本开跑的头几毫秒）的调用仍走 ant 原生 console，没有前缀/时间。
-- `[nav] download` 只在会走 `cb_write_file_data` 的后端出现：native 后端目前没有下载链路
-  （`FrameLoaderClientMC::startDownload` 仍是 `notImplemented()`），所以看不到这行。
+- 页面自己的 `console.*` 输出由 polyfills 的控制台守卫收口到 **`[con-<level>]`** 通道
+  （`__agbConsoleLineEx(level, text)` → `agbLogConsole`），级别就是 tag：
+  `[con-log]`/`[con-info]`/`[con-warn]`/`[con-error]`/`[con-debug]`，未知级别回落 `con-log`；
+  和 `[evt]`/`[nav]` 一样带 `[ 123.4ms]` 时间前缀、走 stderr；所有级别共用一个开关
+  `AGB_CON_LOG=0`。`%c` 之类的样式参数按原样文本输出；单行超过 ~2KB 会被行缓冲截断。
+  控制台守卫安装之前（页面脚本开跑的头几毫秒）的调用仍走 ant 原生 console，没有前缀/时间。
+  只想看页面报错时 `grep '\[con-error\]'` 即可。
+- `[nav] download mime=... url=...` 在顶层导航被判定为下载时打一行（`Content-Disposition: attachment`，
+  或 MIME 不能显示）；任务本身的 start/progress/finish/fail/cancel 走 `[dl]`（见 [download-manager.md](download-manager.md)）。
 - 这些日志是**正常输出**，不是错误（见 §6 噪音对照）。
 - 可选调试通道（`[netlog]`、`[modfetch]`、`[snippet]`、`[call]`、`[ctx]`、`[loop]` …）**没有**走这个
   收口：它们各自有开关，`[netlog]` 还有自己的文件 sink 和时间原点。要拼总时间线时以 `[evt]`/`[nav]`
@@ -148,6 +151,7 @@ antbridge.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**�
 |---|---|---|
 | 日志 | `AGB_GAP_LOG=0` | 关掉 `[gap-jsdom]`（默认开启：每个已知缺口只在**第一次被访问**时打一行） |
 | 日志 | `AGB_DL_LOG=0` | 关掉 `[dl]`（下载任务的 start/progress/finish/fail/cancel） |
+| 日志 | `AGB_CON_LOG=0` | 关掉页面 `console.*` 的收口（`[con-*]`，默认开启；级别在 tag 里） |
 | 探针 | `AGB_PROBE_SHOW=1` | 显示探针窗口（调试可见性相关的差异；截图不需要它） |
 | 探针 | `AGB_PROBE_ALLOW_UNLOAD=1` | beforeunload 守卫直接放行（默认拒绝） |
 | 日志 | `AGB_EVT_LOG=0` | **关掉默认开启的页面生命周期日志**（`[evt]`） |
@@ -283,8 +287,9 @@ antbridge.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**�
 | `Uncaught (in worker) ...` | worker 内未捕获异常（若页面没接 `onerror` 就是真的） |
 | `[probe] headless window hidden ...` | 正常，探针状态行 |
 | `[nav] ...` | 默认开启的导航动作日志，正常（`AGB_NAV_LOG=0` 可关） |
-| `[con-call] ...` | 页面自己的 `console.*` 输出（polyfills 守卫收口，带时间前缀），不是引擎错误 |
-| `[con-call] Error: `（消息为空） | 页面 `console.error(new Error())` 一类调用，正常噪音 |
+| `[con-log]` / `[con-info]` / `[con-warn]` / `[con-debug] ...` | 页面自己的 `console.*` 输出（polyfills 守卫收口，带时间前缀），不是引擎错误 |
+| `[con-error] ...` | 同上但级别是 error：页面自己报的错（`console.error`、未捕获的 Promise），先看页面；`AGB_CON_LOG=0` 可静音 |
+| `[con-error] Error: `（消息为空） | 页面 `console.error(new Error())` 一类调用，正常噪音 |
 | `[evt] ...` / `[ui] ...` | 默认开启的生命周期/输入日志，正常（`AGB_EVT_LOG=0` / `AGB_UI_LOG=0` 可关） |
 
 ## 7. 验证闭环：回归清单 + A/B

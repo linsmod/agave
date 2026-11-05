@@ -26,7 +26,10 @@
  *   [shell] host lifecycle   window ready, message loop, exit bases
  *   [probe] headless probe   userdata, load error, dialog, exit code
  *   [flag]  engine flags     bridge switches (AntBridge.c)
- *   [con-call] page console  console.log/info/warn/error, via the polyfills guard
+ *   [con-log] / [con-info] / [con-warn] / [con-error] / [con-debug]
+ *             page console  console.*, via the polyfills guard. The level is
+ *                            part of the tag; all levels share one channel and
+ *                            one switch (AGB_CON_LOG=0)
  *   [style] render tree      opt-in (AGB_STYLE_LOG=1, AGB_STYLE_FILTER=<substr>):
  *                            attach/detach/style-recalc of the matching elements
  *   [cache] resource cache   memory-cache and HTTP-cache hit/miss per resource
@@ -49,6 +52,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #if defined(_WIN32)
 /* Keep windows.h from defining min/max macros: WebCore headers are included
@@ -85,7 +89,7 @@ static const char* agbLogChannelName(int channel)
     case AGB_LOG_SHELL: return "shell";
     case AGB_LOG_PROBE: return "probe";
     case AGB_LOG_FLAG:  return "flag";
-    case AGB_LOG_CONSOLE: return "con-call";
+    case AGB_LOG_CONSOLE: return "con-log";
     case AGB_LOG_STYLE: return "style";
     case AGB_LOG_CACHE: return "cache";
     case AGB_LOG_GAP:   return "gap-jsdom";
@@ -202,6 +206,7 @@ static inline int agbLogEnabled(int channel)
     case AGB_LOG_CACHE: value = getenv("AGB_CACHE_LOG"); break;
     case AGB_LOG_GAP: value = getenv("AGB_GAP_LOG"); break;
     case AGB_LOG_DL:  value = getenv("AGB_DL_LOG");  break;
+    case AGB_LOG_CONSOLE: value = getenv("AGB_CON_LOG"); break;
     /* Render-tree tracing is per element, so it is opt-in twice: the switch
      * must be "1" (default off) and AGB_STYLE_FILTER narrows it to the ids,
      * classes or tags that contain that substring. */
@@ -231,6 +236,35 @@ static inline void agbLog(int channel, const char* format, ...)
 
     fprintf(stderr, "[%9.1fms] [%s] %s\n", agbLogElapsedMs(),
             agbLogChannelName(channel), line);
+}
+
+/* Page console.*: the level is part of the tag so an error can be grepped
+ * without reading the message (`[con-error]`). Unknown or missing levels fall
+ * back to `con-log`. One channel on purpose: AGB_CON_LOG=0 silences every
+ * level at once, and call sites never pick a channel number. */
+static inline void agbLogConsole(const char* level, const char* format, ...)
+{
+    char line[AGB_LOG_LINE_MAX];
+    char tag[16];
+    va_list args;
+    const char* name = "log";
+
+    if (!agbLogEnabled(AGB_LOG_CONSOLE))
+        return;
+
+    if (level) {
+        if (!strcmp(level, "info") || !strcmp(level, "warn") ||
+            !strcmp(level, "error") || !strcmp(level, "debug"))
+            name = level;
+    }
+
+    snprintf(tag, sizeof(tag), "con-%s", name);
+
+    va_start(args, format);
+    vsnprintf(line, sizeof(line), format, args);
+    va_end(args);
+
+    fprintf(stderr, "[%9.1fms] [%s] %s\n", agbLogElapsedMs(), tag, line);
 }
 
 #endif /* AgbLog_h */
