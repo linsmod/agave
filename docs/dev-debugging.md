@@ -175,6 +175,8 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
 | 事件派发链 | `AGB_EVT_TRACE=1` | 每次派发沿冒泡链打印 `[evt-trace] <type> node=<ptr> listeners=<n>`：看某个监听器到底在不在链上、有没有被调用（R45 就是靠它确认 React 的委托监听器确实执行了） |
 | 崩溃 | `AGB_TRACE_CRASH=1` | 记录最近 256 条内部 trace（崩溃后能回看走到哪） |
 | 性能 | `AGB_PROFILE=1` / `AGB_PERF_LOG=1` | RIP 采样直方图（退出时 dump `[profjs]`）/ 帧耗时（paint+js > 100ms 才打） |
+| 页面脚本 | `AGB_PAGE_EVAL=eval` | 页面脚本回到 direct-eval 语义（**默认 classic script**，顶层 `var`/`function` 进 `window`，R66）；A/B 与 `run_script_mode_tests.ps1` 用 |
+| GC | `AGB_GC_OFF=1` | 关掉引擎 GC；"关掉就好"是"对象被提前回收"的决定性判据（R60/R63/R67） |
 | 绘制诊断 | `AGB_PAINT_FULL=1` | 每帧整屏重绘（忽略脏矩形）；用来区分"失效/裁剪错"和"布局错"（见 §4） |
 | 页面 | `AGB_TITLE_DEBUG=1` / `AGB_SCRIPT_DEBUG=1` | `document.title` 轮询 / tokenizer 脚本加载 |
 | CSS/布局 | `AGB_CSS_DEBUG=1` / `AGB_LAYOUT_DEBUG=1` / `AGB_BG_DEBUG=1` | 未实现 CSS 属性日志 / 布局 / 背景层 |
@@ -241,8 +243,11 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
   栈就是写入者（会被 `tools/cdb_stack.ps1` 符号化）；②`tools/cdb_heap_probe.ps1 -Url <url>` ——
   cdb **启动**（堆校验才生效），从管道里读 HEAP 消息的地址，现场 `db/dq/dps/ln` dump 被写坏的块
   和它的 vtable，用来判断"这块是什么"。
-- **一条命令跑布局回归**：`pwsh -File tools/run_layout_tests.ps1`
-  —— 对 `tools/pages/layout/*.html` 逐个跑 `layout_diff.py`（几何对拍 Chrome），再对
+- **一条命令跑脚本语义/性能回归**：`pwsh -File tools/run_script_mode_tests.ps1`
+  —— `ant_pin_repro.exe`（C 侧 `antb_retain` 住一个函数后强制 GC 再调用，R67）、
+  `cap_script_semantics.html`（`window.pageVar=number`）、`AGB_PAGE_EVAL=eval` 回退、
+  `bench_hot` 的 ns 上限。翻 `AGB_PAGE_EVAL` 默认或动 GC 根集合后必须过。
+- **一条命令跑布局回归**：`pwsh -File tools/run_layout_tests.ps1`  —— 对 `tools/pages/layout/*.html` 逐个跑 `layout_diff.py`（几何对拍 Chrome），再对
   `transform_repaint.html` 做像素断言、对 `scrollbar_hidden.html` 断言 `::-webkit-scrollbar`
   隐藏后的视口宽度，输出 `LAYOUT=PASS`。加几何页不用改脚本（滚动条页没有 `data-case`，
   由专用断言覆盖）。

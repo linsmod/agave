@@ -135,15 +135,15 @@
   计算在 ant 里要分钟级 → GUI 表现为假死（R60）。
 - **已完成**：`obj[key]` 动态字符串键的属性 IC（R65，script 模式下 66→28ns / 63→25ns / 75→52ns）；
   长循环/销毁竞态（R61）不再干扰基准。
-- **已实现（R66，默认关闭）**：script 模式的顶层 `var`/`function` 现在发布到 global
-  （编译器登记 + `sv_global_declare`），`AGB_PAGE_EVAL=script` 打开后探针基准 20–60×
+- **已完成（R66 + R67，默认开启）**：script 模式的顶层 `var`/`function` 发布到 global
+  （编译器登记 + `sv_global_declare`），探针基准 20–60×
   （`empty 210→3ns`、`static-key 618→5.5`、`dyn-key 515→27`），v.qq `nav=57`（eval 模式 22）。
-  **阻塞翻默认**：该模式下 chat.deepseek.com 3/4 AV（eval 模式 4/4 正常），是又一处跨 JS 调用
-  未扎根的 UAF（同类已修：`jit_put_elem` 的 key）。下一步用 `AGB_GUARD_MALLOC` + cdb 抓写入者，
-  清零后把 `AGB_PAGE_EVAL` 默认改为 `script`。
-- 验收：探针跑 `debug/bench_hot.js` 时 `static-key`/`vm-dispatch` 进个位数 ns，且
-  `tools/pages/cap_script_semantics.html` 的 `window.pageVar=number`；`run_jit_loop_tests.ps1`、
-  nav/typing/worker/layout 全绿；v.qq.com 在 `AGB_HANG_WATCH=1` 下不再报 5 s `[hang]`。
+  翻默认前暴露的 chat.deepseek.com AV 已定位并修掉：`antb_retain()` 对函数值调用的
+  `gc_pin_permanent()` 只接受对象类型，函数被静默丢弃 pin → 监听器被回收 → 下次派发读到已释放的
+  closure（R67）。现在 `AGB_PAGE_EVAL` 默认 `script`，`=eval` 保留旧语义做 A/B。
+- 验收：`tools/run_script_mode_tests.ps1`（函数 pin 存活、`window.pageVar=number`、eval 回退、
+  `bench_hot` ns 上限）；`run_jit_loop_tests.ps1`、nav/typing/worker/layout 全绿；
+  v.qq.com 在 `AGB_HANG_WATCH=1` 下不再报 5 s `[hang]`。
 
 ## P2：增强
 

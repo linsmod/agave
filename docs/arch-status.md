@@ -10,7 +10,7 @@
 | 领域 | 现在具备 | 证据 / 细节 |
 |---|---|---|
 | 页面与导航 | HTTP(S)/`file:` 加载、HTML/CSS 解析、`defer`/`async`/ESM、301/302、`about:blank`、iframe、`agave://` 内部页、前进后退 | R44–R49；[hist-lessons.md](hist-lessons.md) |
-| JS / DOM | ant VM、DOM 桥、事件（鼠标/键盘/IME/输入）、computed style、选择器、`history` state、真实 DOM 集合、每 frame 一个 Window 代理 | R27/R31/R34–R37/R45 |
+| JS / DOM | ant VM、DOM 桥、事件（鼠标/键盘/IME/输入）、computed style、选择器、`history` state、真实 DOM 集合、每 frame 一个 Window 代理；页面脚本按 **classic script** 语义执行（顶层 `var`/`function` 落到 `window`，R66） | R27/R31/R34–R37/R45/R66/R67 |
 | 模块加载 | 入口 module 单槽等待（等待期间到达的数据不提前解析，R50）、解析调用栈内求值、延迟模块 flush；三条泳道时序 | [arch-module-loading.md](arch-module-loading.md) |
 | CSS | 自定义属性/`var()`、`display:flex`/blockify、`gap`、`aspect-ratio`、`:is()`/`:where()`、媒体查询与深色模式、`box-shadow`、常量 `calc()`、圆角裁剪 | R39–R43；能力矩阵见 [arch-capability-gaps.md](arch-capability-gaps.md) §2 |
 | 网络 | WinHTTP 后端、HTTP 缓存、代理解析、重定向、MIME/下载决策、`[netlog]` | [dev-debugging.md](dev-debugging.md) |
@@ -43,6 +43,7 @@ ant 的反直觉行为（字面量属性名、`typeof`、`delete` 等）见 [ref
 - **worker 无网络 / 无 `SharedWorker`/`ServiceWorker`**：worker 里 `fetch`/`XHR` 不可用，
   动态 `importScripts` 只能父侧预取 + 查表（R22）。
 - **GC root 只能到 engine 边界**（ant 没有 unpin）：per-document engine 让这一点等价于"每文档释放"（R4）。
+  代价是 `antb_retain()` 住的事件监听器/回调即使 `removeEventListener` 也要留到 realm 销毁（R67）。
 - **localStorage 不跨文档**：同一进程内 A 文档写入后导航到 B，B 读到 `null`（cookie 正常；跨进程能读到旧值）。
   写盘发生在文档 teardown，可读要等下一次 engine 重建；导航类测试页需要跨文档状态时用 cookie。
 - **多控件共用一条引擎线程**：每个控件有独立 JS 上下文，但同一进程的控件不会真正并行；

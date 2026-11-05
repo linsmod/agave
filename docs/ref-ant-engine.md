@@ -66,6 +66,10 @@ git -C H:\ant-v16 rev-parse HEAD
 - ant 的 ESM `esm_is_url` 只认 http(s)：`file:` 模块靠 agave 侧伪装成 `http://file.ant/...`，
   fetcher 再还原（见 [arch-module-loading.md](arch-module-loading.md)）。
 - 一个 error 没有栈时（页面关掉 `Error.stackTraceLimit`）用 `AGB_ERR_SNIPPET=1` 定位。
+- **C 侧持有 JS 值一律走 `antb_retain()`**（监听器、定时器、XHR 回调……）；它内部是
+  `gc_pin_permanent()`。对象走 `permanent_roots`（`gc_permanent` 免扫），**函数/闭包走
+  `permanent_values`**（每次 GC 重新 mark）——两者都不要绕过桥自己 pin，且必须检查返回值：
+  pin 失败是静默的（R67：函数曾整类 pin 失败，监听器被回收后 deepseek 载入 AV）。
 
 ## 6. 桥接的边界
 

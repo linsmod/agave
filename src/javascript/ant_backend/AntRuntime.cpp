@@ -3677,15 +3677,15 @@ static bool g_documentParsed = false;
 static int g_evalDepth = 0;
 
 /* Page scripts are classic <script>: top-level var/function belong to the
- * global object. antb_eval_script() implements that (R66). Opt-in until the
- * remaining lifetime bugs exposed by the faster path are fixed; AGB_PAGE_EVAL
- * =script turns it on for measuring. */
+ * global object. antb_eval_script() implements that (R66); it is the default
+ * since R67, when the listener-rooting UAF it exposed was fixed.
+ * AGB_PAGE_EVAL=eval keeps the old direct-eval semantics for A/B work. */
 static bool pageEvalScriptMode()
 {
     static int cached = -1;
     if (cached < 0) {
         const char* v = getenv("AGB_PAGE_EVAL");
-        cached = (v && !strcmp(v, "script")) ? 1 : 0;
+        cached = (v && !strcmp(v, "eval")) ? 0 : 1;
     }
     return cached == 1;
 }
