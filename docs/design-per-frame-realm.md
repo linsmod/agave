@@ -74,7 +74,12 @@ view（一个 AgaveWebView）
 - **S1 每 document 一个 realm**：engine 保留，主 frame 与 iframe 各一个 realm；
   `bindDocument` 进 realm；`window` = realm global。
   验收：`cap_realm_identity.html` —— iframe 里 `var x` 父页读不到、`top.Array !== Array`、
-  `window.top !== window`。
+  `window.top !== window`。**状态：已实现（`AGB_PER_FRAME_REALM=1`）**，
+  验收 `tools/run_realm_tests.ps1`：`childVarLeak=undefined`、`topArraySame=false`、
+  `parentFn=PF-ok`、`childReachable=string`；nav/typing/worker/layout/jit/script-mode
+  在开关打开时全绿；deepseek 2/2、v.qq 跑满。已知偏差（S2/S3 修）：
+  node wrapper 与 class 仍是引擎级（`parent.document.body === document.body` 仍成立）、
+  模块表仍按引擎、子 frame 的 realm 不回收（等 S3 的按 realm 模块/资源）。
 - **S2 wrapper 按 realm**：DOM 包装加 realm 维度；`parent.document.body !== document.body`。
   验收：跨 frame 节点比较/事件目标正确；`cap_dom.html`、`cap_window_identity.html` 全绿。
 - **S3 事件/定时器/模块按 realm**：派发、回调、模块求值都先切到目标 realm。

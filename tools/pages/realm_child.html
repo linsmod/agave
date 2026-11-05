@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>child frame</title></head>
+<body><div id="c">child</div>
+<script>
+  window.childVar = 'from-child';
+
+  var r = [];
+  r.push('selfIsParent=' + (window.parent === window));
+  r.push('topArraySame=' + (window.top.Array === Array));
+  r.push('parentVar=' + (typeof window.parent.parentVar));
+  r.push('parentFn=' + (typeof window.parent.parentFn === 'function'
+      ? window.parent.parentFn() : 'missing'));
+  r.push('ownArray=ok');
+  document.title = r.join(';');
+</script>
+</body></html>

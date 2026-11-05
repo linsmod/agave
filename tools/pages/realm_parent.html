@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>realm parent</title></head>
+<body><div id="p">parent</div>
+<script>
+  window.parentVar = 'from-parent';
+  window.parentFn = function () { return 'PF-ok'; };
+
+  var f = document.createElement('iframe');
+  f.id = 'fr';
+  f.src = 'realm_child.html';
+  document.body.appendChild(f);
+</script>
+</body></html>

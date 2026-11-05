@@ -123,6 +123,7 @@ int globalDownloadOpen(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, vo
 
 struct RuntimeState {
     AntbEngine*        engine;
+    AntbRealm*         mainRealm;       /* realm of the top-level document */
     WebCore::Document* document;
     AntbClass*         nodeClass;
     AntbClass*         canvasCtxClass;  /* CanvasRenderingContext2D (2d context) */
@@ -233,6 +234,7 @@ static RuntimeState* createRuntimeState(AntbEngine* engine)
 
     memset(state, 0, sizeof(RuntimeState));
     state->engine = engine;
+    state->mainRealm = engine ? antb_realm_current(engine) : NULL;
     state->currentSlot = -1;
 
     /* The first realm of this view gets an id too: its resources are
@@ -347,8 +349,107 @@ static void activateSlot(int slot)
     if (g_docObj)
         antb_set_native(g_docObj, g_document, AGB_TAG_NODE);
 }
-int nodeGetAttribute(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
-int nodeAddEventListener(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+
+/* ---- per-frame realms (design-per-frame-realm.md, stage S1) ------------- */
+/* Off until the wrapper/class tables are realm-scoped too (S2): while they are
+ * engine-scoped a node wrapper created in one realm is handed out to another,
+ * which is usable (one VM) but keeps `parent.document.body === document.body`
+ * true where the spec says it is not. */
+static bool perFrameRealmEnabled()
+{
+    static int cached = -1;
+
+    if (cached < 0)
+        cached = getenv("AGB_PER_FRAME_REALM") ? 1 : 0;
+
+    return cached == 1;
+}
+
+struct FrameRealmEntry {
+    WebCore::Document* document;
+    AntbRealm*         realm;
+    bool               installed;
+};
+
+static std::vector<FrameRealmEntry>* g_frameRealms = NULL;
+
+static std::vector<FrameRealmEntry>& frameRealms()
+{
+    if (!g_frameRealms)
+        g_frameRealms = new std::vector<FrameRealmEntry>();
+
+    return *g_frameRealms;
+}
+
+/* Looks the realm of a frame document up, creating it on first use. Returns
+ * NULL when the engine has no realm support (or the allocation failed), which
+ * makes the caller fall back to the shared realm. */
+static AntbRealm* realmForFrameDocument(AntbEngine* engine, WebCore::Document* document)
+{
+    std::vector<FrameRealmEntry>& entries = frameRealms();
+
+    for (size_t i = 0; i < entries.size(); ++i) {
+        if (entries[i].document == document)
+            return entries[i].realm;
+    }
+
+    if (!engine || !document)
+        return NULL;
+
+    AntbRealm* realm = antb_realm_create(engine);
+
+    if (!realm)
+        return NULL;
+
+    FrameRealmEntry entry;
+
+    entry.document = document;
+    entry.realm = realm;
+    entry.installed = false;
+    entries.push_back(entry);
+
+    agbLog(AGB_LOG_EVT, "frame realm %p for document %p", (void*)realm, (void*)document);
+
+    return realm;
+}
+
+/* The realm a document runs in: the engine's main realm for a top-level
+ * document (or for a frame when per-frame realms are off, in which case the
+ * caller only uses it for parent/top lookups), a dedicated realm otherwise. */
+static AntbRealm* realmOfDocument(AntbEngine* engine, WebCore::Document* document)
+{
+    if (!engine || !document)
+        return NULL;
+
+    if (!document->parentDocument())
+        return (g_currentState && g_currentState != &g_emptyState) ? g_currentState->mainRealm
+                                                                  : antb_realm_current(engine);
+
+    return realmForFrameDocument(engine, document);
+}
+
+static void forgetFrameRealms()
+{
+    if (g_frameRealms)
+        g_frameRealms->clear();
+}
+
+/* Which realms already evaluated prelude.js / polyfills.js. Keyed by realm, not
+ * by generation: every frame realm needs its own copies (a realm has its own
+ * global object). Cleared when the engine dies, so a recycled realm address
+ * cannot make the next engine skip its shims. */
+static std::set<AntbRealm*>* g_preludedRealms = NULL;
+static std::set<AntbRealm*>* g_polyfilledRealms = NULL;
+
+static void forgetRealmScripts()
+{
+    if (g_preludedRealms)
+        g_preludedRealms->clear();
+    if (g_polyfilledRealms)
+        g_polyfilledRealms->clear();
+}
+
+int nodeGetAttribute(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);int nodeAddEventListener(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeRemoveEventListener(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 WebCore::Document* documentOf(AntbValue* self);
 int docGetElementById(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
@@ -4186,6 +4287,22 @@ static bool evalScriptFile(const char* envName, const char* fileName)
  * it can be edited with the same turnaround as polyfills.js. */
 static void loadPrelude(void)
 {
+    AntbRealm* realm;
+
+    if (!g_engine)
+        return;
+
+    realm = antb_realm_current(g_engine);
+    if (!realm)
+        return;
+
+    if (!g_preludedRealms)
+        g_preludedRealms = new std::set<AntbRealm*>();
+    if (g_preludedRealms->count(realm))
+        return;
+
+    g_preludedRealms->insert(realm);
+
     if (evalScriptFile("AGB_PRELUDE", "prelude.js"))
         return;
 
@@ -4211,10 +4328,19 @@ static void loadPolyfills(void)
     if (!g_currentState || g_currentState == &g_emptyState || !g_engine)
         return;
 
-    if (g_currentState->polyfillsGeneration == g_currentState->generation)
-        return;
+    {
+        AntbRealm* realm = antb_realm_current(g_engine);
 
-    g_currentState->polyfillsGeneration = g_currentState->generation;
+        if (!realm)
+            return;
+
+        if (!g_polyfilledRealms)
+            g_polyfilledRealms = new std::set<AntbRealm*>();
+        if (g_polyfilledRealms->count(realm))
+            return;
+
+        g_polyfilledRealms->insert(realm);
+    }
 
     if (env && env[0])
         file = fopen(env, "rb");
@@ -4398,6 +4524,11 @@ static void stopRealm(void)
         state->engine = 0;
     }
 
+    /* The realms (and their prelude/polyfills markers) died with the engine. */
+    state->mainRealm = NULL;
+    forgetFrameRealms();
+    forgetRealmScripts();
+
     if (getenv("AGB_EVT_DEBUG"))
         agbLog(AGB_LOG_EVT, "realm stopped (generation=%lu)", state->generation);
 }
@@ -4428,6 +4559,9 @@ void beginNewRealm(void)
 
     if (state->engine)
         antb_set_uncaught_nonfatal(state->engine, 1);
+
+    state->mainRealm = state->engine ? antb_realm_current(state->engine) : NULL;
+    forgetFrameRealms();
 
     agbLog(AGB_LOG_EVT, "realm start gen=%lu engine=%p",
            state->generation, (void*)state->engine);
@@ -4726,184 +4860,17 @@ int windowSetter(AntbEngine* engine, AntbValue* self, const char* name, const An
  * lookup, which does not run an exotic getter on the global object; they have
  * to be real properties. So the frame-specific ones are refreshed whenever a
  * document becomes the bound one (bindDocument / slot activation). */
-void installFrameGlobals(AntbEngine* engine, WebCore::Document* document)
+/* Installs the JS-side global API on the *current realm's* global object:
+ * canvas class, window methods, the __agb* host functions and the history /
+ * location / navigator / screen objects. Called once per realm (the main
+ * document's realm and, with AGB_PER_FRAME_REALM, every frame's realm).
+ * The DOM node class itself is engine-scoped (wrappers are shared across
+ * realms until S2 of design-per-frame-realm.md). */
+static void installGlobalApi(AntbEngine* engine, AntbValue* global)
 {
-    AntbValue* global;
-    AntbValue* selfWindow;
-    AntbValue* topWindow = NULL;
-    AntbValue* parentWindow = NULL;
-    AntbValue* docObj;
-    AntbValue* v;
+    AntbValue* window = global;   /* window IS the global object */
 
-    if (!engine || !document)
-        return;
-
-    global = antb_global(engine);
-    if (!global)
-        return;
-
-    selfWindow = windowForDocument(engine, document);
-    docObj = documentObjectFor(engine, document);
-
-    if (document->parentDocument())
-        parentWindow = windowObjectFor(engine, document->parentDocument());
-    if (document->topDocument() != document)
-        topWindow = windowObjectFor(engine, document->topDocument());
-
-    if (selfWindow) {
-        antb_set_prop(engine, global, "window", selfWindow);
-        antb_set_prop(engine, global, "self", selfWindow);
-        antb_set_prop(engine, global, "frames", selfWindow);
-    }
-    if (docObj)
-        antb_set_prop(engine, global, "document", docObj);
-
-    v = topWindow ? topWindow : selfWindow;
-    if (v)
-        antb_set_prop(engine, global, "top", v);
-
-    v = parentWindow ? parentWindow : selfWindow;
-    if (v)
-        antb_set_prop(engine, global, "parent", v);
-
-    v = antb_make_number(engine, (double)childFrameCount(document));
-    if (v) {
-        antb_set_prop(engine, global, "length", v);
-        antb_value_release(v);
-    }
-
-    v = document->ownerElement() ? wrapNode(engine, document->ownerElement()) : NULL;
-    if (v) {
-        antb_set_prop(engine, global, "frameElement", v);
-        antb_value_release(v);
-    }
-
-    if (selfWindow)
-        antb_value_release(selfWindow);
-    if (topWindow)
-        antb_value_release(topWindow);
-    if (parentWindow)
-        antb_value_release(parentWindow);
-    if (docObj)
-        antb_value_release(docObj);
-    antb_value_release(global);
-}
-
-void bindDocument(void* document)
-{
-    WebCore::Document* previous = g_document;
-
-    /* The Document object is replaced on every navigation, so always refresh
-     * the pointer; only the JS shim objects are created once. */
-    g_document = (WebCore::Document*)document;
-
-    /* Binding the document that is already installed is a no-op. A page with
-     * async ad scripts gets here 3-6 times for the same document, and the
-     * redundant passes make the VM run a closure body once per pass (css3test
-     * ran its whole suite several times over). */
-    if (g_documentBound && previous == (WebCore::Document*)document && g_docObj)
-        return;
-
-    g_currentSlot = slotForDocument(g_document);
-
-    agbLog(AGB_LOG_EVT, "bindDocument %p (bound=%d) url=%s", document, (int)g_documentBound,
-           g_document ? g_document->URL().utf8().data() : "?");
-
-    if (!g_engine || !g_document)
-        return;
-
-    if (g_documentBound) {
-        AntbValue* global;
-
-        /* Same realm, new document (a frame document created by the parser):
-         * the JS shims stay, but the document object is per document. */
-        if (g_docObj) {
-            antb_value_release(g_docObj);
-            g_docObj = 0;
-        }
-        g_docObj = documentObjectFor(g_engine, g_document);
-
-        /* window IS the global object and nodeAddEventListener() reads the node
-         * from it. Refreshing only g_docObj left the window pointing at the
-         * document that was replaced by the navigation, so a reloaded page
-         * registered its handlers against the old document, the load event
-         * matched no listener and css3test's tests never started again. */
-        global = antb_global(g_engine);
-
-        if (global) {
-            antb_set_native(global, g_document, AGB_TAG_NODE);
-            antb_value_release(global);
-        }
-        sessionHistoryNoteDocument(g_document);
-        installFrameGlobals(g_engine, g_document);
-        return;
-    }
-
-    {
-        AntbValue* global   = antb_global(g_engine);
-        AntbValue* window   = global;   /* window IS the global object */
-        AntbValue* docObj   = documentObjectFor(g_engine, g_document);
-
-        if (!global || !docObj) {
-            antb_value_release(global);
-            antb_value_release(docObj);
-            return;
-        }
-
-
-        if (!g_nodeClass) {
-            g_nodeClass = antb_class_create(g_engine, "Node");
-            if (g_nodeClass) {
-                antb_class_add_method(g_engine, g_nodeClass, "getAttribute", nodeGetAttribute, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "addEventListener", nodeAddEventListener, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "removeEventListener", nodeRemoveEventListener, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "dispatchEvent", nodeDispatchEvent, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "appendChild", nodeAppendChild, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "removeChild", nodeRemoveChild, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "insertBefore", nodeInsertBefore, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "setAttribute", nodeSetAttribute, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "getElementsByTagName", nodeGetElementsByTagName, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "cloneNode", nodeCloneNode, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "replaceChild", nodeReplaceChild, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "hasAttribute", nodeHasAttribute, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "hasChildNodes", nodeHasChildNodes, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "contains", nodeContains, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "compareDocumentPosition", nodeCompareDocumentPosition, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "getElementsByClassName", nodeGetElementsByClassName, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "querySelectorAll", nodeQuerySelectorAll, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "querySelector", nodeQuerySelector, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "focus", nodeFocus, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "blur", nodeBlur, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "click", nodeClick, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "removeAttribute", nodeRemoveAttribute, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "remove", nodeRemove, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "getBoundingClientRect", nodeGetBoundingClientRect, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "getRootNode", nodeGetRootNode, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "getAttributeNames", nodeGetAttributeNames, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "toggleAttribute", nodeToggleAttribute, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "insertAdjacentHTML", nodeInsertAdjacentHTML, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "insertAdjacentElement", nodeInsertAdjacentElement, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "insertAdjacentText", nodeInsertAdjacentText, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "replaceChildren", nodeReplaceChildren, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "scrollIntoView", nodeScrollIntoView, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "submit", nodeFormSubmit, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "reset", nodeFormReset, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "checkValidity", nodeFormCheckValidity, NULL);
-                /* Canvas: no per-tag classes exist, so the two element-side
-                 * canvas APIs live here and check the tag themselves. */
-                antb_class_add_method(g_engine, g_nodeClass, "getContext", nodeGetContext, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "toDataURL", nodeToDataURL, NULL);
-
-                /* Catch-all property: the class dispatching getter only serves
-                 * names present in this table and returns undefined for
-                 * everything else, so without this entry every node property
-                 * (tagName/innerHTML/nodeType/...) read as undefined - Vue's
-                 * mount() got an undefined container.innerHTML and gave up
-                 * with "Component is missing template or render function".
-                 * nodeGetter dispatches on the name itself. */
-                antb_class_set_property(g_engine, g_nodeClass, "", nodeGetter, NULL);
-            }
-        }
+    (void)engine;
 
         if (!g_canvasCtxClass) {
             g_canvasCtxClass = antb_class_create(g_engine, "CanvasRenderingContext2D");
@@ -5040,6 +5007,318 @@ void bindDocument(void* document)
                 }
             }
         }
+}
+void installFrameGlobals(AntbEngine* engine, WebCore::Document* document)
+{
+    AntbValue* global;
+    AntbValue* selfWindow;
+    AntbValue* topWindow = NULL;
+    AntbValue* parentWindow = NULL;
+    AntbValue* docObj;
+    AntbValue* v;
+
+    if (!engine || !document)
+        return;
+
+    global = antb_global(engine);
+    if (!global)
+        return;
+
+    selfWindow = windowForDocument(engine, document);
+    docObj = documentObjectFor(engine, document);
+
+    if (document->parentDocument())
+        parentWindow = windowObjectFor(engine, document->parentDocument());
+    if (document->topDocument() != document)
+        topWindow = windowObjectFor(engine, document->topDocument());
+
+    if (selfWindow) {
+        antb_set_prop(engine, global, "window", selfWindow);
+        antb_set_prop(engine, global, "self", selfWindow);
+        antb_set_prop(engine, global, "frames", selfWindow);
+    }
+    if (docObj)
+        antb_set_prop(engine, global, "document", docObj);
+
+    v = topWindow ? topWindow : selfWindow;
+    if (v)
+        antb_set_prop(engine, global, "top", v);
+
+    v = parentWindow ? parentWindow : selfWindow;
+    if (v)
+        antb_set_prop(engine, global, "parent", v);
+
+    v = antb_make_number(engine, (double)childFrameCount(document));
+    if (v) {
+        antb_set_prop(engine, global, "length", v);
+        antb_value_release(v);
+    }
+
+    v = document->ownerElement() ? wrapNode(engine, document->ownerElement()) : NULL;
+    if (v) {
+        antb_set_prop(engine, global, "frameElement", v);
+        antb_value_release(v);
+    }
+
+    if (selfWindow)
+        antb_value_release(selfWindow);
+    if (topWindow)
+        antb_value_release(topWindow);
+    if (parentWindow)
+        antb_value_release(parentWindow);
+    if (docObj)
+        antb_value_release(docObj);
+    antb_value_release(global);
+}
+
+/* Globals of a frame that owns a realm: `window`/`self` ARE that realm's global
+ * object; `parent`/`top` are the parent realm's global objects. Same VM, so
+ * property access and calls work across realms, while identity now differs
+ * (`parent !== self`, `top.Array !== Array`) as the spec requires. */
+static void installChildFrameGlobals(AntbEngine* engine, WebCore::Document* document)
+{
+    AntbValue* global;
+    AntbValue* docObj;
+    AntbValue* parentGlobal = NULL;
+    AntbValue* topGlobal = NULL;
+    AntbValue* v;
+
+    if (!engine || !document)
+        return;
+
+    global = antb_global(engine);
+    if (!global)
+        return;
+
+    docObj = documentObjectFor(engine, document);
+
+    if (document->parentDocument())
+        parentGlobal = antb_realm_global(engine, realmOfDocument(engine, document->parentDocument()));
+    if (document->topDocument() != document)
+        topGlobal = antb_realm_global(engine, realmOfDocument(engine, document->topDocument()));
+
+    antb_set_prop(engine, global, "window", global);
+    antb_set_prop(engine, global, "self", global);
+    antb_set_prop(engine, global, "frames", global);
+    if (docObj)
+        antb_set_prop(engine, global, "document", docObj);
+    if (parentGlobal)
+        antb_set_prop(engine, global, "parent", parentGlobal);
+    if (topGlobal)
+        antb_set_prop(engine, global, "top", topGlobal);
+
+    v = antb_make_number(engine, (double)childFrameCount(document));
+    if (v) {
+        antb_set_prop(engine, global, "length", v);
+        antb_value_release(v);
+    }
+
+    v = document->ownerElement() ? wrapNode(engine, document->ownerElement()) : NULL;
+    if (v) {
+        antb_set_prop(engine, global, "frameElement", v);
+        antb_value_release(v);
+    }
+
+    /* window.addEventListener/... read the node off the global object. */
+    antb_set_native(global, document, AGB_TAG_NODE);
+
+    if (docObj)
+        antb_value_release(docObj);
+    if (parentGlobal)
+        antb_value_release(parentGlobal);
+    if (topGlobal)
+        antb_value_release(topGlobal);
+    antb_value_release(global);
+}
+
+/* Switches into a frame's realm, installing its global API and shims the first
+ * time. Called for every bind: the realm stays, the document object inside it
+ * is refreshed. */
+static void bindFrameRealm(AntbEngine* engine, WebCore::Document* document)
+{
+    std::vector<FrameRealmEntry>& entries = frameRealms();
+    FrameRealmEntry* entry = NULL;
+    AntbValue* global;
+
+    for (size_t i = 0; i < entries.size(); ++i) {
+        if (entries[i].document == document) {
+            entry = &entries[i];
+            break;
+        }
+    }
+
+    if (!entry || !entry->realm)
+        return;
+
+    antb_realm_enter(engine, entry->realm);
+
+    global = antb_global(engine);
+    if (!global)
+        return;
+
+    if (!entry->installed) {
+        installGlobalApi(engine, global);
+        entry->installed = true;
+    }
+
+    installChildFrameGlobals(engine, document);
+
+    /* g_docObj mirrors "the document object of the realm we are in". */
+    if (g_docObj) {
+        antb_value_release(g_docObj);
+        g_docObj = 0;
+    }
+    {
+        AntbValue* docObj = documentObjectFor(engine, document);
+
+        if (docObj) {
+            g_docObj = antb_retain(docObj);
+            antb_value_release(docObj);
+        }
+    }
+
+    antb_value_release(global);
+
+    loadPrelude();
+    loadPolyfills();
+}
+
+void bindDocument(void* document)
+{
+    WebCore::Document* previous = g_document;
+
+    /* The Document object is replaced on every navigation, so always refresh
+     * the pointer; only the JS shim objects are created once. */
+    g_document = (WebCore::Document*)document;
+
+    /* A frame document with its own realm: switch into it and refresh that
+     * realm's globals. Nothing below applies (no engine bootstrap, no shared
+     * window proxy). */
+    if (perFrameRealmEnabled() && g_engine && g_document && g_document->parentDocument()) {
+        if (realmForFrameDocument(g_engine, g_document)) {
+            bindFrameRealm(g_engine, g_document);
+            return;
+        }
+    }
+
+    /* Every bind enters the document's realm. The engine stays in the realm of
+     * whichever frame ran last, and a main-frame evaluation that came after a
+     * child frame ran must not execute in the child's realm. This has to happen
+     * before the "already bound" early return below. */
+    if (perFrameRealmEnabled() && g_engine && g_document && g_currentState
+            && g_currentState != &g_emptyState && g_currentState->mainRealm)
+        antb_realm_enter(g_engine, g_currentState->mainRealm);
+
+    /* Binding the document that is already installed is a no-op. A page with
+     * async ad scripts gets here 3-6 times for the same document, and the
+     * redundant passes make the VM run a closure body once per pass (css3test
+     * ran its whole suite several times over). */
+    if (g_documentBound && previous == (WebCore::Document*)document && g_docObj)
+        return;
+
+    g_currentSlot = slotForDocument(g_document);
+
+    agbLog(AGB_LOG_EVT, "bindDocument %p (bound=%d) url=%s", document, (int)g_documentBound,
+           g_document ? g_document->URL().utf8().data() : "?");
+
+    if (!g_engine || !g_document)
+        return;
+
+    if (g_documentBound) {
+        AntbValue* global;
+
+        /* Same realm, new document (a frame document created by the parser):
+         * the JS shims stay, but the document object is per document. */
+        if (g_docObj) {
+            antb_value_release(g_docObj);
+            g_docObj = 0;
+        }
+        g_docObj = documentObjectFor(g_engine, g_document);
+
+        /* window IS the global object and nodeAddEventListener() reads the node
+         * from it. Refreshing only g_docObj left the window pointing at the
+         * document that was replaced by the navigation, so a reloaded page
+         * registered its handlers against the old document, the load event
+         * matched no listener and css3test's tests never started again. */
+        global = antb_global(g_engine);
+
+        if (global) {
+            antb_set_native(global, g_document, AGB_TAG_NODE);
+            antb_value_release(global);
+        }
+        sessionHistoryNoteDocument(g_document);
+        installFrameGlobals(g_engine, g_document);
+        return;
+    }
+
+    {
+        AntbValue* global   = antb_global(g_engine);
+        AntbValue* window   = global;   /* window IS the global object */
+        AntbValue* docObj   = documentObjectFor(g_engine, g_document);
+
+        if (!global || !docObj) {
+            antb_value_release(global);
+            antb_value_release(docObj);
+            return;
+        }
+
+
+        if (!g_nodeClass) {
+            g_nodeClass = antb_class_create(g_engine, "Node");
+            if (g_nodeClass) {
+                antb_class_add_method(g_engine, g_nodeClass, "getAttribute", nodeGetAttribute, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "addEventListener", nodeAddEventListener, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "removeEventListener", nodeRemoveEventListener, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "dispatchEvent", nodeDispatchEvent, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "appendChild", nodeAppendChild, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "removeChild", nodeRemoveChild, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "insertBefore", nodeInsertBefore, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "setAttribute", nodeSetAttribute, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "getElementsByTagName", nodeGetElementsByTagName, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "cloneNode", nodeCloneNode, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "replaceChild", nodeReplaceChild, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "hasAttribute", nodeHasAttribute, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "hasChildNodes", nodeHasChildNodes, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "contains", nodeContains, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "compareDocumentPosition", nodeCompareDocumentPosition, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "getElementsByClassName", nodeGetElementsByClassName, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "querySelectorAll", nodeQuerySelectorAll, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "querySelector", nodeQuerySelector, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "focus", nodeFocus, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "blur", nodeBlur, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "click", nodeClick, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "removeAttribute", nodeRemoveAttribute, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "remove", nodeRemove, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "getBoundingClientRect", nodeGetBoundingClientRect, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "getRootNode", nodeGetRootNode, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "getAttributeNames", nodeGetAttributeNames, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "toggleAttribute", nodeToggleAttribute, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "insertAdjacentHTML", nodeInsertAdjacentHTML, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "insertAdjacentElement", nodeInsertAdjacentElement, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "insertAdjacentText", nodeInsertAdjacentText, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "replaceChildren", nodeReplaceChildren, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "scrollIntoView", nodeScrollIntoView, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "submit", nodeFormSubmit, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "reset", nodeFormReset, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "checkValidity", nodeFormCheckValidity, NULL);
+                /* Canvas: no per-tag classes exist, so the two element-side
+                 * canvas APIs live here and check the tag themselves. */
+                antb_class_add_method(g_engine, g_nodeClass, "getContext", nodeGetContext, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "toDataURL", nodeToDataURL, NULL);
+
+                /* Catch-all property: the class dispatching getter only serves
+                 * names present in this table and returns undefined for
+                 * everything else, so without this entry every node property
+                 * (tagName/innerHTML/nodeType/...) read as undefined - Vue's
+                 * mount() got an undefined container.innerHTML and gave up
+                 * with "Component is missing template or render function".
+                 * nodeGetter dispatches on the name itself. */
+                antb_class_set_property(g_engine, g_nodeClass, "", nodeGetter, NULL);
+            }
+        }
+
+        installGlobalApi(g_engine, global);
+
         /* A new main frame document is a new session history entry. */
         sessionHistoryNoteDocument(g_document);
         /* window/self/top/parent/frames/document/length: per frame, refreshed
@@ -6476,9 +6755,23 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
 
         if (!child)
             return 1;   /* null until the frame document exists */
-        v = !strcmp(name, "contentWindow")
-          ? AntRuntime::windowObjectFor(engine, child)
-          : AntRuntime::documentObjectFor(engine, child);
+        if (!strcmp(name, "contentWindow") && perFrameRealmEnabled()) {
+            /* A frame with its own realm: its `window` IS that realm's global
+             * object, so contentWindow has to hand out that object (otherwise
+             * `f.contentWindow === childWindow` is false and contentWindow.top
+             * is the wrong realm). */
+            AntbRealm* childRealm = realmOfDocument(engine, child);
+
+            if (childRealm) {
+                v = antb_realm_global(engine, childRealm);
+            } else {
+                v = AntRuntime::windowObjectFor(engine, child);
+            }
+        } else {
+            v = !strcmp(name, "contentWindow")
+              ? AntRuntime::windowObjectFor(engine, child)
+              : AntRuntime::documentObjectFor(engine, child);
+        }
     } else if (n->isElementNode() && reflectedAttribute(name)) {
         /* dir/lang/hidden/tabIndex/... : an attribute with a type. */
         const struct ReflectedAttribute* reflected = reflectedAttribute(name);

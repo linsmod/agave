@@ -177,6 +177,8 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
 | 性能 | `AGB_PROFILE=1` / `AGB_PERF_LOG=1` | RIP 采样直方图（退出时 dump `[profjs]`）/ 帧耗时（paint+js > 100ms 才打） |
 | 页面脚本 | `AGB_PAGE_EVAL=eval` | 页面脚本回到 direct-eval 语义（**默认 classic script**，顶层 `var`/`function` 进 `window`，R66）；A/B 与 `run_script_mode_tests.ps1` 用 |
 | GC | `AGB_GC_OFF=1` | 关掉引擎 GC；"关掉就好"是"对象被提前回收"的决定性判据（R60/R63/R67） |
+| Realm | `AGB_PER_FRAME_REALM=1` | 每 frame 一个 realm（[design-per-frame-realm.md](design-per-frame-realm.md) S1）：iframe 有独立全局与 intrinsics，`var` 不再串到父页。默认关闭；`run_realm_tests.ps1` 覆盖开/关两条路径 |
+| 脚本编码 | `AGB_SCRIPT_CHARSET=1` | 每个脚本打印 `[script-charset] <编码> doc=<文档编码>`（排查乱码/重复日志） |
 | 绘制诊断 | `AGB_PAINT_FULL=1` | 每帧整屏重绘（忽略脏矩形）；用来区分"失效/裁剪错"和"布局错"（见 §4） |
 | 页面 | `AGB_TITLE_DEBUG=1` / `AGB_SCRIPT_DEBUG=1` | `document.title` 轮询 / tokenizer 脚本加载 |
 | CSS/布局 | `AGB_CSS_DEBUG=1` / `AGB_LAYOUT_DEBUG=1` / `AGB_BG_DEBUG=1` | 未实现 CSS 属性日志 / 布局 / 背景层 |
