@@ -169,6 +169,8 @@ bareMedia=2px schemeBg=rgb(0, 0, 200) mediaDark=1 mediaMin=1
 | 8 位 hex `#RRGGBBAA` / `#RGBA` | `rgba(138, 71, 38, 0.945)` | **已支持（R51）**：`Color::parseHexColor()` 认 4/8 位；声明值与样式表里的 8 位 hex 还会在解析前改写成 `rgba()`（旧 tokenizer 只认 3/6 位） |
 | `min-height: calc(18px + 4px)` | `22px` | **已支持**（R43）：解析期把纯常量的 `calc()` 折叠成单值（`+ - * /`、括号、绝对长度单位）；自定义属性值里的 `calc(var(--token) + 4px)` 先做 sheet 级常量代入再折叠。**限制**：含 `%`/`vw`/`vh`/`em`/`rem`/`env()` 的混合单位 calc 仍不支持（保留原样、声明被丢），需要布局期求值才能覆盖 `calc(100% - 24px)` 这类 |
 
+| `indexedDB.open(...)` | 请求异步 `onerror` | **桩实现（R57 诊断）**：`window.indexedDB` 不存在时直接引用会抛 `ReferenceError`，所以提供 open/deleteDatabase/databases 都异步失败的桩 + `IDBKeyRange`；站点走“失败回退内存存储”的分支，而不是在 Promise 链里炸掉。真正的 IDB 存储未做 |
+
 已确认可用的（别再当缺口重开）：块/inline-block/float/绝对定位/margin auto/padding/border-radius/
 opacity/渐变（R11）、`var()` 含 fallback 与元素级级联（R39）、`box-sizing`（R39）、
 `prefers-color-scheme` 与 `matchMedia` 的尺寸/方向查询（R39）、flex 子元素 blockify（R39）、

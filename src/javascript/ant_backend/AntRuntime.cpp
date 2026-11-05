@@ -7701,6 +7701,13 @@ int nodeQuerySelector(AntbEngine* engine, AntbValue* self, AntbValue** args, int
 
     if (nodeQuerySelectorAll(engine, self, args, argc, holder, NULL)) {
         AntbValue* first = antb_array_get(holder, 0);
+        if (const char* qsFilter = getenv("AGB_QS_DEBUG")) {
+            /* Diagnostic: AGB_QS_DEBUG=<substring> logs every querySelector
+             * whose selector contains the substring, with the hit/miss. */
+            std::string sel = argc >= 1 ? antb_to_utf8(args[0]) : std::string();
+            if (*qsFilter && sel.find(qsFilter) != std::string::npos)
+                fprintf(stderr, "[qs] sel=%s found=%d\n", sel.c_str(), first ? 1 : 0);
+        }
         if (first) {
             antb_value_assign(out, first);
             antb_value_release(first);

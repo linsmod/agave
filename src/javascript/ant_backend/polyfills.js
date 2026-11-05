@@ -453,15 +453,117 @@
         return;
 
     g.__agbRejectionHook = true;
+    /* A rejection reason is often a plain object ({code, message, ...}); the
+     * default string conversion hides it behind "[object Object]", which makes
+     * site failures undebuggable. Prefer stack, then name/message, then the
+     * first few own properties. */
+    function describeRejection(reason) {
+        if (reason == null)
+            return String(reason);
+
+        try {
+            if (typeof reason.stack === 'string' && reason.stack)
+                return reason.stack;
+
+            var name = reason.name ? String(reason.name) : '';
+            var message = reason.message != null ? String(reason.message) : '';
+
+            if (message)
+                return name ? name + ': ' + message : message;
+
+            if (typeof reason === 'object') {
+                var parts = [];
+
+                for (var key in reason) {
+                    if (reason.hasOwnProperty && !reason.hasOwnProperty(key))
+                        continue;
+                    var value;
+                    try { value = String(reason[key]); } catch (e) { value = '?'; }
+                    parts.push(key + '=' + value);
+                    if (parts.length >= 6)
+                        break;
+                }
+
+                if (parts.length)
+                    return '{' + parts.join(', ') + '}';
+            }
+        } catch (e) {}
+
+        try { return String(reason); } catch (e2) {}
+        return '(unprintable rejection)';
+    }
+
     g.onunhandledrejection = function (event) {
         try {
             if (event && event.preventDefault)
                 event.preventDefault();
             if (g.console && g.console.error)
-                g.console.error('Uncaught (in promise)', event && event.reason);
+                g.console.error('Uncaught (in promise) ' + describeRejection(event && event.reason));
         } catch (e) {}
         return true;
     };
+}());
+
+/* IndexedDB is not implemented. Storage wrappers usually ask
+ * `window.indexedDB` first and fall back to memory, but code that references
+ * the bare `indexedDB` identifier (v.qq's SDK does) throws ReferenceError
+ * before that fallback can run. Expose a stub whose requests fail
+ * asynchronously through onerror - the documented failure path every wrapper
+ * already handles - so the site degrades instead of losing the promise chain. */
+(function () {
+    var g = typeof window !== 'undefined' ? window : this;
+
+    if (!g || g.indexedDB)
+        return;
+
+    function failRequest(request) {
+        g.setTimeout(function () {
+            var event = { type: 'error', target: request, currentTarget: request };
+
+            request.error = {
+                name: 'NotSupportedError',
+                message: 'IndexedDB is not supported in this browser'
+            };
+            request.readyState = 'done';
+
+            if (typeof request.onerror === 'function')
+                request.onerror(event);
+        }, 0);
+    }
+
+    function makeRequest() {
+        var request = {
+            result: null,
+            error: null,
+            readyState: 'pending',
+            onsuccess: null,
+            onerror: null,
+            onupgradeneeded: null,
+            onblocked: null
+        };
+
+        failRequest(request);
+        return request;
+    }
+
+    g.indexedDB = {
+        open: function () { return makeRequest(); },
+        deleteDatabase: function () { return makeRequest(); },
+        databases: function () {
+            var request = makeRequest();
+            request.result = [];
+            return request;
+        }
+    };
+
+    if (!g.IDBKeyRange) {
+        g.IDBKeyRange = {
+            only: function (v) { return { lower: v, upper: v, lowerOpen: false, upperOpen: false }; },
+            lowerBound: function (v, open) { return { lower: v, upper: undefined, lowerOpen: !!open, upperOpen: true }; },
+            upperBound: function (v, open) { return { lower: undefined, upper: v, lowerOpen: true, upperOpen: !!open }; },
+            bound: function (l, u, lo, uo) { return { lower: l, upper: u, lowerOpen: !!lo, upperOpen: !!uo }; }
+        };
+    }
 }());
 
 /* Workers are not implemented. Sites still subclass the constructor to wrap

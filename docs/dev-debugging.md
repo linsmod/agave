@@ -185,6 +185,7 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
 | 字体 | `AGB_FONT_LOG=1` | `[fontsel] src[i] ... supported=0/1` 与 `[font] beginLoad/data` |
 | 控件 | `AGB_LOOP_DEBUG=1` / `AWG_CTX_DEBUG=1` | 控件帧循环 / 引擎上下文切换 |
 | JS 文件 | `AGB_PRELUDE` / `AGB_POLYFILLS` | 指向别处的 `prelude.js` / `polyfills.js` 副本 |
+| 注入脚本 | `AGB_INSPECTOR` | 覆盖外壳「注入 inspector.js」读取的路径（默认 exe 同目录的 `inspector.js`）。vConsole 固定读 exe 旁的 `vconsole.min.js` |
 | profile | `AGB_USERDATA` | 整个 profile 根（cookies/localStorage/模块缓存/HTTP 缓存/shell state）。`--probe` 默认 `%LOCALAPPDATA%\Agave\probe`，`--userdata` 等价 |
 
 ## 4. 定位手段
@@ -206,6 +207,12 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
   —— 探针自己解析命令行、把 `"` 和 `\` 当语法，内联 `--eval` 里带 JS 字符串字面量会被拆坏；
   这个 helper 用 `--eval-file` 传文件，顺带设好 `--wait/--settle/--timeout/--userdata`。
   退出码仍是权威判据。
+- **查选择器命中**：`AGB_QS_DEBUG='#app'` 时每次 `querySelector` 只要选择器包含该子串就打印
+  `[qs] sel=... found=0/1`。定位“框架说挂载目标为 null / 找不到容器”这类问题先用它，
+  比在页面里重放选择器可靠（能抓到页面脚本自己的调用时机）。
+- **未处理 Promise 拒绝**：`window.onunhandledrejection` 的 polyfill 会打印
+  stack → `name: message` → 对象前几个自有属性，不再是 `[object Object]`；
+  CLI 侧 ant 的 `print_error_value` 对普通对象也走同一套渲染。
 - **一条命令跑布局回归**：`pwsh -File tools/run_layout_tests.ps1`
   —— 对 `tools/pages/layout/*.html` 逐个跑 `layout_diff.py`（几何对拍 Chrome），再对
   `transform_repaint.html` 做像素断言、对 `scrollbar_hidden.html` 断言 `::-webkit-scrollbar`
