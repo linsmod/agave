@@ -69,6 +69,20 @@ $pdb = Join-Path $BuildDir 'antjsb.pdb'
 Require $dll 'antjsb.dll'
 Require $lib 'antjsb.dll.a'
 
+
+# ant is a separate repository: the published dll must be reproducible from
+# committed sources. Warn when the ant checkout has uncommitted changes so
+# they are not silently lost on the next baseline sync / rebuild.
+Push-Location $AntRoot
+try {
+    $dirty = & git status --porcelain
+    if ($LASTEXITCODE -eq 0 -and $dirty) {
+        Write-Warning ("ant working tree is not clean - commit the engine/bridge changes " +
+                       "in $AntRoot before publishing, otherwise the dll and its source diverge:")
+        $dirty | ForEach-Object { Write-Warning "  $_" }
+    }
+} finally { Pop-Location }
+
 if ($NoPublish) {
     Write-Host "== built (not published)"
     return

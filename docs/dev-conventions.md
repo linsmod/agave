@@ -62,3 +62,5 @@
 3. `--probe` 相关改动：再跑 `tools/run_worker_tests.ps1` + deepseek 登录页（`inp=2 all=129`）。
 4. 文档按 §3 更新（arch-status / arch-capability-gaps / hist-lessons / 本目录）。
 5. `git status` 干净（`debug/`、`build-zig-native/`、`*.log` 都不该出现）。
+6. 改了 ant（桥/内核）：先在 `H:\ant-v16` **提交**（`git -C H:\ant-v16 status` 干净），
+   再在 agave 提交重建后的 `3rdparty/ant/{bin,lib,include}`；两边都干净才算完成。

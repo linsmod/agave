@@ -29,6 +29,10 @@ agave 是**从零移植的浏览器**：WebKit 2008 的 WebCore（解析/布局/
   （`include/AntBridge.h`、`lib/antjsb.dll.a`、`bin/antjsb.dll`）。
 - **改桥 / ant 内核**：`pwsh -File tools/build_antjsb.ps1`（Meson target `antjsb`），
   前置是 ant checkout + Meson/Ninja/MSYS2/Python3；LTO 保持 `b_lto=false`。
+- **改了 ant 要在 ant 仓库提交**：ant 是独立仓库（`H:\ant-v16`，分支 `agave-bridge`），
+  桥/内核的改动提交在**那边**（或至少导出 patch 到 `tools/ant-patches/`）；本仓库只提交
+  发布产物 `3rdparty/ant/{bin,lib,include}`。否则下次同步基线/重建会把改动静默丢掉，
+  dll 与源码不再对应。`tools/build_antjsb.ps1` 在 ant 工作区不干净时会打印警告。
 - **依赖链**：`agave_shell/embed -> libagave.dll -> antjsb.dll`；控件已编进 `libagave`，
   没有 `libagave_webview.dll`。
 - **开关**：`OPT_JS_ANT=ON` 才链接 `antjsb`；`OPT_NET_BACKEND=native` 走 WinHTTP。

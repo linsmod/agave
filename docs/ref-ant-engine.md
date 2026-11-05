@@ -12,6 +12,11 @@
 | `prelude.js` / `polyfills.js` | **本仓库** `src/javascript/ant_backend/` | `build-zig-native\`（运行时副本，可直接改来验证） |
 | git 远端 | agave → GitHub `linsmod/agave`；ant 上游 → `theMackabu/ant`，本地镜像 `H:\ant-upstream`，推送 fork `fork` → `linsmod/ant` | 两套历史无关 |
 
+**提交规则**：桥/内核的改动在 ant 仓库（`H:\ant-v16`，分支 `agave-bridge`）提交；
+本仓库只跟踪发布产物（`3rdparty/ant/bin/antjsb.dll`、`lib/antjsb.dll.a`、`include/AntBridge.h`）。
+`tools/build_antjsb.ps1` 发布前会检查 ant 的 `git status`，不干净时打印警告——
+否则 dll 与源码分叉，下次同步基线时改动会静默丢失。
+
 ## 2. 构建链路
 
 ```powershell
