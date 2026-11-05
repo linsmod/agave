@@ -9,7 +9,7 @@
   - 关键代码锚点（文件/函数）；
   - 跑了哪些回归（探针页、套件）。
 - 一个提交一件事；`docs:` / `shell:` / `ant backend:` / `esm:` 这类前缀已经在用，保持一致。
-- 不提交构建产物，除了 `3rdparty/ant/lib/antbridge.dll`（分发副本，仓库一直在跟）。
+- 不提交构建产物，除了 `3rdparty/ant/lib/antjsb.dll.a`（导入库，仓库一直在跟）；DLL/PDB 留在本机或发布包。
 
 ## 2. 回归页与脚本
 
@@ -43,7 +43,7 @@
 
 - 沿用 **WebKit 2008 风格**：4 空格缩进、大括号换行、`m_` 成员前缀、`RefPtr`/`PassRefPtr`。
   仓库里有 `tools/code_format.sh` 和 `tools/code_style.ini` 可参考。
-- 桥接层（`AntBridge.c`）是 C：K&R 大括号、`snake_case` 函数名、`antb_` 前缀；注释解释**为什么**。
+- 桥接层（`H:\ant-v16\bridge\AntBridge.c`）是 C：K&R 大括号、`snake_case` 函数名、`antb_` 前缀；注释解释**为什么**。
 - `prelude.js` / `polyfills.js`：2 空格缩进、`var`（要兼容老引擎）、IIFE 包裹；
   改完 `node --check` 一下（`tools/check_prelude_lines.py` 专门查"字符串内换行"）。
 - 不许 `clang-format` 全量刷文件（会把 diff 变成几千行）；只格式化自己改的片段。

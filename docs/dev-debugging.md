@@ -70,7 +70,7 @@ Start-Process -WindowStyle Hidden python -ArgumentList '-m','http.server','8971'
 ```
 
 时间 = 距**本进程第一条日志**的毫秒数；原点放在按 pid 命名的共享内存区里，所以 libagave、
-antbridge.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上（各 TU 自己取原点会差 ~15ms，
+antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上（各 TU 自己取原点会差 ~15ms，
 把相邻事件排反）。
 
 ```
@@ -110,7 +110,7 @@ antbridge.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**�
 | `[ui]` 界面事件 | resize / focus / blur / mouse down/up / wheel / key down/up / char | `AGB_UI_LOG=0` | `AGB_UI_DEBUG=1` 连 `mouse move` 也打（默认不打，太吵） |
 | `[shell]` 宿主 | window ready / 进入与退出消息循环 / `CreateWindowEx` 失败 / `atexit` 模块基址 | — | — |
 | `[probe]` 探针 | userdata、headless 状态、加载错误、对话框、退出码 | — | — |
-| `[flag]` 引擎开关 | 桥接开关（`uncaught_nonfatal` 等），来自 antbridge.dll | — | — |
+| `[flag]` 引擎开关 | 桥接开关（`uncaught_nonfatal` 等），来自 antjsb.dll | — | — |
 | `[style]` 渲染树 | 指定元素的 attach / detach / recalcStyle（是否拿到 renderer、computed display）。**opt-in** | 默认关 | `AGB_STYLE_LOG=1` 打开，`AGB_STYLE_FILTER=<子串>` 按 tag/id/class 过滤 |
 | `[cache]` 资源缓存 | 内存缓存 hit/miss、HTTP 缓存 hit/miss、图片 `data`/`notify` 生命周期、绘制时用到的帧状态（`FrameComplete`/`rows=n/m`） | `AGB_CACHE_LOG=0` | — |
 | `[dl]` 下载 | `start`/`state`（控制层派发给宿主）/`finish`/`fail`/`cancel`，带 id、字节数、落盘路径 | `AGB_DL_LOG=0` | — |
@@ -237,20 +237,20 @@ antbridge.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**�
 - **iframe 里到底是什么样**：`__agbActivateSlot(i)` 切换共享 window 绑定的 frame 文档
   （返回上一个槽位），读 `document.*` 之后切回去；`__agbFrameSlot()` 返回当前槽位。
 - **一条命令抓带符号栈（首选）**：`pwsh -File tools/cdb_stack.ps1 -Url <url> -ScriptFile <js>`
-  —— 自动带 `-y "build-zig-native;H:\ant-v16\bridge"`、`.lines`、`sxe av/0xC0000409/0x80000003`，
+  —— 自动带 `-y "build-zig-native;H:\ant-v16\build-zig"`、`.lines`、`sxe av/0xC0000409/0x80000003`，
   命中后 dump `kb 60` + `~*kb 30` + `lm`，日志落 `debug/cdb_stack_<ts>.log`；退出时还会自动符号化
-  `[shell] atexit` 的 `#NN exe|libagave|antbridge+0x...` 帧。挂起用 `-Attach <pid>` 或
+  `[shell] atexit` 的 `#NN exe|libagave|antjsb+0x...` 帧。挂起用 `-Attach <pid>` 或
   `-Hang -Url <url> -HangAfter 8`；已有日志用 `-Symbolize <log>`。
-  `antbridge.pdb` 和 DLL 一起安装（H:/ant-v16/bridge、3rdparty/ant/bin、build-zig-native），
-  所以 cdb 直接就有符号；`pwsh -File tools/build_antbridge.ps1 -Force` 重编并重装，`-Restore` 还原上一份 DLL。
+  `antjsb.pdb` 和 DLL 一起安装（H:/ant-v16/build-zig、3rdparty/ant/bin、build-zig-native），
+  所以 cdb 直接就有符号；`pwsh -File tools/build_antjsb.ps1 -Force` 重编并重装。
   下面两条是**需要自定义 cdb 命令时**的手工后备。
 - **抓挂起线程栈**：`tools\cdb.exe -p <pid> -c '~*k 30; qd'`（探针有超时会秒退，attach 要趁早）。
 - **断在首次异常**：写命令文件 `sxe av` / `g` / `~*kb 20` / `q`，再
-  `tools\cdb.exe -y "<build-zig-native>;H:\ant-v16\bridge" -cf cmds.txt build-zig-native\agave_shell.exe --probe ...`
+  `tools\cdb.exe -y "<build-zig-native>;H:\ant-v16\build-zig" -cf cmds.txt build-zig-native\agave_shell.exe --probe ...`
   —— **不要用 `--` 分隔**（这版 cdb 报 0x80070057），也别用 Start-Process 传 `-c "长命令"`（引号被吞）。
-  `antbridge.dll` 旁边有匹配的 `antbridge.pdb`，`-y` 指过去就能解出 `process.c @ 2355` 这种帧。
-- **CPU 热点**（连 ant 内部符号一起解）：`AGB_PROFILE=1` 跑探针拿 `[profjs]` 直方图；antbridge 和
-  libant 都是带调试信息的 release（`-O2 -g` / `-O3 -g`），`cdb -y <dll目录> -z antbridge.dll -c "ln antbridge+0x<rva>; qd"`
+  `antjsb.dll` 旁边有匹配的 `antjsb.pdb`，`-y` 指过去就能解出 `process.c @ 2355` 这种帧。
+- **CPU 热点**（连 ant 内部符号一起解）：`AGB_PROFILE=1` 跑探针拿 `[profjs]` 直方图；antjsb 和
+  libant 都是带调试信息的 release（`-O2 -g` / `-O3 -g`），`cdb -y <dll目录> -z antjsb.dll -c "ln antjsb+0x<rva>; qd"`
   出函数/源码行；在线抓栈用 `cdb -y <dll目录> -p <pid> -c "~*k 30; qd"`。
 - **地址栏输入 → URL**：`examples/browser_shell/main.c` 的 `normalizeUrl()` 是唯一入口（地址栏/Go/收藏夹/
   `--probe` 都走它）。本地路径 → `fileUrlFromLocalPath()`（`GetFullPathNameW` + `\`→`/` + 逐字节百分号转义）；

@@ -8,7 +8,7 @@
 
 ## 1. 运行拓扑
 
-一个进程、三类线程、三个 DLL（另加宿主 exe）。
+一个进程、三类线程、两个 DLL（`libagave.dll` → `antjsb.dll`，另加宿主 exe）。
 
 ```text
 宿主 UI 线程                       引擎线程（每进程一条）                网络线程（每请求一条）
@@ -38,11 +38,11 @@
 | 层 | 位置 | 职责 |
 |---|---|---|
 | 宿主壳 | `examples/browser_shell/main.c` | 标签页/地址栏/查找/书签；`--probe` 真无头探针。只做 UI，不碰引擎 |
-| Win32 控件 | `src/webview_control/AgaveWebView.c` | 控件窗口、引擎线程、`AGW_CMD_*` 队列、剪贴板/IME、下载表 |
+| Win32 控件 | `src/webview_control/AgaveWebView.c` | 控件窗口、引擎线程、`AGW_CMD_*` 队列、剪贴板/IME、下载表；编进 `libagave.dll` |
 | 视图适配 | `src/webview/` | MaCross `Page`/`Frame`/`WebView`、帧泵、`FrameLoaderClientMC`（willClose/commit/DCL/load）、`DownloadManager`、内部页、`AgbLog.h` |
 | WebCore 移植 | `src/webcore/` | WebKit 2008：HTML/CSS 解析、DOM、布局、绘制、网络 |
 | JS 门面 | `src/javascript/ant_backend/AntRuntime.cpp` | 每 view `RuntimeState`、realm 生命周期、DOM 桥外观、XHR/模块/定时器/history、加载 prelude/polyfills/internal.js |
-| JS 桥 | `src/javascript/ant_backend/AntBridge.c` → `antbridge.dll` | JS↔C 唯一漏斗 `agb_dispatch`；wrapper/class 表 |
+| JS 桥 | `H:\ant-v16\bridge\AntBridge.c` → `antjsb.dll` | JS↔C 唯一漏斗 `agb_dispatch`；wrapper/class 表；桥源码属于 ant 仓库 |
 | 运行时 JS | `src/javascript/ant_backend/prelude.js`、`polyfills.js`、`internal.js` | 从 exe 旁加载，可热改；`internal.js` 只给 `agave://` 页 |
 | ant 引擎 | `H:\ant-v16`（独立仓库，`agave-bridge`） | silver VM/编译、ESM、Worker、wasm；见 [ref-ant-engine.md](ref-ant-engine.md) |
 | 平台底座 | `src/wtf/`、`src/core/`、`include/` | 容器、字符串、断言、公共头 |
@@ -96,7 +96,7 @@ DCL 双发与模块执行顺序的待办见 [plan-roadmap.md](plan-roadmap.md) P
 
 1. 页面 JS 只在引擎线程执行；网络线程/UI 线程不得直接进 JS。
 2. `prelude.js` / `polyfills.js` 从 exe 旁加载；改完拷到 `build-zig-native\` 即生效，不用重链。
-3. `AntBridge.c` 只改本仓库那份；改完 `build_antbridge.ps1 -Force` + relink（[ref-ant-engine.md](ref-ant-engine.md)）。
+3. 桥源码在 `H:\ant-v16\bridge\AntBridge.c`；改完跑 `tools/build_antjsb.ps1` 重建 `antjsb.dll`（[ref-ant-engine.md](ref-ant-engine.md)）。
 4. 全局上的 `window`/`document` 等必须是**数据属性**；ant 的裸标识符查找不走 exotic getter（R31/R33）。
 5. 一个 frame 只有一份文档（R44）；iframe 的 DCL 仍不单独派发（见 `FrameLoaderClientMC.cpp` 注释）。
 6. 控件回调里不要同步跨线程等待；销毁与引擎线程的 `macross_view_update` 有竞态，按控件文档的规则做。

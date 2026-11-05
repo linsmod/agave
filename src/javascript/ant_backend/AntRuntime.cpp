@@ -1,5 +1,5 @@
 /*
- * AntRuntime.cpp - C++ facade over the Ant bridge (antbridge.dll).
+ * AntRuntime.cpp - C++ facade over the Ant bridge (antjsb.dll).
  */
 
 #include "config.h"
@@ -2285,13 +2285,13 @@ static DWORD WINAPI profilerWatcher(LPVOID)
 
 static const char* moduleNameFor(unsigned long long address, unsigned long long* offset)
 {
-    static const char* names[] = { "libagave.dll", "antbridge.dll", NULL };
+    static const char* names[] = { "libagave.dll", "antjsb.dll", NULL };
     static unsigned long long bases[3] = { 0, 0, 0 };
     int i;
 
     if (!bases[0]) {
         bases[0] = (unsigned long long)GetModuleHandleA("libagave.dll");
-        bases[1] = (unsigned long long)GetModuleHandleA("antbridge.dll");
+        bases[1] = (unsigned long long)GetModuleHandleA("antjsb.dll");
         bases[2] = (unsigned long long)GetModuleHandleA(NULL);
     }
 
@@ -3385,6 +3385,8 @@ static char* moduleFetch(const char* urlText, unsigned long* outSize)
     }
 }
 
+static void antbLogSink(const char* line, void*);
+
 bool start()
 {
     startSampler();
@@ -3394,6 +3396,7 @@ bool start()
         return true;
 
     initCookieStorage();
+    antb_set_logger(antbLogSink, 0);
     /* Ant needs the address of a stack variable from the calling thread. */
     volatile char stack_anchor = 0;
     engine = antb_engine_create((const void*)&stack_anchor);
@@ -3412,9 +3415,17 @@ bool start()
     return true;
 }
 
+/* antjsb logs through this callback: the bridge lives in the ant build and
+ * must not include agave's AgbLog.h. */
+static void antbLogSink(const char* line, void*)
+{
+    agbLog(AGB_LOG_FLAG, "%s", line ? line : "");
+}
+
 void* createContext()
 {
     volatile char stack_anchor = 0;
+    antb_set_logger(antbLogSink, 0);
     AntbEngine* engine = antb_engine_create((const void*)&stack_anchor);
 
     if (!engine)

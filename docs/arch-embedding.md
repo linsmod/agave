@@ -34,12 +34,13 @@ cmake --build build-zig-native --target agave_embed     # 双控件演示
 
 | 文件 | 用途 |
 |---|---|
-| `libagave_webview.dll` | 控件 DLL（第三方只需这个 + 头文件） |
-| `libagave_webview.dll.a` | MinGW 导入库 |
+| `libagave.dll` | 引擎 + Win32 控件（`agave_webview_*` 和 `macross_*` 都在这里） |
+| `libagave.dll.a` | MinGW 导入库；宿主只需链接这个 |
+| `antjsb.dll` | 底部 JS 引擎适配层，由 `libagave.dll` 自动依赖 |
 | `agave_embed.exe` | 演示宿主 |
 
-宿主编译时定义 `AGW_USE_DLL` 并链接导入库；运行时把
-`libagave_webview.dll`、`libagave.dll`、`antbridge.dll` 放到 exe 旁边。
+宿主编译时定义 `AGW_USE_DLL` 并链接 `libagave.dll.a`；运行时把
+`libagave.dll`、`antjsb.dll` 放到 exe 旁边。不再有单独的 `libagave_webview.dll`。
 
 ## API 一览
 

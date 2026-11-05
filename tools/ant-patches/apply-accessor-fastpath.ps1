@@ -138,5 +138,5 @@ if ($Build) {
     $env:PATH = "C:\msys64\usr\bin;C:\msys64\mingw64\bin;" + $env:PATH
     & 'C:\msys64\mingw64\bin\ninja.exe' -C (Join-Path $AntRoot 'build-zig') libant.a
     if ($LASTEXITCODE -ne 0) { throw "libant build failed ($LASTEXITCODE)" }
-    Write-Host 'libant.a rebuilt - now run tools\build_antbridge.ps1 -Force'
+    Write-Host 'libant.a rebuilt - now run tools\build_antjsb.ps1 -Force'
 }

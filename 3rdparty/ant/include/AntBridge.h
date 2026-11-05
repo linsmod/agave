@@ -28,6 +28,11 @@ extern "C" {
 typedef struct AntbEngine AntbEngine;   /* one Ant isolate (= one JS global context) */
 typedef struct AntbValue  AntbValue;    /* a handle to a JS value or object          */
 
+/* Optional diagnostic sink. The bridge has no dependency on the embedder's
+ * logger; the host installs one after loading the DLL. */
+typedef void (*AntbLogFn)(const char* line, void* user);
+AGB_API void antb_set_logger(AntbLogFn fn, void* user);
+
 /* Native method callback.
  *   self  - the `this` value (usually the object the method was read from)
  *   args  - argument array (may be NULL when argc == 0)
@@ -59,6 +64,33 @@ AGB_API void antb_engine_destroy(AntbEngine* engine);
  * malloc'd UTF-8 message there (release with antb_free). */
 AGB_API AntbValue* antb_eval(AntbEngine* engine, const char* src, int len, char** err);
 
+/* ES module support: evaluates `src` as a module whose URL is `filename`
+ * (relative imports resolve against it), and installs the http(s) fetcher used
+ * for module bodies. The fetcher must return a malloc'd NUL-terminated buffer. */
+typedef char* (*AntbModuleFetcher)(const char* url, unsigned long* out_size);
+AGB_API AntbValue* antb_eval_module(AntbEngine* engine, const char* src, int len,
+                                    const char* filename, char** err);
+AGB_API void antb_set_uncaught_nonfatal(AntbEngine* engine, int on);
+AGB_API void antb_set_module_fetcher(AntbModuleFetcher fn);
+
+/* Name used in stack traces for the next evaluations (usually the script URL). */
+AGB_API void antb_set_filename(AntbEngine* engine, const char* name);
+
+/* Runs one non-blocking pass of the engine event loop: timers, immediates and
+ * microtasks. Call once per frame. */
+AGB_API void antb_pump(AntbEngine* engine);
+
+/* Pending-exception report from timer/immediate callbacks (NULL when clean). */
+AGB_API char* antb_take_pending_error(AntbEngine* engine);
+
+/* Name of the most recent bridged callback entered (diagnostics only). */
+AGB_API const char* antb_last_call(void);
+
+/* Installs a hook that runs before every bridged native callback, receiving the
+ * engine that owns the method (used to switch per-view JS contexts). NULL
+ * removes it. */
+AGB_API void antb_set_context_activate(void (*fn)(AntbEngine* engine));
+
 /* ---- value inspection --------------------------------------------------- */
 
 AGB_API double antb_to_number(const AntbValue* value);
@@ -67,6 +99,10 @@ AGB_API double antb_to_number(const AntbValue* value);
 AGB_API char* antb_to_utf8(const AntbValue* value);
 
 AGB_API int antb_is_number(const AntbValue* value);
+AGB_API int antb_is_string(const AntbValue* value);
+AGB_API int antb_is_function(const AntbValue* value);
+/* 1 when both wrappers refer to the same JS value (used by removeEventListener). */
+AGB_API int antb_value_same(const AntbValue* a, const AntbValue* b);
 
 AGB_API void antb_value_release(AntbValue* value);
 
@@ -81,9 +117,15 @@ AGB_API AntbValue* antb_make_string(AntbEngine* engine, const char* utf8);
 /* Creates a JS number. */
 AGB_API AntbValue* antb_make_number(AntbEngine* engine, double v);
 
+/* Creates the JS null value (history.state is null, not undefined). */
+AGB_API AntbValue* antb_make_null(AntbEngine* engine);
+
 /* Creates an empty array; antb_array_push appends to it. */
 AGB_API AntbValue* antb_make_array(AntbEngine* engine);
 AGB_API void antb_array_push(AntbEngine* engine, AntbValue* array, const AntbValue* value);
+
+/* Element access for arrays created by antb_make_array. */
+AGB_API AntbValue* antb_array_get(AntbValue* array, int index);
 
 /* Deletes `name` from obj (used by removeAttribute style APIs). */
 AGB_API void antb_delete_prop(AntbEngine* engine, AntbValue* obj, const char* name);
@@ -129,6 +171,16 @@ AGB_API void antb_value_assign(AntbValue* out, const AntbValue* value);
  * registers it as a GC root, and attaches `ptr` via antb_set_native(). */
 AGB_API AntbValue* antb_wrap_native(AntbEngine* engine, void* ptr, unsigned tag);
 
+/* Same, but the wrapper is owned by `owner` (the document that owns the
+ * native object). When the owner goes away, antb_release_owner() drops the
+ * wrappers, so the next document never gets a wrapper of the old one. */
+AGB_API AntbValue* antb_wrap_native_owner(AntbEngine* engine, void* ptr, unsigned tag, void* owner);
+
+/* Releases the wrappers that belong to `owner`. The GC roots of those
+ * wrappers stay until the engine is destroyed (ant's GC cannot unpin), but
+ * the cache stops handing them out. */
+AGB_API void antb_release_owner(AntbEngine* engine, void* owner);
+
 /* Makes a copy of `value` that survives garbage collection (the handle leaks on
  * purpose; use it for stored callbacks such as DOM event listeners). */
 AGB_API AntbValue* antb_retain(const AntbValue* value);
@@ -156,6 +208,11 @@ AGB_API void antb_class_add_property(AntbEngine* engine, AntbClass* klass,
 /* Wraps a C object as an instance of `klass`, caching per (ptr, tag). */
 AGB_API AntbValue* antb_wrap_native_as(AntbEngine* engine, AntbClass* klass,
                                        void* ptr, unsigned tag);
+
+/* Same, but the wrapper is owned by `owner` (the document that owns the
+ * native object). */
+AGB_API AntbValue* antb_wrap_native_as_owner(AntbEngine* engine, AntbClass* klass,
+                                             void* ptr, unsigned tag, void* owner);
 
 /* Internal helpers (still exported so the C++ side can use them):
  * antb_class_set_property registers a getter in the class table,

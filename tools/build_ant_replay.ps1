@@ -51,6 +51,7 @@ $exe = Join-Path $OutDir 'ant_replay.exe'
 
 $includes = @(
     (Join-Path $ant 'include'),
+    (Join-Path $root '3rdparty\ant\include'),
     (Join-Path $ant 'vendor\uthash-2.3.0\src'),
     (Join-Path $ant 'vendor\libuv-v1.53.0\include')
 )
@@ -86,12 +87,12 @@ if ($Run) {
 }
 
 # ---------------------------------------------------------------------------
-# Second program: the same test through agave's own bridge (antbridge.dll), i.e.
+# Second program: the same test through agave's own bridge (antjsb.dll), i.e.
 # antb_engine_create + antb_eval + antb_pump + antb_set_native + antb_call.
 # ---------------------------------------------------------------------------
 $bridgeSrc = Join-Path $root 'tools\ant-replay\ant_replay_bridge.c'
-$bridgeLib = Join-Path $root '3rdparty\ant\lib\antbridge.dll.a'
-$bridgeDll = Join-Path $root '3rdparty\ant\lib\antbridge.dll'
+$bridgeLib = Join-Path $root '3rdparty\ant\lib\antjsb.dll.a'
+$bridgeDll = Join-Path $root '3rdparty\ant\bin\antjsb.dll'
 
 if ((Test-Path $bridgeSrc) -and (Test-Path $bridgeLib)) {
     $bobj = Join-Path $OutDir 'ant_replay_bridge.obj'
@@ -114,7 +115,7 @@ if ((Test-Path $bridgeSrc) -and (Test-Path $bridgeLib)) {
     Write-Host "built $bexe"
     if ($Run) { & $bexe }
 } else {
-    Write-Host 'bridge variant skipped (antbridge.dll.a missing; run tools\build_antbridge.ps1)'
+    Write-Host 'bridge variant skipped (antjsb.dll.a missing; run tools\build_antjsb.ps1)'
 }
 
 

@@ -12,8 +12,12 @@ build-zig-noant/
 build-*.log
 bt.log
 
-# antbridge.dll is ~44 MB; rebuild it with 3rdparty/ant/README.md
+# antjsb.dll is built from the ant checkout; keep the binary/PDB local.
+# 3rdparty/ant/bin is the runtime copy, lib holds the import library.
 3rdparty/ant/bin/*.dll
+3rdparty/ant/bin/*.pdb
+3rdparty/ant/lib/*.dll
+3rdparty/ant/lib/*.pdb
 
 # local test data that ships with the checkout
 authinfo.dat
@@ -28,9 +32,3 @@ build-touch/
 
 # standalone Ant replay test (tools/build_ant_replay.ps1)
 build-ant-replay/
-3rdparty/ant/lib/antbridge.dll
-3rdparty/ant/lib/antbridge.dll
-
-# antbridge is built -O2 -g; the PDB is ~38 MB and stays local (build_antbridge.ps1 installs it).
-3rdparty/ant/bin/*.pdb
-3rdparty/ant/lib/*.pdb

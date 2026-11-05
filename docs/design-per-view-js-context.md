@@ -52,22 +52,19 @@ agb_context_activate(js);   /* 由 AntRuntime 实现：g_current = stateFor(js)�
 
 一次性覆盖全部 150+ 个 native 回调，不用逐个改签名。
 
-### 重要：antbridge.dll 必须手工重建
+### 重要：antjsb 由 ant 构建（2026-11-05 起）
 
-`src/javascript/ant_backend/AntBridge.c` 是**源码副本**，仓库里的
-`3rdparty/ant/bin/antbridge.dll` 是预先构建好的二进制，
-agave 的 CMake 只负责把它拷到输出目录。
+桥源码真源是 ant 仓库的 `H:\ant-v16\bridge\AntBridge.c`，`agave-bridge` 的 Meson
+target `antjsb` 负责把它编成 `antjsb.dll`。agave 只保留 `AntRuntime.cpp` 和
+`3rdparty/ant/{include,lib,bin}` 的发布副本。
 
-所以对 `AntBridge.c` 的任何修改（包括本文提到的 trampoline 扩容）
-**不会**自动生效，必须：
+修改桥（包括本文提到的 trampoline 扩容）后：
 
-1. 把 `src/javascript/ant_backend/AntBridge.c` 同步到
-   `H:\ant-v16\bridge\AntBridge.c`（`tools/build_antbridge.ps1` 会做这一步）；
-2. 重新编译并链接 —— 就是 `pwsh -File tools\build_antbridge.ps1 -Force`
-   （内部 `-shared -o antbridge.dll` + `-DAGB_BUILD_DLL`，见 `AGENTS.md`）；
-3. 把新 `antbridge.dll` / `antbridge.dll.a` 拷回
-   `3rdparty/ant/{bin,lib}` 和 `build-zig-native\`、`host\nativerun\`；
-4. `cmake --build build-zig-native` 重新链接 libagave。
+1. 在 ant 仓库改 `bridge/AntBridge.c`；
+2. 在 agave 仓库执行 `pwsh -File tools\build_antjsb.ps1`；
+3. `cmake --build build-zig-native` 重新链接 libagave。
+
+不再有“把 agave 副本同步到 ant”的步骤，也没有 `build_antbridge.ps1`。
 
 ### 需要改的点
 
@@ -93,7 +90,7 @@ agave 的 CMake 只负责把它拷到输出目录。
   需要在 `activate` 里保存/恢复 `g_current`（栈式）。
 * **内存**：每个引擎有独立 VM（Ant 的堆按引擎分配），
   10 个 view 会明显吃内存；需要实测单引擎基线。
-* **Ant 的全局状态**：若 `antbridge` 内部还有跨引擎的静态状态
+* **Ant 的全局状态**：若 `antjsb` 内部还有跨引擎的静态状态
   （如 `g_last_call`、错误缓冲），需要确认它们是否线程安全/可重入。
 * **销毁**：现有代码在 `stop()` 里只销毁一个引擎，改成析构每个 state。
 

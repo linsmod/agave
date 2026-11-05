@@ -26,8 +26,8 @@
 # build dir (e.g. agave_shell, which is a real browser window) holds the files,
 # the script lists it and stops. Add -StopLockingProcesses to let it kill them.
 #
-# Targets built: libagave.dll / libagave_webview.dll / agave_shell.exe /
-# agave_embed.exe / agave_view_host.exe (headless test host) / touchweb.exe
+# Targets built: libagave.dll / agave_shell.exe / agave_embed.exe /
+# agave_view_host.exe (headless test host) / touchweb.exe
 # (built when OPT_TOUCHWEB was ON at configure time; this script never flips
 # cached options - do that by hand with -Fresh if you really need to).
 #
@@ -58,7 +58,7 @@ $root  = Split-Path -Parent $PSScriptRoot           # agave repo
 $build = if ([IO.Path]::IsPathRooted($BuildDir)) { $BuildDir } else { Join-Path $root $BuildDir }
 $log   = if ($Log) { $Log } else { Join-Path $root 'build-native.log' }
 
-$artifacts = @('libagave.dll', 'libagave_webview.dll', 'agave_shell.exe', 'agave_embed.exe',
+$artifacts = @('libagave.dll', 'agave_shell.exe', 'agave_embed.exe',
                'agave_view_host.exe', 'touchweb.exe', 'polyfills.js')
 
 function Fail([string]$message) {

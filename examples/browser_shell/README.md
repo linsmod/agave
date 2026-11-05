@@ -28,7 +28,7 @@ cmake -S . -B build-zig-native -DOPT_JS_ANT=ON -DOPT_NET_BACKEND=native -DOPT_SH
 cmake --build build-zig-native --target agave_shell
 ```
 
-产物 `build-zig-native/agave_shell.exe`，需要同目录有 `libagave.dll` 和 `antbridge.dll`。
+产物 `build-zig-native/agave_shell.exe`，需要同目录有 `libagave.dll` 和 `antjsb.dll`。
 
 ## 线程模型
 

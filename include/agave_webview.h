@@ -10,8 +10,8 @@
  *   ...
  *   agave_webview_destroy(view);
  *
- * Link with agave_webview.lib + libagave.dll.a, copy libagave.dll and
- * antbridge.dll next to the host executable.
+ * Link with libagave.dll.a, copy libagave.dll and antjsb.dll next to the host
+ * executable.
  *
  * Callbacks are invoked on the control's engine thread. Do not call back into
  * the control synchronously from them beyond the functions documented as

@@ -21,13 +21,12 @@ pwsh -File tools\build_project.ps1 *> build-native.log; $LASTEXITCODE
 $env:PATH = "C:\msys64\mingw64\bin;" + $env:PATH
 cmake --build e:\mybrowsers\agave\build-zig-native --parallel 16
 
-# C. 改了 AntBridge.c（两步缺一不可）
-pwsh -File tools\build_antbridge.ps1 -Force
+# C. 改了桥（ant 的 bridge/AntBridge.c）
+pwsh -File tools\build_antjsb.ps1 -Force
 cmake --build build-zig-native --parallel 16
 
 # D. 改了 ant 引擎内核（H:\ant-v16）
-ninja -C H:\ant-v16\build-zig libant.a
-pwsh -File tools\build_antbridge.ps1 -Force      # 重链 dll 并同步四处副本
+pwsh -File tools\build_antjsb.ps1        # 编 libant.a + 重链 antjsb.dll
 # 只有改了本仓库 C++ 才需要再 cmake --build build-zig-native
 ```
 
@@ -36,7 +35,7 @@ pwsh -File tools\build_antbridge.ps1 -Force      # 重链 dll 并同步四处副
 | 产物 | 配置 | 说明 |
 |---|---|---|
 | `libant.a`（ant 引擎） | meson `buildtype=release` + `-Ddebug=true` → `-O3 -g` | 2026-11-04 起打开；`meson configure H:\ant-v16\build-zig -Ddebug=true`，改完 `ninja -C H:\ant-v16\build-zig libant.a` |
-| `antbridge.dll`（桥 + 引擎） | `-O2 -g`（脚本里写死） | 产出 `antbridge.pdb`，随 DLL 装到 `3rdparty/ant/bin`、`build-zig-native\` 等四处；`src/src.cmake` 会把它拷进构建目录 |
+| `antjsb.dll`（桥 + 引擎） | ant Meson `-O2 -g` | 产出 `antjsb.pdb`；`build_antjsb.ps1` 装到 `3rdparty/ant/bin`，`src/src.cmake` 再拷进构建目录 |
 | `agave_shell` / `libagave` | CMake `CMAKE_BUILD_TYPE=Debug`（`-O0 -g -D_DEBUG`） | 带完整 PDB（`libagave.pdb`），不是 release |
 
 ## 3. 改什么 → 重编什么（先估时间再动手）
@@ -45,8 +44,8 @@ pwsh -File tools\build_antbridge.ps1 -Force      # 重链 dll 并同步四处副
 |---|---|---|
 | `prelude.js` / `polyfills.js` | 拷到 `build-zig-native\`（或 `cmake --build` 会顺带拷） | 0（下次绑文档生效） |
 | 一个 `webcore/*.cpp` / `webview/*.cpp` | `cmake --build build-zig-native` | 10 秒 ~ 1 分钟 |
-| `AntRuntime.cpp` / `AntBridge.c` | `build_antbridge.ps1 -Force` + `cmake --build` | 1 ~ 3 分钟 |
-| ant 的 1-2 个 `.c` | `ninja libant.a` + 重链 dll | ~1 分钟 |
+| `AntRuntime.cpp` / `AntBridge.c` | `build_antjsb.ps1` + `cmake --build` | 1 ~ 3 分钟 |
+| ant 的 1-2 个 `.c` | `build_antjsb.ps1`（内含 libant + 桥） | ~1 分钟 |
 | ant 的**头文件** | 同上，但 libant 会重编 200+ 个对象 | ~10 分钟 |
 | 加/删源文件、改 CMakeLists | `src/` 下的源文件由 `file(GLOB_RECURSE ... CONFIGURE_DEPENDS)` 收集，ninja 会自己重跑 configure；改 `CMakeLists.txt` 仍要手动 configure | 秒级 ~ 数分钟 |
 
@@ -59,19 +58,18 @@ pwsh -File tools\build_antbridge.ps1 -Force      # 重链 dll 并同步四处副
 | `agave_shell.exe` | 桌面壳：GUI 浏览 + `--probe` 无头探针 |
 | `agave_view_host.exe` | **无窗口**渲染：`agave_view_host.exe <url> [out.bmp] [--eval js] [--click x y] [--type text] [--enter] [--wheel n] [--wheelup n] [--repaint]`，像素/交互校验用 |
 | `agave_embed.exe` | 嵌入 demo（同一套控件） |
-| `agave_webview.dll` | Win32 控件（`agave_webview_*` API） |
-| `libagave.dll` | 引擎本体 |
-| `antbridge.dll` (+ `antbridge.pdb`) | JS 桥（预编译产物，见 [ref-ant-engine.md](ref-ant-engine.md)） |
+| `libagave.dll` | 引擎 + Win32 控件（`macross_*` 和 `agave_webview_*`） |
+| `antjsb.dll` (+ `antjsb.pdb`) | JS 桥 + 引擎（ant 侧构建，见 [ref-ant-engine.md](ref-ant-engine.md)） |
 | `prelude.js` / `polyfills.js` | 运行时从 exe 旁加载的 JS shim（可热改） |
 | `%LOCALAPPDATA%\Agave\probe\` / `...\view-host\` | 无头工具自己的 profile（cookies/cache），由 `AGB_USERDATA` 决定，见 [dev-debugging.md](dev-debugging.md) |
 
-- `3rdparty/ant/{bin,lib}/antbridge.dll` 只是**分发副本**，运行时不读它们（`3rdparty/ant/bin` 被 gitignore）。
+- `3rdparty/ant/bin/antjsb.dll` 只是**分发副本**，运行时不读它（`3rdparty/ant/bin` 被 gitignore）。
 - **picasso（图形后端）源码在 `3rdparty/picasso/`，由 `add_subdirectory` 直接编译**，
   产物是 `build-zig-native/picasso/libpicasso2_sw.a`（静态）。它以前是 `ExternalProject`：
   从 `packages/picasso-2.8.0.tar.gz` 解压到构建目录、再用 `packages/patchs/` 覆盖几个文件，
   所以**任何图形修复都写在仓库外**，清构建目录就被还原。现在改图形代码直接改 `3rdparty/picasso/`。
   两个坑：①`BUILD_SHARED_LIBS` 与主工程共用，picasso 只在 `add_subdirectory` 期间用普通变量切成
-  静态、之后立刻还原（强制成 cache 会把 libagave 也变静态，`libagave_webview` 立刻链接失败）；
+  静态、之后立刻还原（强制成 cache 会把 libagave 也变静态）；
   ②主工程给每个 C++ TU 强制 `-include src/wtf/Platform.h`（它拉 `mconfig.h`），picasso 没有
   `mconfig.h`，所以 `3rdparty/picasso/CMakeLists.txt` 里把这一条从 `CMAKE_CXX_FLAGS` 剥掉。
 - 把 exe 单独拷到别处跑会缺 DLL（`debug/` 里直接跑拷过去的 exe 会失败）。
@@ -93,7 +91,7 @@ H:\ant-v16\build-zig\ant.exe                # REPL
 - **`Start-Process -ArgumentList` 不会给含空格的参数加引号**：`--eval` 里带空格/单引号会被拆成多个
   argv，JS 就变成语法错误。要么整串给 `-ArgumentList '--probe "url" --eval "..."'`，要么写 `.cmd`。
 - **PowerShell 会把 `&&` 搅成 `;`**（传给 `--eval` 时）；脚本里用嵌套三元或逗号表达式。
-- **旧进程占着 `antbridge.dll` 时链接会静默失败**——跑的还是旧 dll。重编前先
+- **旧进程占着 `antjsb.dll` 时链接会静默失败**——跑的还是旧 dll。重编前先
   `Get-Process agave_shell | Stop-Process -Force`。
 - 命令执行器可能是 bash（`$env:` 会炸）：本仓库脚本都是 PowerShell，用 `pwsh -File` 调用。
 - 输出是 UTF-8；把日志重定向到文件再 grep，不要依赖控制台编码。

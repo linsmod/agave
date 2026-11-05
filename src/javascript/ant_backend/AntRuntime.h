@@ -1,7 +1,7 @@
 /*
  * AntRuntime.h - process-wide Ant engine lifetime for agave.
  *
- * The Ant engine lives in antbridge.dll (see 3rdparty/ant). This wrapper is the
+ * The Ant engine lives in antjsb.dll (see 3rdparty/ant). This wrapper is the
  * only C++ place that talks to it, so the rest of the engine stays engine-agnostic.
  */
 

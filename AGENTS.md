@@ -4,7 +4,7 @@ agave 是**从零移植的浏览器**：WebKit 2008 的 WebCore（解析/布局/
 （`H:\ant-v16`：VM/编译、ESM、Worker、wasm）+ Win32 控件与宿主壳。目标是让真实站点
 （deepseek、百度、Vue 应用……）表现对齐现代浏览器。
 
-[script engine](tools/build_antbridge.ps1) · [build proj](tools/build_project.ps1) · [cdb](tools/cdb.exe)
+[script engine](tools/build_antjsb.ps1) · [build proj](tools/build_project.ps1) · [cdb](tools/cdb.exe)
 
 ## 文档地图（详情都在 docs/，这里只放铁律）
 
@@ -52,11 +52,12 @@ WHEN USER REPLY A DOT[.] ONLY, MEANS OK/DONE/DO_AS_YOU_SAY/YES/GO_ON/ACCEPT/...
 
 ## 七条铁律（违反会**静默**失败）
 
-1. **改 `AntBridge.c` 只改本仓库** `src/javascript/ant_backend/` 那份，然后
-   `pwsh -File tools/build_antbridge.ps1 -Force` + relink。`H:\ant-v16\bridge\AntBridge.c` 会被脚本覆盖，改了白改。
-2. **改 ant 内核先重编 libant**：`ninja -C H:\ant-v16\build-zig libant.a` → 再重链 dll；
-   只改本仓库 C++ 时才需要 `cmake --build build-zig-native`。
-3. **重编前先停掉正在跑的 `agave_shell`**：旧进程占着 `antbridge.dll` 时链接静默失败，跑的还是旧 dll。
+1. **桥源码在 ant 仓库**：真源是 `H:\ant-v16\bridge\AntBridge.c`，改完跑
+   `pwsh -File tools/build_antjsb.ps1` 重建 `antjsb.dll` / `antjsb.dll.a` / `AntBridge.h`，
+   再 relink `libagave`。agave 里不再保留桥的副本。
+2. **改 ant 内核也走同一个脚本**：`pwsh -File tools/build_antjsb.ps1` 会先编 `libant.a`
+   再链 `antjsb.dll`；只改本仓库 C++ 时才需要 `cmake --build build-zig-native`。
+3. **重编前先停掉正在跑的 `agave_shell`**：旧进程占着 `antjsb.dll` 时链接静默失败，跑的还是旧 dll。
 4. `prelude.js` / `polyfills.js` 是**运行时**从 exe 旁加载的：拷到 `build-zig-native\` 即生效，**不用重链**。
 5. 探针默认**真无头**（不建浏览器窗口）；要像素用 `--shot <bmp>`（抓控件自己的 mirror 缓冲），`AGB_PROBE_SHOW=1` 只在调试「窗口可见时行为不同」的路径时才用。
 6. **不要 rebase** ant 的 `agave-bridge`：基线是冻结 tag，落后上游 54 个 commit，同步另外安排。

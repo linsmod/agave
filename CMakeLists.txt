@@ -73,7 +73,7 @@ OPTION_MACRO_DEFINE(OPT_SHIFTJIS_SUPPORT ENABLE_SHIFTJIS_SUPPORT "Build support 
 
 OPTION_MACRO_DEFINE(OPT_USE_KJS ENABLE_KJS "Build with KJS JavaScript engine." ON)
 OPTION_MACRO_DEFINE(OPT_USE_QJS ENABLE_QJS "Build with QuickJS JavaScript engine." OFF)
-OPTION_MACRO_DEFINE(OPT_JS_ANT ENABLE_ANTJS "Build with Ant JavaScript engine (antbridge.dll)." OFF)
+OPTION_MACRO_DEFINE(OPT_JS_ANT ENABLE_ANTJS "Build with Ant JavaScript engine (antjsb.dll)." OFF)
 set(OPT_NET_BACKEND "curl" CACHE STRING "Network backend: curl (bundled) or native (system stack)")
 
 # quickjs is pulled in only when the QuickJS backend is selected (see 3rdparty.cmake)
@@ -105,25 +105,25 @@ endif()
 
 option(OPT_SHELL "Build the Win32 browser shell" OFF)
 if (OPT_SHELL AND WIN32)
-    # The shell is now an embedding host: all page handling goes through the
-    # AgaveWebView control.
+    # The Win32 control is part of libagave now: one DLL exports both the
+    # MaCross engine API and the agave_webview_* control API.
+    target_sources(${LIB_NAME} PRIVATE
+        ${PROJ_ROOT}/src/webview_control/AgaveWebView.c)
+    set_source_files_properties(
+        ${PROJ_ROOT}/src/webview_control/AgaveWebView.c
+        PROPERTIES COMPILE_DEFINITIONS AGW_BUILD_DLL)
+    target_link_libraries(${LIB_NAME} PRIVATE user32 gdi32)
+    add_library(agave_webview ALIAS ${LIB_NAME})
+
     add_executable(agave_shell WIN32 ${PROJ_ROOT}/examples/browser_shell/main.c)
     target_include_directories(agave_shell PRIVATE ${PROJ_ROOT}/include ${PROJ_OUT})
     target_compile_definitions(agave_shell PRIVATE AGW_USE_DLL)
-    target_link_libraries(agave_shell PRIVATE agave_webview ${LIB_NAME} user32 gdi32 shell32 comdlg32)
-endif()
-
-# Embeddable WebView control: child HWND + engine thread, plus a demo host.
-if (OPT_SHELL AND WIN32)
-    add_library(agave_webview SHARED ${PROJ_ROOT}/src/webview_control/AgaveWebView.c)
-    target_include_directories(agave_webview PRIVATE ${PROJ_ROOT}/include ${PROJ_OUT})
-    target_compile_definitions(agave_webview PRIVATE AGW_BUILD_DLL AGB_USE_DLL)
-    target_link_libraries(agave_webview PRIVATE ${LIB_NAME} user32 gdi32)
+    target_link_libraries(agave_shell PRIVATE ${LIB_NAME} user32 gdi32 shell32 comdlg32)
 
     add_executable(agave_embed WIN32 ${PROJ_ROOT}/examples/embed_demo/main.c)
     target_include_directories(agave_embed PRIVATE ${PROJ_ROOT}/include ${PROJ_OUT})
     target_compile_definitions(agave_embed PRIVATE AGW_USE_DLL)
-    target_link_libraries(agave_embed PRIVATE agave_webview ${LIB_NAME} user32 gdi32)
+    target_link_libraries(agave_embed PRIVATE ${LIB_NAME} user32 gdi32)
 
     # Headless test host: renders into a memory buffer, prints title/progress/
     # timings and saves a BMP. This is what the perf and probe scripts run, and

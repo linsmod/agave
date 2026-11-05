@@ -11,11 +11,11 @@
     -Attach <pid>       dump all threads of a running process (for hangs).
     -Hang -Url ...      start the probe, wait -HangAfter seconds, attach,
                         dump, then kill it.
-    -Symbolize <log>    map "#NN exe|libagave|antbridge+0x..." frames from a
+    -Symbolize <log>    map "#NN exe|libagave|antjsb+0x..." frames from a
                         saved log (e.g. the atexit dump) to function/file:line.
 
-  Symbol path is built from build-zig-native + H:\ant-v16\bridge automatically.
-  antbridge is always built -O2 -g (release + debug info) and its PDB ships
+  Symbol path is built from build-zig-native + H:\ant-v16\build-zig automatically.
+  antjsb is always built -O2 -g (release + debug info) and its PDB ships
   next to the DLL; -DebugBuild forces a rebuild of it.
 
   When the run ends through exit(), the shell prints its own atexit stack; this
@@ -62,7 +62,7 @@ $root    = Split-Path -Parent $PSScriptRoot
 $cdb     = Join-Path $root 'tools\cdb.exe'
 $build   = Join-Path $root 'build-zig-native'
 $default = Join-Path $build 'agave_shell.exe'
-$symDirs = @($build, 'H:\ant-v16\bridge')
+$symDirs = @($build, 'H:\ant-v16\build-zig')
 $symPath = ($symDirs -join ';')
 $stamp   = Get-Date -Format 'yyyyMMdd_HHmmss'
 $debugDir = Join-Path $root 'debug'
@@ -86,19 +86,19 @@ function New-CmdFile {
 
 function Show-SymbolStatus {
     param([string[]]$Lines)
-    $mods = 'antbridge|libagave|agave_shell'
+    $mods = 'antjsb|libagave|agave_shell'
     $interesting = $Lines | Where-Object { $_ -match "^\S+\s+\S+\s+($mods)\s" }
     foreach ($l in $interesting) {
-        if ($l -match '\s(antbridge|libagave|agave_shell)\s+.*\(private pdb symbols\)') {
+        if ($l -match '\s(antjsb|libagave|agave_shell)\s+.*\(private pdb symbols\)') {
             Write-Host ("  [sym] " + $l.Trim())
-        } elseif ($l -match '\s(antbridge|libagave|agave_shell)\s') {
+        } elseif ($l -match '\s(antjsb|libagave|agave_shell)\s') {
             Write-Host ("  [sym] " + $l.Trim()) -ForegroundColor Yellow
         }
     }
-    $ant = $interesting | Where-Object { $_ -match '\santbridge\s' }
-    if ($ant -and -not ($ant | Where-Object { $_ -match '\santbridge\s+.*private pdb symbols' })) {
-        Write-Host "  [!] antbridge has no PDB: its frames will stay module+offset." -ForegroundColor Yellow
-        Write-Host "      rebuild: pwsh -File tools/build_antbridge.ps1 -Force   (or -DebugBuild)" -ForegroundColor Yellow
+    $ant = $interesting | Where-Object { $_ -match '\santjsb\s' }
+    if ($ant -and -not ($ant | Where-Object { $_ -match '\santjsb\s+.*private pdb symbols' })) {
+        Write-Host "  [!] antjsb has no PDB: its frames will stay module+offset." -ForegroundColor Yellow
+        Write-Host "      rebuild: pwsh -File tools/build_antjsb.ps1 -Force   (or -DebugBuild)" -ForegroundColor Yellow
     }
 }
 
@@ -124,7 +124,7 @@ function Invoke-Symbolize {
     $modules = @{
         'exe'       = @{ File = 'agave_shell.exe'; Name = 'agave_shell' }
         'libagave'  = @{ File = 'libagave.dll';    Name = 'libagave' }
-        'antbridge' = @{ File = 'antbridge.dll';   Name = 'antbridge' }
+        'antjsb' = @{ File = 'antjsb.dll';   Name = 'antjsb' }
     }
 
     $groups = @{}
@@ -286,9 +286,9 @@ if ($Symbolize) {
 }
 
 if ($DebugBuild) {
-    Write-Host "== build antbridge (release + debug info, antbridge.pdb) =="
-    & pwsh -NoProfile -File (Join-Path $root 'tools\build_antbridge.ps1') -Debug
-    if ($LASTEXITCODE -ne 0) { throw "build_antbridge failed" }
+    Write-Host "== build antjsb (release + debug info, antjsb.pdb) =="
+    & pwsh -NoProfile -File (Join-Path $root 'tools\build_antjsb.ps1')
+    if ($LASTEXITCODE -ne 0) { throw "build_antjsb failed" }
 }
 
 $exe = if ($Exe) { [IO.Path]::GetFullPath($Exe) } else { $default }

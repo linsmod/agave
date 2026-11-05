@@ -76,8 +76,6 @@ endif()
 
 set(LIB_NAME agave)
 
-# ant_backend/AntBridge.c belongs to antbridge.dll, not to the engine itself.
-list(REMOVE_ITEM SOURCES ${PROJ_ROOT}/src/javascript/ant_backend/AntBridge.c)
 # AntRuntime.cpp is only built when the Ant runtime is enabled.
 if (NOT OPT_JS_ANT)
     list(REMOVE_ITEM SOURCES ${PROJ_ROOT}/src/javascript/ant_backend/AntRuntime.cpp)
@@ -97,26 +95,26 @@ endif()
 
 add_library(${LIB_NAME} ${SOURCES})
 
-# Ant engine runtime (task 1-2): the JS engine itself lives in antbridge.dll,
-# see 3rdparty/ant. Enabled with -DOPT_JS_ANT=ON.
+# Ant engine runtime (task 1-2): the JS engine and its bridge live in
+# antjsb.dll, built from 3rdparty/ant. Enabled with -DOPT_JS_ANT=ON.
 if (OPT_JS_ANT)
     target_sources(${LIB_NAME} PRIVATE ${PROJ_ROOT}/src/javascript/ant_backend/AntRuntime.cpp)
     target_include_directories(${LIB_NAME} PRIVATE
         ${PROJ_ROOT}/src/javascript/ant_backend
         ${PROJ_ROOT}/3rdparty/ant/include)
     target_compile_definitions(${LIB_NAME} PRIVATE AGB_USE_DLL)
-    target_link_libraries(${LIB_NAME} PRIVATE ${PROJ_ROOT}/3rdparty/ant/lib/antbridge.dll.a)
+    target_link_libraries(${LIB_NAME} PRIVATE ${PROJ_ROOT}/3rdparty/ant/lib/antjsb.dll.a)
     add_custom_command(TARGET ${LIB_NAME} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${PROJ_ROOT}/3rdparty/ant/bin/antbridge.dll
-            $<TARGET_FILE_DIR:${LIB_NAME}>/antbridge.dll)
-    # antbridge is built -O2 -g (release + debug info); keep its PDB next to the
+            ${PROJ_ROOT}/3rdparty/ant/bin/antjsb.dll
+            $<TARGET_FILE_DIR:${LIB_NAME}>/antjsb.dll)
+    # antjsb is built -O2 -g (release + debug info); keep its PDB next to the
     # DLL so cdb resolves engine/bridge frames without extra setup.
-    if (EXISTS ${PROJ_ROOT}/3rdparty/ant/bin/antbridge.pdb)
+    if (EXISTS ${PROJ_ROOT}/3rdparty/ant/bin/antjsb.pdb)
         add_custom_command(TARGET ${LIB_NAME} POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                ${PROJ_ROOT}/3rdparty/ant/bin/antbridge.pdb
-                $<TARGET_FILE_DIR:${LIB_NAME}>/antbridge.pdb)
+                ${PROJ_ROOT}/3rdparty/ant/bin/antjsb.pdb
+                $<TARGET_FILE_DIR:${LIB_NAME}>/antjsb.pdb)
     endif()
 endif()
 

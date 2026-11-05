@@ -1697,7 +1697,7 @@ static void shellExitTrace(void)
     {
         unsigned long long exe = (unsigned long long)GetModuleHandleA(NULL);
         unsigned long long av  = (unsigned long long)GetModuleHandleA("libagave.dll");
-        unsigned long long ab  = (unsigned long long)GetModuleHandleA("antbridge.dll");
+        unsigned long long ab  = (unsigned long long)GetModuleHandleA("antjsb.dll");
 
         agbLog(AGB_LOG_SHELL, "atexit fired, bases exe=%llx agave=%llx ant=%llx", exe, av, ab);
 
@@ -1707,7 +1707,7 @@ static void shellExitTrace(void)
             unsigned long long off = a;
 
             if (av && a >= av && a < av + 0x2000000ULL) { mod = "libagave"; off = a - av; }
-            else if (ab && a >= ab && a < ab + 0x2000000ULL) { mod = "antbridge"; off = a - ab; }
+            else if (ab && a >= ab && a < ab + 0x2000000ULL) { mod = "antjsb"; off = a - ab; }
             else if (exe && a >= exe && a < exe + 0x100000ULL) { mod = "exe"; off = a - exe; }
 
             fprintf(stderr, "  #%02d %s+0x%llx\n", i, mod, off);

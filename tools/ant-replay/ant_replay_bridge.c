@@ -1,6 +1,6 @@
 /*
  * ant_replay_bridge.c - same question as ant_replay.c, but through agave's own
- * bridge (antbridge.dll): antb_engine_create + antb_eval + antb_pump +
+ * bridge (antjsb.dll): antb_engine_create + antb_eval + antb_pump +
  * antb_set_native + antb_call, i.e. exactly how AntRuntime drives Ant.
  *
  * If a case here prints runs>1 while ant_replay.c prints 1, the trigger is in

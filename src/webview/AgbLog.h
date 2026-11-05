@@ -8,11 +8,11 @@
  *   [ 1234.5ms] [ui]  mouse down left at 320,180
  *
  * The time is milliseconds since the first log line of the process. The origin
- * lives in a named mapping keyed by pid, so libagave, antbridge.dll, the
+ * lives in a named mapping keyed by pid, so libagave, antjsb.dll, the
  * webview control and the shell all print on the same clock; a per-TU origin
  * would differ by up to ~15ms and reorder closely-spaced events.
  *
- * Header-only on purpose: antbridge.dll is loaded *by* libagave, so it cannot
+ * Header-only on purpose: antjsb.dll is loaded *by* libagave, so it cannot
  * link a logger that lives there. The format and the channel switches still
  * live in this one file.
  *

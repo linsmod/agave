@@ -16,8 +16,8 @@ agave 是**从零移植的浏览器**：**WebKit 2008 的 WebCore**（HTML/CSS �
 | 宿主壳 | `examples/browser_shell/main.c` | 标签页/地址栏/查找/书签/快捷键；`--probe` 真无头探针 |
 | Win32 控件 | `src/webview_control/AgaveWebView.c` | 控件窗口、引擎线程、`AGW_CMD_*` 队列、剪贴板/IME |
 | 视图 + WebCore | `src/webview/`、`src/webcore/` | MaCross 适配、帧泵、页面时序；WebKit 2008 解析/DOM/CSS/布局/绘制/网络 |
-| JS 桥 + 运行时 | `src/javascript/ant_backend/` | `AntRuntime.cpp`（realm/桥外观）、`AntBridge.c`（JS↔C）、`prelude.js`/`polyfills.js`/`internal.js` |
-| ant 引擎 | `H:\ant-v16`（独立仓库） | silver VM/编译、ESM loader、Worker、wasm；见 [ref-ant-engine.md](ref-ant-engine.md) |
+| JS 桥 + 运行时 | `src/javascript/ant_backend/` + ant 的 `bridge/` | `AntRuntime.cpp`（realm/桥外观）、`prelude.js`/`polyfills.js`/`internal.js`；`AntBridge.c` 在 ant 仓库 |
+| ant 引擎 | `H:\ant-v16`（独立仓库） | silver VM/编译、ESM loader、Worker、wasm、antjsb；见 [ref-ant-engine.md](ref-ant-engine.md) |
 
 仓库根目录：
 
@@ -25,11 +25,11 @@ agave 是**从零移植的浏览器**：**WebKit 2008 的 WebCore**（HTML/CSS �
 |---|---|
 | `src/` | 引擎源码（见上表） |
 | `examples/` | `browser_shell`（桌面壳）、`view_host`（无窗口渲染出 BMP）、`embed_demo`、`touchweb` |
-| `include/` | 公共头：`agave_webview.h`、`AntBridge.h`、http/wtf |
+| `include/` | 公共头：`agave_webview.h`、http/wtf；`AntBridge.h` 在 `3rdparty/ant/include` |
 | `tools/` | 脚本、`cdb.exe`、`pages/`（被跟踪的测试页） |
 | `docs/` | 全部文档，入口 [README.md](README.md) |
 | `debug/` | 本地调试页（`.gitignore` 忽略，见 [dev-conventions.md](dev-conventions.md)） |
-| `3rdparty/` | ant 预编译产物与第三方库（`antbridge.dll` 分发副本） |
+| `3rdparty/` | ant 预编译产物与第三方库（`antjsb.dll` 分发副本） |
 | `build-zig-native/` | **唯一可运行目录**：exe + dll + `prelude.js`/`polyfills.js` |
 | `dist/`、`packages/`、`vcproj/`、`test/`、`unit_tests/` | 打包模板 / 第三方源码包 / VS 工程 / 演示宿主与单元测试 |
 
@@ -42,7 +42,7 @@ agave 是**从零移植的浏览器**：**WebKit 2008 的 WebCore**（HTML/CSS �
 |---|---|---|
 | `window`/`document` 辅助、XHR/fetch、storage、`matchMedia`、`Worker` | `src/javascript/ant_backend/prelude.js` | **热改**：拷到 `build-zig-native\` 即生效，不重链 |
 | DOM 构造器补丁（`append`/`classList`/`instanceof Node`/构造器 stub） | `src/javascript/ant_backend/polyfills.js` | 热改；每 realm 执行一次 |
-| DOM 桥（节点属性/方法/事件/构造函数） | `AntBridge.c`（wrapper 表 + 分发）+ `AntRuntime.cpp`（`nodeGetter`/`wrapNode`/类表） | 改完 `build_antbridge.ps1 -Force` + relink |
+| DOM 桥（节点属性/方法/事件/构造函数） | `H:\ant-v16\bridge\AntBridge.c`（wrapper 表 + 分发）+ `AntRuntime.cpp`（`nodeGetter`/`wrapNode`/类表） | 改完 `build_antjsb.ps1` + relink |
 | HTML 解析、`script`/module 时序 | `src/webcore/html/HTMLTokenizer.cpp` | 等待位/`scriptExecution` 在这里 |
 | CSS 解析、选择器 | `src/webcore/css/CSSParser.cpp`、`CSSStyleSelector.cpp` | 词法/语法老，改前先看 `AGENTS.md` 里 `var()` 的写法 |
 | computed style | `src/webcore/css/CSSComputedStyleDeclaration.cpp` | 未实现属性默认静默（`AGB_CSS_DEBUG` 才打） |
