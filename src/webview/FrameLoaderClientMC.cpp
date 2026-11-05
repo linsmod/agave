@@ -630,9 +630,10 @@ void FrameLoaderClientMC::dispatchDidFinishLoading(DocumentLoader*, unsigned lon
     notImplemented();
 }
 
-void FrameLoaderClientMC::dispatchDidFailLoading(DocumentLoader*, unsigned long identifier, const ResourceError&)
+void FrameLoaderClientMC::dispatchDidFailLoading(DocumentLoader*, unsigned long identifier, const ResourceError& err)
 {
-    notImplemented();
+    agbLog(AGB_LOG_NAV, "fail resource id=%lu code=%d url=%s", identifier, err.errorCode(),
+           err.failingURL().utf8().data());
 }
 
 bool FrameLoaderClientMC::dispatchDidLoadResourceFromMemoryCache(DocumentLoader*, const ResourceRequest&,
@@ -755,9 +756,13 @@ void FrameLoaderClientMC::cancelPolicyCheck()
     notImplemented();
 }
 
-void FrameLoaderClientMC::dispatchUnableToImplementPolicy(const ResourceError&)
+void FrameLoaderClientMC::dispatchUnableToImplementPolicy(const ResourceError& err)
 {
-    notImplemented();
+    /* Not forwarded to cb_error: the policy check that follows (stopLoadingForPolicyChange)
+     * fails the provisional load with ERR_NET_INTERRUPTED_BY_POLICY, and that callback is the
+     * one the host acts on. Reporting both would double-fire on_error. */
+    agbLog(AGB_LOG_NAV, "cannot implement code=%d url=%s", err.errorCode(),
+           err.failingURL().utf8().data());
 }
 
 void FrameLoaderClientMC::dispatchDidLoadMainResource(DocumentLoader*)
@@ -800,40 +805,52 @@ void FrameLoaderClientMC::updateGlobalHistoryForReload(const KURL&)
     notImplemented();
 }
 
+ResourceError FrameLoaderClientMC::policyError(int code, const KURL& failingURL, const char* description) const
+{
+    return ResourceError("AgaveErrorDomain", code, failingURL.url(), String::fromUTF8(description));
+}
+
+/* A cancelled load is not a failure. Every superseded navigation cancels the previous main
+ * resource, and a non-null error here would turn each of those into a reported load error
+ * (ResourceLoader::didCancel -> didFailToLoad -> dispatchDidFailLoading). Keep it null: that
+ * is what tells FrameLoader "nothing happened", which is exactly right. */
 ResourceError FrameLoaderClientMC::cancelledError(const ResourceRequest&)
 {
-    notImplemented();
     return ResourceError();
 }
 
-ResourceError FrameLoaderClientMC::blockedError(const ResourceRequest&)
+/* Reached from ResourceLoader::wasBlocked() when ResourceHandle::portAllowed() refused the
+ * port. Returning null here made the whole blocked-port class of failures invisible: the
+ * loader reported an error, FrameLoader dropped it, the host waited for a load that had
+ * already ended. */
+ResourceError FrameLoaderClientMC::blockedError(const ResourceRequest& request)
 {
-    notImplemented();
-    return ResourceError();
+    return policyError(ERR_NET_BLOCKED_PORT, request.url(),
+                       "The port is in the blocked port list");
 }
 
-ResourceError FrameLoaderClientMC::cannotShowURLError(const ResourceRequest&)
+ResourceError FrameLoaderClientMC::cannotShowURLError(const ResourceRequest& request)
 {
-    notImplemented();
-    return ResourceError();
+    return policyError(ERR_NET_UNSUPPORTED_URL, request.url(),
+                       "The URL cannot be shown");
 }
 
-ResourceError FrameLoaderClientMC::interruptForPolicyChangeError(const ResourceRequest&)
+ResourceError FrameLoaderClientMC::interruptForPolicyChangeError(const ResourceRequest& request)
 {
-    notImplemented();
-    return ResourceError();
+    return policyError(ERR_NET_INTERRUPTED_BY_POLICY, request.url(),
+                       "The load was interrupted by a policy decision");
 }
 
-ResourceError FrameLoaderClientMC::cannotShowMIMETypeError(const ResourceResponse&)
+ResourceError FrameLoaderClientMC::cannotShowMIMETypeError(const ResourceResponse& response)
 {
-    notImplemented();
-    return ResourceError();
+    return policyError(ERR_NET_UNSUPPORTED_MIME, response.url(),
+                       "The MIME type cannot be displayed");
 }
 
-ResourceError FrameLoaderClientMC::fileDoesNotExistError(const ResourceResponse&)
+ResourceError FrameLoaderClientMC::fileDoesNotExistError(const ResourceResponse& response)
 {
-    notImplemented();
-    return ResourceError();
+    return policyError(ERR_NET_FILE_READ_ERROR, response.url(),
+                       "The file does not exist");
 }
 
 bool FrameLoaderClientMC::shouldFallBack(const ResourceError&)

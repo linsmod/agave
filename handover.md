@@ -53,6 +53,9 @@ sheet 级常量代入；表单 feedback 的 `min-height` 由 4px 恢复 22px；�
 `--wait` 从真文档 load 起算；本地路径带 `?query`/`#fragment` 不再被当成网络地址）。
 **输入事件补齐**（R45：`event.key`/`code`、`isTrusted`、`{once:true}`、`beforeinput`（含 data/inputType
 与 preventDefault 取消插入）、`input` 的 inputType/data；回归页 `tools/pages/cap_input_events.html`）。
+**加载失败一定通知宿主**（R46：`FrameLoaderClientMC` 的错误工厂不再返回 null —— null 在 FrameLoader 里
+是"没有错误"的哨兵，阻塞端口/不支持的 URL/不支持的 MIME 因此全都静默；`MC_ERROR_CODE` 新增
+`ERR_NET_POLICY_*` 一族区分"浏览器主动拒绝"与网络故障；`cancelledError` 故意保持 null）。
 
 **已经被检查过的"看起来不能用"**（别再当缺陷重开）：ant 的 Worker 是真的（R22）、ant 的 wasm 引擎是真的
 （R19）、渐变/`var()`/flex 大多可用（R11/R39）、滚动与 hover 重绘正确（R13/R14/R40）、刷新后 realm/监听器会清理（R9/R10）。

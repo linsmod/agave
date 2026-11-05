@@ -162,6 +162,16 @@ public:
 public:
     void setFrame (Frame * frame){m_frame = frame;}
 private:
+    /* Builds a non-null ResourceError carrying an MC_ERROR_CODE.
+     *
+     * This exists because a null ResourceError means "no error" to FrameLoader, not "an
+     * error with no details": didFailToLoad skips the client callback, and
+     * checkLoadCompleteForThisFrame() bails out of its provisional branch, so a failure
+     * that returns the default-constructed error is reported as *success by silence*.
+     * The error factories below are constructors, not lookups - they must never return
+     * ResourceError(). */
+    ResourceError policyError(int code, const KURL& failingURL, const char* description) const;
+
     Frame *m_frame;
     ResourceResponse m_response;
     bool m_firstData;

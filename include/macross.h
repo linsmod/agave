@@ -891,6 +891,17 @@ typedef enum _mc_error {
     ERR_NET_PROXY_BASE = ERR_NET_BASE +5000,
     /** It's a PROXY error. */
     ERR_NET_PROXY_ERROR = ERR_NET_PROXY_BASE +1,
+    /** It's not error code, just as a base number for loads the browser refused on purpose.
+     * Unlike the codes above, nothing went wrong on the wire - the engine declined to load. */
+    ERR_NET_POLICY_BASE = ERR_NET_BASE +6000,
+    /** The URL's port is in the blocked port list (see ResourceHandle::portAllowed). */
+    ERR_NET_BLOCKED_PORT = ERR_NET_POLICY_BASE +1,
+    /** The URL cannot be shown by this browser. */
+    ERR_NET_UNSUPPORTED_URL,
+    /** The response MIME type cannot be displayed. */
+    ERR_NET_UNSUPPORTED_MIME,
+    /** The load was interrupted by a policy decision (the navigation was superseded or cancelled on purpose). */
+    ERR_NET_INTERRUPTED_BY_POLICY,
 } MC_ERROR_CODE;
 
 /**
