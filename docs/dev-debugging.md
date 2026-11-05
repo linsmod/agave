@@ -139,7 +139,7 @@ antbridge.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**�
   控制台守卫安装之前（页面脚本开跑的头几毫秒）的调用仍走 ant 原生 console，没有前缀/时间。
   只想看页面报错时 `grep '\[con-error\]'` 即可。
 - `[nav] download mime=... url=...` 在顶层导航被判定为下载时打一行（`Content-Disposition: attachment`，
-  或 MIME 不能显示）；任务本身的 start/progress/finish/fail/cancel 走 `[dl]`（见 [download-manager.md](download-manager.md)）。
+  或 MIME 不能显示）；任务本身的 start/progress/finish/fail/cancel 走 `[dl]`（见 [arch-downloads.md](arch-downloads.md)）。
 - 这些日志是**正常输出**，不是错误（见 §6 噪音对照）。
 - 可选调试通道（`[netlog]`、`[modfetch]`、`[snippet]`、`[call]`、`[ctx]`、`[loop]` …）**没有**走这个
   收口：它们各自有开关，`[netlog]` 还有自己的文件 sink 和时间原点。要拼总时间线时以 `[evt]`/`[nav]`
@@ -231,7 +231,7 @@ antbridge.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**�
   [   2318.1ms] [gap-jsdom] name=document.activeElement area=doc effect="undefined; no focus tracking in script"
   ```
   `name=<接收者>.<属性>`（元素给 `tag#id`），`area` 分组，`effect` 是页面实际得到的值 + 替代写法。
-  名单在 `src/javascript/ant_backend/AgbGapJsdom.h`（= `docs/capability-gaps.md` §1 的机器可读版），
+  名单在 `src/javascript/ant_backend/AgbGapJsdom.h`（= `docs/arch-capability-gaps.md` §1 的机器可读版），
   `AGB_GAP_LOG=0` 关掉。全局对象上的缺口（`window.getSelection`、`IntersectionObserver` 等）打不出来，
   原因见该头文件注释（ant 的标识符查找不走全局对象的 exotic getter）。
 - **iframe 里到底是什么样**：`__agbActivateSlot(i)` 切换共享 window 绑定的 frame 文档
@@ -266,7 +266,7 @@ antbridge.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**�
 - **网络卡点**：`AGB_NET_LOG=1` 看卡在 crack/connected/sending 哪一步；WinHTTP `SendRequest` 偶发长滞是
   WPAD/PAC 环境抖动，同刻 GUI 正常≠代码回归，先重试。
 - **字体**：`AGB_FONT_LOG=1`；回归页 `tools/pages/iconfont_render.html`，
-  `agave_view_host.exe <file-url> out.bmp` 出图核对字形，链路见 [web-font.md](web-font.md)。
+  `agave_view_host.exe <file-url> out.bmp` 出图核对字形，链路见 [arch-web-font.md](arch-web-font.md)。
 
 ## 5. 宿主/控件硬规则（违反会串消息或野指针）
 
@@ -297,8 +297,13 @@ antbridge.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**�
 - 一条命令级回归：`tools/run_worker_tests.ps1`（Worker 九项）；`tools/run_nav_tests.ps1`
   （`[nav]` 八项：链接/脚本跳转/历史后退/meta refresh/window.open/表单提交/302 重定向/关日志）；
   `debug/csscheck.html`（CSS 能力矩阵）；`debug/life.html`（生命周期）；`debug/defercheck.html`；
-  deepseek 登录页（`inp=2 all=129`）。完整清单与基线见 [handover.md §3](../handover.md)。
+  deepseek 登录页（`inp=2 all=129`）。回归清单与基线以本文为准；状态总结见
+  [arch-status.md](arch-status.md)。
+- **页面清单**：`debug/` 下 `life.html`、`evalenv_test.html`、`expando_test.html`、`sched.html`、
+  `font_test.html`、`csscheck.html`、`clipcheck.html`、`scrollcheck.html`、`beforeunload.html`、
+  `defercheck.html`、`newtab.html`、`worker_support.html`；大图 `chat.deepseek.com`、
+  `browserscore.dev`。
 - **能力缺口基线**：`tools/pages/cap_{dom,css,history,storage_a}.html`（一条命令出当前值，
-  见 [capability-gaps.md](capability-gaps.md) §0）；修了某项就更新那里的表格。
+  见 [arch-capability-gaps.md](arch-capability-gaps.md) §0）；修了某项就更新那里的表格。
 - **A/B 对比法**：改动前后结论不一致时，`git stash` → 编出旧 exe → 同参数同页面各跑一次 → 对比退出码
   与 `[exit]` 输出。这比"读代码猜"可靠得多（无头改造就是用这个方法证明零语义变化的）。

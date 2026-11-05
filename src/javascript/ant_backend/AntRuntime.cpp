@@ -1379,7 +1379,7 @@ int titleGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue
         /* Real collections now: the empty array this used to return made
          * every `document.forms.length` / `document.images[0]` wrong, and the
          * page silently took the "no such element" branch. Snapshots, not
-         * live collections (see docs/capability-gaps.md). */
+         * live collections (see docs/arch-capability-gaps.md). */
         const char* tagName = !strcmp(name, "forms")    ? "form"
                             : !strcmp(name, "images")   ? "img"
                             : !strcmp(name, "scripts")  ? "script"
@@ -1832,7 +1832,7 @@ int historyStateGetter(AntbEngine* engine, AntbValue*, const char* name, AntbVal
     } else if (!strcmp(name, "length")) {
         /* Entries of this document (the document itself + pushState calls).
          * Cross-document entries live in the frame loader's back/forward list
-         * and are not reflected here - see docs/capability-gaps.md. */
+         * and are not reflected here - see docs/arch-capability-gaps.md. */
         int length = (int)entries.size();
 
         if (length < 1)
@@ -4403,7 +4403,7 @@ AntbValue* documentObjectFor(AntbEngine* engine, WebCore::Document* document)
  * into the parent. The proxy is a native object holding the frame's Document:
  * the frame-specific properties are answered from it and everything else is
  * delegated to the shared global object, so `parent.jQuery`, polyfill hooks and
- * cross-frame calls keep working (see docs/architecture/frame-window.md). */
+ * cross-frame calls keep working (see docs/design-frame-window.md). */
 
 #define AGB_TAG_WINDOW 0x574E4431u   /* 'WND1' */
 
@@ -5993,7 +5993,7 @@ int nodeScrollIntoView(AntbEngine* engine, AntbValue* self, AntbValue** args, in
 }
 
 /* Wraps a WebCore NodeList/HTMLCollection as a JS array (a snapshot: these
- * are not live collections, see docs/capability-gaps.md). */
+ * are not live collections, see docs/arch-capability-gaps.md). */
 /* NodeList and HTMLCollection share length()/item(); one template covers both. */
 template <typename Collection>
 static AntbValue* wrapNodeList(AntbEngine* engine, Collection* list)

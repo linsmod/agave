@@ -1,8 +1,8 @@
-# 入口模块管线（方案 A 落地版）：模块求值只发生在解析流程内
+# 模块加载与求值（当前实现）
 
-状态：**已落地并验证**（`file://` 直读、`http` 大图 `--offline` 重放、`--reload 2` 三轮）。
-本文是 `handover.md` §2.3 时间轴的展开：三条泳道（宿主主线程 / 引擎线程 / WinHTTP worker）、
-入口模块的等待位、`file:` 模块的伪装层。设计与取舍记录见 `docs/lessons.md` R7、R9、R17。
+> 状态：**当前态，最后核对 2026-11-05**。三条泳道（宿主主线程 / 引擎线程 / WinHTTP worker）、
+> 入口模块单槽等待位、`file:` 模块伪装层。设计与取舍见 [hist-lessons.md](hist-lessons.md) R7/R9/R17；
+> 总图与所有权模型见 [arch-overview.md](arch-overview.md)；待办见 [plan-roadmap.md](plan-roadmap.md)。
 
 ## 怎么读
 
@@ -11,12 +11,12 @@
 - 入口 `<script type="module" src>`（非 async）用**单槽等待位**把解析挂起，等 body 到了再在
   解析流程内 `scriptExecution()` 求值；这就是"模块执行先于 DOMContentLoaded"的来源。
 - `flushDeferredModules()` 在解析结束时执行延迟模块（`<script defer>` 与 DCL 前排队者），
-  随后才是 DCL / load（⚠ DCL 目前会派发两次，见 `handover.md` P0-c）。
+  随后才是 DCL / load（⚠ DCL 目前会派发两次，见 [plan-roadmap.md](plan-roadmap.md) P0-c）。
 
 ## 时序图
 
 ```text
-入口模块管线（方案 A 落地版）：模块求值只在解析流程内发生
+入口模块加载（当前实现）：模块求值只在解析流程内发生
 ════════════════════════════════════════════════════════════════
 
 主线程（宿主）                引擎线程（webview 控件内部）                WinHTTP worker
@@ -71,7 +71,7 @@ file:// 模块的伪装层（不破坏 ant 限制模块https设定）：
   引擎 → agave：模块 fetcher 收到伪装 URL ──► 还原 file:/// ──► 本地读盘（同步完成）
   代价：import.meta.url 显示伪装 URL；percent-escape 在还原时解码
 
-已知限制（详见 docs/lessons.md 的 R7）：
+已知限制（详见 [hist-lessons.md](hist-lessons.md) 的 R7）：
   ① 动态插入/async 入口仍走 CachedScript
   ② 入口 script 元素的 load/error 事件暂不派发
   ③ import.meta.url 伪装形态

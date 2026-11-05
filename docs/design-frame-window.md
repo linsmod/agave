@@ -1,14 +1,16 @@
-# iframe 与 window 对象：现状、规范差距与实施计划
+# iframe 与 window 对象：设计记录（规范差距、方案与实施）
 
-> 状态：**已落地（R31）**：方案 B 的 1–3 步 + 第 5 步的限制说明完成；第 4 步（`postMessage` 的
-> `event.source` 走代理、`targetOrigin` 校验）还没做。验收页 `tools/pages/cap_window_identity.html`。
-> 相关：`handover.md` §4 P0-a、`docs/lessons.md` R30、`docs/capability-gaps.md` §1。
+> 状态：**设计记录**。方案 B 的 1–3 步已落地（R31），第 4 步（`postMessage` 的 `event.source`
+> 走代理、`targetOrigin` 校验）还没做。验收页 `tools/pages/cap_window_identity.html`。
+> **正文中的"现状/我们现在的行为"指 2026-11-04 改造前**；当前实现在
+> [arch-overview.md](arch-overview.md) §3。相关：[plan-roadmap.md](plan-roadmap.md) P0-a、
+> [hist-lessons.md](hist-lessons.md) R30、[arch-capability-gaps.md](arch-capability-gaps.md) §1。
 
 ## 1. 规范要求（我们差在哪）
 
 HTML 规范里**每个 browsing context 有自己的 Window 对象**：
 
-| 规范 | 我们现在的行为 |
+| 规范 | 改造前的行为（2026-11-04 之前） |
 |---|---|
 | 每个 frame 一个 `window`，`self === window` | 所有 frame 共享同一个全局对象 |
 | 子 frame 里 `var x = 1` 是**子 frame 自己的**全局 | 写进共享全局，父页也能看到（互相污染） |
@@ -28,9 +30,9 @@ HTML 规范里**每个 browsing context 有自己的 Window 对象**：
 
 ## 2. 为什么不能简单地"再造一个全局"
 
-当前架构（见 `docs/onboarding.md`、`handover.md` §2）：
+设计时的架构（改造前，见 `docs/dev-onboarding.md`、`arch-status.md` §2）：
 
-- **一个 view 一个 realm**（一个 `AntbEngine`），**一个 document 一个 realm 生命周期**；
+- **一个 view 一个 engine（同一时刻一个 realm）**，**一个 document 一个 realm 生命周期**；
 - frame 文档在桥接层有**槽位**：`g_docSlots[]` + `bindDocument()` + `__agbActivateSlot(i)`；
 - 所有桥接 getter 都用 `g_document`，所以**文档级**的东西天然按帧切换；
 - **全局对象只有一个**（`antb_global(engine)`），`window IS the global object`（`bindDocument` 注释）；
@@ -54,7 +56,7 @@ HTML 规范里**每个 browsing context 有自己的 Window 对象**：
   `parent`/`top`/`self`/`frames`/`length`/`name`/`frameElement`/`postMessage`/`addEventListener`…）
   由代理自己回答，值按该 frame 的 document 计算；
 - 其它属性 **get/set 委托给共享全局**——这样 `parent.foo`、`window.jQuery`、polyfill 的全局钩子
-  仍然互通（与现在的行为兼容），只是"当前 frame 的 window 对象"是独立身份；
+  仍然互通（与改造前的行为兼容），只是"当前 frame 的 window 对象"是独立身份；
 - `window`/`self`/`top`/`parent` 在脚本里解析成**当前 frame 的代理**，`parent` 解析成父 frame 的代理；
 - `var x` 仍然是共享全局的属性（**这一条 B 修不了**，属于已知限制，写进文档）。
 
@@ -74,7 +76,7 @@ HTML 规范里**每个 browsing context 有自己的 Window 对象**：
 | 2 | ✅ 桥接层：不需要新增槽位字段 —— `Document::parentDocument()` 与 `FrameTree`（`childCount/child/name/setName`）已经能回答父子关系，`installFrameGlobals()` 在每次 bind 时刷新全局属性 | `cap_window_identity.html`：切到子 frame 后 `document`/`parent`/`length`/`name` 都是子 frame 的值 |
 | 3 | ✅ C++ `WindowProxy` 对象（tag + catch-all get/set + 固定属性表），`prelude.js` 的 `window/self/top/parent/frames` 改为读代理 | 新增 `tools/pages/cap_window_identity.html`：子 frame 里 `parent !== self`、`parent.document === 父文档`、`frames.length === 1`、`name` 可读 |
 | 4 | `postMessage` 走代理（`event.source` 是发送方代理，`targetOrigin` 校验） | `cap_postmessage.html` 仍 `got=1`，且 `event.source !== window` |
-| 5 | ✅ 文档化已知限制：`var x` 仍是共享全局；`frames[i]` 返回代理 | `docs/capability-gaps.md` §1 更新 |
+| 5 | ✅ 文档化已知限制：`var x` 仍是共享全局；`frames[i]` 返回代理 | `docs/arch-capability-gaps.md` §1 更新 |
 
 ## 5. 已知限制（方案 B 之后仍然存在）
 

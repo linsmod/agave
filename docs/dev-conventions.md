@@ -25,15 +25,19 @@
 
 | 变化 | 写到哪 |
 |---|---|
-| 修掉一个缺陷 | `docs/lessons.md` 追加 `R<n>`：现象 / 根因 / 修法（代码锚点）/ 验证（可重跑判据） |
-| 现状、待办、限制变了 | `handover.md` 的 §1 现状 / §4 待办 / §5 限制 |
-| 新机制或架构决策 | `docs/architecture/` 新建一篇，并在 `docs/README.md` 索引里加一行 |
-| 新的调试开关/环境变量 | `docs/debugging.md` 的环境变量表 |
-| 新的构建/运行坑 | `docs/build-and-run.md` 的环境坑 |
-| 新的改法（改 X 去哪） | `docs/onboarding.md` 的任务索引表 |
-| 发现/修掉一个 Web 能力缺口（JS/DOM/CSS） | `docs/capability-gaps.md` 的表格 + 对应 `tools/pages/cap_*.html` 探测值 |
+| 修掉一个缺陷 | `docs/hist-lessons.md` 追加 `R<n>`：现象 / 根因 / 修法（代码锚点）/ 验证（可重跑判据） |
+| 能力、限制、已证伪的旧结论变了 | `docs/arch-status.md`（能力/限制）；API 级细节改 `docs/arch-capability-gaps.md` |
+| 线程 / 所有权 / realm / 模块 / 下载边界变了 | 对应的 `docs/arch-*.md`（总图、模块、下载） |
+| 新的设计决策 | `docs/design-*.md` 新建**设计记录**，顶部写"不是现状"，并在 `docs/README.md` 加一行 |
+| 待办或验收标准变了 | `docs/plan-roadmap.md` |
+| 新的调试开关/环境变量 | `docs/dev-debugging.md` 的环境变量表 |
+| 新的构建/运行坑 | `docs/dev-build-and-run.md` 的环境坑 |
+| 新的改法（改 X 去哪） | `docs/dev-onboarding.md` §3 的任务索引表 |
+| 发现/修掉一个 Web 能力缺口（JS/DOM/CSS） | `docs/arch-capability-gaps.md` 的表格 + 对应 `tools/pages/cap_*.html` 探测值 |
+| 跨仓库真源 / 函数锚点 | `docs/ref-ant-engine.md`、`docs/ref-code-index.md` |
 
-原则：**同一件事只在一个地方详述**，其它地方给链接。AGENTS.md 只放铁律与地图。
+原则：**当前态只写 `arch-*`，设计记录只写 `design-*`，历史只写 `hist-*`，操作只写 `dev-*`，查表只写 `ref-*`**。
+同一件事只在一个地方详述，其它地方给链接；`AGENTS.md` 只放铁律与地图。
 
 ## 4. 代码风格
 
@@ -52,8 +56,8 @@
 
 ## 5. 提交前 checklist
 
-1. `cmake --build build-zig-native` 通过（改了桥/引擎则连 dll 一起重链，见 [ant-engine.md](ant-engine.md)）。
+1. `cmake --build build-zig-native` 通过（改了桥/引擎则连 dll 一起重链，见 [ref-ant-engine.md](ref-ant-engine.md)）。
 2. 探针跑过受影响的页面；**退出码**是 0 或与基线一致。
 3. `--probe` 相关改动：再跑 `tools/run_worker_tests.ps1` + deepseek 登录页（`inp=2 all=129`）。
-4. 文档按 §3 更新（lessons / handover / 本目录）。
+4. 文档按 §3 更新（arch-status / arch-capability-gaps / hist-lessons / 本目录）。
 5. `git status` 干净（`debug/`、`build-zig-native/`、`*.log` 都不该出现）。

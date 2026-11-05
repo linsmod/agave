@@ -1,7 +1,7 @@
 /*
  * AgbGapJsdom.h - the jsdom capability gap registry.
  *
- * This is the machine readable twin of docs/capability-gaps.md §1: every gap a
+ * This is the machine readable twin of docs/arch-capability-gaps.md §1: every gap a
  * page can run into silently (a property reads as undefined, a collection reads
  * as empty) is listed here once, with the area and the effect the page sees.
  * The bridge reports the FIRST access of each gap:
@@ -20,7 +20,7 @@
  * read through ant's identifier lookup, which does not run an exotic getter on
  * the global object (see R31); reporting them would mean defining real
  * properties, and a page that feature-detects `typeof window.getSelection`
- * would then take the wrong branch. They stay in docs/capability-gaps.md.
+ * would then take the wrong branch. They stay in docs/arch-capability-gaps.md.
  *
  * Adding an entry: append to agbJsdomGaps[], and call agbJsdomGapReport() from
  * the place that returns the missing value (nodeGetter's fall-through for

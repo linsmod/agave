@@ -46,7 +46,7 @@ pwsh -File tools\build_antbridge.ps1 -Force
 
 - 跑 JS：`H:\ant-v16\build-zig\ant.exe script.js`（或 REPL）。怀疑"引擎语义 vs 浏览器/桥接"时先用它钉死。
 - 自带测试：`H:\ant-v16\tests/test_wasm_*.cjs` 等（wasm 9/9 过：导入内存/表/全局、grow、SIMD）。
-- worker 是**真实现**：独立线程 + 独立 isolate + `ant_wire` 结构化克隆（见 [lessons.md](lessons.md) R22）。
+- worker 是**真实现**：独立线程 + 独立 isolate + `ant_wire` 结构化克隆（见 [hist-lessons.md](hist-lessons.md) R22）。
 - wasm 是**解释执行**：导出函数跨界约 3.9µs/次，适合"一次调用跑大循环"（R19）。
 
 ## 5. ant 的反直觉清单（写 shim / 页面测试前必读）
@@ -54,11 +54,11 @@ pwsh -File tools\build_antbridge.ps1 -Force
 - **字面量属性名赋值会被吞**：`g.Worker = fn` 可能写不进去；用动态名（`g['Wor'+'ker']`）或
   `Object.defineProperty`（这也是 `prelude.js`/`polyfills.js` 里很多写法的原因）。
 - 命名函数表达式、原型上的静态名赋值同样有坑；绑定前先验证 `typeof`。
-- `typeof X.y` / `delete` / `for...in` 的支持与标准 JS 不同；写探针脚本时避开（`docs/lessons.md` 里有例子）。
+- `typeof X.y` / `delete` / `for...in` 的支持与标准 JS 不同；写探针脚本时避开（`docs/hist-lessons.md` 里有例子）。
 - `js_set_filename` 只存**指针**：传入的字符串必须活到编译产物之后（桥里为此持有副本，见 R22）。
 - `ant_runtime_init` 也只存 argv 指针：给它栈上数组会留悬垂指针（R22 的崩溃就是这么来的）。
 - ant 的 ESM `esm_is_url` 只认 http(s)：`file:` 模块靠 agave 侧伪装成 `http://file.ant/...`，
-  fetcher 再还原（见 [architecture/module-pipeline.md](architecture/module-pipeline.md)）。
+  fetcher 再还原（见 [arch-module-loading.md](arch-module-loading.md)）。
 - 一个 error 没有栈时（页面关掉 `Error.stackTraceLimit`）用 `AGB_ERR_SNIPPET=1` 定位。
 
 ## 6. 桥接的边界
@@ -69,4 +69,4 @@ pwsh -File tools\build_antbridge.ps1 -Force
   `antb_release_owner` / `antb_engine_destroy`。
 - 每个 view 一个 `RuntimeState`，每个文档一个新 engine（`beginNewRealm`/`stopRealm`），
   回调进来前靠 `antb_set_context_activate` 切状态（细节见
-  [architecture/per-view-js-context.md](architecture/per-view-js-context.md)）。
+  [design-per-view-js-context.md](design-per-view-js-context.md)）。

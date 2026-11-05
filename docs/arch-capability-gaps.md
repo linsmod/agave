@@ -1,8 +1,8 @@
 # 能力缺口：JS/DOM 与 CSS 支持清单（实测）
 
 > 这篇只回答一件事：**哪些 Web 平台能力在 agave 里没有、或只实现了一半**，以及怎么用一条命令复测。
-> 已修的历史缺陷在 [lessons.md](lessons.md)；当前待办与优先级在 [handover.md §4](../handover.md)；
-> 构建与探针用法在 [debugging.md](debugging.md)。本页不重复这些内容。
+> 已修的历史缺陷在 [hist-lessons.md](hist-lessons.md)；当前待办与优先级在 [plan-roadmap.md](plan-roadmap.md)；
+> 探针/日志用法在 [dev-debugging.md](dev-debugging.md)。本页不重复这些内容。
 >
 > 基线：2026-11-04，`build-zig-native`（native 网络后端）。下表「当前值」都是探针实测；
 > 修掉一项后**同时更新本页和对应 `cap_*` 页面**。
@@ -57,7 +57,7 @@ importNode=function elementFromPoint=function
 `attr=bar ds=bar qsAttr=1 qsClass=1 qsClassAttr=1 qsTagAttr=1 qsExact=1 qsExactCase=1 qsBegin=1 qsEnd=1 qsList=1
 qsChild=3 qsDesc=3 qsAdj=1 qsSib=2 qsNth=1 qsOdd=2 qsNot=2 qsFirst=1 qsList2=4 qsNone=0`
 `cap_script.html`（R27 修复后）：`hits=11 child=loaded`
-`cap_postmessage.html`：`postMessage=undefined sent=ERR TypeError: undefined is not a function got=0`
+`cap_postmessage.html`（R31 后）：`postMessage=function sent=yes got=1`
 
 | 能力 | 当前值 | 影响 | 判定 / 建议 |
 |---|---|---|---|
@@ -68,7 +68,7 @@ qsChild=3 qsDesc=3 qsAdj=1 qsSib=2 qsNth=1 qsOdd=2 qsNot=2 qsFirst=1 qsList2=4 q
 | `window.postMessage` / `message` 事件 | **已支持**：同窗口/跨 frame 都能投递（`{data, origin, source}`，`origin` 取发送方文档的 scheme://host[:port]）；`cap_postmessage.html` → `postMessage=function sent=yes got=1` | —— | 已支持 |
 | iframe 的 `contentWindow` / `contentDocument` | **已支持（R34）**：`iframeCw=yes`，`contentWindow.document === contentDocument` 成立；子文档还没建好时是 `null` | —— | 已支持 |
 | 每个 frame 的 `window` 身份（`parent`/`top`/`self`/`frames`/`length`/`name`/`frameElement`） | **已支持（R31）**：frame 有自己的 `Window` 代理，`parent !== self`、`parent.document` 是父文档、`frames.length`/`frames[i]`/`name`/`frameElement` 都按 frame tree 回答，未知属性委托给共享全局 | —— | 已支持（`cap_window_identity.html`） |
-| 子 frame 的顶层 `var` 污染父页 | 仍是共享全局：子 frame 里 `var x = 1` 父页也能读到（`window.foo` 同理） | 依赖「全局隔离」的 polyfill 会互相看见；规范上这是每个 browsing context 独立的全局对象 | 已知限制，要修只能每个 frame 一个 engine（方案 A，不做；见 `docs/architecture/frame-window.md`） |
+| 子 frame 的顶层 `var` 污染父页 | 仍是共享全局：子 frame 里 `var x = 1` 父页也能读到（`window.foo` 同理） | 依赖「全局隔离」的 polyfill 会互相看见；规范上这是每个 browsing context 独立的全局对象 | 已知限制，要修只能每个 frame 一个 engine（方案 A，不做；见 `docs/design-frame-window.md`） |
 | `HTMLImageElement.complete` / `naturalWidth` / `naturalHeight` / `width` / `height` / `decode()` | **已支持（R34）**：`imgComplete=0 imgNatural=0 imgWidth=1 imgDecode=function`（`decode()` 立即 resolve） | —— | 已支持 |
 | `document.querySelector(All)` 的选择器引擎 | **已支持（R35）**：选择器列表、组合器（后代/`>`/`+`/`~`）、属性选择器六个操作符、常用伪类（`nth-child`/`not`/`first-child`/`checked`/…）。实现是 `src/javascript/ant_backend/AgbSelector.h`（WebCore 2008 没有 `Node::querySelectorAll`） | —— | 已支持（`cap_selectors.html`） |
 | `Element.insertAdjacentHTML` / `insertAdjacentElement` / `insertAdjacentText` / `replaceChildren` | **已支持（R34）**：四个插入位置都走 `insertBefore/appendChild`，HTML 走 `createFragmentFromMarkup` | —— | 已支持 |
@@ -81,30 +81,28 @@ qsChild=3 qsDesc=3 qsAdj=1 qsSib=2 qsNth=1 qsOdd=2 qsNot=2 qsFirst=1 qsList2=4 q
 | `window.open` 的引擎侧策略 | 可用，但**绕过** `FrameLoaderClientMC::dispatchCreatePage`，走控件 `agave_control_open_window` | 引擎级 new-window 策略/features 不生效；`[nav]` 里看到的是 `popup create`，不是 `popup open` | 管道差异，P2 |
 | `el.onload = fn` 等事件处理属性 | **已修（R27）**：`hits=11`（属性 + addEventListener 都触发）；此前只有 `addEventListener` 生效，`onload` 是静默 expando | —— | 已支持 |
 
-定位锚点：
+### 1.1 连 shim 都没有（feature detect 会走 fallback）
 
-- 集合：`AntRuntime.cpp` 的 `titleGetter` 里 `"forms"`/`"links"`/… 分支，走 `wrapNodeList()`（快照，不是 live collection）。
-- 元素属性：`nodeGetter` / `nodeSetter`（反射属性表 `kReflectedAttributes`）、`g_nodeClass` 上的方法（`getRootNode`/`insertAdjacent*`/`submit`…）。
-- History：`AntRuntime.cpp` 的 `historyPushState`（注释 “only rewrites the document URL … without a
-  real history entry”）；`historyBack/Forward` 直接调 `page()->goBack()/goForward()`；
-  `popstate` 只在 `prelude.js` 的 `onpopstate` 名字表里出现，没有任何派发点。
-- 表单方法/属性：桥接类表（`AntBridge.c` 的 wrapper 方法表 + `AntRuntime.cpp` 的类属性表）没有
-  `HTMLFormElement` 的 `submit`/`action` 等条目。
-- storage：`AntRuntime.cpp` 的 storage 绑定；写入在文档 teardown 落盘、读取只在 engine 重建时发生
-  （跨进程能读到旧值，同进程导航读不到）。
-- `window.postMessage`（已支持）：`prelude.js` 的 `g.postMessage` → 桥 `__agbFramePostMessage`
-  （`AntRuntime.cpp` 的 `globalFramePostMessage`）派发到 `message` 监听器。宿主桥 `agavePostMessage`
-  是另一个方向（页面→壳），不要混。
-- iframe 文档：桥接层有 `g_docSlots` 槽位，`__agbActivateSlot(i)` 可切换绑定；
-  `contentWindow`/`contentDocument` 没有暴露成 DOM 属性。
-- 缩放图片（已修，R29）：`BitmapImage::draw` 的 `dst!=src` 分支原本走 picasso 的图像填充采样器，
-  画出来是鬼影；现在由 `src/webcore/platform/picasso/ImagePS.cpp` 的 `draw_scaled_image()`
-  自己做 box filter 再 bitblt。
-- 属性选择器：`AntRuntime.cpp` 的 `nodeQuerySelector` / `nodeQuerySelectorAll` 只把简单选择器交给
-  WebCore；`[attr]` / `[attr=v]` / `[class*=]` / `div[attr]` 都返回空（`.class`、`#id`、tag 正常）。
-- 图片属性：`nodeGetter` 没有 `HTMLImageElement` 的 `complete`/`naturalWidth`/`width`/`height` 分支。
-- 事件处理属性（已修）：`AntRuntime.cpp` 的 `nodeSetter`/`nodeGetter` `on*` 分支 +
-  `setNodeEventHandler()`/`findNodeEventHandler()`（R27）。
+`ResizeObserver`、`IntersectionObserver`、`PerformanceObserver`、`indexedDB`、`caches`、`Notification`、
+`geolocation`、`FileReader`、`customElements`、`ShadowRoot`/`attachShadow`、`OffscreenCanvas`、
+`Audio`/`AudioContext`/`speechSynthesis`、`devicePixelRatio`、`print`、`Temporal`、`WebGL`。
+
+`WebSocket`/`EventSource`/`BroadcastChannel` 存在（ant 原生，走 libuv），但浏览器里没有对应的 socket
+事件泵；构造不抛错、连接行为未验证，属于"探测通过但连不上"的静默失败。
+
+定位锚点（已修项只给锚点，不再列"差什么"）：
+
+- 集合 / 表单 / 图片 / 文本 / 反射属性 / 元素树 / `activeElement`：R34，`AntRuntime.cpp` 的
+  `titleGetter` / `nodeGetter` / `g_nodeClass` / `documentObjectFor`。
+- History state：R36，`AntRuntime.cpp` 的 `sessionHistory` / `historyPushState` / `historyBack/Forward`。
+- 选择器：R35，`src/javascript/ant_backend/AgbSelector.h`。
+- frame window / `contentWindow`：R31/R34，`windowObjectFor` / `documentObjectFor` /
+  `HTMLFrameOwnerElement::contentDocument()`。
+- storage：写入在文档 teardown 落盘、读取只在 engine 重建时发生（跨进程能读到旧值，同进程导航读不到）。
+- `window.postMessage`：`prelude.js` 的 `g.postMessage` → `__agbFramePostMessage`；
+  宿主桥 `agavePostMessage` 是页面→壳，两个方向不要混。
+- 缩放图片：R29，`src/webcore/platform/picasso/ImagePS.cpp` 的 `draw_scaled_image()`。
+- 事件处理属性：R27，`AntRuntime.cpp` 的 `nodeSetter` / `nodeGetter` `on*` 分支。
 
 ### 输入事件（`tools/pages/cap_input_events.html`）
 
@@ -174,17 +172,17 @@ opacity/渐变（R11）、`var()` 含 fallback 与元素级级联（R39）、`bo
 ## 3. 已知但另处详述（本页不重复）
 
 - **worker 无网络**（worker 里没有 `fetch`/XHR，`importScripts` 只能预取字面量 URL，
-  无 `SharedWorker`/`ServiceWorker`）：[handover.md P1-d](../handover.md) / R22。
+  无 `SharedWorker`/`ServiceWorker`）：[plan-roadmap.md](plan-roadmap.md) P1-d / R22。
 - **入口模块限制**（动态/async 入口、`import.meta.url` 伪装、DCL 之后的 inline 模块）：
-  R7 / [module-pipeline.md](architecture/module-pipeline.md)。
+  R7 / [arch-module-loading.md](arch-module-loading.md)。
 - **wasm 是解释执行**：R19。
 
 ## 4. 修复后的收尾动作
 
 1. 改代码 → 跑 §0 的对应命令，确认 `[exit]` 里的值变了。
 2. 更新本页表格（把“当前值”改成新值，判定改为“已支持”，保留一行历史/或直接移到 §2 末尾的可用清单）。
-3. 如果是一个缺陷（不是纯新增能力），在 [lessons.md](lessons.md) 追加 `R<n>`（现象/根因/修法/验证）。
-4. 如果改变了站点兼容性判断（比如 grid 可用了），同步 [handover.md](../handover.md) §5 的 CSS 边界。
+3. 如果是一个缺陷（不是纯新增能力），在 [hist-lessons.md](hist-lessons.md) 追加 `R<n>`（现象/根因/修法/验证）。
+4. 如果改变了站点兼容性判断（比如 grid 可用了），同步 [arch-status.md](arch-status.md) §2 的 CSS 边界。
 
 ## 5. 把 shim 拿掉，看真实报错（诊断手法）
 

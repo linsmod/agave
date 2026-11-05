@@ -7,7 +7,7 @@
   --eval script holding JS string literals or a regexp arrives mangled. Pass
   the script with -ScriptFile (preferred) and it is handed over as a file.
 
-  Exit code is the authoritative verdict (see docs/debugging.md):
+  Exit code is the authoritative verdict (see docs/dev-debugging.md):
     0 OK, 1 usage, 2 load timeout, 3 no [exit] after load,
     4 eval ran but no [exit], 5 navigation failed, 6 empty document.
 

@@ -43,7 +43,7 @@
  *
  * This is not the place for the opt-in debug channels ([netlog], [modfetch],
  * [snippet], [call], ...): they are separate tools with their own switches and
- * sinks. See docs/debugging.md.
+ * sinks. See docs/dev-debugging.md.
  */
 
 #ifndef AgbLog_h

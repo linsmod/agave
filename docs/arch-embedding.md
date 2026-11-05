@@ -62,7 +62,8 @@ cmake --build build-zig-native --target agave_embed     # 双控件演示
 | 引擎线程（进程内共享一条） | `macross_initialize`、所有 `MaCrossView`、命令队列、`event_dispatch`、`view_update` |
 
 * 宿主线程**不会**被页面布局阻塞（实测 163 加载期间 UI 消息仍是毫秒级）；
-* 回调在引擎线程触发，**不要**在回调里做同步跨线程等待；
+* 回调在引擎线程触发，**不要**在回调里做同步跨线程等待；下载状态是例外——控件深拷贝后
+  `PostMessage`，`on_download` 在 UI 线程派发（见 [arch-downloads.md](arch-downloads.md) §7）；
 * `navigate` / `eval` / `set_zoom` 是入队操作，任何线程调用都安全；
 * 每个控件独立：独立 `MaCrossView`、独立 DIB、独立进度与标题。
 
@@ -79,7 +80,8 @@ cmake --build build-zig-native --target agave_embed     # 双控件演示
 * `on_new_window` 由 shim 的 `window.open` 驱动：控件创建好 popup 控件并
   交给宿主摆放（宿主可改位置/尺寸），宿主返回 0 表示阻止（控件自动销毁）；
   popup 窗口属于引擎线程，其消息由控件的引擎循环泵出；
-* 多控件共享一个 Ant 引擎实例（`g_document` 是进程级），
-  多个控件同时执行有 DOM 依赖的脚本时，document 绑定会互相影响 —— 这是
-  当前最大的架构限制，接入方应尽量让一个进程只跑一个"活"页面；
+* 每个控件有独立的 `RuntimeState` 和 ant engine（per-view JS 上下文，2026-11-03 起；
+  文档切换时换新 realm），`window.foo` 不会跨控件泄漏；但所有控件仍共用一条引擎线程，重活会互相排队；
+* `macross_initialize` 是进程级、只初始化一次；模块会话、`DownloadManager`、generation 计数器
+  等少量资源是进程级共享的；
 * 控件不处理右键菜单，宿主可以自己弹（或等我们补）。

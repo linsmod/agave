@@ -10,16 +10,29 @@ agave 是**从零移植的浏览器**：WebKit 2008 的 WebCore（解析/布局/
 
 | 想知道 | 看 |
 |---|---|
-| 全部文档索引 | [docs/README.md](docs/README.md) |
-| 分层架构 / 目录地图 / **我要改 X 去哪** / 症状→先查哪 | [docs/onboarding.md](docs/onboarding.md) |
-| 工具链、构建、产物与运行拓扑、环境坑 | [docs/build-and-run.md](docs/build-and-run.md) |
-| 探针、默认日志（`[evt]`/`[nav]`/`[ui]`/`[con-*]`/`[cache]`/`[gap-jsdom]`）、环境变量全表、cdb、噪音对照、A/B 验证 | [docs/debugging.md](docs/debugging.md) |
-| JS/DOM/CSS **能力缺口**（不支持清单 + 一条命令复测） | [docs/capability-gaps.md](docs/capability-gaps.md) |
-| ant/桥接哪份是真的、改引擎链路、ant 的反直觉 | [docs/ant-engine.md](docs/ant-engine.md) |
-| 提交/回归页/文档/代码风格约定 | [docs/conventions.md](docs/conventions.md) |
-| 现状、待办（含验收标准）、已知限制、代码索引 | [handover.md](handover.md) |
-| 历史缺陷：现象 → 根因 → 修法 → 验证（R1..R49） | [docs/lessons.md](docs/lessons.md) |
-| 入口模块管线三条泳道时序图 | [docs/architecture/module-pipeline.md](docs/architecture/module-pipeline.md) |
+| 全部文档索引 + 前缀约定 | [docs/README.md](docs/README.md) |
+| 当前架构总图 / 现状 / 已知限制 | [docs/arch-overview.md](docs/arch-overview.md)、[docs/arch-status.md](docs/arch-status.md) |
+| 待办与验收标准 | [docs/plan-roadmap.md](docs/plan-roadmap.md) |
+| 代码在哪、**我要改 X 去哪**、症状→先查哪 | [docs/dev-onboarding.md](docs/dev-onboarding.md) |
+| 构建/运行 / 调试、日志、回归 | [docs/dev-build-and-run.md](docs/dev-build-and-run.md)、[docs/dev-debugging.md](docs/dev-debugging.md) |
+| JS/DOM/CSS **能力缺口**（不支持清单 + 一条命令复测） | [docs/arch-capability-gaps.md](docs/arch-capability-gaps.md) |
+| ant/桥接哪份是真的、函数/机制锚点 | [docs/ref-ant-engine.md](docs/ref-ant-engine.md)、[docs/ref-code-index.md](docs/ref-code-index.md) |
+| 提交/回归页/文档/代码风格约定 | [docs/dev-conventions.md](docs/dev-conventions.md) |
+| 历史缺陷：现象 → 根因 → 修法 → 验证（R 系列） | [docs/hist-lessons.md](docs/hist-lessons.md) |
+| 设计记录（**不是现状**） | [docs/design-per-view-js-context.md](docs/design-per-view-js-context.md)、[docs/design-frame-window.md](docs/design-frame-window.md) |
+
+## 文档更新（够用就行）
+
+- **什么时候写**：代码的当前行为、能力边界、构建/调试方式变了才写；纯重构、改名、格式化不必为了凑 diff 改文档。
+- **写到哪**：现状 → `docs/arch-*.md`；待办/验收 → `docs/plan-roadmap.md`；可复用的根因/验证 →
+  `docs/hist-lessons.md` 追加 `R<n>`；设计决策 → `docs/design-*.md`；命令/环境变量/坑 →
+  `docs/dev-*.md`；函数锚点/跨仓库真源 → `docs/ref-*.md`。
+- **写多少**：一个改动只改最相关的一处；现有文档能容纳就就地改，新子系统/新设计才新建文件。
+  同一事实只在一处详述，其它地方给链接。
+- **不要混**：`arch-*` 用现在时，不写“R27 修了什么”；历史只进 `hist-lessons`，设计记录只进 `design-*`。
+- **保持一致**：改文件名/标题/章节时顺手改引用链接，至少确认相对链接可达；文档与代码冲突时
+  以代码为准，在当次改动里修正，来不及就记进 `plan-roadmap.md`。
+- **不要求**：不要求每个提交写 changelog，不要求为纯重构补文档，也不把细节搬进 `AGENTS.md`。
 
 ## rules
 
@@ -37,7 +50,7 @@ MAKE HELPER SCRIPTS REUSABLE; WHEN A SCRIPT IS HIGH-FREQUENCY USED, PLACE IT IN 
 
 WHEN USER REPLY A DOT[.] ONLY, MEANS OK/DONE/DO_AS_YOU_SAY/YES/GO_ON/ACCEPT/...
 
-## 六条铁律（违反会**静默**失败）
+## 七条铁律（违反会**静默**失败）
 
 1. **改 `AntBridge.c` 只改本仓库** `src/javascript/ant_backend/` 那份，然后
    `pwsh -File tools/build_antbridge.ps1 -Force` + relink。`H:\ant-v16\bridge\AntBridge.c` 会被脚本覆盖，改了白改。

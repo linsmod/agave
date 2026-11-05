@@ -32,14 +32,10 @@ cmake --build build-zig-native --target agave_shell
 
 ## 线程模型
 
-| 线程 | 负责 |
-|---|---|
-| UI 线程 | 窗口、控件、消息循环、把当前标签的位图 `BitBlt` 到窗口 |
-| 引擎线程 | 持有全部 `MaCrossView`，消费命令队列，跑 `macross_event_dispatch()` + `macross_view_update()` |
+UI 线程只负责窗口/消息循环；引擎线程、命令队列和回调线程契约由控件拥有，
+完整说明见 [arch-embedding.md](../../docs/arch-embedding.md)。
 
-UI 线程**从不**直接调用引擎 API：
-
-* 输入、导航、缩放等都进一个加锁的命令队列（`ShellCommand`）；
+* 输入、导航、缩放等都进一个加锁的命令队列（`ShellCommand`），UI 线程**从不**直接调用引擎 API；
 * 引擎回调只把标题/URL/进度写进对应标签的字段，然后 `PostMessage(WM_SHELL_STATE)`；
 * **DIB 归引擎线程所有**：UI 只记录"想要多大"，由引擎线程创建/重建缓冲区并调用
   `macross_view_resize`。否则 UI 释放缓冲区时引擎可能还在往里画（会黑屏/崩溃）。

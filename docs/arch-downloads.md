@@ -1,8 +1,9 @@
-# 下载管理器（DownloadManager）设计
+# 下载子系统（当前实现）
 
-> 状态：P0 已实现并验证（引擎 + API + 控制层 + 探针）；P1（GUI 面板）待做。
-> 相关经验：[lessons.md](lessons.md) R47；宿主 API 见 `include/macross.h` 的 `cb_download`；
-> 回归服务器 `tools/download_server.py`。
+> 状态：**P0 + P1 已实现并验证**（引擎 + API + 控制层 + 探针 + `agave://downloads` 面板）；
+> P2 见 [plan-roadmap.md](plan-roadmap.md)。相关经验：[hist-lessons.md](hist-lessons.md) R47；
+> 宿主 API 见 `include/macross.h` 的 `cb_download`；回归服务器 `tools/download_server.py`。
+> 线程/所有权总图见 [arch-overview.md](arch-overview.md) §5。
 
 ## 1. 目标
 
@@ -11,15 +12,11 @@
 3. 宿主/GUI 能拿到**完整状态**（开始 / 进度 / 完成 / 失败 / 取消），而不是"收到第一块字节"。
 4. 探针能无头验证，且**绝不**写用户目录。
 
-## 2. 为什么以前是报错
+## 2. 背景
 
-| 层 | 原来的样子 | 结果 |
-|---|---|---|
-| 决策 | `FrameLoaderClientMC::dispatchDecidePolicyForMIMEType()` 永远返回 `PolicyUse` | `PolicyDownload` 分支永远走不到 |
-| 兜底 | `MainResourceLoader::continueAfterContentPolicy()` 的 `PolicyUse` 分支：`!canShowMIMEType()` → `cannotShowMIMEType()` + `stopLoadingForPolicyChange()` | R46 之后表现为 `on_error(ERR_NET_UNSUPPORTED_MIME)` + 空白页 |
-| 钩子 | `FrameLoaderClientMC::download()` = `notImplemented()` | 即使走到也没人接 |
-| 宿主 API | `cb_write_file_data` 已接进 `WebCallback.cpp`，引擎从不调用 | — |
-| 控制层 | `agwWriteFileData()`：在**引擎线程** `fopen`，写死 `%USERPROFILE%\Downloads\<URL尾段>`，首字节就回调 `on_download`，忽略 `item->downloadDir` | 半成品：无状态、无失败、污染用户目录 |
+早期 `dispatchDecidePolicyForMIMEType()` 永远返回 `PolicyUse`，`download()` 是 `notImplemented()`，
+控制层在引擎线程首字节就回调 `on_download` 并写死用户目录。R46 之后不可显示 MIME 变成加载错误；
+R47 把决策、所有权交接、任务状态机和面板一次接通。完整根因见 [hist-lessons.md](hist-lessons.md) R47。
 
 ## 3. 决策点（唯一）
 
@@ -190,13 +187,13 @@ internal.js → window.agave = { downloads(), cancelDownload(id), openDownload(i
 引擎线程（大文件会顶一下页面，P2 改异步写线程）；401/重定向中途只做 FAILED。
 内部页目前仍是普通 realm（没有独立生命周期），面板每次打开重新读快照。
 
-## 11. 分期
+## 11. 阶段与验证记录（历史）
 
 | 期 | 内容 | 验收 |
 |---|---|---|
-| P0 ✅ | 决策 + `detachHandle` + DownloadManager + API + 控制层下载表 + 探针 | 见下 §11.1 |
-| P1 ✅ | `agave://` 内部页 runtime + 面板 + `Ctrl+J` + 状态栏 | 见下 §11.2 |
-| P2 | 异步写、并发上限、断点续传、另存为、`<a download>`、`agave://history` | — |
+| P0 ✅ | 决策 + `detachHandle` + DownloadManager + API + 控制层下载表 + 探针 | 见 §11.1 |
+| P1 ✅ | `agave://` 内部页 runtime + 面板 + `Ctrl+J` + 状态栏 | 见 §11.2 |
+| P2 | 异步写、并发上限、断点续传、另存为、`<a download>`、`agave://history` | [plan-roadmap.md](plan-roadmap.md) |
 
 ### 11.1 P0 验证（2026-11-05）
 

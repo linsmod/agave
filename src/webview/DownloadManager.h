@@ -7,7 +7,7 @@
  * (ResourceLoader::detachHandle) and the job below owns the connection from
  * then on: the page can navigate away and the transfer keeps going.
  *
- * Design notes live in docs/download-manager.md.
+ * Design notes live in docs/arch-downloads.md.
  */
 
 #ifndef DownloadManager_h

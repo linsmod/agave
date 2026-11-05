@@ -1,5 +1,5 @@
 /*
- * DownloadManager.cpp - see DownloadManager.h and docs/download-manager.md.
+ * DownloadManager.cpp - see DownloadManager.h and docs/arch-downloads.md.
  */
 
 #include "config.h"

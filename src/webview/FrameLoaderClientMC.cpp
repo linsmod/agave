@@ -763,9 +763,12 @@ void FrameLoaderClientMC::dispatchDidFinishDocumentLoad()
 {
     Net::logEvent("page.domready", "");
 
-    /* The JS window object is one per engine, not one per frame, so an iframe
-     * finishing must not re-run the embedding page's DOMContentLoaded/onload
-     * handlers. css3test has ad iframes and used to run its whole suite twice. */
+    /* Frames share this view's engine and its global object, and
+     * dispatchWindowEvent() goes to that shared global. Letting an iframe
+     * finish here would re-run the embedding page's DOMContentLoaded/onload
+     * handlers. Per-frame window proxies exist (R31), but per-frame DCL
+     * dispatch is not implemented yet. css3test has ad iframes and used to
+     * run its whole suite twice. */
     if (!isMainFrameClient(m_frame))
         return;
 

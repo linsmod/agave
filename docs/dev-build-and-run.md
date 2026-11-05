@@ -61,9 +61,9 @@ pwsh -File tools\build_antbridge.ps1 -Force      # 重链 dll 并同步四处副
 | `agave_embed.exe` | 嵌入 demo（同一套控件） |
 | `agave_webview.dll` | Win32 控件（`agave_webview_*` API） |
 | `libagave.dll` | 引擎本体 |
-| `antbridge.dll` (+ `antbridge.pdb`) | JS 桥（预编译产物，见 [ant-engine.md](ant-engine.md)） |
+| `antbridge.dll` (+ `antbridge.pdb`) | JS 桥（预编译产物，见 [ref-ant-engine.md](ref-ant-engine.md)） |
 | `prelude.js` / `polyfills.js` | 运行时从 exe 旁加载的 JS shim（可热改） |
-| `%LOCALAPPDATA%\Agave\probe\` / `...\view-host\` | 无头工具自己的 profile（cookies/cache），由 `AGB_USERDATA` 决定，见 [debugging.md](debugging.md) |
+| `%LOCALAPPDATA%\Agave\probe\` / `...\view-host\` | 无头工具自己的 profile（cookies/cache），由 `AGB_USERDATA` 决定，见 [dev-debugging.md](dev-debugging.md) |
 
 - `3rdparty/ant/{bin,lib}/antbridge.dll` 只是**分发副本**，运行时不读它们（`3rdparty/ant/bin` 被 gitignore）。
 - **picasso（图形后端）源码在 `3rdparty/picasso/`，由 `add_subdirectory` 直接编译**，

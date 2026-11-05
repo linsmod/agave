@@ -1,8 +1,10 @@
-# 每个 view 独立的 JS 上下文（per-view Ant engine）
+# 每个 view 独立的 JS 上下文（设计记录：per-view Ant engine）
 
-状态：**已实现**（2026-11-03 起）。每个 view 一个 `RuntimeState` + 一个 `AntbEngine`（`AntRuntime::createContext()`），
-每个文档再换一个新 engine（`beginNewRealm()` / `stopRealm()`，见 `docs/lessons.md` R10/R17）。
-本文保留为当时的实施方案与权衡记录；下面「现状」「需要改的点」「工作量」都是**设计时**的表述。
+> 状态：**设计记录**。2026-11-03 起已实现（每个 view 一个 `RuntimeState` + 一个 `AntbEngine`，
+> `AntRuntime::createContext()`；每个文档再换一个新 engine，`beginNewRealm()` / `stopRealm()`，
+> 见 [hist-lessons.md](hist-lessons.md) R10/R17）。
+> 本文保留当时的实施方案与权衡；下面「现状」「需要改的点」「工作量」都是**设计时**的表述。
+> 当前实现在 [arch-overview.md](arch-overview.md) §3。
 
 ## 现状（设计时，2026-11-02）
 
