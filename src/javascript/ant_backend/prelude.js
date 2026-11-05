@@ -1060,4 +1060,54 @@
    * their non-worker path instead of half-working. */
   try { g.SharedWorker = undefined; } catch (e) {}
   try { g.ServiceWorker = undefined; } catch (e) {}
+
+  /* `value` accessor on the input/textarea/select interface prototypes.
+   *
+   * React's input value tracker (react-dom/src/client/inputValueTracking) does
+   *   Object.getOwnPropertyDescriptor(node.constructor.prototype, 'value')
+   * and only installs _valueTracker when that returns a real {get, set}
+   * descriptor. The engine's interface prototypes have no `value` entry, so
+   * the tracker never existed and updateValueIfChanged() answered false for
+   * every keystroke: the controlled-input loop (input event -> onChange ->
+   * setState -> value write-back) never ran, and sites that filter input -
+   * DeepSeek's phone field rewrites the value down to digits - accepted every
+   * character. Reading back through the wrapper still goes through the
+   * per-wrapper catch-all property (own properties win over the prototype),
+   * so normal `el.value` reads/writes are unchanged; only the explicit
+   * descriptor path React uses picks these functions up. */
+  if (g.Object && g.Object.defineProperty) {
+    var _agbValueIfaces = ['HTMLInputElement', 'HTMLTextAreaElement', 'HTMLSelectElement'];
+    for (var _agbVii = 0; _agbVii < _agbValueIfaces.length; _agbVii++) {
+      try {
+        var _agbCtor = g[_agbValueIfaces[_agbVii]];
+        var _agbProto = _agbCtor && _agbCtor.prototype;
+        if (_agbProto && !g.Object.getOwnPropertyDescriptor(_agbProto, 'value')) {
+          /* The guard matters: a plain `this.value` inside the accessor
+           * recurses into itself whenever `this` is the prototype (a site
+           * assigning HTMLInputElement.prototype.value, or anything reading
+           * it off the prototype) and hangs the page mid-boot. With the guard
+           * the prototype-level access answers undefined/ignores, while
+           * wrappers resolve `this.value` through their own catch-all before
+           * the prototype is ever consulted. */
+          (function (proto) {
+            /* The implementation must not read `this.value`: React re-exports
+             * this very descriptor as an own property on the wrapper, so a
+             * self-referencing accessor would recurse forever. Route through
+             * the bridge instead, which reads/writes the DOM element
+             * directly. */
+            g.Object.defineProperty(proto, 'value', {
+              configurable: true, enumerable: true,
+              get: function () {
+                try { return g.__agbInputValue(this); } catch (e) { return undefined; }
+              },
+              set: function (v) {
+                try { g.__agbInputValue(this, v); } catch (e) {}
+              }
+            });
+          })(_agbProto);
+        }
+      } catch (e) {}
+    }
+  }
+
 })(window);

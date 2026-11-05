@@ -127,8 +127,13 @@ public:
     bool handleCharacterEvent(const PlatformKeyboardEvent&);
     void defaultKeyboardEventHandler(KeyboardEvent*);
 
+    /* Dispatches textInput (the pre-insertion event the bridge exposes as
+     * `beforeinput`). `inserted` reports whether the text really went into
+     * an editable selection - the answer insertText() needs to tell a
+     * successful insertion from "nothing editable took it". */
     bool handleTextInputEvent(const String& text, Event* underlyingEvent = 0,
-        bool isLineBreak = false, bool isBackTab = false);
+                              bool isLineBreak = false, bool isBackTab = false,
+                              bool* inserted = 0);
     void defaultTextInputEventHandler(TextEvent*);
 
     bool eventMayStartDrag(const PlatformMouseEvent&) const;

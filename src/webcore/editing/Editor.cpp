@@ -1393,7 +1393,15 @@ bool Editor::execCommand(const AtomicString& command, Event* triggeringEvent)
 
 bool Editor::insertText(const String& text, Event* triggeringEvent)
 {
-    return m_frame->eventHandler()->handleTextInputEvent(text, triggeringEvent);
+    bool inserted = false;
+
+    /* The return value is "was the text really inserted", not "was the event
+     * cancelled": handleTextInputEvent reports the latter, and callers that
+     * need a fallback (typed characters reaching a non-editable field) need
+     * the former. */
+    m_frame->eventHandler()->handleTextInputEvent(text, triggeringEvent, false, false, &inserted);
+
+    return inserted;
 }
 
 bool Editor::insertTextWithoutSendingTextEvent(const String& text, bool selectInsertedText, Event* triggeringEvent)

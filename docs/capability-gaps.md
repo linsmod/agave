@@ -106,6 +106,29 @@ qsChild=3 qsDesc=3 qsAdj=1 qsSib=2 qsNth=1 qsOdd=2 qsNot=2 qsFirst=1 qsList2=4 q
 - 事件处理属性（已修）：`AntRuntime.cpp` 的 `nodeSetter`/`nodeGetter` `on*` 分支 +
   `setNodeEventHandler()`/`findNodeEventHandler()`（R27）。
 
+### 输入事件（`tools/pages/cap_input_events.html`）
+
+一条命令复测（真实按键，不是合成事件）：
+
+```powershell
+agave_shell.exe --probe ../tools/pages/cap_input_events.html --keys "abc"     --eval "probeExit(window.reportInputEvents())" --wait 300
+agave_shell.exe --probe ../tools/pages/cap_input_events.html     --pre-eval "document.getElementById('c').focus()" --keys "y"     --eval "probeExit(window.reportInputEvents())" --wait 300
+```
+
+| 能力 | 现状 | 备注 |
+|---|---|---|
+| `addEventListener` / `on*` 属性 / capture / bubble / `stopPropagation` / `removeEventListener` | **支持** | 16 种类型全通（`#a`–`#j` 用例） |
+| `{once:true}` | **支持**（R45） | 引擎派发与 JS `dispatchEvent` 两条路径都会摘除 |
+| `event.key` / `event.code` | **支持**（R45） | 由 `keyIdentifier()`+`charCode()`+shift 推出（`a`/`Enter`/`ArrowLeft`/`KeyA`/`Digit1`） |
+| `event.isTrusted` | **支持**（R45） | 引擎派发 `true`，JS `dispatchEvent` 为 `false` |
+| `beforeinput` + `data`/`inputType` + `preventDefault` 取消插入 | **支持**（R45） | 由 `textInput` 映射；`#c` 用例 `c[val="",prevented=1]` |
+| `input` 事件的 `inputType`/`data` | **支持**（R45） | `inputType="insertText"`，`data` 取自同一次 `textInput` |
+| `keydown` 的 `preventDefault` 拦字符 | **支持** | `#b` 用例 `b[val="",prevented=1]` |
+| `select` / `selectionchange` | **不支持** | 键入不产生这两个事件 |
+| `change` | 支持（失焦时） | 未在测试页覆盖（需要 blur 用例） |
+| `paste`/`cut`/`copy` | 合成事件可派发 | 真实剪贴板路径未接（无 `ClipboardEvent`） |
+| 事件顺序 | **`keydown > keyup > keypress > beforeinput > input`** | Chrome 是 `keydown > keypress > beforeinput > input > keyup`；宿主按键投递顺序所致 |
+
 ## 2. CSS
 
 `cap_css.html` 当前输出：

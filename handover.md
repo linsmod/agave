@@ -48,6 +48,12 @@ deepseek 备案号居中、二维码 iframe 无 2px 外框）。
 **`calc()` 常量折叠**（R43：纯常量 calc 在解析期折成单值、自定义属性里 `calc(var(--token) + …)` 先做
 sheet 级常量代入；表单 feedback 的 `min-height` 由 4px 恢复 22px；混合单位 calc 仍不支持）。
 
+**一个 frame 只有一份文档 / 探针加载门控**（R44：`FrameLoader::init()` 不再提交初始空文档，
+第一次 `load()` 解析出来的就是唯一那份；探针的"加载完成"改用引擎 `on_progress(finished)`，
+`--wait` 从真文档 load 起算；本地路径带 `?query`/`#fragment` 不再被当成网络地址）。
+**输入事件补齐**（R45：`event.key`/`code`、`isTrusted`、`{once:true}`、`beforeinput`（含 data/inputType
+与 preventDefault 取消插入）、`input` 的 inputType/data；回归页 `tools/pages/cap_input_events.html`）。
+
 **已经被检查过的"看起来不能用"**（别再当缺陷重开）：ant 的 Worker 是真的（R22）、ant 的 wasm 引擎是真的
 （R19）、渐变/`var()`/flex 大多可用（R11/R39）、滚动与 hover 重绘正确（R13/R14/R40）、刷新后 realm/监听器会清理（R9/R10）。
 

@@ -1493,11 +1493,21 @@ bool EventHandler::handleCharacterEvent(const PlatformKeyboardEvent& keyEvent)
     if (keyEvent.text().isEmpty())
         return false;
 
-    /* insertTextWithoutSendingTextEvent, not insertText: it reports whether the
-     * text really went into an editable selection, which is what tells the
-     * caller a fallback is needed. insertText() dispatches a textInput event and
-     * always returns "not prevented", i.e. no usable answer. */
-    return m_frame->editor()->insertTextWithoutSendingTextEvent(keyEvent.text(), false, keypress.get());
+    /* textInput (which the bridge exposes to pages as `beforeinput`) is
+     * dispatched here, and it answers two different questions:
+     *   - notCancelled: the page did not preventDefault the insertion;
+     *   - inserted: the text really went into an editable selection.
+     * A cancelled insertion is still "consumed" - the caller must not fall back
+     * to inserting the text itself, or preventDefault would do nothing. */
+    {
+        bool inserted = false;
+        bool notCancelled = handleTextInputEvent(keyEvent.text(), keypress.get(),
+                                                 false, false, &inserted);
+
+        if (!notCancelled)
+            return true;
+        return inserted;
+    }
 }
 
 void EventHandler::defaultKeyboardEventHandler(KeyboardEvent* event)
@@ -1707,7 +1717,7 @@ bool EventHandler::handleDrag(const MouseEventWithHitTestResults& event)
 }
   
 bool EventHandler::handleTextInputEvent(const String& text, Event* underlyingEvent,
-                                        bool isLineBreak, bool isBackTab)
+                                        bool isLineBreak, bool isBackTab, bool* inserted)
 {
     if (!m_frame)
         return false;
@@ -1723,7 +1733,19 @@ bool EventHandler::handleTextInputEvent(const String& text, Event* underlyingEve
     event->setIsLineBreak(isLineBreak);
     event->setIsBackTab(isBackTab);
     ExceptionCode ec;
-    return target->dispatchEvent(event.release(), ec, true);
+    /* Keep our own reference: dispatchEvent() adopts the one we release, and
+     * the default-handled flag has to be read afterwards. */
+    RefPtr<TextEvent> keepAlive = event;
+    bool notCancelled = target->dispatchEvent(event.release(), ec, true);
+
+    /* The default handler marks the event when the text really landed
+     * (defaultTextInputEventHandler -> insertTextWithoutSendingTextEvent), so
+     * the caller can tell a successful insertion from an event that no
+     * editable selection consumed - without having to bypass this path. */
+    if (inserted)
+        *inserted = keepAlive->defaultHandled();
+
+    return notCancelled;
 }
     
     

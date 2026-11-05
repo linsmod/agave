@@ -56,6 +56,9 @@ namespace WebCore { bool prefersDarkColorScheme(); }
 #include "Text.h"
 #include "Comment.h"
 #include "HTMLInputElement.h"
+#include "BeforeTextInsertedEvent.h"
+#include "PlatformKeyboardEvent.h"
+#include "TextEvent.h"
 #include "HTMLCanvasElement.h"
 #include "CanvasRenderingContext2D.h"
 #include "CanvasStyle.h"
@@ -430,6 +433,7 @@ int globalStorageKey(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void
 int globalStorageCount(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalComputedStyle(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalPrefersDark(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int globalInputValue(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalActivateSlot(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int imageConstructor(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 /* ------------------------------------------------------------------------- */
@@ -4842,6 +4846,8 @@ void bindDocument(void* document)
         antb_define_method(g_engine, global, "__agbStorageCount", globalStorageCount, NULL);
         antb_define_method(g_engine, global, "__agbComputedStyle", globalComputedStyle, NULL);
         antb_define_method(g_engine, global, "__agbPrefersDark", globalPrefersDark, NULL);
+        /* Direct value access for the prototype-level value accessor (React tracker). */
+        antb_define_method(g_engine, global, "__agbInputValue", globalInputValue, NULL);
 
         /* history: SPA routers and "go back" links use it. */
         {
@@ -6673,6 +6679,59 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
     antb_value_assign(out, v);
     antb_value_release(v);
     return 1;
+}
+
+/* __agbInputValue(wrapper[, newValue]): direct value access for the
+ * prototype-level `value` accessor prelude.js installs for React's tracker.
+ * It must go straight to the DOM element - the accessor cannot say
+ * `this.value`, because React re-exports exactly this descriptor as an own
+ * property on the wrapper, so `this.value` inside the getter would re-enter
+ * the accessor and recurse until the page hangs. */
+int globalInputValue(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                     AntbValue* out, void*)
+{
+    WebCore::Node* n = argc >= 1 ? nodeOf(args[0]) : NULL;
+    WebCore::Element* element;
+
+    (void)self;
+
+    if (!n || !n->isElementNode())
+        return 0;
+
+    element = static_cast<WebCore::Element*>(n);
+
+    if (argc >= 2) {
+        char* text = antb_to_utf8(args[1]);
+
+        if (text) {
+            if (element->hasTagName(WebCore::HTMLNames::inputTag))
+                static_cast<WebCore::HTMLInputElement*>(element)->setValue(WebCore::String::fromUTF8(text));
+            else if (element->hasTagName(WebCore::HTMLNames::textareaTag))
+                static_cast<WebCore::HTMLTextAreaElement*>(element)->setValue(WebCore::String::fromUTF8(text));
+            antb_free(text);
+        }
+        return 0;
+    }
+
+    if (element->hasTagName(WebCore::HTMLNames::inputTag)) {
+        WebCore::String s = static_cast<WebCore::HTMLInputElement*>(element)->value();
+        AntbValue* v = antb_make_string(engine, s.utf8().data());
+        if (v) {
+            antb_value_assign(out, v);
+            antb_value_release(v);
+            return 1;
+        }
+    } else if (element->hasTagName(WebCore::HTMLNames::textareaTag)) {
+        WebCore::String s = static_cast<WebCore::HTMLTextAreaElement*>(element)->value();
+        AntbValue* v = antb_make_string(engine, s.utf8().data());
+        if (v) {
+            antb_value_assign(out, v);
+            antb_value_release(v);
+            return 1;
+        }
+    }
+
+    return 0;
 }
 
 int nodeSetter(AntbEngine* engine, AntbValue* self, const char* name, const AntbValue* value, void*)
@@ -9168,6 +9227,7 @@ AntbValue* wrapNode(AntbEngine* engine, WebCore::Node* node)
 
     /* per-instance property table: textContent/nodeName/nodeType */
     antb_define_property_rw(engine, v, "textContent", nodeGetter, nodeSetter, NULL);
+
     return v;
 }
 
@@ -9350,6 +9410,115 @@ void documentWillUnload(void)
 
 /* Builds the JS event object: the prelude adds the DOM methods (which only set
  * flags), then we copy the native fields across. */
+/* --- KeyboardEvent.key / .code ------------------------------------------
+ * This WebCore predates DOM Level 3 `key`/`code`: pages only got keyCode and
+ * charCode, so every modern handler that tests `e.key === "Enter"` (DeepSeek's
+ * forms do) silently failed. Derive both from keyIdentifier()/charCode(); the
+ * platform modifiers come from the underlying PlatformKeyboardEvent. */
+static bool keyIdentifierCodepoint(const std::string& ki, unsigned* out)
+{
+    unsigned v = 0;
+
+    if (ki.size() < 6 || (ki[0] != 'U' && ki[0] != 'u') || ki[1] != '+')
+        return false;
+
+    for (size_t i = 2; i < ki.size(); ++i) {
+        char c = ki[i];
+        int d = (c >= '0' && c <= '9') ? c - '0'
+              : ((c >= 'a' && c <= 'f') ? c - 'a' + 10
+              : ((c >= 'A' && c <= 'F') ? c - 'A' + 10 : -1));
+        if (d < 0)
+            return false;
+        v = v * 16 + (unsigned)d;
+    }
+
+    *out = v;
+    return true;
+}
+
+static void appendUtf8(std::string* out, unsigned cp)
+{
+    if (cp < 0x80) {
+        *out += (char)cp;
+    } else if (cp < 0x800) {
+        *out += (char)(0xC0 | (cp >> 6));
+        *out += (char)(0x80 | (cp & 0x3F));
+    } else if (cp < 0x10000) {
+        *out += (char)(0xE0 | (cp >> 12));
+        *out += (char)(0x80 | ((cp >> 6) & 0x3F));
+        *out += (char)(0x80 | (cp & 0x3F));
+    } else {
+        *out += (char)(0xF0 | (cp >> 18));
+        *out += (char)(0x80 | ((cp >> 12) & 0x3F));
+        *out += (char)(0x80 | ((cp >> 6) & 0x3F));
+        *out += (char)(0x80 | (cp & 0x3F));
+    }
+}
+
+static const char* keyNameForIdentifier(const std::string& ki)
+{
+    static const struct { const char* id; const char* name; } map[] = {
+        { "Space", " " }, { "Return", "Enter" }, { "BackSpace", "Backspace" },
+        { "Tab", "Tab" }, { "Escape", "Escape" }, { "Delete", "Delete" },
+        { "Left", "ArrowLeft" }, { "Right", "ArrowRight" },
+        { "Up", "ArrowUp" }, { "Down", "ArrowDown" },
+        { "Home", "Home" }, { "End", "End" },
+        { "PageUp", "PageUp" }, { "PageDown", "PageDown" }, { "Insert", "Insert" },
+        { "NumLock", "NumLock" }, { "CapsLock", "CapsLock" },
+        { "Shift", "Shift" }, { "Control", "Control" }, { "Alt", "Alt" },
+        { "Meta", "Meta" }, { "Pause", "Pause" }, { "Scroll", "ScrollLock" },
+        { "PrintScreen", "PrintScreen" }, { "Menu", "ContextMenu" }
+    };
+
+    for (unsigned i = 0; i < sizeof(map) / sizeof(map[0]); ++i)
+        if (ki == map[i].id)
+            return map[i].name;
+
+    return NULL;
+}
+
+/* "U+0041" -> "KeyA", "U+0031" -> "Digit1", "U+002C" -> "Comma". */
+static void codeForCodepoint(unsigned cp, std::string* out)
+{
+    if (cp >= 'A' && cp <= 'Z') { *out = "Key"; *out += (char)cp; return; }
+    if (cp >= 'a' && cp <= 'z') { *out = "Key"; *out += (char)(cp - 'a' + 'A'); return; }
+    if (cp >= '0' && cp <= '9') { *out = "Digit"; *out += (char)cp; return; }
+
+    static const struct { unsigned cp; const char* code; } punct[] = {
+        { ' ', "Space" }, { ',', "Comma" }, { '.', "Period" }, { '/', "Slash" },
+        { ';', "Semicolon" }, { 39, "Quote" }, { '[', "BracketLeft" },
+        { ']', "BracketRight" }, { '\\', "Backslash" }, { '-', "Minus" },
+        { '=', "Equal" }, { '`', "Backquote" }
+    };
+
+    for (unsigned i = 0; i < sizeof(punct) / sizeof(punct[0]); ++i)
+        if (cp == punct[i].cp) { *out = punct[i].code; return; }
+}
+
+static void codeForIdentifier(const std::string& ki, std::string* out)
+{
+    if (ki == "Space") { *out = "Space"; return; }
+    if (ki == "Return") { *out = "Enter"; return; }
+    if (ki == "BackSpace") { *out = "Backspace"; return; }
+    if (ki == "Left") { *out = "ArrowLeft"; return; }
+    if (ki == "Right") { *out = "ArrowRight"; return; }
+    if (ki == "Up") { *out = "ArrowUp"; return; }
+    if (ki == "Down") { *out = "ArrowDown"; return; }
+
+    if (ki.size() > 1 && ki[0] == 'F') {          /* F1..F12 */
+        bool digits = true;
+        for (size_t i = 1; i < ki.size(); ++i)
+            if (ki[i] < '0' || ki[i] > '9') { digits = false; break; }
+        if (digits) { *out = ki; return; }
+    }
+
+    *out = ki;                                    /* Tab/Escape/Delete/Home/... */
+}
+
+/* Text of the most recent textInput (the pre-insertion event): the
+ * `input` event that follows carries it as `data`. */
+static std::string g_lastTextInputData;
+
 static AntbValue* makeEventObject(const std::string& type, WebCore::Node* target, WebCore::Event* event)
 {
     AntbValue* global;
@@ -9376,6 +9545,15 @@ static AntbValue* makeEventObject(const std::string& type, WebCore::Node* target
     antb_value_release(factory);
     if (!evt)
         return NULL;
+    /* Engine-dispatched events are trusted; a JS dispatchEvent() passes the
+     * caller's own Event object through nodeDispatchEvent and keeps it false. */
+    {
+        AntbValue* trusted = antb_make_number(g_engine, 1.0);
+        if (trusted) {
+            antb_set_prop(g_engine, evt, "isTrusted", trusted);
+            antb_value_release(trusted);
+        }
+    }
     if (event) {
         struct { const char* name; double value; } nums[] = {
             { "timeStamp", (double)event->timeStamp() },
@@ -9423,6 +9601,63 @@ static AntbValue* makeEventObject(const std::string& type, WebCore::Node* target
             for (i = 0; i < sizeof(keyNums) / sizeof(keyNums[0]); ++i) {
                 AntbValue* v = antb_make_number(g_engine, keyNums[i].value);
                 if (v) { antb_set_prop(g_engine, evt, keyNums[i].name, v); antb_value_release(v); }
+            }
+            {
+                std::string id = key->keyIdentifier().utf8().data();
+                bool shift = false;
+                const WebCore::PlatformKeyboardEvent* platform = key->keyEvent();
+                unsigned cp = 0;
+                std::string keyName, codeName;
+
+                if (platform)
+                    shift = platform->shiftKey();
+
+                if (key->charCode() > 0) {
+                    appendUtf8(&keyName, (unsigned)key->charCode());
+                } else if (keyIdentifierCodepoint(id, &cp)) {
+                    unsigned out = cp;
+                    /* keyIdentifier spells letters in upper case regardless of
+                     * the shift state; Chrome reports the produced character. */
+                    if (cp >= 'A' && cp <= 'Z' && !shift)
+                        out = cp - 'A' + 'a';
+                    appendUtf8(&keyName, out);
+                } else {
+                    const char* mapped = keyNameForIdentifier(id);
+                    if (mapped)
+                        keyName = mapped;
+                }
+
+                if (keyIdentifierCodepoint(id, &cp))
+                    codeForCodepoint(cp, &codeName);
+                else
+                    codeForIdentifier(id, &codeName);
+
+                if (!keyName.empty()) {
+                    AntbValue* v = antb_make_string(g_engine, keyName.c_str());
+                    if (v) { antb_set_prop(g_engine, evt, "key", v); antb_value_release(v); }
+                }
+                if (!codeName.empty()) {
+                    AntbValue* v = antb_make_string(g_engine, codeName.c_str());
+                    if (v) { antb_set_prop(g_engine, evt, "code", v); antb_value_release(v); }
+                }
+            }
+        } else if (type == "input") {
+            /* The 2008 input event carries no inputType; pages read it to tell
+             * typing from paste/deletion. Everything this engine produces is
+             * an insertion. */
+            if (target && target->isElementNode()) {
+                WebCore::Element* element = static_cast<WebCore::Element*>(target);
+
+                if (element->hasTagName(WebCore::HTMLNames::inputTag) ||
+                    element->hasTagName(WebCore::HTMLNames::textareaTag)) {
+                    AntbValue* v = antb_make_string(g_engine, "insertText");
+                    if (v) { antb_set_prop(g_engine, evt, "inputType", v); antb_value_release(v); }
+                    if (!g_lastTextInputData.empty()) {
+                        AntbValue* d = antb_make_string(g_engine, g_lastTextInputData.c_str());
+                        if (d) { antb_set_prop(g_engine, evt, "data", d); antb_value_release(d); }
+                        g_lastTextInputData.clear();
+                    }
+                }
             }
         }
     }
@@ -9488,6 +9723,26 @@ void dispatchEvent(void* nodePtr, void* eventPtr)
         return;
     {
         std::string type = event->type().domString().utf8().data();
+
+        /* Two WebCore events are the "text is about to be inserted" moment,
+         * which modern pages know as `beforeinput`:
+         *   - webkitBeforeTextInserted: dispatched by TypingCommand for every
+         *     editable insertion, including <input>/<textarea> (this port
+         *     inserts typed characters through insertTextWithoutSendingTextEvent,
+         *     so this is the one form fields hit);
+         *   - textInput: the legacy DOM event, dispatched by
+         *     Editor::insertText() (execCommand and friends).
+         * Both are renamed for the JS side and carry data/inputType, so a
+         * handler sees the text before it lands and can cancel it with
+         * preventDefault(). */
+        WebCore::TextEvent* textInputEvt = NULL;
+
+        if (type == "textInput" && event->isTextEvent()) {
+            textInputEvt = static_cast<WebCore::TextEvent*>(event);
+            type = "beforeinput";
+            g_lastTextInputData = textInputEvt->data().utf8().data();
+        }
+
         AntbValue* evt = makeEventObject(type, node, event);
 
         if (getenv("AGB_EVT_DEBUG") && (type == "load" || type == "DOMContentLoaded"))
@@ -9496,28 +9751,80 @@ void dispatchEvent(void* nodePtr, void* eventPtr)
         bool stoppedImmediate = false;
         if (!evt)
             return;
+
+        if (textInputEvt) {
+            const char* text = textInputEvt->data().utf8().data();
+            AntbValue* data = antb_make_string(g_engine, text);
+            AntbValue* kind = antb_make_string(g_engine, "insertText");
+
+            if (data) { antb_set_prop(g_engine, evt, "data", data); antb_value_release(data); }
+            if (kind) { antb_set_prop(g_engine, evt, "inputType", kind); antb_value_release(kind); }
+        }
+
         /* Bubble only when the event says so. load does not bubble: without
          * this check every <script>/<img> load bubbled up to the document and
          * ran the page's window load handler once per async script. */
         bool bubbles = event->bubbles();
+        std::vector<WebCore::Node*> visited;
 
         for (WebCore::Node* current = node; current && !stopped;
              current = bubbles ? current->parentNode() : 0) {
             AntbValue* wrapper = wrapNode(g_engine, current);
             if (wrapper) {
+                visited.push_back(current);
+                if (getenv("AGB_EVT_TRACE")) {
+                    int matched = 0;
+                    for (size_t li = 0; g_listeners && li < g_listeners->size(); ++li)
+                        if ((*g_listeners)[li].node == current && (*g_listeners)[li].type == type)
+                            ++matched;
+                    fprintf(stderr, "[evt-trace] %s node=%p listeners=%d\n",
+                            type.c_str(), (void*)current, matched);
+                }
                 runListenersFor(current, type, evt, wrapper, stopped, stoppedImmediate);
                 antb_value_release(wrapper);
             }
         }
         /* preventDefault in JS must reach the engine, or links still navigate. */
+        bool preventedInJs = false;
         {
             AntbValue* prevented = antb_get_prop(g_engine, evt, "__prevented");
             if (prevented) {
-                if (antb_to_boolean(prevented))
+                if (antb_to_boolean(prevented)) {
+                    preventedInJs = true;
                     event->preventDefault();
+                }
                 antb_value_release(prevented);
             }
         }
+
+        /* textInput's preventDefault is honoured by WebCore itself: its default
+         * handler only runs when the event was not cancelled, so the
+         * preventDefault() above is the whole story. */
+        (void)preventedInJs;
+
+        /* {once:true}: the engine path has no listener snapshot to compare
+         * against (nodeDispatchEvent, the JS dispatch path, does), so drop the
+         * once-listeners of every node this dispatch visited. Without this the
+         * option only worked for events a page dispatched itself. */
+        if (g_listeners) {
+            for (size_t i = 0; i < g_listeners->size(); ) {
+                Listener& l = (*g_listeners)[i];
+                bool drop = false;
+
+                if (l.once && l.type == type) {
+                    for (size_t v = 0; v < visited.size(); ++v)
+                        if (l.node == visited[v]) { drop = true; break; }
+                }
+                if (drop) {
+                    if (l.fn)
+                        antb_value_release(l.fn);
+                    g_listeners->erase(g_listeners->begin() + i);
+                } else {
+                    ++i;
+                }
+            }
+        }
+
         antb_value_release(evt);
     }
 }
