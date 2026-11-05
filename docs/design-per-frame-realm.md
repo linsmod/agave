@@ -43,14 +43,26 @@ view（一个 AgaveWebView）
  └─ WindowProxy（每 frame 一个）：parent/top/frames[i] → 进入目标 realm 读它的 global
 ```
 
-- **window = 当前 realm 的 global**（顶层成立；子 frame 也成立）。
-- **`parent` / `top` / `frames[i]`** 是转发对象：get/set/has 进目标 realm 再操作它的 global。
+- **window = 当前 realm 的 global**（顶层成立；子 frame 也成立）。- **`parent` / `top` / `frames[i]`** 是转发对象：get/set/has 进目标 realm 再操作它的 global。
   同 VM 所以 `parent.document`、`parent.fn()` 仍然可用，但 `parent.Array !== Array`、跨 realm
   `instanceof` 为 false —— 这正是规范行为。
 - **DOM 包装按 realm 分**：同一个 DOM node 在父/子 realm 里有不同的 wrapper 对象
   （`parent.document.body !== document.body`，规范如此）。
 - **模块表按 realm**：ES module map 属于 realm，不再进程级共享（规范如此；也修掉两个 frame
-  重复求值/单例覆盖的问题）。
+  重复求值/单例覆盖的问题）。**尚未实现**（`js->modules.state` 仍是引擎级）。
+
+### 3.1 prelude / polyfills 注入几次
+
+`prelude.js` 和 `polyfills.js` 都是**每个 realm 注入一次**（`g_preludedRealms` /
+`g_polyfilledRealms` 按 realm 记账），也就是：**每个 frame 文档一次，换文档（新 engine）再来一次**。
+一个主文档 + N 个 iframe 就是 N+1 次；这与"页面每个 frame 都有自己的 Web API 表面"一致，
+不是重复注入。`internal.js` 仍只给 `agave://` 页。
+
+宿主 API（`__agb*` + window 方法）由 `bindDocument()` 在创建 realm 时安装；**eval 漏斗
+（`antbEvalPage` → `ensureGlobalApi()`）兜底**：如果某个 realm 在被求值时还没装过 API
+（比如 ant 因为调用另一个 realm 的函数而切了进去），先补装再执行。之前 v.qq 报的
+`__agbHttpRequestEx is not defined`（prelude 的 `fetch` 里）就是"realm 有 prelude 但没 API"
+这一类，现在不可能再出现。
 
 ## 4. 影响面清单（改哪、为什么）
 

@@ -1,0 +1,9 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>fetch child</title></head><body>
+<script>
+  window.__fetchState = 'pending';
+  try {
+    fetch('data:text/plain,hi').then(function (r) { window.__fetchState = 'ok:' + r.status; })
+      .catch(function (e) { window.__fetchState = 'err:' + e.message; });
+  } catch (e) { window.__fetchState = 'throw:' + e.message; }
+</script>
+</body></html>

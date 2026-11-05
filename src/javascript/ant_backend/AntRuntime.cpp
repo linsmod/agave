@@ -3820,8 +3820,48 @@ static bool pageEvalScriptMode()
     return cached == 1;
 }
 
-static AntbValue* antbEvalPage(const char* src, int len, char** err)
+/* Realms whose global already got the host API (__agb*, window methods). */
+static std::set<AntbRealm*>* g_apiRealms = NULL;
+
+static void installGlobalApi(AntbEngine* engine, AntbValue* global);
+
+/* Every realm needs the host API. bindDocument() installs it, but a realm can
+ * also become current without a bind - e.g. ant switches into a closure's realm
+ * when a value from another frame is called - so the evaluation funnel makes
+ * sure the realm it is about to run code in has the API. Without this, a page
+ * script could run its prelude-defined `fetch` in a realm that never got
+ * `__agbHttpRequestEx` (ReferenceError inside prelude's fetch). */
+static void ensureGlobalApi(void)
 {
+    AntbRealm* realm;
+    AntbValue* global;
+
+    if (!g_engine || !perFrameRealmEnabled())
+        return;
+
+    realm = antb_realm_current(g_engine);
+    if (!realm)
+        return;
+
+    if (!g_apiRealms)
+        g_apiRealms = new std::set<AntbRealm*>();
+    if (g_apiRealms->count(realm))
+        return;
+
+    global = antb_global(g_engine);
+    if (!global)
+        return;
+
+    installGlobalApi(g_engine, global);
+    antb_value_release(global);
+    g_apiRealms->insert(realm);
+
+    agbLog(AGB_LOG_EVT, "late global api install for realm %p", (void*)realm);
+}
+
+static AntbValue* antbEvalPage(const char* src, int len, char** err)
+{    ensureGlobalApi();
+
     return pageEvalScriptMode()
         ? antb_eval_script(g_engine, src, len, err)
         : antb_eval(g_engine, src, len, err);
@@ -4332,6 +4372,9 @@ static void loadPrelude(void)
 
     g_preludedRealms->insert(realm);
 
+    if (getenv("AGB_EVT_DEBUG"))
+        agbLog(AGB_LOG_EVT, "prelude.js loaded into realm %p", (void*)realm);
+
     if (evalScriptFile("AGB_PRELUDE", "prelude.js"))
         return;
 
@@ -4559,6 +4602,9 @@ static void stopRealm(void)
     /* The realms (and their prelude/polyfills markers) died with the engine. */
     state->mainRealm = NULL;
     forgetRealmScripts();
+
+    if (g_apiRealms)
+        g_apiRealms->clear();
 
     if (getenv("AGB_EVT_DEBUG"))
         agbLog(AGB_LOG_EVT, "realm stopped (generation=%lu)", state->generation);
@@ -5038,6 +5084,19 @@ static void installGlobalApi(AntbEngine* engine, AntbValue* global)
                 }
             }
         }
+
+    /* Remember which realm got the API: ensureGlobalApi() runs on the eval
+     * funnel and must not re-install it for this realm. */
+    {
+        AntbRealm* realm = antb_realm_current(engine);
+
+        if (realm) {
+            if (!g_apiRealms)
+                g_apiRealms = new std::set<AntbRealm*>();
+
+            g_apiRealms->insert(realm);
+        }
+    }
 }
 void installFrameGlobals(AntbEngine* engine, WebCore::Document* document)
 {

@@ -153,8 +153,39 @@ if ($perFrame.Code -ne 0) {
     }
 }
 
-Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+# 4. A frame realm must have the host API. A child page that calls fetch while
+#    parsing used to hit "ReferenceError: __agbHttpRequestEx is not defined"
+#    inside prelude's fetch when a realm ran prelude code without the API.
+$fetchPage = Join-Path $root 'tools/pages/realm_parent_fetch.html'
 
+if (Test-Path $fetchPage) {
+    $fetchJs = Join-Path $tmp 'fetch_check.js'
+    @'
+var f = document.getElementById('fr');
+var cw = f ? f.contentWindow : null;
+probeExit('api=' + (cw ? typeof cw.__agbHttpRequestEx : 'n/a') +
+          ' state=' + (cw ? String(cw.__fetchState) : 'n/a'));
+'@ | Set-Content -Path $fetchJs -Encoding ascii
+
+    $stdout = Join-Path $tmp 'fetch_out.txt'
+    $stderr = Join-Path $tmp 'fetch_err.txt'
+    $p = Start-Process -FilePath $exe -NoNewWindow -PassThru -Wait -ArgumentList @(
+        '--probe', $fetchPage, '--eval-file', $fetchJs,
+        '--wait', '1200', '--settle', '500', '--timeout', '60000'
+    ) -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+
+    $text = (Get-Content $stdout -Raw) -as [string]
+
+    if ($p.ExitCode -ne 0 -or $text -notmatch 'api=function') {
+        $failures++
+        Write-Host ("FAIL  frame realm has the host API (exit {0})" -f $p.ExitCode)
+        Write-Host (($text -split "`n" | Select-Object -Last 2) -join "`n")
+    } else {
+        Write-Host "PASS  frame realm has the host API (fetch reachable)"
+    }
+}
+
+Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 if ($failures -gt 0) {
     Write-Host "`nREALM CHECKS FAILED ($failures)"
     exit 1
