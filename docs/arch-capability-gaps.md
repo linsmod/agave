@@ -135,7 +135,7 @@ agave_shell.exe --probe ../tools/pages/cap_input_events.html     --pre-eval "doc
 grid=block transform=[] boxShadow=rgb(255, 0, 0) 0px 0px 4px sticky=static aspectHeight=90px
 gap=8px isColor=rgb(1, 2, 3) whereColor=rgb(4, 5, 6) varColor=rgb(7, 8, 9)
 varCascade=rgb(9, 8, 7) varInherit=rgb(1, 2, 3) boxSizing=border-box boxWidth=100 flexItemW=20
-safeAlign=center safeItemY=427 absChildX=88 calcMinH=22px calcVarMinH=22px calcMixed=0px
+safeAlign=center safeItemY=427 absChildX=88 calcMinH=22px calcVarMinH=22px calcMixed=calc(100% - 24px)
 bareMedia=2px schemeBg=rgb(0, 0, 200) mediaDark=1 mediaMin=1
 ```
 
@@ -145,8 +145,14 @@ bareMedia=2px schemeBg=rgb(0, 0, 200) mediaDark=1 mediaMin=1
 | 特性 | 当前 computed | 判定 / 建议 |
 |---|---|---|
 | `display: grid` | `block` | **不支持**：`CSSParser::modernKeywordID()` 明确把 grid 降级成 block（`CSS.supports('display','grid')` 也返回 false）；P1 |
-| `transform: translateX(10px)` | `""` | **不支持**（含 `-webkit-transform` 的读取与绘制）；动画/位移类站点影响大；P1 |
+| `transform: translateX(10px)` | 绘制生效（computed 仍返回空） | **部分支持（R52）**：别名表补无前缀 `transform`，修掉 parseTransform 的三个上游 bug；translate/scale/rotate 在 `RenderBlock::paint()` 里按 transform-origin 合成矩阵绘制。**限制**：局部重绘按未变换的脏矩形裁剪（图片类内容 repaint 时被切）、hit-test 未映射、未建 stacking context；computed style 的 `transform` 仍为空 |
 | `box-shadow: 0 0 4px red` | `rgb(255, 0, 0) 0px 0px 4px` | **已支持**（R11 把 `box-shadow` 别名到 `-webkit-box-shadow`）；旧文档里“非 `-webkit-` 未实现”已过时；绘制未逐像素验证 |
+| `width/height: 100vw/100vh` | `100vw=1100px`、`50vh=400px` | **已支持（R53）**：解析期按 FrameView 尺寸换算成 px；`vmin/vmax` 同。限制：窗口 resize 不重算 |
+| 嵌套自定义属性的 `calc()`（`--card: calc((var(--w) - var(--count) * var(--gap)) / var(--n))`） | `265.333px` | **已支持（R53）**：`substituteCalcVariables`+`foldCalcConstants` 迭代 3 轮；纯数字 `calc()` 也可折叠（`calc(3 - 1)`→2）；**含 `%` 的混合单位已支持（R54）**：`calc(100% - 24px)`、`calc(20px + 10%)`、`calc((100% - 20px)/2)`、`calc(100%/3)` 在布局期按包含块求值（`Length::Calculated`） |
+| `flex-wrap: wrap`（含 flex 子项） | 按 contentWidth 断行、行内按 grow 分配 | **已支持（R54）**：三趟布局（首选尺寸 → 断行 → 每行 grow/shrink 后用 override size 重排），再按 `justify-content`/`align-items`/`align-content` 摆放 |
+| `flex: 1 1 0` / `flex: 0 0 200px` / `flex-basis` | grow/shrink/basis 生效 | **已支持（R54）**：`flex` 简写展开成 `-webkit-box-flex` + `flex-shrink` + `flex-basis`（`flex:1`→1 1 0%，`auto`→1 1 auto，`none`→0 0 auto）；新增属性走 `CSSPropertyNames` 末尾追加 + `extraProps` 旁路 |
+| `align-content: space-between/center/flex-end` | 行间分布生效 | **已支持（R54）**：默认 `stretch` 把单行撑满容器（`align-items:center` 因此在整个盒子里居中，与 Chrome 一致）；`space-around` 近似成 `space-between` |
+| `scrollbar-width: none` / `-ms-overflow-style: none` | 滚动条不占宽 | **已支持（R54）**：`RenderStyle::scrollbarNone()`；文档滚动条在 `FrameView::applyOverflowToViewport()`、元素滚动条在 `RenderLayer::updateScrollInfoAfterLayout()` 里不占空间。`::-webkit-scrollbar{display:none}` 仍未支持（选择器解析不了），站点若只用后者仍会差一个滚动条宽度 |
 | `position: sticky` | `static` | **不支持**，按 static 布局；P2 |
 | `aspect-ratio: 16/9` + `width:160px` | `height=90px` | **已支持**（R41）：宽或高为 auto 时按比例推另一轴（按 content box），`16 / 9` 与 `16/9` 都认 |
 | flex `gap: 8px` | `8px` | **已支持**（R41）：`gap`/`row-gap`/`column-gap`，简写 1 值=两轴、2 值=row col；flex 仍是 2008 的 `-webkit-box` 体系，但间距按现代语义插在 in-flow 子项之间 |
@@ -159,6 +165,7 @@ bareMedia=2px schemeBg=rgb(0, 0, 200) mediaDark=1 mediaMin=1
 | `align-items: safe center` | `center` | **已支持**（R42）：解析期删掉 `safe`/`unsafe` 溢出关键字，保留对齐关键字；否则两 token 会让整条声明被丢、`align-items` 退回 `stretch` |
 | column flex 里的 `position:absolute` 子项 | 按 `align-items` 定 staticX | **已支持**（R42）：`RenderFlexibleBox::layoutVerticalBox()` 的 positioned 分支按 `boxAlign()` 修正 static position（`BCENTER` 居中、`BEND` 右对齐）；此前无条件贴左 |
 | `iframe.frameBorder = "0"`（JS property） | `border-top-width: 0px` | **已支持**（R42）：`kReflectedAttributes` 加 `frameBorder→frameborder`，property 写入落到 `setAttribute()` → `parseMappedAttribute()` 的 `border-width:0` 呈现提示；静态 `frameborder="0"` 一直可用 |
+| 8 位 hex `#RRGGBBAA` / `#RGBA` | `rgba(138, 71, 38, 0.945)` | **已支持（R51）**：`Color::parseHexColor()` 认 4/8 位；声明值与样式表里的 8 位 hex 还会在解析前改写成 `rgba()`（旧 tokenizer 只认 3/6 位） |
 | `min-height: calc(18px + 4px)` | `22px` | **已支持**（R43）：解析期把纯常量的 `calc()` 折叠成单值（`+ - * /`、括号、绝对长度单位）；自定义属性值里的 `calc(var(--token) + 4px)` 先做 sheet 级常量代入再折叠。**限制**：含 `%`/`vw`/`vh`/`em`/`rem`/`env()` 的混合单位 calc 仍不支持（保留原样、声明被丢），需要布局期求值才能覆盖 `calc(100% - 24px)` 这类 |
 
 已确认可用的（别再当缺口重开）：块/inline-block/float/绝对定位/margin auto/padding/border-radius/
@@ -166,6 +173,7 @@ opacity/渐变（R11）、`var()` 含 fallback 与元素级级联（R39）、`bo
 `prefers-color-scheme` 与 `matchMedia` 的尺寸/方向查询（R39）、flex 子元素 blockify（R39）、
 `gap`/`aspect-ratio`/`:is()`/`:where()`（R41）、`safe`/`unsafe` 对齐前缀与 flex 绝对定位子项对齐、
 `frameBorder` 属性反射（R42）、常量 `calc()` 折叠（R43）、
+百分比混合 `calc()`、`flex` 简写/`flex-basis`/`align-content`/`scrollbar-width`（R54）、
 `classList.add/toggle`、`matches`、`closest`、`dataset`、
 `append`、`remove`、`textContent`、`querySelectorAll`、`getElementsByClassName`、`document.cookie`。
 

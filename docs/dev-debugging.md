@@ -60,6 +60,12 @@ agave_shell.exe --probe <url> --userdata E:\tmp\probe-a ...   # 也可用环境�
 Start-Process -WindowStyle Hidden python -ArgumentList '-m','http.server','8971','--directory','e:\mybrowsers\agave\debug'
 ```
 
+**流式响应 / 入口模块等待期**：`python tools/slow_module_server.py 8974` 再
+`--probe http://127.0.0.1:8974/` —— 页面分两块送达（第一块 20 KiB 垫片，让
+`WinHttpReadData` 的 16 KiB 缓冲立刻返回），模块脚本后 0.5 s 的第二块含 inline `<script>`，
+模块体延迟 1.5 s。复测"解析器等入口模块时到达的数据不能提前 tokenize"（R50）：
+修复前 exit 139 + `ASSERTION FAILED: !scriptNode`，修复后 exit 0。
+
 ## 2. 默认打开的日志（`[evt]` / `[nav]` / `[ui]` / `[shell]` / `[probe]` / `[flag]`）
 
 这些日志**不需要任何环境变量**：一次运行应该能自己解释发生了什么。全部经由
@@ -200,6 +206,13 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
   —— 探针自己解析命令行、把 `"` 和 `\` 当语法，内联 `--eval` 里带 JS 字符串字面量会被拆坏；
   这个 helper 用 `--eval-file` 传文件，顺带设好 `--wait/--settle/--timeout/--userdata`。
   退出码仍是权威判据。
+- **布局对拍 Chrome**：`python tools/layout_diff.py tools/pages/layout/<page>.html [--tol 1]`
+  —— 同一份 `tools/pages/layout/lib_measure.js` 在 agave 探针和 headless Chrome 里各跑一遍，
+  两边视口都固定成 1084×800（agave = 1100 窗口减 16px 经典滚动条；Chrome = `--hide-scrollbars`
+  + `Emulation.setDeviceMetricsOverride`），按 `data-case="名字"` 输出
+  `名字:left,top,width,height|prop=computed`，逐行比 rect/计算值。用例写在 HTML 里即可
+  （`data-props` 指定要读的计算属性）。加页面：`tools/pages/layout/*.html`，一套跑多个：
+  `python tools/layout_diff.py tools/pages/layout/*.html`。
 - **一条命令截图**：`pwsh -File tools/screenshot.ps1 -Url <url> -Out <png> -Wait 12000`
   —— 内部就是 `agave_shell.exe --probe <url> --shot <bmp>`：探针窗口是隐藏的 `WS_POPUP`，
   从不 `ShowWindow`，抓的是控件的 mirror 缓冲（`agave_webview_paint_to`），所以屏幕上什么都不会出现。

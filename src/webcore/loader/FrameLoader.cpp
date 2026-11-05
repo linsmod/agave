@@ -804,6 +804,29 @@ JSValue* FrameLoader::executeScript(const String& URL, int baseLine, const Strin
 
     return result;
 }
+
+/* Module scripts must be evaluated with module semantics: top-level export,
+ * import.meta and dynamic import are rejected by the classic path (the
+ * v.qq.com modern bundle died on `export function` / `import.meta`). */
+JSValue* FrameLoader::executeModule(const String& URL, const String& script)
+{
+    KJSProxy* proxy = m_frame->scriptProxy();
+    if (!proxy)
+        return 0;
+
+    bool wasRunningScript = m_isRunningScript;
+    m_isRunningScript = true;
+
+    JSValue* result = proxy->evaluateModule(URL, script);
+
+    if (!wasRunningScript) {
+        m_isRunningScript = false;
+        submitFormAgain();
+        Document::updateDocumentsRendering();
+    }
+
+    return result;
+}
 #endif
 
 #if ENABLE(QJS)

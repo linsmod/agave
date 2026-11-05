@@ -196,6 +196,12 @@ bool HTMLScriptElement::isModuleScript() const
 
 bool HTMLScriptElement::shouldExecuteAsJavaScript()
 {
+    /* <script nomodule> is the legacy-browser fallback: an engine with module
+     * support must not run it (v.qq.com's SystemJS bundle ran here and threw
+     * "System is not defined" on every load). */
+    if (hasAttribute(AtomicString("nomodule")))
+        return false;
+
     /*
         Mozilla 1.8 and WinIE 7 both accept text/javascript and text/ecmascript.
         Mozilla 1.8 accepts application/javascript, application/ecmascript, and application/x-javascript, but WinIE 7 doesn't.

@@ -24,6 +24,7 @@
 #include "config.h"
 #include "CSSParser.h"
 
+#include "Length.h"
 #include "CSSBorderImageValue.h"
 #include "CSSCharsetRule.h"
 #include "CSSCursorImageValue.h"
@@ -58,6 +59,7 @@
 #include "Counter.h"
 #include "DashboardRegion.h"
 #include "Document.h"
+#include "FrameView.h"
 #include "FontFamilyValue.h"
 #include "FontValue.h"
 #include "KURL.h"
@@ -235,8 +237,11 @@ static String substituteCalcVariables(const String& css);
 namespace {
 
 struct CalcValue {
-    double number;
-    bool isLength;   /* px-type absolute length, vs. a dimensionless number */
+    double number;   /* px part, or the dimensionless value when !isLength */
+    bool isLength;   /* px/percent-type absolute length vs. a plain number */
+    double percent;  /* percentage part (only meaningful when isLength) */
+
+    CalcValue() : number(0), isLength(false), percent(0) {}
 };
 
 class CalcEvaluator {
@@ -248,7 +253,10 @@ public:
         skipSpace();
         out = parseSum();
         skipSpace();
-        return m_ok && m_p == m_end && out.isLength;
+        /* Pure numbers fold too: custom properties use them as multipliers
+         * (`--count: calc(var(--n) - 1)`), and the caller appends "px" only
+         * for length results. */
+        return m_ok && m_p == m_end;
     }
 
 private:
@@ -291,7 +299,13 @@ private:
             char op = *m_p++;
             CalcValue r = parseProduct();
             if (!m_ok || v.isLength != r.isLength) { m_ok = false; break; }
-            v.number = op == '+' ? v.number + r.number : v.number - r.number;
+            if (op == '+') {
+                v.number += r.number;
+                v.percent += r.percent;
+            } else {
+                v.number -= r.number;
+                v.percent -= r.percent;
+            }
         }
         return v;
     }
@@ -309,10 +323,12 @@ private:
             if (op == '/') {
                 if (r.isLength || r.number == 0.0) { m_ok = false; break; }
                 v.number /= r.number;
+                v.percent /= r.number;
             } else {
                 /* number * length is allowed; length * length is not. */
                 if (v.isLength && r.isLength) { m_ok = false; break; }
                 v.number *= r.number;
+                v.percent *= r.number;
                 v.isLength = v.isLength || r.isLength;
             }
         }
@@ -340,13 +356,16 @@ private:
             v = parseAtom();
         }
 
-        if (negative) v.number = -v.number;
+        if (negative) {
+            v.number = -v.number;
+            v.percent = -v.percent;
+        }
         return v;
     }
 
     CalcValue parseAtom()
     {
-        CalcValue v = { 0.0, false };
+        CalcValue v;
         const char* start = m_p;
         if (m_p < m_end && (*m_p == '.' || (*m_p >= '0' && *m_p <= '9'))) {
             while (m_p < m_end && (*m_p == '.' || *m_p == '-' || *m_p == '+' ||
@@ -371,6 +390,14 @@ private:
             ++m_p;
 
         if (m_p > unitStart) {
+            /* `%` cannot be folded to px, but carrying it separately lets the
+             * caller emit calc(<pct>% + <px>px), which the parser understands. */
+            if (m_p - unitStart == 1 && unitStart[0] == '%') {
+                v.percent = v.number;
+                v.number = 0;
+                v.isLength = true;
+                return v;
+            }
             double factor = unitToPx(unitStart, (int)(m_p - unitStart));
             if (factor < 0) { m_ok = false; return v; }
             v.number *= factor;
@@ -554,18 +581,43 @@ static String foldCalcConstants(const String& css)
                 CalcValue result;
                 CalcEvaluator ev(&expr[0], &expr[0] + strlen(&expr[0]));
                 if (ev.evaluate(result)) {
-                    char buf[64];
                     /* Six decimals are plenty for a pixel length; trailing
                      * zeroes are trimmed so `18px + 4px` becomes exactly `22px`. */
-                    snprintf(buf, sizeof(buf), "%.6f", result.number);
-                    char* dot = strchr(buf, '.');
-                    if (dot) {
-                        char* e = buf + strlen(buf) - 1;
-                        while (e > dot && *e == '0') *e-- = 0;
-                        if (*e == '.') *e = 0;
+                    auto appendNumber = [&out](double n, const char* unit) {
+                        char buf[64];
+                        snprintf(buf, sizeof(buf), "%.6f", n);
+                        char* dot = strchr(buf, '.');
+                        if (dot) {
+                            char* e = buf + strlen(buf) - 1;
+                            while (e > dot && *e == '0') *e-- = 0;
+                            if (*e == '.') *e = 0;
+                        }
+                        for (const char* p = buf; *p; ++p) out.push_back((UChar)*p);
+                        if (unit)
+                            for (const char* p = unit; *p; ++p) out.push_back((UChar)*p);
+                    };
+
+                    if (result.percent != 0.0) {
+                        /* calc(100% - 24px) cannot become a single px value.
+                         * The 2008 grammar cannot parse calc() at all (expr has
+                         * no '+'/'-' operators, so the declaration would be
+                         * dropped before parseValue runs), but a dimension
+                         * token is a plain term. Encode percentage and pixel
+                         * offset in the unit text (thousandths of a unit, so
+                         * the ident stays free of '.'):
+                         *   0agbcalcP100000X-24000  ==  100% - 24px
+                         * parseValue() recognises the prefix and builds a
+                         * CSS_CALC_LENGTH primitive from it. */
+                        char buf[96];
+                        snprintf(buf, sizeof(buf), "0agbcalcP%ldX%ld",
+                                 (long)(result.percent < 0 ? result.percent * 1000 - 0.5 : result.percent * 1000 + 0.5),
+                                 (long)(result.number < 0 ? result.number * 1000 - 0.5 : result.number * 1000 + 0.5));
+                        for (const char* p = buf; *p; ++p) out.push_back((UChar)*p);
+                    } else if (result.isLength) {
+                        appendNumber(result.number, "px");
+                    } else {
+                        appendNumber(result.number, 0);
                     }
-                    strcat(buf, "px");
-                    for (const char* p = buf; *p; ++p) out.push_back((UChar)*p);
                     changed = true;
                     i = j;
                     continue;
@@ -586,6 +638,274 @@ static String foldCalcConstants(const String& css)
     return String(&out[0], (unsigned)out.size());
 }
 
+/* Custom properties often build on each other:
+ *   --w: calc(100vw - 76px - var(--left-nav-width));
+ *   --card: calc((var(--w) - var(--count) * var(--gap)) / var(--n));
+ * One substitution pass only resolves the plain constants, so repeat
+ * substitute + fold until it stabilises: after the first pass --w is a folded
+ * `844px`, and the second pass can then fold --card. */
+static String foldCalcIteratively(const String& css)
+{
+    String text = css;
+
+    for (int pass = 0; pass < 3; ++pass) {
+        String next = foldCalcConstants(substituteCalcVariables(text));
+
+        if (next == text)
+            break;
+        text = next;
+    }
+
+    return text;
+}
+
+/* ---- #RRGGBBAA / #RGBA -> rgba() -----------------------------------------
+ * The 2008 colour tokenizer only knows 3/6-digit hex (tokenizer.flex's
+ * `hexcolor` rule); an 8-digit colour splits into "#RRGGBB" + a stray ident and
+ * the declaration is dropped. Modern design systems emit these (v.qq.com's
+ * JS-driven hero gradient is #8A4726F2 ...), so rewrite the value text into the
+ * rgba() form the old parser understands. Only inside declaration values:
+ * selectors are left alone, and comments/strings/url() are copied verbatim. */
+static bool isHexColorDigit(UChar c)
+{
+    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+}
+
+static unsigned hexColorVal(UChar c)
+{
+    if (c >= '0' && c <= '9') return (unsigned)(c - '0');
+    if (c >= 'a' && c <= 'f') return (unsigned)(c - 'a' + 10);
+    return (unsigned)(c - 'A' + 10);
+}
+
+/* ---- vw/vh/vmin/vmax -> px ----------------------------------------------
+ * The 2008 engine has no viewport units. The browser viewport is known when a
+ * stylesheet or declaration is parsed, so bake them into px here; this keeps
+ * `width: 100vw`, `height: 100vh` and `calc((100vw - 76px) / 3)` working (the
+ * constant calc folder then handles the arithmetic). Units inside strings,
+ * comments and url() are copied verbatim. */
+static bool isUnitChar(UChar c)
+{
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+        || c == '-' || c == '_';
+}
+
+static String rewriteViewportUnits(const String& css, Document* doc)
+{
+    if (!doc)
+        return css;
+    FrameView* view = doc->view();
+    if (!view)
+        return css;
+
+    int vw = view->width();
+    int vh = view->height();
+    if (vw <= 0 || vh <= 0)
+        return css;
+
+    unsigned len = css.length();
+    std::vector<UChar> out;
+    out.reserve(len + 16);
+    unsigned i = 0;
+
+    while (i < len) {
+        UChar c = css[i];
+
+        if (c == '/' && i + 1 < len && css[i + 1] == '*') {
+            while (i < len) {
+                out.push_back(css[i]);
+                if (css[i] == '*' && i + 1 < len && css[i + 1] == '/') {
+                    out.push_back(css[i + 1]);
+                    i += 2;
+                    break;
+                }
+                ++i;
+            }
+            continue;
+        }
+
+        if (c == '"' || c == '\'') {
+            UChar quote = c;
+            out.push_back(c);
+            ++i;
+            while (i < len) {
+                UChar d = css[i];
+                out.push_back(d);
+                ++i;
+                if (d == (UChar)92 && i < len) {
+                    out.push_back(css[i]);
+                    ++i;
+                } else if (d == quote) {
+                    break;
+                }
+            }
+            continue;
+        }
+
+        if ((c == 'u' || c == 'U') && i + 3 < len
+            && (css[i + 1] == 'r' || css[i + 1] == 'R')
+            && (css[i + 2] == 'l' || css[i + 2] == 'L') && css[i + 3] == '(') {
+            int parens = 0;
+            while (i < len) {
+                UChar d = css[i];
+                out.push_back(d);
+                ++i;
+                if (d == '(') ++parens;
+                else if (d == ')' && --parens == 0) break;
+            }
+            continue;
+        }
+
+        if ((c >= '0' && c <= '9') || (c == '.' && i + 1 < len && css[i + 1] >= '0' && css[i + 1] <= '9')) {
+            unsigned start = i;
+            while (i < len && ((css[i] >= '0' && css[i] <= '9') || css[i] == '.'))
+                ++i;
+            unsigned numEnd = i;
+            String numText = css.substring(start, numEnd - start);
+            double number = numText.deprecatedString().toDouble();
+
+            if (i + 1 < len) {
+                UChar u0 = (UChar)toASCIILower(css[i]);
+                UChar u1 = (UChar)toASCIILower(css[i + 1]);
+                int unitLen = 0;
+                double unitValue = 0;
+
+                if (u0 == 'v' && u1 == 'w') {
+                    unitLen = 2; unitValue = vw / 100.0;
+                } else if (u0 == 'v' && u1 == 'h') {
+                    unitLen = 2; unitValue = vh / 100.0;
+                } else if (u0 == 'v' && u1 == 'm' && i + 3 < len
+                           && (toASCIILower(css[i + 2]) == 'i' || toASCIILower(css[i + 2]) == 'a')
+                           && toASCIILower(css[i + 3]) == 'n') {
+                    unitLen = 4;
+                    unitValue = (toASCIILower(css[i + 2]) == 'i' ? min(vw, vh) : max(vw, vh)) / 100.0;
+                }
+
+                bool afterOk = (i + unitLen >= len) || !isUnitChar(css[i + unitLen]);
+                if (unitLen && afterOk) {
+                    String text = String::format("%.2fpx", number * unitValue);
+                    for (unsigned k = 0; k < text.length(); ++k)
+                        out.push_back(text[k]);
+                    i += unitLen;
+                    continue;
+                }
+            }
+
+            for (unsigned k = start; k < numEnd; ++k)
+                out.push_back(css[k]);
+            continue;
+        }
+
+        out.push_back(c);
+        ++i;
+    }
+
+    return String(&out[0], (unsigned)out.size());
+}
+
+static String rewriteHexAlphaColors(const String& css, bool valueOnly)
+{
+    unsigned len = css.length();
+    std::vector<UChar> out;
+    out.reserve(len + 32);
+
+    unsigned depth = 0;
+    bool inDecl = valueOnly;
+    unsigned i = 0;
+
+    while (i < len) {
+        UChar c = css[i];
+
+        /* comments */
+        if (c == '/' && i + 1 < len && css[i + 1] == '*') {
+            while (i < len) {
+                out.push_back(css[i]);
+                if (css[i] == '*' && i + 1 < len && css[i + 1] == '/') {
+                    out.push_back(css[i + 1]);
+                    i += 2;
+                    break;
+                }
+                ++i;
+            }
+            continue;
+        }
+
+        /* strings */
+        if (c == '"' || c == '\'') {
+            UChar quote = c;
+            out.push_back(c);
+            ++i;
+            while (i < len) {
+                UChar d = css[i];
+                out.push_back(d);
+                ++i;
+                if (d == '\\' && i < len) {
+                    out.push_back(css[i]);
+                    ++i;
+                } else if (d == quote) {
+                    break;
+                }
+            }
+            continue;
+        }
+
+        /* url(...) may contain #id references: copy verbatim */
+        if ((c == 'u' || c == 'U') && i + 3 < len
+            && (css[i + 1] == 'r' || css[i + 1] == 'R')
+            && (css[i + 2] == 'l' || css[i + 2] == 'L') && css[i + 3] == '(') {
+            int parens = 0;
+            while (i < len) {
+                UChar d = css[i];
+                out.push_back(d);
+                ++i;
+                if (d == '(') ++parens;
+                else if (d == ')' && --parens == 0) break;
+            }
+            continue;
+        }
+
+        if (c == '{') { ++depth; inDecl = false; out.push_back(c); ++i; continue; }
+        if (c == '}') { if (depth) --depth; inDecl = false; out.push_back(c); ++i; continue; }
+        if (c == ';') { inDecl = false; out.push_back(c); ++i; continue; }
+        if (c == ':' && depth > 0) { inDecl = true; out.push_back(c); ++i; continue; }
+
+        if (c == '#' && inDecl) {
+            unsigned j = i + 1;
+            while (j < len && isHexColorDigit(css[j]))
+                ++j;
+            unsigned n = j - i - 1;
+            UChar after = j < len ? css[j] : 0;
+            bool delim = (after == 0 || after == ';' || after == ',' || after == ')'
+                          || after == ' ' || after == '\t' || after == '\n' || after == '\r'
+                          || after == '!' || after == '}');
+            if ((n == 8 || n == 4) && delim) {
+                unsigned r, g, b, a;
+                if (n == 8) {
+                    r = hexColorVal(css[i + 1]) * 16 + hexColorVal(css[i + 2]);
+                    g = hexColorVal(css[i + 3]) * 16 + hexColorVal(css[i + 4]);
+                    b = hexColorVal(css[i + 5]) * 16 + hexColorVal(css[i + 6]);
+                    a = hexColorVal(css[i + 7]) * 16 + hexColorVal(css[i + 8]);
+                } else {
+                    r = hexColorVal(css[i + 1]) * 0x11;
+                    g = hexColorVal(css[i + 2]) * 0x11;
+                    b = hexColorVal(css[i + 3]) * 0x11;
+                    a = hexColorVal(css[i + 4]) * 0x11;
+                }
+                String text = String::format("rgba(%u, %u, %u, %.3f)", r, g, b, a / 255.0);
+                for (unsigned k = 0; k < text.length(); ++k)
+                    out.push_back(text[k]);
+                i = j;
+                continue;
+            }
+        }
+
+        out.push_back(c);
+        ++i;
+    }
+
+    return String(&out[0], (unsigned)out.size());
+}
+
 void CSSParser::parseSheet(CSSStyleSheet* sheet, const String& string)
 {
     styleElement = sheet;
@@ -597,7 +917,7 @@ void CSSParser::parseSheet(CSSStyleSheet* sheet, const String& string)
     clearCustomProperties();
 
     setupParser("", foldCalcConstants(rewriteIsWhereSelectors(rewriteBareMediaQueries(
-                     rewriteCustomPropertyNames(substituteCalcVariables(string))))), "");
+                     rewriteCustomPropertyNames(foldCalcIteratively(rewriteViewportUnits(rewriteHexAlphaColors(string, false), document())))))), "");
 
     CSSParser* old = currentParser;
     currentParser = this;
@@ -1300,7 +1620,7 @@ bool CSSParser::parseExpandedValue(int propId, const String& text, bool importan
     sub.styleElement = styleElement;
     sub.id = propId;
     sub.important = important;
-    sub.setupParser("@-webkit-value{", foldCalcConstants(text), "} ");
+    sub.setupParser("@-webkit-value{", foldCalcConstants(rewriteViewportUnits(rewriteHexAlphaColors(text, true), document())), "} ");
 
     currentParser = &sub;
     cssyyparse(&sub);
@@ -1318,7 +1638,7 @@ bool CSSParser::parseValue(CSSMutableStyleDeclaration *declaration, int _id, con
     styleElement = declaration->stylesheet();
 
     {
-        String text = foldCalcConstants(rewriteCustomPropertyNames(string));
+        String text = foldCalcConstants(rewriteCustomPropertyNames(rewriteViewportUnits(rewriteHexAlphaColors(string, true), document())));
 
         if (text.contains("var(")) {
             /* The variables are only known once the cascade at the element is
@@ -1405,7 +1725,8 @@ bool CSSParser::parseDeclaration(CSSMutableStyleDeclaration *declaration, const 
 {
     styleElement = declaration->stylesheet();
 
-    setupParser("@-webkit-decls{", foldCalcConstants(rewriteCustomPropertyNames(string)), "} ");
+    String declText = foldCalcConstants(rewriteCustomPropertyNames(rewriteViewportUnits(rewriteHexAlphaColors(string, true), document())));
+    setupParser("@-webkit-decls{", declText, "} ");
 
     CSSParser* old = currentParser;
     currentParser = this;
@@ -1508,6 +1829,11 @@ void CSSParser::clearProperties()
 
 Document *CSSParser::document() const
 {
+    /* parseValue() also runs for var()-expanded declarations, where there is
+     * no style element attached (crash: StyleBase::parent on null). */
+    if (!styleElement)
+        return 0;
+
     StyleBase *root = styleElement;
     Document *doc = 0;
     while (root->parent())
@@ -1536,6 +1862,9 @@ bool CSSParser::validUnit(Value* value, Units unitflags, bool strict)
     case CSSPrimitiveValue::CSS_PERCENTAGE:
         b = (unitflags & FPercent)?true:false;
         break;
+    case CSSPrimitiveValue::CSS_CALC_LENGTH:
+        b = (unitflags & (FLength | FPercent)) ? true : false;
+        break;
     case Value::Q_EMS:
     case CSSPrimitiveValue::CSS_EMS:
     case CSSPrimitiveValue::CSS_EXS:
@@ -1554,6 +1883,8 @@ bool CSSParser::validUnit(Value* value, Units unitflags, bool strict)
     case CSSPrimitiveValue::CSS_DEG:
     case CSSPrimitiveValue::CSS_RAD:
     case CSSPrimitiveValue::CSS_GRAD:
+        b = (unitflags & FAngle)?true:false;
+        break;
     case CSSPrimitiveValue::CSS_HZ:
     case CSSPrimitiveValue::CSS_KHZ:
     case CSSPrimitiveValue::CSS_DIMENSION:
@@ -1678,6 +2009,13 @@ static int modernKeywordID(int propId, const Value* value)
         if (word == "baseline") return CSS_VAL_BASELINE;
         if (word == "stretch") return CSS_VAL_STRETCH;
         break;
+    case CSS_PROP_ALIGN_CONTENT:
+        if (word == "flex-start" || word == "start") return CSS_VAL_START;
+        if (word == "flex-end" || word == "end") return CSS_VAL_END;
+        if (word == "center") return CSS_VAL_CENTER;
+        if (word == "space-between" || word == "space-around") return CSS_VAL_JUSTIFY;
+        if (word == "stretch") return CSS_VAL_STRETCH;
+        break;
     case CSS_PROP__WEBKIT_BOX_LINES:    /* flex-wrap */
         if (word == "wrap") return CSS_VAL_MULTIPLE;
         if (word == "nowrap") return CSS_VAL_SINGLE;
@@ -1721,6 +2059,95 @@ static void stripAlignmentOverflowKeywords(ValueList* values, int propId)
     }
 }
 
+/* ---- calc() with a percentage term ---------------------------------------
+ * foldCalcConstants() cannot turn `calc(100% - 24px)` into a single px value,
+ * and the 2008 grammar cannot parse calc() at all: `expr` has no '+'/'-'
+ * operators, so the declaration dies in yacc before parseValue() would see a
+ * function value. A dimension token, however, is an ordinary term. The text
+ * rewriter therefore encodes the two parts in the unit text:
+ *
+ *     0agbcalcP<pct-milli>X<px-milli>      e.g. 0agbcalcP100000X-24000
+ *
+ * which means 100% - 24px. Here it becomes a CSS_CALC_LENGTH primitive;
+ * CSSStyleSelector turns that into Length(Calculated), and the percentage
+ * still resolves against the containing block during layout. */
+static bool calcFromDimensionToken(const ParseString& token, double& percent, int& px)
+{
+    String text = domString(token);
+
+    if (!text.startsWith("0agbcalcP"))
+        return false;
+
+    const UChar* chars = text.characters();
+    unsigned len = text.length();
+    unsigned i = 9;   /* strlen("0agbcalcP") */
+
+    auto readMilli = [&](long& out) -> bool {
+        bool negative = false;
+        if (i < len && chars[i] == '-') {
+            negative = true;
+            ++i;
+        }
+        if (i >= len || chars[i] < '0' || chars[i] > '9')
+            return false;
+        long value = 0;
+        while (i < len && chars[i] >= '0' && chars[i] <= '9') {
+            value = value * 10 + (chars[i] - '0');
+            if (value > 100000000L)
+                return false;
+            ++i;
+        }
+        out = negative ? -value : value;
+        return true;
+    };
+
+    long pctMilli = 0;
+    if (!readMilli(pctMilli))
+        return false;
+    if (i >= len || chars[i] != 'X')
+        return false;
+    ++i;
+
+    long pxMilli = 0;
+    if (!readMilli(pxMilli) || i != len)
+        return false;
+
+    percent = pctMilli / 1000.0;
+    px = (int)(pxMilli / 1000);
+    return true;
+}
+
+/* Properties whose layout code resolves Length(Calculated). Anything else
+ * keeps the old behaviour (the declaration is dropped) rather than risking a
+ * Length type that a rendering path does not understand. */
+static bool propertyAcceptsCalcLength(int propId)
+{
+    switch (propId) {
+    case CSS_PROP_WIDTH:
+    case CSS_PROP_HEIGHT:
+    case CSS_PROP_MIN_WIDTH:
+    case CSS_PROP_MIN_HEIGHT:
+    case CSS_PROP_MAX_WIDTH:
+    case CSS_PROP_MAX_HEIGHT:
+    case CSS_PROP_MARGIN_TOP:
+    case CSS_PROP_MARGIN_RIGHT:
+    case CSS_PROP_MARGIN_BOTTOM:
+    case CSS_PROP_MARGIN_LEFT:
+    case CSS_PROP_PADDING_TOP:
+    case CSS_PROP_PADDING_RIGHT:
+    case CSS_PROP_PADDING_BOTTOM:
+    case CSS_PROP_PADDING_LEFT:
+    case CSS_PROP_TOP:
+    case CSS_PROP_RIGHT:
+    case CSS_PROP_BOTTOM:
+    case CSS_PROP_LEFT:
+    case CSS_PROP_TEXT_INDENT:
+        return true;
+    default:
+        return false;
+    }
+}
+
 bool CSSParser::parseValue(int propId, bool important)
 {
     if (!valueList)
@@ -1742,6 +2169,21 @@ bool CSSParser::parseValue(int propId, bool important)
 
         if (modern)
             id = modern;
+    }
+
+    /* calc() mixing a percentage with a length arrives as an encoded dimension
+     * token (see calcFromDimensionToken); the per-property branches below only
+     * accept plain lengths/percentages, so handle it here. */
+    if (!id && value->unit == CSSPrimitiveValue::CSS_DIMENSION
+        && propertyAcceptsCalcLength(propId)) {
+        double percent = 0;
+        int px = 0;
+
+        if (calcFromDimensionToken(value->string, percent, px)) {
+            valueList->next();
+            addProperty(propId, new CSSPrimitiveValue(percent, px), important);
+            return true;
+        }
     }
 
     int num = inShorthand() ? 1 : valueList->size();
@@ -2179,6 +2621,31 @@ bool CSSParser::parseValue(int propId, bool important)
                 }
             }
         }
+        break;
+
+    case CSS_PROP_FLEX:                 // <grow> <shrink>? || <basis>
+        return parseFlexShorthand(important);
+
+    case CSS_PROP_FLEX_SHRINK:          // <number>
+        valid_primitive = validUnit(value, FNumber | FNonNeg, strict);
+        break;
+
+    case CSS_PROP_FLEX_BASIS:           // <length> | <percentage> | auto
+        if (id == CSS_VAL_AUTO)
+            valid_primitive = true;
+        else
+            valid_primitive = !id && validUnit(value, FLength | FPercent | FNonNeg, strict);
+        break;
+
+    case CSS_PROP_SCROLLBAR_WIDTH:      // auto | thin | none
+        if (id == CSS_VAL_AUTO || id == CSS_VAL_THIN || id == CSS_VAL_NONE)
+            valid_primitive = true;
+        break;
+
+    case CSS_PROP_ALIGN_CONTENT:        // flex-start | center | flex-end | space-between | stretch
+        if (id == CSS_VAL_START || id == CSS_VAL_END || id == CSS_VAL_CENTER ||
+            id == CSS_VAL_JUSTIFY || id == CSS_VAL_STRETCH)
+            valid_primitive = true;
         break;
 
     case CSS_PROP_WORD_BREAK:          // normal | break-all | break-word (this is a custom extension)
@@ -2939,6 +3406,80 @@ fail:
         delete values[k];
     delete positionYValue;
     return false;
+}
+
+/* `flex: <grow> <shrink>? || <basis>` (CSS Flexible Box Layout 1). The engine
+ * has no flex-basis/flex-shrink properties of its own, so the shorthand expands
+ * into -webkit-box-flex (what RenderFlexibleBox already consumes) plus the two
+ * properties added for wrapping layouts. Omitted parts follow the spec:
+ * `flex: 1` is 1 1 0%, `flex: auto` is 1 1 auto, `flex: none` is 0 0 auto. */
+bool CSSParser::parseFlexShorthand(bool important)
+{
+    if (!valueList)
+        return false;
+
+    float numbers[2] = { 0.0f, 0.0f };
+    int numNumbers = 0;
+    bool gotBasis = false;
+    Length basis(Auto);
+
+    while (Value* v = valueList->current()) {
+        if (v->unit == CSSPrimitiveValue::CSS_NUMBER) {
+            if (numNumbers >= 2) {
+                /* `flex: 1 1 0`: a unitless trailing zero is the basis. */
+                if (v->fValue == 0.0) {
+                    basis = Length(0, Fixed);
+                    gotBasis = true;
+                    valueList->next();
+                    continue;
+                }
+                return false;
+            }
+            numbers[numNumbers++] = (float)v->fValue;
+        } else if (v->unit == CSSPrimitiveValue::CSS_IDENT) {
+            String word = domString(v->string).lower();
+
+            if (word == "auto") {
+                basis = Length(Auto);
+            } else if (word == "none") {
+                numbers[0] = numbers[1] = 0.0f;
+                numNumbers = 2;
+                basis = Length(Auto);
+            } else {
+                return false;
+            }
+            gotBasis = true;
+        } else if (v->unit == CSSPrimitiveValue::CSS_PX) {
+            basis = Length((int)(v->fValue + 0.5f), Fixed);
+            gotBasis = true;
+        } else if (v->unit == CSSPrimitiveValue::CSS_PERCENTAGE) {
+            basis = Length(v->fValue, Percent);
+            gotBasis = true;
+        } else {
+            return false;
+        }
+        valueList->next();
+    }
+
+    if (!numNumbers && !gotBasis)
+        return false;
+
+    float grow = numNumbers > 0 ? numbers[0] : 1.0f;
+    float shrink = numNumbers > 1 ? numbers[1] : 1.0f;
+
+    if (!gotBasis)
+        basis = Length(0.0, Percent);
+
+    ShorthandScope scope(this, CSS_PROP_FLEX);
+    addProperty(CSS_PROP__WEBKIT_BOX_FLEX, new CSSPrimitiveValue(grow, CSSPrimitiveValue::CSS_NUMBER), important);
+    addProperty(CSS_PROP_FLEX_SHRINK, new CSSPrimitiveValue(shrink, CSSPrimitiveValue::CSS_NUMBER), important);
+    if (basis.isAuto())
+        addProperty(CSS_PROP_FLEX_BASIS, new CSSPrimitiveValue(CSS_VAL_AUTO), important);
+    else if (basis.isPercent())
+        addProperty(CSS_PROP_FLEX_BASIS, new CSSPrimitiveValue(basis.percent(), CSSPrimitiveValue::CSS_PERCENTAGE), important);
+    else
+        addProperty(CSS_PROP_FLEX_BASIS, new CSSPrimitiveValue(basis.value(), CSSPrimitiveValue::CSS_PX), important);
+    return true;
 }
 
 bool CSSParser::parseShorthand(int propId, const int *properties, int numProperties, bool important)
@@ -4622,30 +5163,30 @@ public:
     , m_allowSingleArgument(false)
     , m_unit(CSSParser::FUnknown)
     {
-        if (fname == "scale(" || fname == "scaleX(" || fname == "scaleY(") {
+        if (fname == "scale(" || fname == "scalex(" || fname == "scaley(") {
             m_unit = CSSParser::FNumber;
             if (fname == "scale(")
                 m_type = CSSTransformValue::ScaleTransformOperation;
-            else if (fname == "scaleX(")
+            else if (fname == "scalex(")
                 m_type = CSSTransformValue::ScaleXTransformOperation;
             else
                 m_type = CSSTransformValue::ScaleYTransformOperation;
         } else if (fname == "rotate(") {
             m_type = CSSTransformValue::RotateTransformOperation;
             m_unit = CSSParser::FAngle;
-        } else if (fname == "skew(" || fname == "skewX(" || fname == "skewY(") {
+        } else if (fname == "skew(" || fname == "skewx(" || fname == "skewy(") {
             m_unit = CSSParser::FAngle;
             if (fname == "skew(")
                 m_type = CSSTransformValue::SkewTransformOperation;
-            else if (fname == "skewX(")
+            else if (fname == "skewx(")
                 m_type = CSSTransformValue::SkewXTransformOperation;
             else
                 m_type = CSSTransformValue::SkewYTransformOperation;
-        } else if (fname == "translate(" || fname == "translateX(" || fname == "translateY(") {
+        } else if (fname == "translate(" || fname == "translatex(" || fname == "translatey(") {
             m_unit = CSSParser::FLength | CSSParser::FPercent;
             if (fname == "translate(")
                 m_type = CSSTransformValue::TranslateTransformOperation;
-            else if (fname == "translateX(")
+            else if (fname == "translatex(")
                 m_type = CSSTransformValue::TranslateXTransformOperation;
             else
                 m_type = CSSTransformValue::TranslateYTransformOperation;
@@ -4712,7 +5253,7 @@ PassRefPtr<CSSValue> CSSParser::parseTransform()
                 return 0;
             
             // Add the value to the current transform operation.
-            transformValue->addValue(new CSSPrimitiveValue(value->fValue, (CSSPrimitiveValue::UnitTypes) value->unit));
+            transformValue->addValue(new CSSPrimitiveValue(a->fValue, (CSSPrimitiveValue::UnitTypes) a->unit));
 
             a = args->next();
             if (!a)

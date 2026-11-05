@@ -109,6 +109,34 @@ bool Color::parseHexColor(const String& name, RGBA32& rgb)
             return true;
         }
     }
+
+    /* CSS Color 4: #RGBA and #RRGGBBAA. Modern design systems emit these in
+     * CSS custom properties and JS-driven gradients (v.qq.com paints its hero
+     * overlay with #8A4726F2 etc.); without them the declaration is dropped or
+     * misparsed as opaque black. */
+    if (len == 4 || len == 8) {
+        bool ok;
+        uint64_t val = name.deprecatedString().toUInt64(&ok, 16);
+
+        if (!ok)
+            return false;
+
+        unsigned r, g, b, a;
+        if (len == 8) {
+            r = (unsigned)((val >> 24) & 0xFF);
+            g = (unsigned)((val >> 16) & 0xFF);
+            b = (unsigned)((val >> 8) & 0xFF);
+            a = (unsigned)(val & 0xFF);
+        } else {
+            r = (unsigned)((val >> 12) & 0xF) * 0x11;
+            g = (unsigned)((val >> 8) & 0xF) * 0x11;
+            b = (unsigned)((val >> 4) & 0xF) * 0x11;
+            a = (unsigned)(val & 0xF) * 0x11;
+        }
+        rgb = (a << 24) | (r << 16) | (g << 8) | b;
+        return true;
+    }
+
     return false;
 }
 

@@ -629,6 +629,67 @@ public:
 
 // CSS Transforms (may become part of CSS3)
 
+class TransformOperation {
+public:
+    enum type_t {
+        TRANSLATE,
+        TRANSLATE_X,
+        TRANSLATE_Y,
+        SCALE,
+        SCALE_X,
+        SCALE_Y,
+        ROTATE
+    };
+
+    TransformOperation()
+        : m_type(TRANSLATE)
+        , m_x(Length(0, Fixed))
+        , m_y(Length(0, Fixed))
+        , m_scaleX(1)
+        , m_scaleY(1)
+        , m_angle(0)
+    {}
+
+    explicit TransformOperation(type_t t)
+        : m_type(t)
+        , m_x(Length(0, Fixed))
+        , m_y(Length(0, Fixed))
+        , m_scaleX(1)
+        , m_scaleY(1)
+        , m_angle(0)
+    {}
+
+    bool operator==(const TransformOperation& o) const
+    {
+        return m_type == o.m_type && m_x == o.m_x && m_y == o.m_y
+            && m_scaleX == o.m_scaleX && m_scaleY == o.m_scaleY && m_angle == o.m_angle;
+    }
+    bool operator!=(const TransformOperation& o) const { return !(*this == o); }
+
+    type_t type() const { return m_type; }
+    void setType(type_t t) { m_type = t; }
+
+    const Length& x() const { return m_x; }
+    const Length& y() const { return m_y; }
+    void setX(const Length& l) { m_x = l; }
+    void setY(const Length& l) { m_y = l; }
+
+    double scaleX() const { return m_scaleX; }
+    double scaleY() const { return m_scaleY; }
+    void setScale(double sx, double sy) { m_scaleX = sx; m_scaleY = sy; }
+
+    double angle() const { return m_angle; }
+    void setAngle(double a) { m_angle = a; }
+
+private:
+    type_t m_type;
+    Length m_x;      // translate offsets (px or %)
+    Length m_y;
+    double m_scaleX;
+    double m_scaleY;
+    double m_angle;  // degrees
+};
+
 class StyleTransformData : public Shared<StyleTransformData> {
 public:
     StyleTransformData();
@@ -639,10 +700,9 @@ public:
         return !(*this == o);
     }
 
-    // This will eventually hold the parsed transform operations as well.
-    // In this first landing, we're just mapping in the transform origin.
     Length m_x;
     Length m_y;
+    Vector<TransformOperation> m_operations;
 };
 
 //------------------------------------------------
@@ -1184,6 +1244,15 @@ protected:
     Length m_rowGap;
     Length m_columnGap;
     float m_aspectRatio;
+
+    /* Modern flex: shrink factor, basis (Auto = use width), and the
+     * align-content distribution across wrapped lines. */
+    float m_flexShrink;
+    Length m_flexBasis;
+    EBoxAlignment m_alignContent;
+
+    /* scrollbar-width: none - the element's scrollbars stay out of layout. */
+    bool m_scrollbarNone;
     
 // list of associated pseudo styles
     RenderStyle* pseudoStyle;
@@ -1531,6 +1600,8 @@ public:
     EPageBreak columnBreakAfter() const { return static_cast<EPageBreak>(rareNonInheritedData->m_multiCol->m_breakAfter); }
     Length transformOriginX() const { return rareNonInheritedData->m_transform->m_x; }
     Length transformOriginY() const { return rareNonInheritedData->m_transform->m_y; }
+    const Vector<TransformOperation>& transformOperations() const { return rareNonInheritedData->m_transform->m_operations; }
+    bool hasTransform() const { return !rareNonInheritedData->m_transform->m_operations.isEmpty(); }
     // End CSS3 Getters
 
     // Apple-specific property getter methods
@@ -1782,6 +1853,8 @@ public:
     void setColumnBreakAfter(EPageBreak p) { SET_VAR(rareNonInheritedData.access()->m_multiCol, m_breakAfter, p); }
     void setTransformOriginX(Length l) { SET_VAR(rareNonInheritedData.access()->m_transform, m_x, l); }
     void setTransformOriginY(Length l) { SET_VAR(rareNonInheritedData.access()->m_transform, m_y, l); }
+    void setTransformOperations(const Vector<TransformOperation>& ops) { SET_VAR(rareNonInheritedData.access()->m_transform, m_operations, ops); }
+    void clearTransform() { setTransformOperations(Vector<TransformOperation>()); }
     // End CSS3 Setters
    
     // Apple-specific property setters
@@ -1851,12 +1924,26 @@ public:
     float aspectRatio() const { return m_aspectRatio; }
     void setAspectRatio(float v) { m_aspectRatio = v; }
 
+    float flexShrink() const { return m_flexShrink; }
+    void setFlexShrink(float v) { m_flexShrink = v; }
+    Length flexBasis() const { return m_flexBasis; }
+    void setFlexBasis(const Length& v) { m_flexBasis = v; }
+    EBoxAlignment alignContent() const { return m_alignContent; }
+    void setAlignContent(EBoxAlignment a) { m_alignContent = a; }
+
+    bool scrollbarNone() const { return m_scrollbarNone; }
+    void setScrollbarNone(bool v) { m_scrollbarNone = v; }
+
     // Initial values for all the properties
     /* flex gap defaults to 0 ('normal' means 0 for flex containers) */
     static Length initialGap() { return Length(0, Fixed); }
     static Length initialFlexRowGap() { return Length(0, Fixed); }
     static Length initialFlexColumnGap() { return Length(0, Fixed); }
     static float initialAspectRatio() { return 0.0f; }
+    static float initialFlexShrink() { return 1.0f; }
+    static Length initialFlexBasis() { return Length(Auto); }
+    static bool initialScrollbarNone() { return false; }
+    static EBoxAlignment initialAlignContent() { return BSTRETCH; }
     static bool initialBackgroundAttachment() { return true; }
     static EBackgroundBox initialBackgroundClip() { return BGBORDER; }
     static EBackgroundBox initialBackgroundOrigin() { return BGPADDING; }

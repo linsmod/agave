@@ -2372,7 +2372,7 @@ int RenderObject::paddingTop() const
 {
     int w = 0;
     Length padding = m_style->paddingTop();
-    if (padding.isPercent())
+    if (padding.isPercent() || padding.isCalculated())
         w = containingBlock()->availableWidth();
     w = padding.calcMinValue(w);
     if (isTableCell() && padding.isAuto())
@@ -2384,7 +2384,7 @@ int RenderObject::paddingBottom() const
 {
     int w = 0;
     Length padding = style()->paddingBottom();
-    if (padding.isPercent())
+    if (padding.isPercent() || padding.isCalculated())
         w = containingBlock()->availableWidth();
     w = padding.calcMinValue(w);
     if (isTableCell() && padding.isAuto())
@@ -2396,7 +2396,7 @@ int RenderObject::paddingLeft() const
 {
     int w = 0;
     Length padding = style()->paddingLeft();
-    if (padding.isPercent())
+    if (padding.isPercent() || padding.isCalculated())
         w = containingBlock()->availableWidth();
     w = padding.calcMinValue(w);
     if (isTableCell() && padding.isAuto())
@@ -2408,7 +2408,7 @@ int RenderObject::paddingRight() const
 {
     int w = 0;
     Length padding = style()->paddingRight();
-    if (padding.isPercent())
+    if (padding.isPercent() || padding.isCalculated())
         w = containingBlock()->availableWidth();
     w = padding.calcMinValue(w);
     if (isTableCell() && padding.isAuto())

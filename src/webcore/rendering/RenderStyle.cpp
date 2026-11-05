@@ -431,11 +431,17 @@ StyleTransformData::StyleTransformData(const StyleTransformData& o)
     : Shared<StyleTransformData>()
     , m_x(o.m_x)
     , m_y(o.m_y)
+    , m_operations(o.m_operations)
 {}
 
 bool StyleTransformData::operator==(const StyleTransformData& o) const
 {
-    return m_x == o.m_x && m_y == o.m_y;
+    if (m_x != o.m_x || m_y != o.m_y || m_operations.size() != o.m_operations.size())
+        return false;
+    for (unsigned i = 0; i < m_operations.size(); ++i)
+        if (m_operations[i] != o.m_operations[i])
+            return false;
+    return true;
 }
 
 StyleRareNonInheritedData::StyleRareNonInheritedData()
@@ -722,6 +728,10 @@ RenderStyle::RenderStyle()
     : m_rowGap(RenderStyle::initialFlexRowGap())
     , m_columnGap(RenderStyle::initialFlexColumnGap())
     , m_aspectRatio(0.0f)
+    , m_flexShrink(1.0f)
+    , m_flexBasis(Length(Auto))
+    , m_alignContent(BSTRETCH)
+    , m_scrollbarNone(false)
     , box(initDefaultStyle()->box)
     , visual(defaultStyle->visual)
     , background(defaultStyle->background)
@@ -782,6 +792,10 @@ RenderStyle::RenderStyle(const RenderStyle& o)
     , m_rowGap(o.m_rowGap)
     , m_columnGap(o.m_columnGap)
     , m_aspectRatio(o.m_aspectRatio)
+    , m_flexShrink(o.m_flexShrink)
+    , m_flexBasis(o.m_flexBasis)
+    , m_alignContent(o.m_alignContent)
+    , m_scrollbarNone(o.m_scrollbarNone)
     , pseudoStyle(0)
     , m_pseudoState(o.m_pseudoState)
     , m_affectedByAttributeSelectors(false)
@@ -831,7 +845,11 @@ bool RenderStyle::operator==(const RenderStyle& o) const
             m_customProperties == o.m_customProperties &&
             m_rowGap == o.m_rowGap &&
             m_columnGap == o.m_columnGap &&
-            m_aspectRatio == o.m_aspectRatio
+            m_aspectRatio == o.m_aspectRatio &&
+            m_flexShrink == o.m_flexShrink &&
+            m_flexBasis == o.m_flexBasis &&
+            m_alignContent == o.m_alignContent &&
+            m_scrollbarNone == o.m_scrollbarNone
 #if ENABLE(SVG)
             && m_svgStyle == o.m_svgStyle
 #endif

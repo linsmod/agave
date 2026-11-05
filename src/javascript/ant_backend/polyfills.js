@@ -553,4 +553,144 @@
         DataTransfer.prototype.setDragImage = function () {};
         g.DataTransfer = DataTransfer;
     }
+
+    /* --- performance timeline --------------------------------------------- */
+    /* The engine exposes performance.now() but not the User Timing methods;
+     * v.qq.com's Vue entry throws on performance.mark("hydration:start") and
+     * never mounts. Entries are not retained: only the call has to succeed. */
+    if (g.performance) {
+        var perf = g.performance;
+        try {
+            if (!perf.mark) perf.mark = function (name) {
+                if (g.__agbPerfClock) g.__agbPerfClock[name] = perf.now ? perf.now() : 0;
+                return { name: name, entryType: 'mark', startTime: perf.now ? perf.now() : 0, duration: 0 };
+            };
+            if (!perf.measure) perf.measure = function (name, startMark, endMark) {
+                var a = g.__agbPerfClock && typeof startMark === 'string' ? g.__agbPerfClock[startMark] : startMark;
+                var b = g.__agbPerfClock && typeof endMark === 'string' ? g.__agbPerfClock[endMark] : endMark;
+                var t = perf.now ? perf.now() : 0;
+                return { name: name, entryType: 'measure', startTime: a || 0,
+                         duration: Math.max(0, (b || t) - (a || 0)) };
+            };
+            if (!perf.getEntriesByName) perf.getEntriesByName = function () { return []; };
+            if (!perf.getEntriesByType) perf.getEntriesByType = function () { return []; };
+            if (!perf.clearMarks) perf.clearMarks = function () { };
+            if (!perf.clearMeasures) perf.clearMeasures = function () { };
+        } catch (e) {}
+    }
+    if (!g.__agbPerfClock) g.__agbPerfClock = {};
+
+    /* --- visibility / size observers --------------------------------------- */
+    /* Neither observer exists in the engine. Sites use them to gate rendering
+     * and lazy images (v.qq.com's Vue entry dies on a bare
+     * `IntersectionObserver` reference), so a real-enough shim: report the
+     * element's layout rect against the viewport, poll while observed, and
+     * deliver entries asynchronously like the spec. */
+    function rectOf(el) {
+        var r = el && el.getBoundingClientRect ? el.getBoundingClientRect() : null;
+        return r || { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0 };
+    }
+
+    function fireAsync(fn) {
+        if (g.setTimeout) g.setTimeout(fn, 0);
+        else fn();
+    }
+
+    if (typeof g.IntersectionObserver === 'undefined') {
+        function IntersectionObserver(callback, options) {
+            if (typeof callback !== 'function')
+                throw new TypeError('IntersectionObserver: callback is not a function');
+            options = options || {};
+            this.root = options.root || null;
+            this.rootMargin = options.rootMargin || '0px';
+            this.thresholds = options.threshold ? [].concat(options.threshold) : [0];
+            this._cb = callback;
+            this._targets = [];
+            this._last = {};
+            this._timer = 0;
+        }
+        IntersectionObserver.prototype._check = function () {
+            var self = this;
+            var vw = g.innerWidth || 1024, vh = g.innerHeight || 768;
+            var entries = [];
+            for (var i = 0; i < self._targets.length; ++i) {
+                var el = self._targets[i];
+                var r = rectOf(el);
+                var interW = Math.max(0, Math.min(r.right, vw) - Math.max(r.left, 0));
+                var interH = Math.max(0, Math.min(r.bottom, vh) - Math.max(r.top, 0));
+                var inter = interW * interH;
+                var area = r.width * r.height;
+                var ratio = area > 0 ? inter / area : 0;
+                var isIntersecting = inter > 0;
+                entries.push({
+                    target: el,
+                    isIntersecting: isIntersecting,
+                    intersectionRatio: ratio,
+                    boundingClientRect: r,
+                    intersectionRect: { left: 0, top: 0, right: interW, bottom: interH, width: interW, height: interH, x: 0, y: 0 },
+                    rootBounds: null,
+                    time: (g.performance && g.performance.now) ? g.performance.now() : 0
+                });
+            }
+            if (entries.length) {
+                try { self._cb(entries, self); } catch (e) {}
+            }
+        };
+        IntersectionObserver.prototype.observe = function (el) {
+            if (!el || this._targets.indexOf(el) >= 0) return;
+            this._targets.push(el);
+            var self = this;
+            if (!this._timer && g.setInterval)
+                this._timer = g.setInterval(function () { self._check(); }, 250);
+            fireAsync(function () { self._check(); });
+        };
+        IntersectionObserver.prototype.unobserve = function (el) {
+            var i = this._targets.indexOf(el);
+            if (i >= 0) this._targets.splice(i, 1);
+        };
+        IntersectionObserver.prototype.disconnect = function () {
+            this._targets = [];
+            if (this._timer && g.clearInterval) g.clearInterval(this._timer);
+            this._timer = 0;
+        };
+        IntersectionObserver.prototype.takeRecords = function () { return []; };
+        g.IntersectionObserver = IntersectionObserver;
+    }
+
+    if (typeof g.ResizeObserver === 'undefined') {
+        function ResizeObserver(callback) {
+            if (typeof callback !== 'function')
+                throw new TypeError('ResizeObserver: callback is not a function');
+            this._cb = callback;
+            this._targets = [];
+            this._timer = 0;
+        }
+        ResizeObserver.prototype._check = function () {
+            var entries = [];
+            for (var i = 0; i < this._targets.length; ++i) {
+                var r = rectOf(this._targets[i]);
+                entries.push({
+                    target: this._targets[i],
+                    contentRect: { left: 0, top: 0, width: r.width, height: r.height, x: 0, y: 0 },
+                    borderBoxSize: [{ inlineSize: r.width, blockSize: r.height }],
+                    contentBoxSize: [{ inlineSize: r.width, blockSize: r.height }]
+                });
+            }
+            if (entries.length) {
+                try { this._cb(entries, this); } catch (e) {}
+            }
+        };
+        ResizeObserver.prototype.observe = function (el) {
+            if (!el || this._targets.indexOf(el) >= 0) return;
+            this._targets.push(el);
+            var self = this;
+            fireAsync(function () { self._check(); });
+        };
+        ResizeObserver.prototype.unobserve = function (el) {
+            var i = this._targets.indexOf(el);
+            if (i >= 0) this._targets.splice(i, 1);
+        };
+        ResizeObserver.prototype.disconnect = function () { this._targets = []; };
+        g.ResizeObserver = ResizeObserver;
+    }
 }());

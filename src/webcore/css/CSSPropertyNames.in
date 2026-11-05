@@ -214,3 +214,8 @@ gap
 row-gap
 column-gap
 aspect-ratio
+flex
+flex-shrink
+flex-basis
+align-content
+scrollbar-width

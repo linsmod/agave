@@ -1181,6 +1181,16 @@ RenderLayer::updateScrollInfoAfterLayout()
 
     bool haveHorizontalBar = m_hBar;
     bool haveVerticalBar = m_vBar;
+
+    /* scrollbar-width:none: keep the box scrollable but never reserve space
+     * for a scrollbar (the same result as ::-webkit-scrollbar{display:none}). */
+    if (m_object->style()->scrollbarNone()) {
+        if (haveHorizontalBar)
+            setHasHorizontalScrollbar(false);
+        if (haveVerticalBar)
+            setHasVerticalScrollbar(false);
+        return;
+    }
     
     // overflow:scroll should just enable/disable.
     if (m_object->style()->overflowX() == OSCROLL)

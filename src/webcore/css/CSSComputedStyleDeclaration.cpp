@@ -233,6 +233,8 @@ static PassRefPtr<CSSValue> valueForLength(const Length& length)
             return new CSSPrimitiveValue(CSS_VAL_MIN_INTRINSIC);
         case Percent:
             return new CSSPrimitiveValue(length.percent(), CSSPrimitiveValue::CSS_PERCENTAGE);
+        case Calculated:
+            return new CSSPrimitiveValue(length.calcPercent(), length.calcPx());
         case Relative:
         case Static:
             break;

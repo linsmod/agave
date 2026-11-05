@@ -407,6 +407,10 @@ HTMLTokenizer::State HTMLTokenizer::scriptHandler(State state)
 {
     // We are inside a <script>
     bool doScriptExec = false;
+    /* Set for inline <script type="module">: the body has to be evaluated with
+     * module semantics (export / import.meta / dynamic import), which the
+     * classic path rejects. */
+    bool inlineModuleScript = false;
 
     // (Bugzilla 3837) Scripts following a frameset element should not execute or, 
     // in the case of extern scripts, even load.
@@ -512,6 +516,7 @@ HTMLTokenizer::State HTMLTokenizer::scriptHandler(State state)
             } else
 #endif
             doScriptExec = static_cast<HTMLScriptElement*>(scriptNode.get())->shouldExecuteAsJavaScript();
+            inlineModuleScript = static_cast<HTMLScriptElement*>(scriptNode.get())->isModuleScript();
             scriptNode = 0;
         }
     }
@@ -570,7 +575,7 @@ HTMLTokenizer::State HTMLTokenizer::scriptHandler(State state)
             else
                 prependingSrc = src;
             setSrc(SegmentedString());
-            state = scriptExecution(exScript, state, DeprecatedString::null, scriptStartLineno);
+            state = scriptExecution(exScript, state, DeprecatedString::null, scriptStartLineno, inlineModuleScript);
         }
     }
 
@@ -603,7 +608,7 @@ HTMLTokenizer::State HTMLTokenizer::scriptHandler(State state)
     return state;
 }
 
-HTMLTokenizer::State HTMLTokenizer::scriptExecution(const DeprecatedString& str, State state, DeprecatedString scriptURL, int baseLine)
+HTMLTokenizer::State HTMLTokenizer::scriptExecution(const DeprecatedString& str, State state, DeprecatedString scriptURL, int baseLine, bool isModule)
 {
     if (m_fragment || !m_doc->frame())
         return state;
@@ -630,7 +635,14 @@ HTMLTokenizer::State HTMLTokenizer::scriptExecution(const DeprecatedString& str,
         AntRuntime::prefetchModuleGraph(url.utf8().data(), str.utf8().data());
 #endif
 
-    m_doc->frame()->loader()->executeScript(url, baseLine, str);
+#if ENABLE(KJS)
+    if (isModule && getenv("AGB_SCRIPT_DEBUG"))
+        fprintf(stderr, "[script] module eval url=%s head=%.60s\n", url.utf8().data(), str.utf8().data());
+    if (isModule)
+        m_doc->frame()->loader()->executeModule(url, str);
+    else
+#endif
+        m_doc->frame()->loader()->executeScript(url, baseLine, str);
     state = m_state;
 
     state.setAllowYield(true);
@@ -1446,7 +1458,13 @@ bool HTMLTokenizer::write(const SegmentedString& str, bool appendData)
     if (m_executingScript)
         source.setExcludeLineNumbers();
 
-    if ((m_executingScript && appendData) || !pendingScripts.isEmpty()) {
+    /* A routed entry module blocks the parser with pendingScripts empty: the
+     * module element is still held in scriptNode until notifyModuleEntry()
+     * releases it. Data that arrives meanwhile must wait like any other
+     * blocked-on-script chunk - tokenizing it here would hit the next
+     * <script> start tag while scriptNode is set (ASSERT(!scriptNode) in
+     * parseTag, the v.qq.com crash). */
+    if (m_state.loadingExtScript() || (m_executingScript && appendData) || !pendingScripts.isEmpty()) {
         // don't parse; we will do this later
         if (currentPrependingSrc)
             currentPrependingSrc->append(source);
@@ -1866,7 +1884,7 @@ void HTMLTokenizer::notifyModuleEntry(const char* source, bool failed)
 
     if (!failed && n) {
         if (static_cast<HTMLScriptElement*>(n.get())->shouldExecuteAsJavaScript())
-            m_state = scriptExecution(DeprecatedString(source), m_state, url);
+            m_state = scriptExecution(DeprecatedString(source), m_state, url, 0, true);
         /* No load/error event for now: dispatching here would run page JS in
          * the frame-loop context. The module itself runs at the deferred
          * flush, in the parse flow. */
@@ -1929,7 +1947,8 @@ void HTMLTokenizer::notifyFinished(CachedResource*)
             EventTargetNodeCast(n.get())->dispatchHTMLEvent(errorEvent, true, false);
         else {
             if (static_cast<HTMLScriptElement*>(n.get())->shouldExecuteAsJavaScript())
-                m_state = scriptExecution(scriptSource.deprecatedString(), m_state, cachedScriptUrl);
+                m_state = scriptExecution(scriptSource.deprecatedString(), m_state, cachedScriptUrl, 0,
+                                          static_cast<HTMLScriptElement*>(n.get())->isModuleScript());
             EventTargetNodeCast(n.get())->dispatchHTMLEvent(loadEvent, false, false);
         }
 

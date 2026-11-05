@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>calc percent</title>
+<style>
+  html, body { margin: 0; padding: 0; }
+  #stage { width: 600px; background: #eee; --w: calc(100% - 40px); }
+  .row { height: 10px; background: #333; margin: 0 0 2px 0; }
+  #spacer { height: 1200px; }
+  .abs { position: absolute; top: 0; height: 10px; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div class="row" data-case="p1" data-props="width" style="width: calc(100% - 24px)"></div>
+  <div class="row" data-case="p2" data-props="width" style="width: calc(50% + 10px)"></div>
+  <div class="row" data-case="p3" data-props="width" style="width: calc(20px + 10%)"></div>
+  <div class="row" data-case="p4" data-props="width" style="width: calc((100% - 20px) / 2)"></div>
+  <div class="row" data-case="p5" data-props="margin-left" style="width: 50px; margin-left: calc(10% + 5px)"></div>
+  <div class="row" data-case="p6" data-props="padding-left" style="padding-left: calc(5% + 1px); height: 10px"></div>
+  <div class="row" data-case="p7" data-props="width" style="width: calc(100% / 3)"></div>
+  <div class="row" data-case="p8" data-props="width" style="width: calc(100% - 2 * 12px)"></div>
+  <div class="row" data-case="p9" data-props="width" style="width: var(--w)"></div>
+  <div class="row" data-case="p11" data-props="width" style="width: calc(100% - (10px * 2))"></div>
+  <div class="row" data-case="p12" data-props="max-width" style="width: 900px; max-width: calc(100% - 100px)"></div>
+  <div class="row" data-case="p13" data-props="height" style="height: calc(50vh - 20px)"></div>
+  <div class="row abs" data-case="p10" style="left: calc(100% - 50px); width: 40px"></div>
+</div>
+<div id="spacer"></div>
+</body>
+</html>

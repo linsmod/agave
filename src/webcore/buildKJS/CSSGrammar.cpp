@@ -175,14 +175,16 @@ int getPropertyID(const char* tagStr, int len)
             { "border-bottom-left-radius", "-webkit-border-bottom-left-radius" },
             { "border-bottom-right-radius", "-webkit-border-bottom-right-radius" },
             { "box-shadow", "-webkit-box-shadow" },
-            { "flex", "-webkit-box-flex" },
             { "flex-grow", "-webkit-box-flex" },
             { "flex-direction", "-webkit-box-orient" },
             { "flex-wrap", "-webkit-box-lines" },
             { "justify-content", "-webkit-box-pack" },
             { "align-items", "-webkit-box-align" },
             { "order", "-webkit-box-ordinal-group" },
-            { "box-sizing", "-webkit-box-sizing" }
+            { "box-sizing", "-webkit-box-sizing" },
+            { "-ms-overflow-style", "scrollbar-width" },
+            { "transform", "-webkit-transform" },
+            { "transform-origin", "-webkit-transform-origin" }
         };
 
         for (size_t i = 0; i < sizeof(aliases) / sizeof(aliases[0]); ++i) {
@@ -204,7 +206,12 @@ int getPropertyID(const char* tagStr, int len)
             { "gap", CSS_PROP_GAP },
             { "row-gap", CSS_PROP_ROW_GAP },
             { "column-gap", CSS_PROP_COLUMN_GAP },
-            { "aspect-ratio", CSS_PROP_ASPECT_RATIO }
+            { "aspect-ratio", CSS_PROP_ASPECT_RATIO },
+            { "flex", CSS_PROP_FLEX },
+            { "flex-shrink", CSS_PROP_FLEX_SHRINK },
+            { "flex-basis", CSS_PROP_FLEX_BASIS },
+            { "align-content", CSS_PROP_ALIGN_CONTENT },
+            { "scrollbar-width", CSS_PROP_SCROLLBAR_WIDTH }
         };
 
         for (size_t i = 0; i < sizeof(extraProps) / sizeof(extraProps[0]); ++i) {

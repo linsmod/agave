@@ -972,6 +972,11 @@ static const char * const propertyList[] = {
 "row-gap", 
 "column-gap", 
 "aspect-ratio", 
+"flex",
+"flex-shrink",
+"flex-basis",
+"align-content",
+"scrollbar-width",
     0
 };
 const char* getPropertyName(CSSPropertyID id)

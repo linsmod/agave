@@ -248,6 +248,15 @@ void FrameView::adjustViewSize()
 
 void FrameView::applyOverflowToViewport(RenderObject* o, ScrollbarMode& hMode, ScrollbarMode& vMode)
 {
+    /* scrollbar-width:none (and the -ms-overflow-style: none spelling) hides
+     * the document scrollbars without turning overflow into clipping, which is
+     * how modern sites make 100vw equal the content width. */
+    if (o->style()->scrollbarNone()) {
+        hMode = ScrollbarAlwaysOff;
+        vMode = ScrollbarAlwaysOff;
+        return;
+    }
+
     // Handle the overflow:hidden/scroll case for the body/html elements.  WinIE treats
     // overflow:hidden and overflow:scroll on <body> as applying to the document's
     // scrollbars.  The CSS2.1 draft states that HTML UAs should use the <html> or <body> element and XML/XHTML UAs should

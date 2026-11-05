@@ -45,7 +45,23 @@
       get length() { return Object.keys(_ssData).length; }
     };
   }
-  if (!g.requestIdleCallback) { g.requestIdleCallback = function (cb) { return 1; }; g.cancelIdleCallback = function () {}; }
+  if (!g.requestIdleCallback) {
+    /* Must actually run the callback: sites schedule non-critical work here
+     * (v.qq.com loads its whole top-nav fragment through it). The old stub
+     * returned 1 and never called cb, so that work silently never happened. */
+    var __agbIdleSeq = 1, __agbIdle = {};
+    g.requestIdleCallback = function (cb) {
+      var id = __agbIdleSeq++;
+      __agbIdle[id] = g.setTimeout(function () {
+        delete __agbIdle[id];
+        try { cb({ didTimeout: false, timeRemaining: function () { return 50; } }); } catch (e) {}
+      }, 1);
+      return id;
+    };
+    g.cancelIdleCallback = function (id) {
+      if (__agbIdle[id]) { g.clearTimeout(__agbIdle[id]); delete __agbIdle[id]; }
+    };
+  }
   if (!g.createImageBitmap) g.createImageBitmap = function () { return null; };
   if (!g.__agbStyleApi) {
     g.__agbStyleApi = {
@@ -1109,5 +1125,15 @@
       } catch (e) {}
     }
   }
+
+  /* Vite's legacy plugin decides between the modern and the legacy bundle in
+   * an inline module: `import.meta.url, import("_").catch(...),
+   * async function*(){}().next(), !file:&&(__vite_is_modern_browser=true)`.
+   * When the dynamic import suspends, the flag lands after the fallback script
+   * already ran, the legacy bundle loads and dies on SystemJS, and the client
+   * app never mounts (v.qq.com: empty top nav). This engine does support modern
+   * modules, so answer the probe up front; the page's own script can only agree. */
+  if (typeof g.__vite_is_modern_browser === 'undefined')
+    g.__vite_is_modern_browser = true;
 
 })(window);

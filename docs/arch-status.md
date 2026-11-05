@@ -11,7 +11,7 @@
 |---|---|---|
 | 页面与导航 | HTTP(S)/`file:` 加载、HTML/CSS 解析、`defer`/`async`/ESM、301/302、`about:blank`、iframe、`agave://` 内部页、前进后退 | R44–R49；[hist-lessons.md](hist-lessons.md) |
 | JS / DOM | ant VM、DOM 桥、事件（鼠标/键盘/IME/输入）、computed style、选择器、`history` state、真实 DOM 集合、每 frame 一个 Window 代理 | R27/R31/R34–R37/R45 |
-| 模块加载 | 入口 module 单槽等待、解析调用栈内求值、延迟模块 flush；三条泳道时序 | [arch-module-loading.md](arch-module-loading.md) |
+| 模块加载 | 入口 module 单槽等待（等待期间到达的数据不提前解析，R50）、解析调用栈内求值、延迟模块 flush；三条泳道时序 | [arch-module-loading.md](arch-module-loading.md) |
 | CSS | 自定义属性/`var()`、`display:flex`/blockify、`gap`、`aspect-ratio`、`:is()`/`:where()`、媒体查询与深色模式、`box-shadow`、常量 `calc()`、圆角裁剪 | R39–R43；能力矩阵见 [arch-capability-gaps.md](arch-capability-gaps.md) §2 |
 | 网络 | WinHTTP 后端、HTTP 缓存、代理解析、重定向、MIME/下载决策、`[netlog]` | [dev-debugging.md](dev-debugging.md) |
 | Worker / wasm | 真 Worker（独立线程 + isolate）、wasm 解释执行（导入/内存/表/全局/SIMD） | R19/R22 |
@@ -33,7 +33,11 @@ ant 的反直觉行为（字面量属性名、`typeof`、`delete` 等）见 [ref
 - **一个 view 一个 engine**：同一时刻只有一个 `AntbEngine` / realm；iframe 与主 frame 共享这个 engine
   和全局对象，但每个 frame 有自己的 `window` 代理（R31）。因此顶层 `var x` 仍写进共享全局；
   iframe 的 DOMContentLoaded 也仍不单独派发（`dispatchDidFinishDocumentLoad` 只处理主 frame）。
-- **CSS 边界**：grid 布局、transform 绘制、`position:sticky` 未实现（按 static 降级）。
+- **CSS 边界**：grid 布局、`position:sticky` 未实现（按 static 降级）；transform 只做了
+  translate/scale/rotate 的绘制（局部重绘裁剪、hit-test 未做，R52）；`vw/vh` 在解析期换算成 px
+  （窗口 resize 不重算）；含 `%` 的混合 `calc()` 已支持（R54，`Length::Calculated`），
+  flex 简写/`flex-basis`/`align-content`/`scrollbar-width` 已支持（R54），
+  `::-webkit-scrollbar{display:none}` 仍解析不了。
   完整实测值与复测命令见 [arch-capability-gaps.md](arch-capability-gaps.md) §2。
 - **wasm 是解释执行**：导出函数跨界约 3.9µs/次，适合"一次调用跑大循环"（R19）。
 - **worker 无网络 / 无 `SharedWorker`/`ServiceWorker`**：worker 里 `fetch`/`XHR` 不可用，

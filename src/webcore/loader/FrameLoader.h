@@ -325,6 +325,7 @@ namespace WebCore {
 #if ENABLE(KJS)
         KJS::JSValue* executeScript(const String& URL, int baseLine, const String& script);
         KJS::JSValue* executeScript(const String& script, bool forceUserGesture = false);
+        KJS::JSValue* executeModule(const String& URL, const String& script);
 #endif
 #if ENABLE(QJS)
         JSValue executeScript(const String& URL, int baseLine, const String& script);

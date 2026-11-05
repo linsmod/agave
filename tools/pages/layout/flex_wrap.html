@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>flex wrap</title>
+<style>
+  html, body { margin: 0; padding: 0; }
+  .box { width: 600px; background: #eee; margin-bottom: 4px; display: flex; flex-wrap: wrap; gap: 10px; }
+  .item { height: 20px; background: #333; }
+  .a { width: 120px; }
+  .g { flex: 1 1 0; height: 20px; background: #555; }
+  .b { flex: 0 0 200px; height: 20px; background: #777; }
+  #spacer { height: 1200px; }
+</style>
+</head>
+<body>
+<div class="box" id="f1">
+  <div class="item a" data-case="a1"></div>
+  <div class="item a" data-case="a2"></div>
+  <div class="item a" data-case="a3"></div>
+  <div class="item a" data-case="a4"></div>
+  <div class="item a" data-case="a5"></div>
+</div>
+<div class="box" id="f2">
+  <div class="g" data-case="g1"></div>
+  <div class="g" data-case="g2"></div>
+  <div class="g" data-case="g3"></div>
+</div>
+<div class="box" id="f3">
+  <div class="b" data-case="b1"></div>
+  <div class="b" data-case="b2"></div>
+  <div class="b" data-case="b3"></div>
+</div>
+<div class="box" id="f4" style="align-content: space-between; height: 120px">
+  <div class="item a" data-case="c1"></div>
+  <div class="item a" data-case="c2"></div>
+  <div class="item a" data-case="c3"></div>
+  <div class="item a" data-case="c4"></div>
+  <div class="item a" data-case="c5"></div>
+</div>
+<div class="box" id="f5" style="justify-content: space-between">
+  <div class="item a" data-case="d1"></div>
+  <div class="item a" data-case="d2"></div>
+  <div class="item a" data-case="d3"></div>
+</div>
+<div class="box" id="f6" style="align-items: center; height: 60px">
+  <div class="item a" style="height:20px" data-case="e1"></div>
+  <div class="item a" style="height:40px" data-case="e2"></div>
+</div>
+<div id="spacer"></div>
+</body>
+</html>

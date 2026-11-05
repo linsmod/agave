@@ -102,14 +102,16 @@ int getPropertyID(const char* tagStr, int len)
              * the renderer already implements (RenderFlexibleBox); their
              * modern keyword spellings are translated in CSSParser.cpp. */
             { "box-shadow", "-webkit-box-shadow" },
-            { "flex", "-webkit-box-flex" },
             { "flex-grow", "-webkit-box-flex" },
             { "flex-direction", "-webkit-box-orient" },
             { "flex-wrap", "-webkit-box-lines" },
             { "justify-content", "-webkit-box-pack" },
             { "align-items", "-webkit-box-align" },
             { "order", "-webkit-box-ordinal-group" },
-            { "box-sizing", "-webkit-box-sizing" }
+            { "box-sizing", "-webkit-box-sizing" },
+            { "-ms-overflow-style", "scrollbar-width" },
+            { "transform", "-webkit-transform" },
+            { "transform-origin", "-webkit-transform-origin" }
         };
 
         for (size_t i = 0; i < sizeof(aliases) / sizeof(aliases[0]); ++i) {

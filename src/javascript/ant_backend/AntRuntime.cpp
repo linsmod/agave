@@ -6676,6 +6676,68 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
         }
 
         v = antb_make_number(engine, (double)measured);
+    } else if (n->isElementNode() && (!strcmp(name, "href") || !strcmp(name, "src"))) {
+        /* DOM `el.href` / `el.src` return the resolved absolute URL, not the
+         * attribute. Returning the raw value made pages that resolve
+         * protocol-relative chunk URLs (`//vfiles.gtimg.cn/...`) through a
+         * scratch <a> build `https://v.qq.com//vfiles...` and fail the load. */
+        WebCore::Element* el = static_cast<WebCore::Element*>(n);
+        WebCore::String rel = el->getAttribute(WebCore::AtomicString(name));
+        WebCore::String abs = rel.isEmpty() ? WebCore::String() : el->document()->completeURL(rel);
+        v = antb_make_string(engine, abs.utf8().data());
+    } else if (n->isElementNode()
+               && static_cast<WebCore::Element*>(n)->hasTagName(WebCore::HTMLNames::aTag)
+               && (!strcmp(name, "pathname") || !strcmp(name, "search") || !strcmp(name, "hash")
+                   || !strcmp(name, "hostname") || !strcmp(name, "host") || !strcmp(name, "port")
+                   || !strcmp(name, "protocol") || !strcmp(name, "origin"))) {
+        /* URL decomposition of <a href>: sites parse URLs by assigning
+         * a.href and reading these (v.qq.com's Vue entry died on
+         * a.pathname.charAt(0) because every component was undefined). */
+        WebCore::Element* el = static_cast<WebCore::Element*>(n);
+        WebCore::String href = el->getAttribute(WebCore::HTMLNames::hrefAttr);
+        WebCore::KURL base(el->document()->baseURL());
+        WebCore::KURL url = href.isEmpty() ? base : WebCore::KURL(base, href.deprecatedString());
+        if (url.isMalformed() || url.isEmpty())
+            url = base;
+
+        std::string host = url.host().ascii();
+        unsigned short port = url.port();
+        std::string hostWithPort = host;
+        if (port) {
+            char buf[16];
+            snprintf(buf, sizeof(buf), ":%u", (unsigned)port);
+            hostWithPort += buf;
+        }
+
+        std::string s;
+        if (!strcmp(name, "protocol")) {
+            s = url.protocol().ascii();
+            if (!s.empty() && s[s.size() - 1] != ':')
+                s += ":";
+        } else if (!strcmp(name, "hostname")) {
+            s = host;
+        } else if (!strcmp(name, "host")) {
+            s = hostWithPort;
+        } else if (!strcmp(name, "port")) {
+            s = port ? hostWithPort.substr(host.size() + 1) : "";
+        } else if (!strcmp(name, "pathname")) {
+            s = url.path().ascii();
+            if (s.empty() || s[0] != '/')
+                s = "/" + s;
+        } else if (!strcmp(name, "search")) {
+            if (url.query().isEmpty())
+                s = "";
+            else
+                s = url.query()[0] == '?' ? url.query().ascii() : std::string("?") + url.query().ascii();
+        } else if (!strcmp(name, "hash")) {
+            s = url.ref().isEmpty() ? "" : std::string("#") + url.ref().ascii();
+        } else if (!strcmp(name, "origin")) {
+            s = url.protocol().ascii();
+            if (!s.empty() && s[s.size() - 1] != ':')
+                s += ":";
+            s += "//" + hostWithPort;
+        }
+        v = antb_make_string(engine, s.c_str());
     } else if (!strcmp(name, "id") || !strcmp(name, "className") || !strcmp(name, "href")
                || !strcmp(name, "src") || !strcmp(name, "srcset") || !strcmp(name, "alt")
                || !strcmp(name, "placeholder") || !strcmp(name, "poster")

@@ -311,6 +311,299 @@ void RenderFlexibleBox::layoutBlock(bool relayoutChildren)
     setNeedsLayout(false);
 }
 
+
+/* `flex-wrap: wrap` (-webkit-box-lines: multiple) for the horizontal case.
+ * The 2008 engine only ever placed one line, so a wrapping row of cards stayed
+ * one 3000px-wide line (v.qq.com's banner grid). Fixed-size children simply
+ * break to a new line once the content width is exhausted; flexible children
+ * keep using the single-line path above. */
+void RenderFlexibleBox::layoutWrappedHorizontalBox(bool relayoutChildren)
+{
+    struct LineItem {
+        RenderObject* child;
+        int contentWidth;   /* target content-box width */
+        int outerWidth;     /* margin box width */
+        int outerHeight;    /* margin box height */
+        float grow;
+        float shrink;
+        int marginLeft, marginRight, marginTop, marginBottom;
+        int line;
+    };
+
+    const int contentLeft = borderLeft() + paddingLeft();
+    const int innerWidth = max(0, contentWidth());
+    const int columnGap = max(0, style()->flexColumnGap().calcValue(innerWidth));
+    const int rowGap = max(0, style()->flexRowGap().calcValue(max(0, height() - borderTop() - borderBottom() - paddingTop() - paddingBottom())));
+
+    Vector<LineItem> items;
+
+    /* ---- pass 1: preferred size of every item, then line breaking.
+     * The preferred size follows flexbox: an explicit flex-basis wins, an
+     * auto-basis item uses its width, and an auto width uses the max-content
+     * size (a text run should not claim the whole row). */
+    FlexBoxIterator iterator(this);
+    for (RenderObject* child = iterator.first(); child; child = iterator.next()) {
+        if (child->isPositioned()) {
+            child->containingBlock()->insertPositionedObject(child);
+            if (child->hasStaticX())
+                child->setStaticX(contentLeft);
+            if (child->hasStaticY())
+                child->setStaticY(borderTop() + paddingTop());
+            continue;
+        }
+
+        if (relayoutChildren)
+            child->setChildNeedsLayout(true, false);
+
+        child->setOverrideSize(-1);
+        child->calcVerticalMargins();
+        child->layoutIfNeeded();
+
+        int bordersPlusPadding = child->borderLeft() + child->borderRight()
+                               + child->paddingLeft() + child->paddingRight();
+        Length basis = child->style()->flexBasis();
+        int contentW;
+
+        if (!basis.isAuto())
+            contentW = max(0, basis.calcValue(innerWidth));
+        else if (child->style()->width().isAuto())
+            contentW = max(0, child->maxPrefWidth() - bordersPlusPadding);
+        else
+            contentW = max(0, child->width() - bordersPlusPadding);
+
+        LineItem item;
+        item.child = child;
+        item.contentWidth = contentW;
+        item.marginLeft = child->marginLeft();
+        item.marginRight = child->marginRight();
+        item.marginTop = child->marginTop();
+        item.marginBottom = child->marginBottom();
+        item.outerWidth = contentW + bordersPlusPadding + item.marginLeft + item.marginRight;
+        item.outerHeight = child->height() + item.marginTop + item.marginBottom;
+        item.grow = max(0.0f, child->style()->boxFlex());
+        item.shrink = max(0.0f, child->style()->flexShrink());
+        item.line = 0;
+
+        items.append(item);
+    }
+
+    int line = 0;
+    int lineWidth = 0;
+    for (unsigned i = 0; i < items.size(); ++i) {
+        int outer = items[i].outerWidth;
+        int gap = lineWidth > 0 ? columnGap : 0;
+
+        if (lineWidth > 0 && lineWidth + gap + outer > innerWidth) {
+            ++line;
+            lineWidth = 0;
+            gap = 0;
+        }
+        items[i].line = line;
+        lineWidth += gap + outer;
+    }
+    const int lineCount = items.isEmpty() ? 0 : line + 1;
+
+    /* ---- pass 2: distribute free space inside each line (flex-grow /
+     * flex-shrink) and re-lay the items out at their final widths. */
+    m_flexingChildren = true;
+
+    for (int l = 0; l < lineCount; ++l) {
+        int first = -1;
+        int last = -1;
+        int sumOuter = 0;
+        int count = 0;
+        float growSum = 0.0f;
+        float shrinkSum = 0.0f;
+
+        for (unsigned i = 0; i < items.size(); ++i) {
+            if (items[i].line != l)
+                continue;
+            if (first < 0)
+                first = (int)i;
+            last = (int)i;
+            sumOuter += items[i].outerWidth;
+            growSum += items[i].grow;
+            shrinkSum += items[i].shrink * items[i].outerWidth;
+            ++count;
+        }
+
+        int freeSpace = innerWidth - sumOuter - columnGap * (count > 0 ? count - 1 : 0);
+
+        if (freeSpace > 0 && growSum > 0.0f) {
+            int distributed = 0;
+            int seen = 0;
+            for (unsigned i = 0; i < items.size(); ++i) {
+                if (items[i].line != l)
+                    continue;
+                ++seen;
+                int share;
+                if (seen == count)
+                    share = freeSpace - distributed;
+                else
+                    share = (int)(freeSpace * (items[i].grow / growSum));
+                distributed += share;
+                items[i].contentWidth = max(0, items[i].contentWidth + share);
+                items[i].outerWidth = max(0, items[i].outerWidth + share);
+            }
+        } else if (freeSpace < 0 && shrinkSum > 0.0f) {
+            int deficit = -freeSpace;
+            int taken = 0;
+            int seen = 0;
+            for (unsigned i = 0; i < items.size(); ++i) {
+                if (items[i].line != l)
+                    continue;
+                ++seen;
+                int share;
+                if (seen == count)
+                    share = deficit - taken;
+                else
+                    share = (int)(deficit * ((items[i].shrink * items[i].outerWidth) / shrinkSum));
+                int reduce = min(share, max(0, items[i].contentWidth));
+                taken += reduce;
+                items[i].contentWidth -= reduce;
+                items[i].outerWidth = max(0, items[i].outerWidth - reduce);
+            }
+        }
+    }
+
+    /* Re-layout with the final widths. */
+    for (unsigned i = 0; i < items.size(); ++i) {
+        RenderObject* child = items[i].child;
+        int borderBox = items[i].contentWidth + child->borderLeft() + child->borderRight()
+                      + child->paddingLeft() + child->paddingRight();
+
+        child->setOverrideSize(borderBox);
+        child->setChildNeedsLayout(true, false);
+        child->layoutIfNeeded();
+        items[i].outerWidth = child->width() + child->marginLeft() + child->marginRight();
+        items[i].outerHeight = child->height() + child->marginTop() + child->marginBottom();
+    }
+
+    m_flexingChildren = false;
+
+    /* ---- pass 3: vertical placement (line heights, align-items,
+     * align-content) and horizontal placement (justify-content). */
+    Vector<int> lineHeights;
+    lineHeights.resize(lineCount);
+    for (int l = 0; l < lineCount; ++l)
+        lineHeights[l] = 0;
+    for (unsigned i = 0; i < items.size(); ++i)
+        lineHeights[items[i].line] = max(lineHeights[items[i].line], items[i].outerHeight);
+
+    int totalHeight = 0;
+    for (int l = 0; l < lineCount; ++l)
+        totalHeight += lineHeights[l] + (l > 0 ? rowGap : 0);
+
+    /* m_height still holds the previous layout's result here; a specified
+     * height is the authority for align-content. */
+    int containerHeight = style()->height().isFixed()
+        ? style()->height().value()
+        : height() - borderTop() - borderBottom() - paddingTop() - paddingBottom();
+    int contentTop = borderTop() + paddingTop();
+    int lineGap = rowGap;
+    int alignOffset = 0;
+
+    if (lineCount > 0 && containerHeight > totalHeight) {
+        int freeV = containerHeight - totalHeight;
+
+        switch (style()->alignContent()) {
+        case BCENTER:
+            alignOffset = freeV / 2;
+            break;
+        case BEND:
+            alignOffset = freeV;
+            break;
+        case BJUSTIFY:
+            if (lineCount > 1)
+                lineGap += freeV / (lineCount - 1);
+            break;
+        case BSTRETCH:
+            /* Default align-content: the single line grows to the container,
+             * so align-items then centers inside the whole box. */
+            for (int l = 0; l < lineCount; ++l)
+                lineHeights[l] += freeV / lineCount;
+            break;
+        default:
+            break;
+        }
+    }
+
+    int yPos = contentTop + alignOffset;
+    int overflowRight = contentLeft;
+
+    for (int l = 0; l < lineCount; ++l) {
+        int sumOuter = 0;
+        int count = 0;
+        for (unsigned i = 0; i < items.size(); ++i) {
+            if (items[i].line != l)
+                continue;
+            sumOuter += items[i].outerWidth;
+            ++count;
+        }
+
+        int baseGap = columnGap;
+        int xPos = contentLeft;
+        int free = innerWidth - sumOuter - columnGap * (count > 0 ? count - 1 : 0);
+
+        switch (style()->boxPack()) {
+        case BCENTER:
+            if (free > 0)
+                xPos += free / 2;
+            break;
+        case BEND:
+            if (free > 0)
+                xPos += free;
+            break;
+        case BJUSTIFY:
+            if (count > 1 && free > 0)
+                baseGap += free / (count - 1);
+            break;
+        default:
+            break;
+        }
+
+        bool firstInLine = true;
+        for (unsigned i = 0; i < items.size(); ++i) {
+            if (items[i].line != l)
+                continue;
+
+            if (!firstInLine)
+                xPos += baseGap;
+            firstInLine = false;
+
+            int childY = yPos;
+            switch (style()->boxAlign()) {
+            case BCENTER:
+                childY += (lineHeights[l] - items[i].outerHeight) / 2;
+                break;
+            case BEND:
+                childY += lineHeights[l] - items[i].outerHeight;
+                break;
+            default:
+                break;
+            }
+
+            placeChild(items[i].child, xPos + items[i].marginLeft, childY + items[i].marginTop);
+            if (items[i].child->isRenderBlock())
+                static_cast<RenderBlock*>(items[i].child)->addVisualOverflow(static_cast<RenderBlock*>(items[i].child)->floatRect());
+
+            xPos += items[i].outerWidth;
+            overflowRight = max(overflowRight, xPos);
+        }
+
+        yPos += lineHeights[l] + lineGap;
+    }
+
+    int contentBottom = yPos - (lineCount > 0 ? lineGap : 0);
+
+    m_height = contentBottom + borderBottom() + paddingBottom() + horizontalScrollbarHeight();
+    m_overflowWidth = max(m_overflowWidth, overflowRight);
+    m_overflowHeight = max(contentBottom, m_height);
+    m_overflowTop = 0;
+
+    calcHeight();
+}
+
 void RenderFlexibleBox::layoutHorizontalBox(bool relayoutChildren)
 {
     int toAdd = borderBottom() + paddingBottom() + horizontalScrollbarHeight();
@@ -348,6 +641,13 @@ void RenderFlexibleBox::layoutHorizontalBox(bool relayoutChildren)
         child = iterator.next();
     }
     
+    /* A wrapping row without flexible children uses the simple line layout
+     * below; the single-line code has no concept of lines. */
+    if (!haveFlex && style()->boxLines() == MULTIPLE) {
+        layoutWrappedHorizontalBox(relayoutChildren);
+        return;
+    }
+
     // We do 2 passes.  The first pass is simply to lay everyone out at
     // their preferred widths.  The second pass handles flexing the children.
     do {

@@ -22,6 +22,8 @@
 
 #include "config.h"
 #include "RenderBlock.h"
+#include <math.h>
+#include "AffineTransform.h"
 
 #include "Document.h"
 #include "Element.h"
@@ -452,7 +454,7 @@ bool RenderBlock::isSelfCollapsingBlock() const
         return false;
 
     bool hasAutoHeight = style()->height().isAuto();
-    if (style()->height().isPercent() && !style()->htmlHacks()) {
+    if ((style()->height().isPercent() || style()->height().isCalculated()) && !style()->htmlHacks()) {
         hasAutoHeight = true;
         for (RenderBlock* cb = containingBlock(); !cb->isRenderView(); cb = cb->containingBlock()) {
             if (cb->style()->height().isFixed() || cb->isTableCell())
@@ -462,7 +464,7 @@ bool RenderBlock::isSelfCollapsingBlock() const
 
     // If the height is 0 or auto, then whether or not we are a self-collapsing block depends
     // on whether we have content that is all self-collapsing or not.
-    if (hasAutoHeight || ((style()->height().isFixed() || style()->height().isPercent()) && style()->height().isZero())) {
+    if (hasAutoHeight || ((style()->height().isFixed() || style()->height().isPercent() || style()->height().isCalculated()) && style()->height().isZero())) {
         // If the block has inline children, see if we generated any line boxes.  If we have any
         // line boxes, then we can't be self-collapsing, since we have content.
         if (childrenInline())
@@ -1161,7 +1163,8 @@ void RenderBlock::layoutBlockChildren(bool relayoutChildren)
         // Make sure we layout children if they need it.
         // FIXME: Technically percentage height objects only need a relayout if their percentage isn't going to be turned into
         // an auto value.  Add a method to determine this, so that we can avoid the relayout.
-        if (relayoutChildren || (child->style()->height().isPercent() || child->style()->minHeight().isPercent() || child->style()->maxHeight().isPercent()))
+        if (relayoutChildren || (child->style()->height().isPercent() || child->style()->minHeight().isPercent() || child->style()->maxHeight().isPercent()
+                || child->style()->height().isCalculated() || child->style()->minHeight().isCalculated() || child->style()->maxHeight().isCalculated()))
             child->setChildNeedsLayout(true, false);
 
         // If relayoutChildren is set and we have percentage padding, we also need to invalidate the child's pref widths.
@@ -1359,6 +1362,95 @@ void RenderBlock::repaintOverhangingFloats(bool paintAllDescendants)
     }
 }
 
+
+/* CSS transforms: painting-only for now (no layout/hit-test impact).
+ * picasso's matrix primitives mix left- and right-multiplying conventions
+ * (translate appends, scale/rotate prepend), so compose the matrix here in
+ * plain column-vector form and hand the result to setMatrix() once. */
+struct XForm { double a, b, c, d, e, f; };
+
+static XForm xformIdentity()
+{
+    XForm m = { 1, 0, 0, 1, 0, 0 };
+    return m;
+}
+
+static XForm xformMultiply(const XForm& m, const XForm& t)
+{
+    XForm r;
+    r.a = m.a * t.a + m.c * t.b;
+    r.b = m.b * t.a + m.d * t.b;
+    r.c = m.a * t.c + m.c * t.d;
+    r.d = m.b * t.c + m.d * t.d;
+    r.e = m.a * t.e + m.c * t.f + m.e;
+    r.f = m.b * t.e + m.d * t.f + m.f;
+    return r;
+}
+
+static XForm xformTranslate(double tx, double ty)
+{
+    XForm m = { 1, 0, 0, 1, tx, ty };
+    return m;
+}
+
+static XForm xformScale(double sx, double sy)
+{
+    XForm m = { sx, 0, 0, sy, 0, 0 };
+    return m;
+}
+
+static XForm xformRotate(double degrees)
+{
+    double rad = degrees * 3.14159265358979323846 / 180.0;
+    double cs = cos(rad), sn = sin(rad);
+    XForm m = { cs, sn, -sn, cs, 0, 0 };
+    return m;
+}
+
+static int resolveTransformLength(const Length& len, int base)
+{
+    if (len.isPercent())
+        return (int)(len.percent() * base / 100.0);
+    if (len.isFixed())
+        return (int)len.value();
+    return 0;
+}
+
+static XForm transformMatrixFor(const Vector<TransformOperation>& ops, int width, int height)
+{
+    XForm m = xformIdentity();
+
+    for (unsigned i = 0; i < ops.size(); ++i) {
+        const TransformOperation& op = ops[i];
+        switch (op.type()) {
+        case TransformOperation::TRANSLATE:
+            m = xformMultiply(m, xformTranslate(resolveTransformLength(op.x(), width),
+                                                resolveTransformLength(op.y(), height)));
+            break;
+        case TransformOperation::TRANSLATE_X:
+            m = xformMultiply(m, xformTranslate(resolveTransformLength(op.x(), width), 0));
+            break;
+        case TransformOperation::TRANSLATE_Y:
+            m = xformMultiply(m, xformTranslate(0, resolveTransformLength(op.y(), height)));
+            break;
+        case TransformOperation::SCALE:
+            m = xformMultiply(m, xformScale(op.scaleX(), op.scaleY()));
+            break;
+        case TransformOperation::SCALE_X:
+            m = xformMultiply(m, xformScale(op.scaleX(), 1));
+            break;
+        case TransformOperation::SCALE_Y:
+            m = xformMultiply(m, xformScale(1, op.scaleY()));
+            break;
+        case TransformOperation::ROTATE:
+            m = xformMultiply(m, xformRotate(op.angle()));
+            break;
+        }
+    }
+
+    return m;
+}
+
 void RenderBlock::paint(PaintInfo& paintInfo, int tx, int ty)
 {
     tx += m_x;
@@ -1379,6 +1471,27 @@ void RenderBlock::paint(PaintInfo& paintInfo, int tx, int ty)
 
     bool useControlClip = phase != PaintPhaseBlockBackground && phase != PaintPhaseSelfOutline && hasControlClip();
 
+    /* A transformed element paints itself and its descendants through a
+     * transform-origin-relative matrix; layout stays untouched. */
+    bool transformed = style()->hasTransform() && paintInfo.context;
+    if (transformed) {
+        GraphicsContext* context = paintInfo.context;
+        int originAbsX = tx + resolveTransformLength(style()->transformOriginX(), width());
+        int originAbsY = ty + resolveTransformLength(style()->transformOriginY(), height());
+
+        XForm local = xformMultiply(xformTranslate(originAbsX, originAbsY),
+                                    transformMatrixFor(style()->transformOperations(), width(), height()));
+        local = xformMultiply(local, xformTranslate(-originAbsX, -originAbsY));
+
+        const AffineTransform& current = context->getMatrix();
+        XForm c = { current.a(), current.b(), current.c(), current.d(), current.e(), current.f() };
+        XForm total = xformMultiply(c, local);
+
+        context->save();
+        context->setMatrix(AffineTransform((float)total.a, (float)total.b, (float)total.c,
+                                           (float)total.d, (float)total.e, (float)total.f));
+    }
+
     // Push a clip.
     if (useControlClip) {
         if (phase == PaintPhaseOutline)
@@ -1389,8 +1502,11 @@ void RenderBlock::paint(PaintInfo& paintInfo, int tx, int ty)
             paintInfo.phase = PaintPhaseChildBlockBackgrounds;
         }
         IntRect clipRect(controlClipRect(tx, ty));
-        if (clipRect.isEmpty())
+        if (clipRect.isEmpty()) {
+            if (transformed)
+                paintInfo.context->restore();
             return;
+        }
         paintInfo.context->save();
         paintInfo.context->clip(clipRect);
     }
@@ -1407,6 +1523,9 @@ void RenderBlock::paint(PaintInfo& paintInfo, int tx, int ty)
         } else if (phase == PaintPhaseChildBlockBackground)
             paintInfo.phase = phase;
     }
+
+    if (transformed)
+        paintInfo.context->restore();
 }
 
 void RenderBlock::paintColumns(PaintInfo& paintInfo, int tx, int ty, bool paintingFloats)

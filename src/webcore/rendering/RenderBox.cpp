@@ -1109,10 +1109,10 @@ int RenderBox::relativePositionOffsetX() const
 int RenderBox::relativePositionOffsetY() const
 {
     if (!style()->top().isAuto()) {
-        if (!style()->top().isPercent() || containingBlock()->style()->height().isFixed())
+        if ((!style()->top().isPercent() && !style()->top().isCalculated()) || containingBlock()->style()->height().isFixed())
             return style()->top().calcValue(containingBlockHeight());
     } else if (!style()->bottom().isAuto()) {
-        if (!style()->bottom().isPercent() || containingBlock()->style()->height().isFixed())
+        if ((!style()->bottom().isPercent() && !style()->bottom().isCalculated()) || containingBlock()->style()->height().isFixed())
             return -style()->bottom().calcValue(containingBlockHeight());
     }
     return 0;
@@ -1396,7 +1396,7 @@ int RenderBox::calcHeightUsing(const Length& h)
     if (!h.isAuto()) {
         if (h.isFixed())
             height = h.value();
-        else if (h.isPercent())
+        else if (h.isPercent() || h.isCalculated())
             height = calcPercentageHeight(h);
         if (height != -1) {
             height = calcBorderBoxHeight(height);
@@ -1448,7 +1448,7 @@ int RenderBox::calcPercentageHeight(const Length& height)
     // height.
     else if (cb->style()->height().isFixed())
         result = cb->calcContentBoxHeight(cb->style()->height().value());
-    else if (cb->style()->height().isPercent() && !isPositionedWithSpecifiedHeight) {
+    else if ((cb->style()->height().isPercent() || cb->style()->height().isCalculated()) && !isPositionedWithSpecifiedHeight) {
         // We need to recur and compute the percentage height for our containing block.
         result = cb->calcPercentageHeight(cb->style()->height());
         if (result != -1)
@@ -1535,7 +1535,7 @@ int RenderBox::calcReplacedHeightUsing(Length height) const
             // It is necessary to use the border-box to match WinIE's broken
             // box model.  This is essential for sizing inside
             // table cells using percentage heights.
-            if (cb->isTableCell() && (cb->style()->height().isAuto() || cb->style()->height().isPercent()))
+            if (cb->isTableCell() && (cb->style()->height().isAuto() || cb->style()->height().isPercent() || cb->style()->height().isCalculated()))
                 return height.calcValue(availableHeight - (borderTop() + borderBottom()
                     + paddingTop() + paddingBottom()));
 
@@ -1562,10 +1562,10 @@ int RenderBox::availableHeightUsing(const Length& h) const
     // We need to stop here, since we don't want to increase the height of the table
     // artificially.  We're going to rely on this cell getting expanded to some new
     // height, and then when we lay out again we'll use the calculation below.
-    if (isTableCell() && (h.isAuto() || h.isPercent()))
+    if (isTableCell() && (h.isAuto() || h.isPercent() || h.isCalculated()))
         return overrideSize() - (borderLeft() + borderRight() + paddingLeft() + paddingRight());
 
-    if (h.isPercent())
+    if (h.isPercent() || h.isCalculated())
        return calcContentBoxHeight(h.calcValue(containingBlock()->availableHeight()));
 
     return containingBlock()->availableHeight();

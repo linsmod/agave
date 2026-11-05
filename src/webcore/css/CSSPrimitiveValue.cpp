@@ -108,55 +108,61 @@ static String quoteURLIfNeeded(const String& string)
 }
 
 CSSPrimitiveValue::CSSPrimitiveValue()
-    : m_type(0)
+    : m_type(0), m_calcPx(0)
 {
 }
 
 CSSPrimitiveValue::CSSPrimitiveValue(int ident)
-    : m_type(CSS_IDENT)
+    : m_type(CSS_IDENT), m_calcPx(0)
 {
     m_value.ident = ident;
 }
 
 CSSPrimitiveValue::CSSPrimitiveValue(double num, UnitTypes type)
-    : m_type(type)
+    : m_type(type), m_calcPx(0)
 {
     m_value.num = num;
 }
 
+CSSPrimitiveValue::CSSPrimitiveValue(double percent, int calcPx)
+    : m_type(CSS_CALC_LENGTH), m_calcPx(calcPx)
+{
+    m_value.num = percent;
+}
+
 CSSPrimitiveValue::CSSPrimitiveValue(const String& str, UnitTypes type)
-    : m_type(type)
+    : m_type(type), m_calcPx(0)
 {
     if ((m_value.string = str.impl()))
         m_value.string->ref();
 }
 
 CSSPrimitiveValue::CSSPrimitiveValue(PassRefPtr<Counter> c)
-    : m_type(CSS_COUNTER)
+    : m_type(CSS_COUNTER), m_calcPx(0)
 {
     m_value.counter = c.releaseRef();
 }
 
 CSSPrimitiveValue::CSSPrimitiveValue(PassRefPtr<Rect> r)
-    : m_type(CSS_RECT)
+    : m_type(CSS_RECT), m_calcPx(0)
 {
     m_value.rect = r.releaseRef();
 }
 
 CSSPrimitiveValue::CSSPrimitiveValue(PassRefPtr<DashboardRegion> r)
-    : m_type(CSS_DASHBOARD_REGION)
+    : m_type(CSS_DASHBOARD_REGION), m_calcPx(0)
 {
     m_value.region = r.releaseRef();
 }
 
 CSSPrimitiveValue::CSSPrimitiveValue(RGBA32 color)
-    : m_type(CSS_RGBCOLOR)
+    : m_type(CSS_RGBCOLOR), m_calcPx(0)
 {
     m_value.rgbcolor = color;
 }
 
 CSSPrimitiveValue::CSSPrimitiveValue(PassRefPtr<Pair> p)
-    : m_type(CSS_PAIR)
+    : m_type(CSS_PAIR), m_calcPx(0)
 {
     m_value.pair = p.releaseRef();
 }
@@ -460,6 +466,18 @@ String CSSPrimitiveValue::cssText() const
         case CSS_PERCENTAGE:
             text = String::format("%.6lg%%", m_value.num);
             break;
+        case CSS_CALC_LENGTH: {
+            /* Keep the same flat spelling the text rewriter emits so the value
+             * round-trips through style.cssText / getComputedStyle. */
+            String percent = String::format("%.6lg%%", m_value.num);
+            if (m_calcPx > 0)
+                text = "calc(" + percent + " + " + String::number(m_calcPx) + "px)";
+            else if (m_calcPx < 0)
+                text = "calc(" + percent + " - " + String::number(-m_calcPx) + "px)";
+            else
+                text = percent;
+            break;
+        }
         case CSS_EMS:
             text = String::format("%.6lgem", m_value.num);
             break;

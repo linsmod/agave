@@ -67,13 +67,18 @@ public:
         CSS_RECT = 24,
         CSS_RGBCOLOR = 25,
         CSS_PAIR = 100, // We envision this being exposed as a means of getting computed style values for pairs (border-spacing/radius, background-position, etc.)
-        CSS_DASHBOARD_REGION = 101 // FIXME: What on earth is this doing as a primitive value? It should not be!
+        CSS_DASHBOARD_REGION = 101, // FIXME: What on earth is this doing as a primitive value? It should not be!
+        /* calc() that mixes a percentage with a pixel offset, e.g.
+         * calc(100% - 24px). m_value.num holds the percentage, m_calcPx the
+         * pixel part; CSSStyleSelector turns it into Length(Calculated). */
+        CSS_CALC_LENGTH = 102
     };
 
     // FIXME: int vs. unsigned overloading is too tricky for color vs. ident
     CSSPrimitiveValue();
     CSSPrimitiveValue(int ident);
     CSSPrimitiveValue(double, UnitTypes);
+    CSSPrimitiveValue(double percent, int calcPx);
     CSSPrimitiveValue(const String&, UnitTypes);
     CSSPrimitiveValue(PassRefPtr<Counter>);
     CSSPrimitiveValue(PassRefPtr<Rect>);
@@ -111,6 +116,10 @@ public:
 
     double getDoubleValue(unsigned short unitType);
     double getDoubleValue() const { return m_value.num; }
+
+    /* CSS_CALC_LENGTH payload: percentage in m_value.num, pixel part here. */
+    double calcPercent() const { return m_value.num; }
+    int calcPx() const { return m_calcPx; }
 
     void setFloatValue(unsigned short unitType, double floatValue, ExceptionCode&);
     float getFloatValue(unsigned short unitType) { return static_cast<float>(getDoubleValue(unitType)); }
@@ -151,6 +160,7 @@ protected:
         Pair* pair;
         DashboardRegion* region;
     } m_value;
+    int m_calcPx;
 };
 
 } // namespace WebCore

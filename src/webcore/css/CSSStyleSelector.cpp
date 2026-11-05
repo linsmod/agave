@@ -46,6 +46,7 @@
 #include "CSSStyleSheet.h"
 #include "CSSValueKeywords.h"
 #include "CSSValueList.h"
+#include "CSSTransformValue.h"
 #include "CachedImage.h"
 #include "Counter.h"
 #include "DashboardRegion.h"
@@ -1808,6 +1809,8 @@ static Length convertToLength(CSSPrimitiveValue *primitiveValue, RenderStyle *st
             l = Length(primitiveValue->computeLengthIntForLength(style, multiplier), Fixed);
         else if(type == CSSPrimitiveValue::CSS_PERCENTAGE)
             l = Length(primitiveValue->getDoubleValue(), Percent);
+            else if (type == CSSPrimitiveValue::CSS_CALC_LENGTH)
+                l = Length(primitiveValue->calcPercent(), primitiveValue->calcPx());
         else if(type == CSSPrimitiveValue::CSS_NUMBER)
             l = Length(primitiveValue->getDoubleValue() * 100.0, Percent);
         else if (ok)
@@ -1971,6 +1974,16 @@ static void applyCounterList(RenderStyle* style, CSSValueList* list, bool isRese
             }
         }
     }
+}
+
+static Length transformLengthFromValue(CSSValue* value, RenderStyle* style, double zoomFactor)
+{
+    if (!value || !value->isPrimitiveValue())
+        return Length(0, Fixed);
+    CSSPrimitiveValue* primitive = static_cast<CSSPrimitiveValue*>(value);
+    if (primitive->primitiveType() == CSSPrimitiveValue::CSS_PERCENTAGE)
+        return Length(primitive->getDoubleValue(), Percent);
+    return Length(primitive->computeLengthIntForLength(style, zoomFactor), Fixed);
 }
 
 void CSSStyleSelector::applyProperty(int id, CSSValue *value)
@@ -3038,12 +3051,14 @@ void CSSStyleSelector::applyProperty(int id, CSSValue *value)
                            primitiveValue->isQuirkValue());
             else if(type == CSSPrimitiveValue::CSS_PERCENTAGE)
                 l = Length(primitiveValue->getDoubleValue(), Percent);
+            else if (type == CSSPrimitiveValue::CSS_CALC_LENGTH)
+                l = Length(primitiveValue->calcPercent(), primitiveValue->calcPx());
             else
                 return;
             if (id == CSS_PROP_PADDING_LEFT || id == CSS_PROP_PADDING_RIGHT ||
                 id == CSS_PROP_PADDING_TOP || id == CSS_PROP_PADDING_BOTTOM)
                 // Padding can't be negative
-                apply = !((l.isFixed() || l.isPercent()) && l.calcValue(100) < 0);
+                apply = !((l.isFixed() || l.isPercent() || l.isCalculated()) && l.calcValue(100) < 0);
             else
                 apply = true;
         }
@@ -3121,6 +3136,8 @@ void CSSStyleSelector::applyProperty(int id, CSSValue *value)
                 l = Length(primitiveValue->computeLengthIntForLength(style, zoomFactor), Fixed);
             else if (type == CSSPrimitiveValue::CSS_PERCENTAGE)
                 l = Length(primitiveValue->getDoubleValue(), Percent);
+                else if (type == CSSPrimitiveValue::CSS_CALC_LENGTH)
+                    l = Length(primitiveValue->calcPercent(), primitiveValue->calcPx());
             else
                 return;
             apply = true;
@@ -3177,6 +3194,8 @@ void CSSStyleSelector::applyProperty(int id, CSSValue *value)
             l = Length(primitiveValue->computeLengthIntForLength(style, zoomFactor), Fixed);
           else if(type == CSSPrimitiveValue::CSS_PERCENTAGE)
             l = Length(primitiveValue->getDoubleValue(), Percent);
+            else if (type == CSSPrimitiveValue::CSS_CALC_LENGTH)
+                l = Length(primitiveValue->calcPercent(), primitiveValue->calcPx());
 
           style->setVerticalAlign(LENGTH);
           style->setVerticalAlignLength(l);
@@ -4142,6 +4161,49 @@ void CSSStyleSelector::applyProperty(int id, CSSValue *value)
             return;
         }
         return;
+    case CSS_PROP_FLEX_SHRINK:
+        HANDLE_INHERIT_AND_INITIAL(flexShrink, FlexShrink)
+        if (!primitiveValue || primitiveValue->primitiveType() != CSSPrimitiveValue::CSS_NUMBER)
+            return;
+        style->setFlexShrink(primitiveValue->getFloatValue());
+        return;
+    case CSS_PROP_FLEX_BASIS:
+        HANDLE_INHERIT_AND_INITIAL(flexBasis, FlexBasis)
+        if (!primitiveValue)
+            return;
+        if (primitiveValue->primitiveType() == CSSPrimitiveValue::CSS_IDENT) {
+            style->setFlexBasis(Length(Auto));
+            return;
+        }
+        {
+            int type = primitiveValue->primitiveType();
+
+            if (type > CSSPrimitiveValue::CSS_PERCENTAGE && type < CSSPrimitiveValue::CSS_DEG)
+                style->setFlexBasis(Length(primitiveValue->computeLengthIntForLength(style, zoomFactor), Fixed));
+            else if (type == CSSPrimitiveValue::CSS_PERCENTAGE)
+                style->setFlexBasis(Length(primitiveValue->getDoubleValue(), Percent));
+            else if (type == CSSPrimitiveValue::CSS_CALC_LENGTH)
+                style->setFlexBasis(Length(primitiveValue->calcPercent(), primitiveValue->calcPx()));
+        }
+        return;
+    case CSS_PROP_SCROLLBAR_WIDTH:
+        HANDLE_INHERIT_AND_INITIAL(scrollbarNone, ScrollbarNone)
+        if (!primitiveValue)
+            return;
+        style->setScrollbarNone(primitiveValue->getIdent() == CSS_VAL_NONE);
+        return;
+    case CSS_PROP_ALIGN_CONTENT:
+        HANDLE_INHERIT_AND_INITIAL(alignContent, AlignContent)
+        if (!primitiveValue)
+            return;
+        switch (primitiveValue->getIdent()) {
+        case CSS_VAL_START:   style->setAlignContent(BSTART);   return;
+        case CSS_VAL_END:     style->setAlignContent(BEND);     return;
+        case CSS_VAL_CENTER:  style->setAlignContent(BCENTER);  return;
+        case CSS_VAL_JUSTIFY: style->setAlignContent(BJUSTIFY); return;
+        case CSS_VAL_STRETCH: style->setAlignContent(BSTRETCH); return;
+        default:              return;
+        }
     case CSS_PROP__WEBKIT_BOX_SIZING:
         HANDLE_INHERIT_AND_INITIAL(boxSizing, BoxSizing)
         if (!primitiveValue) return;
@@ -4598,6 +4660,8 @@ void CSSStyleSelector::applyProperty(int id, CSSValue *value)
             l = Length(primitiveValue->computeLengthIntForLength(style, zoomFactor), Fixed);
         else if(type == CSSPrimitiveValue::CSS_PERCENTAGE)
             l = Length(primitiveValue->getDoubleValue(), Percent);
+            else if (type == CSSPrimitiveValue::CSS_CALC_LENGTH)
+                l = Length(primitiveValue->calcPercent(), primitiveValue->calcPx());
         else
             return;
         style->setTransformOriginX(l);
@@ -4612,10 +4676,78 @@ void CSSStyleSelector::applyProperty(int id, CSSValue *value)
             l = Length(primitiveValue->computeLengthIntForLength(style, zoomFactor), Fixed);
         else if(type == CSSPrimitiveValue::CSS_PERCENTAGE)
             l = Length(primitiveValue->getDoubleValue(), Percent);
+            else if (type == CSSPrimitiveValue::CSS_CALC_LENGTH)
+                l = Length(primitiveValue->calcPercent(), primitiveValue->calcPx());
         else
             return;
         style->setTransformOriginY(l);
         break;
+    }
+
+    case CSS_PROP__WEBKIT_TRANSFORM: {
+        /* transform: translate()/scale()/rotate(). The renderer applies the
+         * operations around the transform-origin; unsupported functions make
+         * the whole value invalid, like other engines at this point. */
+        if (value->cssValueType() == CSSValue::CSS_INITIAL || value->cssValueType() == CSSValue::CSS_INHERIT
+            || value->isPrimitiveValue()) {
+            style->clearTransform();
+            return;
+        }
+        if (!value->isValueList())
+            return;
+        CSSValueList* list = static_cast<CSSValueList*>(value);
+        Vector<TransformOperation> ops;
+        for (unsigned i = 0; i < list->length(); ++i) {
+            CSSValue* item = list->item(i);
+            if (!item || !item->isTransformValue())
+                return;
+            CSSTransformValue* transform = static_cast<CSSTransformValue*>(item);
+            CSSValueList* args = transform->values();
+            if (!args || !args->length())
+                return;
+            TransformOperation op;
+            switch (transform->type()) {
+            case CSSTransformValue::TranslateTransformOperation:
+                op = TransformOperation(TransformOperation::TRANSLATE);
+                op.setX(transformLengthFromValue(args->item(0), style, zoomFactor));
+                op.setY(args->length() > 1 ? transformLengthFromValue(args->item(1), style, zoomFactor)
+                                           : Length(0, Fixed));
+                break;
+            case CSSTransformValue::TranslateXTransformOperation:
+                op = TransformOperation(TransformOperation::TRANSLATE_X);
+                op.setX(transformLengthFromValue(args->item(0), style, zoomFactor));
+                break;
+            case CSSTransformValue::TranslateYTransformOperation:
+                op = TransformOperation(TransformOperation::TRANSLATE_Y);
+                op.setY(transformLengthFromValue(args->item(0), style, zoomFactor));
+                break;
+            case CSSTransformValue::ScaleTransformOperation: {
+                op = TransformOperation(TransformOperation::SCALE);
+                CSSPrimitiveValue* sx = static_cast<CSSPrimitiveValue*>(args->item(0));
+                double sy = args->length() > 1 ? static_cast<CSSPrimitiveValue*>(args->item(1))->getDoubleValue()
+                                               : sx->getDoubleValue();
+                op.setScale(sx->getDoubleValue(), sy);
+                break;
+            }
+            case CSSTransformValue::ScaleXTransformOperation:
+                op = TransformOperation(TransformOperation::SCALE_X);
+                op.setScale(static_cast<CSSPrimitiveValue*>(args->item(0))->getDoubleValue(), 1);
+                break;
+            case CSSTransformValue::ScaleYTransformOperation:
+                op = TransformOperation(TransformOperation::SCALE_Y);
+                op.setScale(1, static_cast<CSSPrimitiveValue*>(args->item(0))->getDoubleValue());
+                break;
+            case CSSTransformValue::RotateTransformOperation:
+                op = TransformOperation(TransformOperation::ROTATE);
+                op.setAngle(static_cast<CSSPrimitiveValue*>(args->item(0))->getDoubleValue());
+                break;
+            default:
+                return;
+            }
+            ops.append(op);
+        }
+        style->setTransformOperations(ops);
+        return;
     }
     case CSS_PROP_INVALID:
         return;
@@ -4650,8 +4782,6 @@ void CSSStyleSelector::applyProperty(int id, CSSValue *value)
     case CSS_PROP__WEBKIT_PADDING_START:
     case CSS_PROP__WEBKIT_TEXT_DECORATIONS_IN_EFFECT:
     case CSS_PROP__WEBKIT_TEXT_STROKE:
-    case CSS_PROP__WEBKIT_TRANSFORM:
-        return;
 #if ENABLE(SVG)
     default:
         // Try the SVG properties
@@ -4926,6 +5056,8 @@ void CSSStyleSelector::mapBackgroundXPosition(BackgroundLayer* layer, CSSValue* 
         l = Length(primitiveValue->computeLengthIntForLength(style, zoomFactor), Fixed);
     else if(type == CSSPrimitiveValue::CSS_PERCENTAGE)
         l = Length(primitiveValue->getDoubleValue(), Percent);
+        else if (type == CSSPrimitiveValue::CSS_CALC_LENGTH)
+            l = Length(primitiveValue->calcPercent(), primitiveValue->calcPx());
     else
         return;
     layer->setBackgroundXPosition(l);
@@ -4948,6 +5080,8 @@ void CSSStyleSelector::mapBackgroundYPosition(BackgroundLayer* layer, CSSValue* 
         l = Length(primitiveValue->computeLengthIntForLength(style, zoomFactor), Fixed);
     else if(type == CSSPrimitiveValue::CSS_PERCENTAGE)
         l = Length(primitiveValue->getDoubleValue(), Percent);
+        else if (type == CSSPrimitiveValue::CSS_CALC_LENGTH)
+            l = Length(primitiveValue->calcPercent(), primitiveValue->calcPx());
     else
         return;
     layer->setBackgroundYPosition(l);
