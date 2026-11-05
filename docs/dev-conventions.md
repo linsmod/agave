@@ -9,7 +9,8 @@
   - 关键代码锚点（文件/函数）；
   - 跑了哪些回归（探针页、套件）。
 - 一个提交一件事；`docs:` / `shell:` / `ant backend:` / `esm:` 这类前缀已经在用，保持一致。
-- 不提交构建产物，除了 `3rdparty/ant/lib/antjsb.dll.a`（导入库，仓库一直在跟）；DLL/PDB 留在本机或发布包。
+- 不提交构建产物，除了 `3rdparty/ant/lib/antjsb.dll.a` 和 `3rdparty/ant/bin/antjsb.dll`
+  （plain clone 的预编译回落；PDB 不跟）。
 
 ## 2. 回归页与脚本
 

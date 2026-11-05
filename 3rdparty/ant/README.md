@@ -29,7 +29,8 @@ lib/antjsb.dll.a
 include/AntBridge.h
 ```
 
-DLL/PDB 被 `.gitignore` 忽略，导入库和头文件在库里，所以 agave 源码不需要改动即可编译。
+`antjsb.dll` 作为 plain clone 的预编译回落随仓库跟踪；`antjsb.pdb` 被 `.gitignore`
+忽略。导入库 `lib/antjsb.dll.a` 和头文件 `include/AntBridge.h` 也随仓库跟踪。
 
 ## 构建选项
 

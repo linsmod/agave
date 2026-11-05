@@ -63,7 +63,7 @@ pwsh -File tools\build_antjsb.ps1        # 编 libant.a + 重链 antjsb.dll
 | `prelude.js` / `polyfills.js` | 运行时从 exe 旁加载的 JS shim（可热改） |
 | `%LOCALAPPDATA%\Agave\probe\` / `...\view-host\` | 无头工具自己的 profile（cookies/cache），由 `AGB_USERDATA` 决定，见 [dev-debugging.md](dev-debugging.md) |
 
-- `3rdparty/ant/bin/antjsb.dll` 只是**分发副本**，运行时不读它（`3rdparty/ant/bin` 被 gitignore）。
+- `3rdparty/ant/bin/antjsb.dll` 是**预编译回落副本**（plain clone 也能构建/运行）；运行时仍读 `build-zig-native/` 里的那份。
 - **picasso（图形后端）源码在 `3rdparty/picasso/`，由 `add_subdirectory` 直接编译**，
   产物是 `build-zig-native/picasso/libpicasso2_sw.a`（静态）。它以前是 `ExternalProject`：
   从 `packages/picasso-2.8.0.tar.gz` 解压到构建目录、再用 `packages/patchs/` 覆盖几个文件，
