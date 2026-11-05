@@ -28,14 +28,29 @@ $root = Split-Path -Parent $PSScriptRoot
 $build = Join-Path $root $BuildDir
 $exe = Join-Path $build 'agave_shell.exe'
 $parentPage = Join-Path $root 'tools/pages/realm_parent.html'
-$checkJs = Join-Path $root 'debug/realm_check.js'
 
 if (-not (Test-Path $exe)) { throw "agave_shell.exe not found: $exe" }
 if (-not (Test-Path $parentPage)) { throw "page not found: $parentPage" }
-if (-not (Test-Path $checkJs)) { throw "probe script not found: $checkJs" }
 
 $tmp = Join-Path ([IO.Path]::GetTempPath()) ('agb-realm-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+
+# The probe script: what the parent sees of itself and of the iframe.
+$checkJs = Join-Path $tmp 'realm_check.js'
+@'
+var f = document.getElementById('fr');
+var cw = f ? f.contentWindow : null;
+var cd = f ? f.contentDocument : null;
+
+probeExit([
+  'childTitle=' + (cd && cd.title ? cd.title : 'null'),
+  'childVarLeak=' + (typeof window.childVar),
+  'parentSelf=' + (window.parent === window),
+  'parentTopArraySame=' + (window.top.Array === Array),
+  'childReachable=' + (cw ? (typeof cw.childVar) : 'n/a'),
+  'childTopIsParent=' + (cw ? (cw.top === window) : 'n/a')
+].join('|'));
+'@ | Set-Content -Path $checkJs -Encoding ascii
 
 $failures = 0
 
