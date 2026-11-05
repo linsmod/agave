@@ -12,6 +12,7 @@ agave 是**从零移植的浏览器**：WebKit 2008 的 WebCore（解析/布局/
 |---|---|
 | 全部文档索引 + 前缀约定 | [docs/README.md](docs/README.md) |
 | 当前架构总图 / 现状 / 已知限制 | [docs/arch-overview.md](docs/arch-overview.md)、[docs/arch-status.md](docs/arch-status.md) |
+| 内核渲染管线：DOM→样式→布局→绘制；**布局问题先看哪** | [docs/arch-rendering.md](docs/arch-rendering.md) |
 | 待办与验收标准 | [docs/plan-roadmap.md](docs/plan-roadmap.md) |
 | 代码在哪、**我要改 X 去哪**、症状→先查哪 | [docs/dev-onboarding.md](docs/dev-onboarding.md) |
 | 构建/运行 / 调试、日志、回归 | [docs/dev-build-and-run.md](docs/dev-build-and-run.md)、[docs/dev-debugging.md](docs/dev-debugging.md) |

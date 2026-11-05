@@ -20,6 +20,7 @@
 |---|---|---|
 | [arch-overview.md](arch-overview.md) | **当前架构总图**：进程/线程/模块、代码分层、realm 与所有权、导航、下载/内部页、边界 | 第一次需要完整图，或怀疑某篇文档过时 |
 | [arch-status.md](arch-status.md) | **现状**：已具备能力、已知限制、验证入口 | 想知道"现在能做什么、哪些不是 bug" |
+| [arch-rendering.md](arch-rendering.md) | **内核渲染管线**：DOM → 样式 → 渲染树 → 布局 → 绘制；布局内部、几何读取、症状→文件 | 布局/间距/0×0/命中不对，或第一次改 WebCore 渲染 |
 | [arch-module-loading.md](arch-module-loading.md) | 模块加载与求值：三条泳道时序图 + 代码锚点 | 改模块加载/解析时序 |
 | [arch-downloads.md](arch-downloads.md) | 下载子系统：决策点、所有权、状态机、三层 API、线程模型、面板 | 改下载 / 加下载 UI |
 | [arch-embedding.md](arch-embedding.md) | 宿主接入契约：控件 API、线程模型、多控件 | 集成 agave / 写宿主 |
@@ -39,8 +40,8 @@
 ## 常见路径
 
 - **新人**：`AGENTS.md` → [arch-overview.md](arch-overview.md) → [dev-onboarding.md](dev-onboarding.md) → [arch-status.md](arch-status.md)。
-- **改代码**：[dev-onboarding.md](dev-onboarding.md) §3 → [ref-code-index.md](ref-code-index.md) → [dev-build-and-run.md](dev-build-and-run.md)。
-- **查 bug**：[dev-debugging.md](dev-debugging.md) → [arch-capability-gaps.md](arch-capability-gaps.md) → [hist-lessons.md](hist-lessons.md)。
+- **改代码**：[dev-onboarding.md](dev-onboarding.md) §3 → [arch-rendering.md](arch-rendering.md)（布局/绘制）→ [ref-code-index.md](ref-code-index.md) → [dev-build-and-run.md](dev-build-and-run.md)。
+- **查 bug**：[dev-debugging.md](dev-debugging.md) → [arch-capability-gaps.md](arch-capability-gaps.md) → [hist-lessons.md](hist-lessons.md)（布局问题先看 [arch-rendering.md](arch-rendering.md) §7）。
 - **做设计**：[design-frame-window.md](design-frame-window.md) / [design-per-view-js-context.md](design-per-view-js-context.md) → [hist-lessons.md](hist-lessons.md)。
 
 ## 维护规则

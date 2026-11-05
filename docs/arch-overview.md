@@ -47,6 +47,8 @@
 | ant 引擎 | `H:\ant-v16`（独立仓库，`agave-bridge`） | silver VM/编译、ESM、Worker、wasm；见 [ref-ant-engine.md](ref-ant-engine.md) |
 | 平台底座 | `src/wtf/`、`src/core/`、`include/` | 容器、字符串、断言、公共头 |
 
+WebCore 内部的渲染管线（DOM → 样式 → 渲染树 → 布局 → 绘制）见 [arch-rendering.md](arch-rendering.md)。
+
 ## 3. realm、所有权、进程级共享
 
 - **每个 view 一个 `RuntimeState`**（`AntRuntime::createContext()`，在 `macross_view_create` 时建；

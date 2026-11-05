@@ -46,8 +46,8 @@ agave 是**从零移植的浏览器**：**WebKit 2008 的 WebCore**（HTML/CSS �
 | HTML 解析、`script`/module 时序 | `src/webcore/html/HTMLTokenizer.cpp` | 等待位/`scriptExecution` 在这里 |
 | CSS 解析、选择器 | `src/webcore/css/CSSParser.cpp`、`CSSStyleSelector.cpp` | 词法/语法老，改前先看 `AGENTS.md` 里 `var()` 的写法 |
 | computed style | `src/webcore/css/CSSComputedStyleDeclaration.cpp` | 未实现属性默认静默（`AGB_CSS_DEBUG` 才打） |
-| 布局 | `src/webcore/rendering/` | flex 实际走 `-webkit-box`（`RenderFlexibleBox`） |
-| 绘制 / 裁剪 / 渐变 | `src/webcore/platform/graphics/GraphicsContextPS.cpp` | picasso 后端；`clip` 是设备坐标 |
+| 布局 / 间距 / 元素 0×0 | 先看 [arch-rendering.md](arch-rendering.md) §3/§7；代码在 `src/webcore/rendering/` | flex 实际走 `-webkit-box`（`RenderFlexibleBox`） |
+| 绘制 / 裁剪 / 渐变 | `src/webcore/platform/picasso/GraphicsContextPS.cpp` | picasso 后端；`clip` 是设备坐标 |
 | 网络（HTTP/缓存/代理） | `src/webcore/platform/network/native/` | WinHTTP 后端 + `NetLog.cpp` |
 | 页面生命周期钩子（willClose/commit/DCL/load） | `src/webview/FrameLoaderClientMC.cpp` | 时序问题的第一现场；`[evt]` 钩子也在这里 |
 | 默认日志收口（`[evt]`/`[nav]`/`[ui]`/`[shell]`/`[probe]`/`[flag]`） | `src/webview/AgbLog.h` + 各调用点 | 只加日志，不动热路径；回归 `tools/run_nav_tests.ps1` |
@@ -63,6 +63,7 @@ agave 是**从零移植的浏览器**：**WebKit 2008 的 WebCore**（HTML/CSS �
 | `undefined is not a function` / `Cannot read properties of undefined` | 桥接缺方法或 wrapper 的 catch-all getter（`nodeGetter`），先于怀疑页面；已知缺口查 [arch-capability-gaps.md](arch-capability-gaps.md) |
 | 某个 Web API / 选择器不生效，但页面在别的浏览器正常 | 先查 [arch-capability-gaps.md](arch-capability-gaps.md)（`cap_*` 页可一条命令复测） |
 | 样式不对 | `getComputedStyle` 是否走到、属性是否"未实现"；跑 `debug/csscheck.html` |
+| 布局不对（位置/间距/元素 0×0/滚动区） | [arch-rendering.md](arch-rendering.md) §7；先用 `__agbLayoutInfo()` 分清"没 renderer"和"有 renderer 没布局" |
 | 画错 / 残影 / 不重绘 | 隐藏窗口没有 WM_PAINT（用 `--probe AGB_PROBE_SHOW=1` 或 `agave_view_host` 出 BMP）；再看 clip/repaint |
 | 卡住 / CPU 100% | `AGB_PROFILE=1` 直方图 + `cdb` 抓忙线程栈（[dev-debugging.md](dev-debugging.md)） |
 | 网络没提交 / 一直重试 | `AGB_NET_LOG=1` 看 stage；`progress finished=1` **不代表**加载成功 |

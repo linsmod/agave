@@ -1,11 +1,15 @@
 # 代码位置索引（函数 / 机制锚点）
 
-> 用途：从"机制名"快速跳到函数。文件级"我要改 X 去哪"见 [dev-onboarding.md](dev-onboarding.md) §5；
+> 用途：从"机制名"快速跳到函数。文件级"我要改 X 去哪"见 [dev-onboarding.md](dev-onboarding.md) §3；
 > 能力缺口见 [arch-capability-gaps.md](arch-capability-gaps.md)。
 
 | 主题 | 位置 |
 |---|---|
 | realm 生命周期 | `AntRuntime.cpp`：`stopRealm()` / `beginNewRealm()` / `documentWillUnload()`；`createContext()`（每 view 一个） |
+| 渲染管线（阶段 → 文件） | [arch-rendering.md](arch-rendering.md)：DOM→样式→渲染树→布局→绘制，含布局内部与症状→文件 |
+| 布局入口 / 脏标记 | `FrameView.cpp`：`layout()` / `scheduleRelayout()` / `layoutIfNeededRecursive()`；`Document.cpp`：`updateLayout()` / `recalcStyle()`；`RenderObject.cpp`：`setNeedsLayout()` / `markContainingBlocksForLayout()` |
+| 布局核心 | `RenderView.cpp`：`layout()`；`RenderBlock.cpp`：`layoutBlock()` / `layoutBlockChildren()` / `layoutPositionedObjects()`；`bidi.cpp`：`layoutInlineChildren()`；`RenderBox.cpp`：`calcWidth()` / `calcHeight()`；flex `RenderFlexibleBox.cpp`：`layoutHorizontalBox()` / `layoutVerticalBox()`；表格 `RenderTable.cpp`：`layout()` |
+| 几何读取 | `Element.cpp`：`offsetWidth()` / `clientWidth()` / `scrollWidth()`（先 `updateLayoutIgnorePendingStylesheets()`）；`AntRuntime.cpp`：`nodeGetBoundingClientRect()` / `globalLayoutInfo()`（`__agbLayoutInfo`） |
 | generation / 在途资源 | `AntRuntime.cpp`：`currentGeneration()` / `cancelInFlightResources()`；XHR `XhrJob::m_generation`、模块 `ModuleEntry::generation`、延迟模块 `DeferredModule::generation` |
 | DOM pin / 文档 slot | `AntRuntime.cpp`：`releasePinnedNodes()` / `wrapNode()` / `slotForDocument()` / `activateSlot()` |
 | 模块调度 | `AntRuntime.cpp`：`moduleStart()` / `moduleFetch()`（同步等待）/ `modulePrefetchImports()`（字符串扫描）/ `queueDeferredScript()` / `flushDeferredModules()` |
