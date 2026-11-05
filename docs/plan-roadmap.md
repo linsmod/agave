@@ -48,12 +48,13 @@
   `https://v.qq.com/page-slice/dynamic-channel-header.html` 从未被请求（业务加载动作未触发），
   作为 M1 的未完成项单独追。
 - **M2 布局级 CSS（P1）**：①8 位 hex `#RRGGBBAA`（颜色解析）**已做（R51）**；②`transform` 的
-  translate/scale/rotate（绘制 + 命中）**部分完成（R52：绘制生效，局部重绘裁剪/hit-test 未做）**；
+  translate/scale/rotate（绘制 + 命中）**绘制与失效已完成（R52 绘制、R55 变换感知脏矩形），hit-test 与 stacking context 未做**；
   ③视口单位 `vw`/`vh`（本站 209×100vw、8×100vh）**已做（R53）**；④`calc()` 混合单位
   （`%`/`vw`/`vh`/`var`，本站 491 处）在布局期求值 —— **vw/vh/var/数字链已做（R53），含 `%` 的仍缺**；
   ⑤横向溢出与 `overflow:hidden` 对 scrollWidth 的影响 —— **已修（R53：scrollWidth 2658→1100）**。
   验收（2026-11-05 实测）：`scrollWidth == innerWidth`（1100）、`.left-nav-wrap` 高 = 800（100vh）、
-  卡宽 265（Chrome 259 @1082 视口）、卡片按行换行；**hero 仍差 transform 的局部重绘裁剪**。
+  卡宽 265（Chrome 259 @1082 视口）、卡片按行换行；hero 的变换感知重绘已修（R55，局部重绘不再裁掉
+  translate 到布局盒外的部分）。
 - **M3 现代 flexbox（P1）**：`flex-wrap:wrap`、`flex-basis`、`align-content`、`flex` 简写与
   legacy `-webkit-box` 的差异。**已完成（R53 基础断行，R54 有 flex 子项的三趟布局 + flex 简写 +
   flex-basis/align-content + scrollbar-width）**：`tools/layout_diff.py` 的 19 个 flex 用例对拍

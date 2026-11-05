@@ -206,6 +206,12 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
   —— 探针自己解析命令行、把 `"` 和 `\` 当语法，内联 `--eval` 里带 JS 字符串字面量会被拆坏；
   这个 helper 用 `--eval-file` 传文件，顺带设好 `--wait/--settle/--timeout/--userdata`。
   退出码仍是权威判据。
+- **一条命令跑布局回归**：`pwsh -File tools/run_layout_tests.ps1`
+  —— 对 `tools/pages/layout/*.html` 逐个跑 `layout_diff.py`（几何对拍 Chrome），再对
+  `transform_repaint.html` 做像素断言，输出 `LAYOUT=PASS`。加页面不用改脚本。
+- **像素断言**：`python tools/pixel_check.py <bmp> 250,150,ff0000 450,150,ffffff [--tol 8]`
+  —— 读探针 `--shot` 的 BMP（32/24 位、bottom-up），`x,y,RRGGBB` 是截图坐标（左上原点）。
+  绘制类回归（裁剪、变换、placeholder 消失）用它，几何用 `layout_diff.py`。
 - **布局对拍 Chrome**：`python tools/layout_diff.py tools/pages/layout/<page>.html [--tol 1]`
   —— 同一份 `tools/pages/layout/lib_measure.js` 在 agave 探针和 headless Chrome 里各跑一遍，
   两边视口都固定成 1084×800（agave = 1100 窗口减 16px 经典滚动条；Chrome = `--hide-scrollbars`

@@ -1007,6 +1007,15 @@ IntRect RenderBox::absoluteClippedOverflowRect()
 
 void RenderBox::computeAbsoluteRepaintRect(IntRect& rect, bool fixed)
 {
+    /* A transformed box paints away from its layout position. Its damage rect
+     * must cover the painted area, otherwise a partial repaint clips the
+     * transformed content at the layout box (v.qq.com hero image: the element
+     * is centre-shifted by translate(-50%), and any small damage rect cut the
+     * right half off). Union keeps the layout box invalidated too, which takes
+     * care of the old position when a transform changes. */
+    if (style() && style()->hasTransform())
+        rect = unionRect(rect, style()->transformedRect(rect, width(), height()));
+
     if (RenderView* v = view()) {
         if (LayoutState* layoutState = v->layoutState()) {
             rect.move(m_x, m_y);

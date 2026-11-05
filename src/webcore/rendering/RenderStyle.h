@@ -690,6 +690,30 @@ private:
     double m_angle;  // degrees
 };
 
+/* 2-D affine matrix in CSS column-vector form:
+ *     x' = a*x + c*y + e      y' = b*x + d*y + f
+ * Shared by painting (RenderBlock) and repaint invalidation (RenderBox) so both
+ * map geometry through exactly the same transform. */
+struct XForm { double a, b, c, d, e, f; };
+
+inline XForm xformIdentity()
+{
+    XForm m = { 1, 0, 0, 1, 0, 0 };
+    return m;
+}
+
+inline XForm xformMultiply(const XForm& m, const XForm& t)
+{
+    XForm r;
+    r.a = m.a * t.a + m.c * t.b;
+    r.b = m.b * t.a + m.d * t.b;
+    r.c = m.a * t.c + m.c * t.d;
+    r.d = m.b * t.c + m.d * t.d;
+    r.e = m.a * t.e + m.c * t.f + m.e;
+    r.f = m.b * t.e + m.d * t.f + m.f;
+    return r;
+}
+
 class StyleTransformData : public Shared<StyleTransformData> {
 public:
     StyleTransformData();
@@ -1602,6 +1626,15 @@ public:
     Length transformOriginY() const { return rareNonInheritedData->m_transform->m_y; }
     const Vector<TransformOperation>& transformOperations() const { return rareNonInheritedData->m_transform->m_operations; }
     bool hasTransform() const { return !rareNonInheritedData->m_transform->m_operations.isEmpty(); }
+
+    /* Transform matrices relative to this element's border box (transform-origin
+     * included). absoluteTransformMatrix() shifts the same matrix into the
+     * absolute coordinate space painting uses (tx/ty are the paint offsets). */
+    XForm localTransformMatrix(int width, int height) const;
+    XForm absoluteTransformMatrix(int tx, int ty, int width, int height) const;
+    /* Bounding box of `rect` after the local transform; used by repaint so a
+     * transformed element damages where it is actually painted. */
+    IntRect transformedRect(const IntRect& rect, int width, int height) const;
     // End CSS3 Getters
 
     // Apple-specific property getter methods

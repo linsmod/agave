@@ -21,6 +21,7 @@
 
 #include "config.h"
 #include "RenderStyle.h"
+#include <math.h>
 
 #include "CSSStyleSelector.h"
 #include "RenderArena.h"
@@ -433,6 +434,125 @@ StyleTransformData::StyleTransformData(const StyleTransformData& o)
     , m_y(o.m_y)
     , m_operations(o.m_operations)
 {}
+
+/* ---- CSS transform matrices ---------------------------------------------
+ * picasso's matrix primitives mix left- and right-multiplying conventions, so
+ * the renderer composes the matrix itself in column-vector form and hands the
+ * final value to setMatrix() once. Paint (RenderBlock) and invalidation
+ * (RenderBox) share these helpers, so damage and pixels always agree. */
+static XForm xformTranslate(double tx, double ty)
+{
+    XForm m = { 1, 0, 0, 1, tx, ty };
+    return m;
+}
+
+static XForm xformScale(double sx, double sy)
+{
+    XForm m = { sx, 0, 0, sy, 0, 0 };
+    return m;
+}
+
+static XForm xformRotate(double degrees)
+{
+    double rad = degrees * 3.14159265358979323846 / 180.0;
+    double cs = cos(rad), sn = sin(rad);
+    XForm m = { cs, sn, -sn, cs, 0, 0 };
+    return m;
+}
+
+static int resolveTransformLength(const Length& len, int base)
+{
+    if (len.isPercent())
+        return (int)(len.percent() * base / 100.0);
+    if (len.isFixed())
+        return (int)len.value();
+    return 0;
+}
+
+static XForm transformMatrixForOps(const Vector<TransformOperation>& ops, int width, int height)
+{
+    XForm m = xformIdentity();
+
+    for (unsigned i = 0; i < ops.size(); ++i) {
+        const TransformOperation& op = ops[i];
+        switch (op.type()) {
+        case TransformOperation::TRANSLATE:
+            m = xformMultiply(m, xformTranslate(resolveTransformLength(op.x(), width),
+                                                resolveTransformLength(op.y(), height)));
+            break;
+        case TransformOperation::TRANSLATE_X:
+            m = xformMultiply(m, xformTranslate(resolveTransformLength(op.x(), width), 0));
+            break;
+        case TransformOperation::TRANSLATE_Y:
+            m = xformMultiply(m, xformTranslate(0, resolveTransformLength(op.y(), height)));
+            break;
+        case TransformOperation::SCALE:
+            m = xformMultiply(m, xformScale(op.scaleX(), op.scaleY()));
+            break;
+        case TransformOperation::SCALE_X:
+            m = xformMultiply(m, xformScale(op.scaleX(), 1));
+            break;
+        case TransformOperation::SCALE_Y:
+            m = xformMultiply(m, xformScale(1, op.scaleY()));
+            break;
+        case TransformOperation::ROTATE:
+            m = xformMultiply(m, xformRotate(op.angle()));
+            break;
+        }
+    }
+
+    return m;
+}
+
+XForm RenderStyle::localTransformMatrix(int width, int height) const
+{
+    if (!hasTransform())
+        return xformIdentity();
+
+    int originX = resolveTransformLength(transformOriginX(), width);
+    int originY = resolveTransformLength(transformOriginY(), height);
+
+    XForm local = xformMultiply(xformTranslate(originX, originY),
+                                transformMatrixForOps(transformOperations(), width, height));
+    return xformMultiply(local, xformTranslate(-originX, -originY));
+}
+
+XForm RenderStyle::absoluteTransformMatrix(int tx, int ty, int width, int height) const
+{
+    return xformMultiply(xformTranslate(tx, ty),
+                         xformMultiply(localTransformMatrix(width, height),
+                                       xformTranslate(-tx, -ty)));
+}
+
+IntRect RenderStyle::transformedRect(const IntRect& rect, int width, int height) const
+{
+    if (!hasTransform())
+        return rect;
+
+    XForm m = localTransformMatrix(width, height);
+    double x0 = rect.x();
+    double y0 = rect.y();
+    double x1 = x0 + rect.width();
+    double y1 = y0 + rect.height();
+
+    double xs[4] = { x0, x1, x0, x1 };
+    double ys[4] = { y0, y0, y1, y1 };
+
+    double minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+    for (int i = 0; i < 4; ++i) {
+        double px = m.a * xs[i] + m.c * ys[i] + m.e;
+        double py = m.b * xs[i] + m.d * ys[i] + m.f;
+
+        if (px < minX) minX = px;
+        if (py < minY) minY = py;
+        if (px > maxX) maxX = px;
+        if (py > maxY) maxY = py;
+    }
+
+    return IntRect((int)floor(minX), (int)floor(minY),
+                   (int)ceil(maxX) - (int)floor(minX),
+                   (int)ceil(maxY) - (int)floor(minY));
+}
 
 bool StyleTransformData::operator==(const StyleTransformData& o) const
 {

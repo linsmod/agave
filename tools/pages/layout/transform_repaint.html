@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>transform repaint</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #fff; }
+  #a { position: absolute; left: 300px; top: 100px; width: 200px; height: 100px; background: #ff0000; }
+  #b { position: absolute; left: 100px; top: 300px; width: 200px; height: 100px; background: #0000ff; transform-origin: 50% 50%; }
+</style>
+</head>
+<body>
+<div id="a"></div>
+<div id="b"></div>
+<script>
+/* Run after load (the probe calls it) so the transform change is a normal
+ * style-change repaint, not part of the initial paint. */
+window.__transformTest = function () {
+  document.getElementById('a').style.transform = 'translateX(-100px)';
+  document.getElementById('b').style.transform = 'scale(0.5)';
+  return 'ok';
+};
+
+/* --shot captures after --wait and does not run --eval, so the transform has
+ * to change from a page timer: it becomes an ordinary style-change repaint,
+ * which is exactly the partial-repaint path this page exercises. */
+setTimeout(function () { window.__transformTest(); }, 200);
+</script>
+</body>
+</html>

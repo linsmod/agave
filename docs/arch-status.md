@@ -33,8 +33,8 @@ ant 的反直觉行为（字面量属性名、`typeof`、`delete` 等）见 [ref
 - **一个 view 一个 engine**：同一时刻只有一个 `AntbEngine` / realm；iframe 与主 frame 共享这个 engine
   和全局对象，但每个 frame 有自己的 `window` 代理（R31）。因此顶层 `var x` 仍写进共享全局；
   iframe 的 DOMContentLoaded 也仍不单独派发（`dispatchDidFinishDocumentLoad` 只处理主 frame）。
-- **CSS 边界**：grid 布局、`position:sticky` 未实现（按 static 降级）；transform 只做了
-  translate/scale/rotate 的绘制（局部重绘裁剪、hit-test 未做，R52）；`vw/vh` 在解析期换算成 px
+- **CSS 边界**：grid 布局、`position:sticky` 未实现（按 static 降级）；transform 做了
+  translate/scale/rotate 的绘制与变换感知的脏矩形（hit-test、stacking context 未做，R52/R55）；`vw/vh` 在解析期换算成 px
   （窗口 resize 不重算）；含 `%` 的混合 `calc()` 已支持（R54，`Length::Calculated`），
   flex 简写/`flex-basis`/`align-content`/`scrollbar-width` 已支持（R54），
   `::-webkit-scrollbar{display:none}` 仍解析不了。

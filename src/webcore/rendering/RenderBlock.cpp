@@ -1363,94 +1363,8 @@ void RenderBlock::repaintOverhangingFloats(bool paintAllDescendants)
 }
 
 
-/* CSS transforms: painting-only for now (no layout/hit-test impact).
- * picasso's matrix primitives mix left- and right-multiplying conventions
- * (translate appends, scale/rotate prepend), so compose the matrix here in
- * plain column-vector form and hand the result to setMatrix() once. */
-struct XForm { double a, b, c, d, e, f; };
-
-static XForm xformIdentity()
-{
-    XForm m = { 1, 0, 0, 1, 0, 0 };
-    return m;
-}
-
-static XForm xformMultiply(const XForm& m, const XForm& t)
-{
-    XForm r;
-    r.a = m.a * t.a + m.c * t.b;
-    r.b = m.b * t.a + m.d * t.b;
-    r.c = m.a * t.c + m.c * t.d;
-    r.d = m.b * t.c + m.d * t.d;
-    r.e = m.a * t.e + m.c * t.f + m.e;
-    r.f = m.b * t.e + m.d * t.f + m.f;
-    return r;
-}
-
-static XForm xformTranslate(double tx, double ty)
-{
-    XForm m = { 1, 0, 0, 1, tx, ty };
-    return m;
-}
-
-static XForm xformScale(double sx, double sy)
-{
-    XForm m = { sx, 0, 0, sy, 0, 0 };
-    return m;
-}
-
-static XForm xformRotate(double degrees)
-{
-    double rad = degrees * 3.14159265358979323846 / 180.0;
-    double cs = cos(rad), sn = sin(rad);
-    XForm m = { cs, sn, -sn, cs, 0, 0 };
-    return m;
-}
-
-static int resolveTransformLength(const Length& len, int base)
-{
-    if (len.isPercent())
-        return (int)(len.percent() * base / 100.0);
-    if (len.isFixed())
-        return (int)len.value();
-    return 0;
-}
-
-static XForm transformMatrixFor(const Vector<TransformOperation>& ops, int width, int height)
-{
-    XForm m = xformIdentity();
-
-    for (unsigned i = 0; i < ops.size(); ++i) {
-        const TransformOperation& op = ops[i];
-        switch (op.type()) {
-        case TransformOperation::TRANSLATE:
-            m = xformMultiply(m, xformTranslate(resolveTransformLength(op.x(), width),
-                                                resolveTransformLength(op.y(), height)));
-            break;
-        case TransformOperation::TRANSLATE_X:
-            m = xformMultiply(m, xformTranslate(resolveTransformLength(op.x(), width), 0));
-            break;
-        case TransformOperation::TRANSLATE_Y:
-            m = xformMultiply(m, xformTranslate(0, resolveTransformLength(op.y(), height)));
-            break;
-        case TransformOperation::SCALE:
-            m = xformMultiply(m, xformScale(op.scaleX(), op.scaleY()));
-            break;
-        case TransformOperation::SCALE_X:
-            m = xformMultiply(m, xformScale(op.scaleX(), 1));
-            break;
-        case TransformOperation::SCALE_Y:
-            m = xformMultiply(m, xformScale(1, op.scaleY()));
-            break;
-        case TransformOperation::ROTATE:
-            m = xformMultiply(m, xformRotate(op.angle()));
-            break;
-        }
-    }
-
-    return m;
-}
-
+/* CSS transforms: painting + repaint invalidation. The matrix helpers live on
+ * RenderStyle so RenderBox's damage rects use the same transform as paint. */
 void RenderBlock::paint(PaintInfo& paintInfo, int tx, int ty)
 {
     tx += m_x;
@@ -1476,16 +1390,9 @@ void RenderBlock::paint(PaintInfo& paintInfo, int tx, int ty)
     bool transformed = style()->hasTransform() && paintInfo.context;
     if (transformed) {
         GraphicsContext* context = paintInfo.context;
-        int originAbsX = tx + resolveTransformLength(style()->transformOriginX(), width());
-        int originAbsY = ty + resolveTransformLength(style()->transformOriginY(), height());
-
-        XForm local = xformMultiply(xformTranslate(originAbsX, originAbsY),
-                                    transformMatrixFor(style()->transformOperations(), width(), height()));
-        local = xformMultiply(local, xformTranslate(-originAbsX, -originAbsY));
-
         const AffineTransform& current = context->getMatrix();
         XForm c = { current.a(), current.b(), current.c(), current.d(), current.e(), current.f() };
-        XForm total = xformMultiply(c, local);
+        XForm total = xformMultiply(c, style()->absoluteTransformMatrix(tx, ty, width(), height()));
 
         context->save();
         context->setMatrix(AffineTransform((float)total.a, (float)total.b, (float)total.c,
