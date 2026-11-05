@@ -37,7 +37,7 @@ ant 的反直觉行为（字面量属性名、`typeof`、`delete` 等）见 [ref
   translate/scale/rotate 的绘制与变换感知的脏矩形（hit-test、stacking context 未做，R52/R55）；`vw/vh` 在解析期换算成 px
   （窗口 resize 不重算）；含 `%` 的混合 `calc()` 已支持（R54，`Length::Calculated`），
   flex 简写/`flex-basis`/`align-content`/`scrollbar-width` 已支持（R54），
-  `::-webkit-scrollbar{display:none}` 仍解析不了。
+  `::-webkit-scrollbar{display:none}` 会在解析期改写成 `scrollbar-width:none`（R56）。
   完整实测值与复测命令见 [arch-capability-gaps.md](arch-capability-gaps.md) §2。
 - **wasm 是解释执行**：导出函数跨界约 3.9µs/次，适合"一次调用跑大循环"（R19）。
 - **worker 无网络 / 无 `SharedWorker`/`ServiceWorker`**：worker 里 `fetch`/`XHR` 不可用，

@@ -152,7 +152,8 @@ bareMedia=2px schemeBg=rgb(0, 0, 200) mediaDark=1 mediaMin=1
 | `flex-wrap: wrap`（含 flex 子项） | 按 contentWidth 断行、行内按 grow 分配 | **已支持（R54）**：三趟布局（首选尺寸 → 断行 → 每行 grow/shrink 后用 override size 重排），再按 `justify-content`/`align-items`/`align-content` 摆放 |
 | `flex: 1 1 0` / `flex: 0 0 200px` / `flex-basis` | grow/shrink/basis 生效 | **已支持（R54）**：`flex` 简写展开成 `-webkit-box-flex` + `flex-shrink` + `flex-basis`（`flex:1`→1 1 0%，`auto`→1 1 auto，`none`→0 0 auto）；新增属性走 `CSSPropertyNames` 末尾追加 + `extraProps` 旁路 |
 | `align-content: space-between/center/flex-end` | 行间分布生效 | **已支持（R54）**：默认 `stretch` 把单行撑满容器（`align-items:center` 因此在整个盒子里居中，与 Chrome 一致）；`space-around` 近似成 `space-between` |
-| `scrollbar-width: none` / `-ms-overflow-style: none` | 滚动条不占宽 | **已支持（R54）**：`RenderStyle::scrollbarNone()`；文档滚动条在 `FrameView::applyOverflowToViewport()`、元素滚动条在 `RenderLayer::updateScrollInfoAfterLayout()` 里不占空间。`::-webkit-scrollbar{display:none}` 仍未支持（选择器解析不了），站点若只用后者仍会差一个滚动条宽度 |
+| `scrollbar-width: none` / `-ms-overflow-style: none` | 滚动条不占宽 | **已支持（R54）**：`RenderStyle::scrollbarNone()`；文档滚动条在 `FrameView::applyOverflowToViewport()`、元素滚动条在 `RenderLayer::updateScrollInfoAfterLayout()` 里不占空间 |
+| `::-webkit-scrollbar{display:none}` / `{width:0}` | 不占滚动条宽度 | **已支持（R56）**：解析期把这类规则改写成 `scrollbar-width:none`（`rewriteWebkitScrollbarRules()`，@media 内也处理）；`-thumb/-track/-button/-corner/-resizer` 规则整条丢弃（原生滚动条本来就画不了这些样式），不影响滚动本身 |
 | `position: sticky` | `static` | **不支持**，按 static 布局；P2 |
 | `aspect-ratio: 16/9` + `width:160px` | `height=90px` | **已支持**（R41）：宽或高为 auto 时按比例推另一轴（按 content box），`16 / 9` 与 `16/9` 都认 |
 | flex `gap: 8px` | `8px` | **已支持**（R41）：`gap`/`row-gap`/`column-gap`，简写 1 值=两轴、2 值=row col；flex 仍是 2008 的 `-webkit-box` 体系，但间距按现代语义插在 in-flow 子项之间 |

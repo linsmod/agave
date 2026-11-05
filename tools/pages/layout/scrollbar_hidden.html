@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>scrollbar hidden</title>
+<style>
+  html, body { margin: 0; padding: 0; }
+  html::-webkit-scrollbar { display: none; }
+  #full { height: 20px; background: #333; }
+  #tall { height: 2000px; }
+  .box { width: 300px; height: 100px; overflow: auto; margin-top: 10px; }
+  .box::-webkit-scrollbar { width: 0; height: 0; }
+  .box .inner { width: 900px; height: 400px; background: #777; }
+</style>
+</head>
+<body>
+<div id="full"></div>
+<div class="box" id="box"><div class="inner"></div></div>
+<div id="tall"></div>
+</body>
+</html>

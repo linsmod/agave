@@ -208,7 +208,9 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
   退出码仍是权威判据。
 - **一条命令跑布局回归**：`pwsh -File tools/run_layout_tests.ps1`
   —— 对 `tools/pages/layout/*.html` 逐个跑 `layout_diff.py`（几何对拍 Chrome），再对
-  `transform_repaint.html` 做像素断言，输出 `LAYOUT=PASS`。加页面不用改脚本。
+  `transform_repaint.html` 做像素断言、对 `scrollbar_hidden.html` 断言 `::-webkit-scrollbar`
+  隐藏后的视口宽度，输出 `LAYOUT=PASS`。加几何页不用改脚本（滚动条页没有 `data-case`，
+  由专用断言覆盖）。
 - **像素断言**：`python tools/pixel_check.py <bmp> 250,150,ff0000 450,150,ffffff [--tol 8]`
   —— 读探针 `--shot` 的 BMP（32/24 位、bottom-up），`x,y,RRGGBB` 是截图坐标（左上原点）。
   绘制类回归（裁剪、变换、placeholder 消失）用它，几何用 `layout_diff.py`。

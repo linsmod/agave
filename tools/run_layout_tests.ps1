@@ -24,7 +24,11 @@ $root = Split-Path -Parent $PSScriptRoot
 Push-Location $root
 
 try {
+    # scrollbar_hidden.html has no data-case elements on purpose: hiding the
+    # scrollbar changes the viewport width, which cannot be compared against
+    # Chrome's fixed emulation. It is asserted by the dedicated check below.
     $pages = Get-ChildItem 'tools/pages/layout' -Filter '*.html' |
+             Where-Object { $_.Name -ne 'scrollbar_hidden.html' } |
              Sort-Object Name |
              ForEach-Object { 'tools/pages/layout/' + $_.Name }
     if (-not $pages) { throw 'no layout pages found' }
@@ -47,6 +51,26 @@ try {
         & python tools/pixel_check.py $bmp `
             250,150,ff0000 450,150,ffffff 160,330,0000ff 105,305,ffffff 300,350,ffffff
         if ($LASTEXITCODE -ne 0) { $failed++ }
+    }
+
+    Write-Host '== scrollbar hiding (::-webkit-scrollbar)'
+    $url = 'file:///' + (Join-Path $root 'tools/pages/layout/scrollbar_hidden.html').Replace('\', '/')
+    $out = & (Join-Path $root 'build-zig-native\agave_shell.exe') --probe $url `
+        --eval-file (Join-Path $root 'tools/pages/layout/check_scrollbar_hidden.js') `
+        --wait 700 --settle 200 --timeout 30000 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host 'scrollbar_hidden: probe failed'
+        $failed++
+    } else {
+        $text = $out -join "`n"
+        $missing = 0
+        foreach ($needle in @('client=1100x800 inner=1100x800', 'doc scroll=1100', 'full width=1100', 'box clientWidth=300 offsetWidth=300')) {
+            if ($text -notmatch [regex]::Escape($needle)) {
+                Write-Host ('scrollbar_hidden: missing ' + $needle)
+                $missing++
+            }
+        }
+        if ($missing) { $failed++ } else { Write-Host 'scrollbar_hidden: ok' }
     }
 
     if ($failed) {

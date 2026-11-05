@@ -213,6 +213,7 @@ void CSSParser::setupParser(const char* prefix, const String& string, const char
 static String rewriteCustomPropertyNames(const String& css);
 static String rewriteBareMediaQueries(const String& css);
 static String rewriteIsWhereSelectors(const String& css);
+static String rewriteWebkitScrollbarRules(const String& css);
 static String foldCalcConstants(const String& css);
 static String substituteCalcVariables(const String& css);
 
@@ -690,6 +691,152 @@ static bool isUnitChar(UChar c)
         || c == '-' || c == '_';
 }
 
+/* ---- ::-webkit-scrollbar -> scrollbar-width ------------------------------
+ * The 2008 selector grammar has no pseudo-element for scrollbars, so a rule
+ * like `html::-webkit-scrollbar{display:none}` is not just ignored - it can
+ * poison the whole declaration block. Modern sites use it to hide scrollbars
+ * without giving up scrolling, so translate the two hiding idioms into the
+ * property this engine does understand:
+ *
+ *     X::-webkit-scrollbar{display:none}  ->  X{scrollbar-width:none}
+ *     X::-webkit-scrollbar{width:0}       ->  X{scrollbar-width:none}
+ *
+ * Every other `::-webkit-scrollbar*` rule (thumb/track/button/corner styling)
+ * is dropped: this engine paints native scrollbars, so those declarations had
+ * no effect anyway. At-rule bodies (@media, @supports) are rewritten
+ * recursively. */
+static bool selectorPartHidesScrollbar(const String& part)
+{
+    int pos = part.find("-webkit-scrollbar");
+    if (pos < 0)
+        return false;
+
+    /* -thumb/-track/... style the scrollbar; they never hide it. */
+    unsigned suffix = (unsigned)(pos + 17); /* strlen("-webkit-scrollbar") */
+    if (suffix < part.length() && (part[suffix] == '-' || (part[suffix] >= 'a' && part[suffix] <= 'z')))
+        return false;
+
+    return true;
+}
+
+static String scrollbarSelectorPrefix(const String& part)
+{
+    int pos = part.find("-webkit-scrollbar");
+    if (pos < 0)
+        return part;
+
+    unsigned end = (unsigned)pos;
+    while (end > 0 && part[end - 1] == ':')
+        --end;
+
+    String prefix = part.substring(0, end).stripWhiteSpace();
+    return prefix.isEmpty() ? String("*") : prefix;
+}
+
+static String scrollbarBlockDeclarations(const String& body)
+{
+    String lower = body.lower();
+
+    if (lower.contains("display:none") || lower.contains("display: none")
+        || lower.contains("width:0") || lower.contains("width: 0")
+        || lower.contains("height:0") || lower.contains("height: 0"))
+        return "scrollbar-width:none";
+
+    return String();
+}
+
+static String rewriteScrollbarBlock(const String& css)
+{
+    String out;
+    unsigned len = css.length();
+    unsigned i = 0;
+
+    while (i < len) {
+        int brace = css.find("{", i);
+        if (brace < 0) {
+            out += css.substring(i);
+            break;
+        }
+
+        String prelude = css.substring(i, (unsigned)brace - i).stripWhiteSpace();
+
+        /* Find the matching close brace (declaration blocks do not nest, but
+         * at-rules do). */
+        int depth = 0;
+        int close = -1;
+        for (unsigned k = (unsigned)brace; k < len; ++k) {
+            UChar c = css[k];
+
+            if (c == '"' || c == '\'') {
+                UChar quote = c;
+                for (++k; k < len && css[k] != quote; ++k) {
+                    if (css[k] == '\\')
+                        ++k;
+                }
+                continue;
+            }
+            if (c == '{')
+                ++depth;
+            else if (c == '}') {
+                if (--depth == 0) {
+                    close = (int)k;
+                    break;
+                }
+            }
+        }
+
+        if (close < 0) {
+            out += css.substring(i);
+            break;
+        }
+
+        String body = css.substring((unsigned)brace + 1, (unsigned)close - brace - 1);
+
+        if (prelude.startsWith("@")) {
+            out += prelude + "{" + rewriteScrollbarBlock(body) + "}";
+        } else if (prelude.contains("-webkit-scrollbar")) {
+            String declarations = scrollbarBlockDeclarations(body);
+
+            if (!declarations.isEmpty()) {
+                String selectors;
+
+                for (unsigned start = 0, k = 0; k <= prelude.length(); ++k) {
+                    if (k < prelude.length() && prelude[k] != ',')
+                        continue;
+
+                    String one = prelude.substring(start, k - start).stripWhiteSpace();
+                    start = k + 1;
+
+                    if (!selectorPartHidesScrollbar(one))
+                        continue;
+
+                    if (!selectors.isEmpty())
+                        selectors += ",";
+                    selectors += scrollbarSelectorPrefix(one);
+                }
+
+                if (!selectors.isEmpty())
+                    out += selectors + "{" + declarations + "}";
+            }
+            /* Every other scrollbar pseudo rule is dropped entirely. */
+        } else {
+            out += prelude + "{" + body + "}";
+        }
+
+        i = (unsigned)close + 1;
+    }
+
+    return out;
+}
+
+static String rewriteWebkitScrollbarRules(const String& css)
+{
+    if (!css.contains("-webkit-scrollbar"))
+        return css;
+
+    return rewriteScrollbarBlock(css);
+}
+
 static String rewriteViewportUnits(const String& css, Document* doc)
 {
     if (!doc)
@@ -916,8 +1063,8 @@ void CSSParser::parseSheet(CSSStyleSheet* sheet, const String& string)
      * next one) from inheriting a previous sheet's values. */
     clearCustomProperties();
 
-    setupParser("", foldCalcConstants(rewriteIsWhereSelectors(rewriteBareMediaQueries(
-                     rewriteCustomPropertyNames(foldCalcIteratively(rewriteViewportUnits(rewriteHexAlphaColors(string, false), document())))))), "");
+    setupParser("", rewriteWebkitScrollbarRules(foldCalcConstants(rewriteIsWhereSelectors(rewriteBareMediaQueries(
+                     rewriteCustomPropertyNames(foldCalcIteratively(rewriteViewportUnits(rewriteHexAlphaColors(string, false), document()))))))), "");
 
     CSSParser* old = currentParser;
     currentParser = this;

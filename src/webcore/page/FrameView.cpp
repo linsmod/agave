@@ -422,9 +422,18 @@ void FrameView::layout(bool allowSubtree)
                         body->renderer()->setChildNeedsLayout(true);
                     // It's sufficient to just check the X overflow,
                     // since it's illegal to have visible in only one direction.
-                    RenderObject* o = rootRenderer->style()->overflowX() == OVISIBLE 
-                        ? body->renderer() : rootRenderer;
-                    applyOverflowToViewport(o, hMode, vMode); // Only applies to HTML UAs, not to XML/XHTML UAs
+                    /* `html{scrollbar-width:none}` (also produced by ::-webkit-scrollbar
+                     * rewriting) hides the document scrollbar whichever of root/body owns
+                     * the overflow. */
+                    if (rootRenderer->style()->scrollbarNone()
+                        || body->renderer()->style()->scrollbarNone()) {
+                        hMode = ScrollbarAlwaysOff;
+                        vMode = ScrollbarAlwaysOff;
+                    } else {
+                        RenderObject* o = rootRenderer->style()->overflowX() == OVISIBLE
+                            ? body->renderer() : rootRenderer;
+                        applyOverflowToViewport(o, hMode, vMode); // Only applies to HTML UAs, not to XML/XHTML UAs
+                    }
                 }
             }
         } else if (rootRenderer)
