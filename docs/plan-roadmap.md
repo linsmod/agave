@@ -250,7 +250,7 @@
 - **onresize 的验收方式**：不再单独为属性写法做回归；`tools/pages/resize/` 里 `<body onresize>` 只当
   "属性路径仍然存在"的观察项（用 DOM 属性记录，因为它的全局与页面不通）。
 
-### P0-j `obj[dynamicKey] = v` 仍会崩在 `hash_key`（163 adtracker，**未修完**）
+### P0-j `obj[dynamicKey] = v` 崩在 `hash_key`（163 adtracker，**已修 2026-11-06**）
 
 - 现象：163 `adtracker2022.be06f843.js`（`requireTdidSass2_2_7`）在 `obj[key] = v` 时 first-chance AV；
   `agb_crash.txt` + `tools/cdb_stack.ps1 -Symbolize` 得到：
@@ -259,7 +259,7 @@
 - 已修（ant `e86c54b2`）：`jit_put_elem` 原来在 root scope **之前**做 `sv_key_to_propstr()`（原始 key 未根），
   且**非索引数字键**分支（小数/负数/>2^32）把转换结果直接传进去、完全没 pin。现在先根 obj/key/val，
   两个分支都 pin 转换后的 key。效果：163 从 2/2 崩（`-1073741819`）降到 0/2，同模块的 `TypeError: oom` 也消失。
-- **仍有残留**（2026-11-06 13:19 又崩一次，栈同上、`jit_put_elem` 在已 pin 的分支）：已确认
+- **残留根因（已修，ant 后续提交）**：`sv_key_to_propstr()` 转换失败时返回的是**错误值**（大键导致 `intern_string`/`js_mkstr` oom），`jit_put_elem` 仍把它当键字符串交给 `js_setprop_keyed` → `vstr()` 对错误对象取长度/字节 → `hash_key` 读到垃圾（AV 地址落在页边界）。修法：转换后 `is_err(key_jv)` 直接返回该错误；另外把转换结果复制成扁平字符串再存。验证：163 `--probe` 3/3 无崩溃、`TypeError: oom` 归零，`cdb_stack.ps1 -Url` 无 first-chance AV；ant 新增 `tests/test_put_elem_gc.c`（meson `put-elem-gc`，`ANT_GC_STRESS=1`）。\n- **排查记录**：已确认
   `gc_push_root` 存 slot 地址、`gc_visit_roots` 会访问所有值，所以不是“字符串没进根表”。
   当前最可能的假设：`sv_key_to_propstr()` 产出的字节来自 **rope/临时扁平化 buffer**，不是稳定字符串，
   所以 pin 住“值”也保不住“字节”。

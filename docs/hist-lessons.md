@@ -129,6 +129,8 @@ ant 引擎热点、wasm 二进制通道、React 需要的 DOM 桥形状、comput
 
 ---
 
+| R71 `obj[动态键] = v` 崩在 `hash_key`（163 adtracker，2026-11-06 已修，ant 侧） | 现象：`https://www.163.com/` 约 1–2 s `exit -1073741819`；`agb_crash.txt` 符号化是 `hash_key(hash.h:126/127) ← intern_find ← setprop_impl/lkp ← js_setprop_keyed ← jit_put_elem ← jit_helper_put_elem_strict`，读地址是页对齐的垃圾（如 `0x14523d6e000`）；同一模块还往页面漏 `TypeError: oom`。根因两层，都在 `jit_put_elem`：①**键转换失败时返回的是错误值**（长拼接键触发 `intern_string`/`js_mkstr` oom），代码不加判断就当键交给 `js_setprop_keyed` → `vstr()` 对错误对象取字节/长度 → `hash_key` 按垃圾长度扫内存；②转换发生在 root scope **之前**（原始 key 是 JIT alloca 值，GC 不扫），且**非索引数字键**分支（小数/负数/2^32 以上）把转换结果直接传进去、完全没 pin —— R66 只 pin 了转换后的 `key_jv`。修法：先根 `obj/key/val`，再转换；`is_err(key_jv)` 立即返回错误；转换结果再 `js_mkstr` 复制成扁平字符串后 pin 着存（避免 rope/临时扁平化 buffer 的字节被回收）。⚠ 两个坑：①"字符串值 pin 住了"不等于安全 —— 值在根表里，但字节可能来自临时 buffer；②错误值在 ant 里是普通 `ant_value_t`，**类型不是 string**，把它当 key 用不会立刻报错，只会在哈希时炸。 | 验证：`--probe https://www.163.com/` 3/3 无崩溃、`TypeError: oom` 0 次；`pwsh -File tools/cdb_stack.ps1 -Url https://www.163.com/` 从"抓到 `hash_key` first-chance AV"变成 `no exception`；新增 ant 用例 `tests/test_put_elem_gc.c`（meson `put-elem-gc`，`ANT_GC_STRESS=1`，覆盖动态字符串键、小数键、长键 + 期间 `gc_run`）；`run_script_mode_tests.ps1` 全绿（dense 2.5 / static-key 4.5 / vm-dispatch 7 ns）。**残留**：163 仍 `exit 4`（adtracker 的字节码 VM 慢，属 P1-g 挂起，不是崩溃）。 |
+
 ## 附：怎么写新条目
 
 1. 标题带编号与日期：「R25 <一句话现象>（YYYY-MM-DD 已修）」。
