@@ -36,6 +36,18 @@ namespace WebCore { bool prefersDarkColorScheme(); }
 #include "Node.h"
 #include "CSSComputedStyleDeclaration.h"
 #include "CSSMutableStyleDeclaration.h"
+#include "CSSStyleDeclaration.h"
+#include "CSSStyleSheet.h"
+#include "CSSRule.h"
+#include "CSSRuleList.h"
+#include "CSSStyleRule.h"
+#include "CSSMediaRule.h"
+#include "CSSImportRule.h"
+#include "CSSCharsetRule.h"
+#include "CSSFontFaceRule.h"
+#include "CSSPageRule.h"
+#include "MediaList.h"
+#include "StyleSheetList.h"
 #include "StyledElement.h"
 #include "PlatformString.h"
 #include "Event.h"
@@ -122,6 +134,11 @@ int globalDownloadOpen(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, vo
 
 #define AGB_MAX_DOCUMENT_SLOTS 16
 
+struct CssomRef {
+    void* ptr;
+    int   kind;
+};
+
 struct RuntimeState {
     AntbEngine*        engine;
     AntbRealm*         mainRealm;       /* realm of the top-level document */
@@ -129,6 +146,14 @@ struct RuntimeState {
     AntbClass*         nodeClass;
     AntbClass*         canvasCtxClass;  /* CanvasRenderingContext2D (2d context) */
     AntbClass*         windowClass;     /* Window (per-frame window proxy) */
+    AntbClass*         styleSheetListClass;
+    AntbClass*         styleSheetClass;
+    AntbClass*         cssRuleClass;
+    AntbClass*         cssRuleListClass;
+    AntbClass*         mediaListClass;
+    AntbClass*         cssDeclarationClass;
+    std::vector<CssomRef>* cssomRefs;   /* ref'd CSSOM objects, released at realm teardown */
+    std::set<void*>*   cssomSeen;
     void*              sessionHistory;  /* std::vector<SessionHistoryEntry>*   */
     int                sessionHistoryIndex;
     AntbValue*         locationObj;
@@ -274,6 +299,14 @@ static void activateState(RuntimeState* state)
 #define g_nodeClass     (g_currentState->nodeClass)
 #define g_canvasCtxClass (g_currentState->canvasCtxClass)
 #define g_windowClass   (g_currentState->windowClass)
+#define g_styleSheetListClass (g_currentState->styleSheetListClass)
+#define g_styleSheetClass     (g_currentState->styleSheetClass)
+#define g_cssRuleClass        (g_currentState->cssRuleClass)
+#define g_cssRuleListClass    (g_currentState->cssRuleListClass)
+#define g_mediaListClass      (g_currentState->mediaListClass)
+#define g_cssDeclarationClass (g_currentState->cssDeclarationClass)
+#define g_cssomRefs     (g_currentState->cssomRefs)
+#define g_cssomSeen     (g_currentState->cssomSeen)
 #define g_sessionHistoryIndex (g_currentState->sessionHistoryIndex)
 #define g_locationObj   (g_currentState->locationObj)
 #define g_docObj        (g_currentState->docObj)
@@ -501,6 +534,9 @@ int historyPushState(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void
 int historyStateGetter(AntbEngine*, AntbValue*, const char*, AntbValue*, void*);
 AntbValue* wrapNode(AntbEngine*, WebCore::Node*);
 int nodeGetter(AntbEngine*, AntbValue*, const char*, AntbValue*, void*);
+enum { CSSOM_LIST, CSSOM_SHEET, CSSOM_RULE, CSSOM_RULELIST, CSSOM_MEDIA, CSSOM_DECL };
+AntbValue* cssomWrap(AntbEngine*, void*, int kind);
+static void cssomReleaseRefs(RuntimeState* state);
 int attrsGetter(AntbEngine*, AntbValue*, const char*, AntbValue*, void*);
 int nodeGetElementsByTagName(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeCloneNode(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
@@ -1456,6 +1492,19 @@ int titleGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue
             return 0;
         antb_value_assign(out, v);
         antb_value_release(v);
+        return 1;
+    }
+
+    if (!strcmp(name, "styleSheets")) {
+        /* document.styleSheets: the document object has one catch-all getter,
+         * so new properties are dispatched here rather than by another
+         * antb_define_property_rw() (which would replace this whole getter). */
+        AntbValue* list = cssomWrap(engine, d->styleSheets(), CSSOM_LIST);
+
+        if (!list)
+            return 0;
+        antb_value_assign(out, list);
+        antb_value_release(list);
         return 1;
     }
 
@@ -3659,6 +3708,9 @@ void destroyContext(void* context)
     if (state->engine)
         antb_engine_destroy(state->engine);
 
+    /* No realm teardown ran (view destroyed): drop the CSSOM refs now. */
+    cssomReleaseRefs(state);
+
     if (g_currentState == state)
         g_currentState = &g_emptyState;
 
@@ -3708,6 +3760,8 @@ void stop()
 
     for (size_t i = 0; i < states.size(); ++i) {
         RuntimeState* state = states[i];
+
+        cssomReleaseRefs(state);
 
         if (state->engine)
             antb_engine_destroy(state->engine);
@@ -4613,10 +4667,19 @@ static void stopRealm(void)
     if (state->engine && g_document)
         antb_release_owner(state->engine, g_document);
 
+    /* The CSSOM wrappers are gone; drop the refs they held on sheets/rules. */
+    cssomReleaseRefs(state);
+
     /* The node class belongs to the old engine. */
     g_nodeClass = 0;
     g_canvasCtxClass = 0;
     g_windowClass = 0;
+    g_styleSheetListClass = 0;
+    g_styleSheetClass = 0;
+    g_cssRuleClass = 0;
+    g_cssRuleListClass = 0;
+    g_mediaListClass = 0;
+    g_cssDeclarationClass = 0;
     clearExpandoObjects();
     g_documentBound = false;
 
@@ -5690,6 +5753,629 @@ WebCore::Node* nodeOf(AntbValue* self)
     /* A window proxy stands in for its document, so window.addEventListener()
      * and the other document level methods resolve through it. */
     return (WebCore::Node*)antb_get_native(self, AGB_TAG_WINDOW);
+}
+
+/* ------------------------------------------------------------------------- */
+/* CSSOM: document.styleSheets / sheet.cssRules                              */
+/* ------------------------------------------------------------------------- */
+/* Live wrapper objects, built the same way as node/canvas wrappers: one class
+ * per CSSOM type (methods live on the class, not on every instance), the
+ * WebCore object is reached through a native tag, and wrappers are owned by the
+ * document so the realm teardown releases them with the nodes. The WebCore
+ * objects are ref'd for as long as a wrapper exists; cssomReleaseRefs() drops
+ * those refs when the realm goes away (stopRealm/destroyContext). */
+
+#define CSSOM_TAG_LIST  0x43534C31u  /* 'CSL1' */
+#define CSSOM_TAG_SHEET 0x43535331u  /* 'CSS1' */
+#define CSSOM_TAG_RULE  0x43535231u  /* 'CSR1' */
+#define CSSOM_TAG_RLIST 0x4353524Cu  /* 'CRL1' */
+#define CSSOM_TAG_MEDIA 0x43534D31u  /* 'CSM1' */
+#define CSSOM_TAG_DECL  0x43534431u  /* 'CSD1' */
+
+enum {
+    CSSOM_OP_ITEM,
+    CSSOM_OP_INSERT_RULE,
+    CSSOM_OP_DELETE_RULE,
+    CSSOM_OP_ADD_RULE,
+    CSSOM_OP_REMOVE_RULE,
+    CSSOM_OP_GET_VALUE,
+    CSSOM_OP_GET_PRIORITY,
+    CSSOM_OP_SET_PROPERTY,
+    CSSOM_OP_REMOVE_PROPERTY
+};
+
+static unsigned cssomTag(int kind)
+{
+    switch (kind) {
+    case CSSOM_LIST:    return CSSOM_TAG_LIST;
+    case CSSOM_SHEET:   return CSSOM_TAG_SHEET;
+    case CSSOM_RULE:    return CSSOM_TAG_RULE;
+    case CSSOM_RULELIST:return CSSOM_TAG_RLIST;
+    case CSSOM_MEDIA:   return CSSOM_TAG_MEDIA;
+    default:            return CSSOM_TAG_DECL;
+    }
+}
+
+static void* cssomNative(AntbValue* self, int kind)
+{
+    if (!self)
+        return NULL;
+    return antb_get_native(self, cssomTag(kind));
+}
+
+static AntbClass* cssomClassFor(int kind)
+{
+    switch (kind) {
+    case CSSOM_LIST:     return g_styleSheetListClass;
+    case CSSOM_SHEET:    return g_styleSheetClass;
+    case CSSOM_RULE:     return g_cssRuleClass;
+    case CSSOM_RULELIST: return g_cssRuleListClass;
+    case CSSOM_MEDIA:    return g_mediaListClass;
+    default:             return g_cssDeclarationClass;
+    }
+}
+
+static int cssomAssignString(AntbEngine* engine, AntbValue* out, const WebCore::String& text)
+{
+    AntbValue* v = antb_make_string(engine, text.isNull() ? "" : text.utf8().data());
+
+    if (!v)
+        return 0;
+    antb_value_assign(out, v);
+    antb_value_release(v);
+    return 1;
+}
+
+static int cssomAssignNumber(AntbEngine* engine, AntbValue* out, double number)
+{
+    AntbValue* v = antb_make_number(engine, number);
+
+    if (!v)
+        return 0;
+    antb_value_assign(out, v);
+    antb_value_release(v);
+    return 1;
+}
+
+static int cssomAssignNull(AntbEngine* engine, AntbValue* out)
+{
+    AntbValue* v = antb_make_null(engine);
+
+    if (!v)
+        return 0;
+    antb_value_assign(out, v);
+    antb_value_release(v);
+    return 1;
+}
+
+static void cssomTrack(AntbEngine* engine, void* ptr, int kind)
+{
+    (void)engine;
+
+    if (!ptr)
+        return;
+
+    if (!g_cssomSeen)
+        g_cssomSeen = new std::set<void*>();
+
+    if (!g_cssomSeen->insert(ptr).second)
+        return;
+
+    if (kind == CSSOM_LIST)
+        static_cast<WebCore::StyleSheetList*>(ptr)->ref();
+    else if (kind == CSSOM_RULELIST)
+        static_cast<WebCore::CSSRuleList*>(ptr)->ref();
+    else
+        static_cast<WebCore::StyleBase*>(ptr)->ref();
+
+    if (!g_cssomRefs)
+        g_cssomRefs = new std::vector<CssomRef>();
+
+    {
+        CssomRef ref;
+        ref.ptr = ptr;
+        ref.kind = kind;
+        g_cssomRefs->push_back(ref);
+    }
+}
+
+static void cssomReleaseRefs(RuntimeState* state)
+{
+    if (!state)
+        return;
+
+    if (state->cssomRefs) {
+        size_t i;
+
+        for (i = 0; i < state->cssomRefs->size(); ++i) {
+            CssomRef& ref = (*state->cssomRefs)[i];
+
+            if (ref.kind == CSSOM_LIST)
+                static_cast<WebCore::StyleSheetList*>(ref.ptr)->deref();
+            else if (ref.kind == CSSOM_RULELIST)
+                static_cast<WebCore::CSSRuleList*>(ref.ptr)->deref();
+            else
+                static_cast<WebCore::StyleBase*>(ref.ptr)->deref();
+        }
+
+        delete state->cssomRefs;
+        state->cssomRefs = 0;
+    }
+
+    if (state->cssomSeen) {
+        delete state->cssomSeen;
+        state->cssomSeen = 0;
+    }
+}
+
+static void cssomEnsureClasses();
+
+AntbValue* cssomWrap(AntbEngine* engine, void* ptr, int kind)
+{
+    AntbClass* klass;
+    AntbValue* v;
+
+    if (!ptr)
+        return antb_make_null(engine);
+
+    cssomEnsureClasses();
+
+    klass = cssomClassFor(kind);
+    if (!klass)
+        return NULL;
+
+    v = antb_wrap_native_as_owner(engine, klass, ptr, cssomTag(kind), g_document);
+    if (v)
+        cssomTrack(engine, ptr, kind);
+    return v;
+}
+
+static bool cssomNumericName(const char* name, unsigned* index)
+{
+    unsigned long value;
+    char* end = NULL;
+
+    if (!name || !name[0])
+        return false;
+
+    value = strtoul(name, &end, 10);
+    if (!end || *end)
+        return false;
+
+    *index = (unsigned)value;
+    return true;
+}
+
+static AntbValue* cssomWrapRule(WebCore::CSSRule* rule)
+{
+    return cssomWrap(g_engine, rule, CSSOM_RULE);
+}
+
+static int cssomGetIndexed(AntbEngine* engine, int kind, void* ptr, unsigned index,
+                           AntbValue* out)
+{
+    switch (kind) {
+    case CSSOM_LIST: {
+        WebCore::StyleSheet* sheet = static_cast<WebCore::StyleSheetList*>(ptr)->item(index);
+
+        if (!sheet || !sheet->isStyleSheet())
+            return 0;
+        {
+            AntbValue* v = cssomWrap(engine, static_cast<WebCore::CSSStyleSheet*>(sheet),
+                                     CSSOM_SHEET);
+            if (!v)
+                return 0;
+            antb_value_assign(out, v);
+            antb_value_release(v);
+        }
+        return 1;
+    }
+    case CSSOM_RULELIST: {
+        WebCore::CSSRule* rule = static_cast<WebCore::CSSRuleList*>(ptr)->item(index);
+
+        if (!rule)
+            return 0;
+        {
+            AntbValue* v = cssomWrapRule(rule);
+            if (!v)
+                return 0;
+            antb_value_assign(out, v);
+            antb_value_release(v);
+        }
+        return 1;
+    }
+    case CSSOM_MEDIA: {
+        WebCore::MediaList* media = static_cast<WebCore::MediaList*>(ptr);
+
+        if (index >= media->length())
+            return 0;
+        return cssomAssignString(engine, out, media->item(index));
+    }
+    case CSSOM_DECL: {
+        WebCore::CSSStyleDeclaration* decl = static_cast<WebCore::CSSStyleDeclaration*>(ptr);
+
+        if (index >= decl->length())
+            return 0;
+        return cssomAssignString(engine, out, decl->item(index));
+    }
+    default:
+        return 0;
+    }
+}
+
+int cssomGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue* out, void* user)
+{
+    int kind = (int)(intptr_t)user;
+    void* ptr = cssomNative(self, kind);
+    unsigned index;
+
+    if (!ptr || !name)
+        return 0;
+
+    if (!strcmp(name, "length")) {
+        switch (kind) {
+        case CSSOM_LIST:
+            return cssomAssignNumber(engine, out,
+                (double)static_cast<WebCore::StyleSheetList*>(ptr)->length());
+        case CSSOM_RULELIST:
+            return cssomAssignNumber(engine, out,
+                (double)static_cast<WebCore::CSSRuleList*>(ptr)->length());
+        case CSSOM_MEDIA:
+            return cssomAssignNumber(engine, out,
+                (double)static_cast<WebCore::MediaList*>(ptr)->length());
+        case CSSOM_DECL:
+            return cssomAssignNumber(engine, out,
+                (double)static_cast<WebCore::CSSStyleDeclaration*>(ptr)->length());
+        default:
+            return 0;
+        }
+    }
+
+    if (cssomNumericName(name, &index))
+        return cssomGetIndexed(engine, kind, ptr, index, out);
+
+    switch (kind) {
+    case CSSOM_SHEET: {
+        WebCore::CSSStyleSheet* sheet = static_cast<WebCore::CSSStyleSheet*>(ptr);
+        AntbValue* v;
+
+        if (!strcmp(name, "href"))
+            return cssomAssignString(engine, out, sheet->href());
+        if (!strcmp(name, "title"))
+            return cssomAssignString(engine, out, sheet->title());
+        if (!strcmp(name, "type"))
+            return cssomAssignString(engine, out, WebCore::String("text/css"));
+        if (!strcmp(name, "disabled"))
+            return cssomAssignNumber(engine, out, sheet->disabled() ? 1 : 0);
+        if (!strcmp(name, "media"))
+            v = cssomWrap(engine, sheet->media(), CSSOM_MEDIA);
+        else if (!strcmp(name, "ownerNode")) {
+            v = sheet->ownerNode() ? wrapNode(engine, sheet->ownerNode())
+                                   : antb_make_null(engine);
+        } else if (!strcmp(name, "ownerRule"))
+            v = cssomWrap(engine, sheet->ownerRule(), CSSOM_RULE);
+        else if (!strcmp(name, "parentStyleSheet"))
+            v = cssomWrap(engine, sheet->parentStyleSheet(), CSSOM_SHEET);
+        else if (!strcmp(name, "cssRules") || !strcmp(name, "rules"))
+            v = cssomWrap(engine, sheet->cssRules(!strcmp(name, "rules")), CSSOM_RULELIST);
+        else
+            return 0;
+
+        if (!v)
+            return 0;
+        antb_value_assign(out, v);
+        antb_value_release(v);
+        return 1;
+    }
+    case CSSOM_RULE: {
+        WebCore::CSSRule* rule = static_cast<WebCore::CSSRule*>(ptr);
+        AntbValue* v = NULL;
+
+        if (!strcmp(name, "type"))
+            return cssomAssignNumber(engine, out, (double)rule->type());
+        if (!strcmp(name, "cssText"))
+            return cssomAssignString(engine, out, rule->cssText());
+        if (!strcmp(name, "parentStyleSheet"))
+            v = cssomWrap(engine, rule->parentStyleSheet(), CSSOM_SHEET);
+
+        if (v) {
+            antb_value_assign(out, v);
+            antb_value_release(v);
+            return 1;
+        }
+
+        switch (rule->type()) {
+        case WebCore::CSSRule::STYLE_RULE: {
+            WebCore::CSSStyleRule* styleRule = static_cast<WebCore::CSSStyleRule*>(rule);
+
+            if (!strcmp(name, "selectorText"))
+                return cssomAssignString(engine, out, styleRule->selectorText());
+            if (!strcmp(name, "style"))
+                v = cssomWrap(engine, styleRule->style(), CSSOM_DECL);
+            break;
+        }
+        case WebCore::CSSRule::MEDIA_RULE: {
+            WebCore::CSSMediaRule* mediaRule = static_cast<WebCore::CSSMediaRule*>(rule);
+
+            if (!strcmp(name, "media"))
+                v = cssomWrap(engine, mediaRule->media(), CSSOM_MEDIA);
+            else if (!strcmp(name, "cssRules"))
+                v = cssomWrap(engine, mediaRule->cssRules(), CSSOM_RULELIST);
+            break;
+        }
+        case WebCore::CSSRule::IMPORT_RULE: {
+            WebCore::CSSImportRule* importRule = static_cast<WebCore::CSSImportRule*>(rule);
+
+            if (!strcmp(name, "href"))
+                return cssomAssignString(engine, out, importRule->href());
+            if (!strcmp(name, "media"))
+                v = cssomWrap(engine, importRule->media(), CSSOM_MEDIA);
+            else if (!strcmp(name, "styleSheet"))
+                v = cssomWrap(engine, importRule->styleSheet(), CSSOM_SHEET);
+            break;
+        }
+        case WebCore::CSSRule::CHARSET_RULE:
+            if (!strcmp(name, "encoding"))
+                return cssomAssignString(
+                    engine, out, static_cast<WebCore::CSSCharsetRule*>(rule)->encoding());
+            break;
+        case WebCore::CSSRule::FONT_FACE_RULE:
+            if (!strcmp(name, "style"))
+                v = cssomWrap(engine,
+                    static_cast<WebCore::CSSFontFaceRule*>(rule)->style(), CSSOM_DECL);
+            break;
+        case WebCore::CSSRule::PAGE_RULE: {
+            WebCore::CSSPageRule* pageRule = static_cast<WebCore::CSSPageRule*>(rule);
+
+            if (!strcmp(name, "selectorText"))
+                return cssomAssignString(engine, out, pageRule->selectorText());
+            if (!strcmp(name, "style"))
+                v = cssomWrap(engine, pageRule->style(), CSSOM_DECL);
+            break;
+        }
+        default:
+            break;
+        }
+
+        if (!v)
+            return 0;
+        antb_value_assign(out, v);
+        antb_value_release(v);
+        return 1;
+    }
+    case CSSOM_MEDIA:
+        if (!strcmp(name, "mediaText"))
+            return cssomAssignString(
+                engine, out, static_cast<WebCore::MediaList*>(ptr)->mediaText());
+        return 0;
+    case CSSOM_DECL: {
+        WebCore::CSSStyleDeclaration* decl = static_cast<WebCore::CSSStyleDeclaration*>(ptr);
+
+        if (!strcmp(name, "cssText"))
+            return cssomAssignString(engine, out, decl->cssText());
+        if (!strcmp(name, "parentRule"))
+            return cssomAssignNull(engine, out);
+        return 0;
+    }
+    default:
+        return 0;
+    }
+}
+
+int cssomMethod(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                AntbValue* out, void* user)
+{
+    int op = (int)(intptr_t)user;
+    int kind = -1;
+    int k;
+    void* ptr = NULL;
+
+    for (k = CSSOM_LIST; k <= CSSOM_DECL; ++k) {
+        ptr = cssomNative(self, k);
+        if (ptr) {
+            kind = k;
+            break;
+        }
+    }
+
+    if (!ptr)
+        return 0;
+
+    if (op == CSSOM_OP_ITEM) {
+        unsigned index = (argc > 0 && args[0]) ? (unsigned)antb_to_number(args[0]) : 0;
+
+        return cssomGetIndexed(engine, kind, ptr, index, out);
+    }
+
+    if (op == CSSOM_OP_GET_VALUE || op == CSSOM_OP_GET_PRIORITY) {
+        WebCore::CSSStyleDeclaration* decl = static_cast<WebCore::CSSStyleDeclaration*>(ptr);
+        char* name = (argc > 0 && args[0]) ? antb_to_utf8(args[0]) : NULL;
+        WebCore::String value;
+
+        if (!name)
+            return 0;
+
+        if (op == CSSOM_OP_GET_VALUE)
+            value = decl->getPropertyValue(WebCore::String(name));
+        else
+            value = decl->getPropertyPriority(WebCore::String(name));
+
+        antb_free(name);
+        return cssomAssignString(engine, out, value);
+    }
+
+    if (op == CSSOM_OP_SET_PROPERTY) {
+        WebCore::CSSStyleDeclaration* decl = static_cast<WebCore::CSSStyleDeclaration*>(ptr);
+        char* name = (argc > 0 && args[0]) ? antb_to_utf8(args[0]) : NULL;
+        char* value = (argc > 1 && args[1]) ? antb_to_utf8(args[1]) : NULL;
+        char* priority = (argc > 2 && args[2]) ? antb_to_utf8(args[2]) : NULL;
+        WebCore::ExceptionCode ec = 0;
+
+        if (name && value) {
+            decl->setProperty(WebCore::String(name), WebCore::String(value),
+                              priority ? WebCore::String(priority) : WebCore::String(), ec);
+        }
+
+        antb_free(name);
+        antb_free(value);
+        antb_free(priority);
+        return ec ? 0 : 1;
+    }
+
+    if (op == CSSOM_OP_REMOVE_PROPERTY) {
+        WebCore::CSSStyleDeclaration* decl = static_cast<WebCore::CSSStyleDeclaration*>(ptr);
+        char* name = (argc > 0 && args[0]) ? antb_to_utf8(args[0]) : NULL;
+        WebCore::ExceptionCode ec = 0;
+        WebCore::String removed;
+
+        if (name)
+            removed = decl->removeProperty(WebCore::String(name), ec);
+
+        antb_free(name);
+        if (ec)
+            return 0;
+        return cssomAssignString(engine, out, removed);
+    }
+
+    if (kind == CSSOM_SHEET
+            || (kind == CSSOM_RULE
+                && static_cast<WebCore::CSSRule*>(ptr)->isMediaRule())) {
+        WebCore::ExceptionCode ec = 0;
+        unsigned index = (argc > 1 && args[1]) ? (unsigned)antb_to_number(args[1]) : 0;
+
+        if (op == CSSOM_OP_INSERT_RULE) {
+            char* text = (argc > 0 && args[0]) ? antb_to_utf8(args[0]) : NULL;
+            unsigned result = 0;
+
+            if (!text)
+                return 0;
+
+            if (kind == CSSOM_SHEET)
+                result = static_cast<WebCore::CSSStyleSheet*>(ptr)->insertRule(
+                    WebCore::String(text), index, ec);
+            else
+                result = static_cast<WebCore::CSSMediaRule*>(ptr)->insertRule(
+                    WebCore::String(text), index, ec);
+
+            antb_free(text);
+            if (ec)
+                return 0;
+            return cssomAssignNumber(engine, out, (double)result);
+        }
+
+        if (op == CSSOM_OP_DELETE_RULE) {
+            index = (argc > 0 && args[0]) ? (unsigned)antb_to_number(args[0]) : 0;
+
+            if (kind == CSSOM_SHEET)
+                static_cast<WebCore::CSSStyleSheet*>(ptr)->deleteRule(index, ec);
+            else
+                static_cast<WebCore::CSSMediaRule*>(ptr)->deleteRule(index, ec);
+            return ec ? 0 : 1;
+        }
+
+        if (op == CSSOM_OP_ADD_RULE) {
+            char* selector = (argc > 0 && args[0]) ? antb_to_utf8(args[0]) : NULL;
+            char* body = (argc > 1 && args[1]) ? antb_to_utf8(args[1]) : NULL;
+            int result = -1;
+
+            if (!selector || !body) {
+                antb_free(selector);
+                antb_free(body);
+                return 0;
+            }
+
+            if (kind == CSSOM_SHEET)
+                result = static_cast<WebCore::CSSStyleSheet*>(ptr)->addRule(
+                    WebCore::String(selector), WebCore::String(body),
+                    (argc > 2 && args[2]) ? (int)antb_to_number(args[2]) : -1, ec);
+
+            antb_free(selector);
+            antb_free(body);
+            if (ec)
+                return 0;
+            return cssomAssignNumber(engine, out, (double)result);
+        }
+
+        if (op == CSSOM_OP_REMOVE_RULE) {
+            unsigned index2 = (argc > 0 && args[0]) ? (unsigned)antb_to_number(args[0]) : 0;
+
+            if (kind == CSSOM_SHEET)
+                static_cast<WebCore::CSSStyleSheet*>(ptr)->removeRule(index2, ec);
+            return ec ? 0 : 1;
+        }
+    }
+
+    return 0;
+}
+
+static void cssomEnsureClasses()
+{
+    if (g_styleSheetListClass)
+        return;
+
+    g_styleSheetListClass = antb_class_create(g_engine, "StyleSheetList");
+    if (g_styleSheetListClass) {
+        antb_class_set_property(g_engine, g_styleSheetListClass, "",
+                                cssomGetter, (void*)(intptr_t)CSSOM_LIST);
+        antb_class_add_method(g_engine, g_styleSheetListClass, "item",
+                              cssomMethod, (void*)(intptr_t)CSSOM_OP_ITEM);
+    }
+
+    g_styleSheetClass = antb_class_create(g_engine, "CSSStyleSheet");
+    if (g_styleSheetClass) {
+        antb_class_set_property(g_engine, g_styleSheetClass, "",
+                                cssomGetter, (void*)(intptr_t)CSSOM_SHEET);
+        antb_class_add_method(g_engine, g_styleSheetClass, "insertRule",
+                              cssomMethod, (void*)(intptr_t)CSSOM_OP_INSERT_RULE);
+        antb_class_add_method(g_engine, g_styleSheetClass, "deleteRule",
+                              cssomMethod, (void*)(intptr_t)CSSOM_OP_DELETE_RULE);
+        antb_class_add_method(g_engine, g_styleSheetClass, "addRule",
+                              cssomMethod, (void*)(intptr_t)CSSOM_OP_ADD_RULE);
+        antb_class_add_method(g_engine, g_styleSheetClass, "removeRule",
+                              cssomMethod, (void*)(intptr_t)CSSOM_OP_REMOVE_RULE);
+    }
+
+    g_cssRuleClass = antb_class_create(g_engine, "CSSRule");
+    if (g_cssRuleClass) {
+        antb_class_set_property(g_engine, g_cssRuleClass, "",
+                                cssomGetter, (void*)(intptr_t)CSSOM_RULE);
+        antb_class_add_method(g_engine, g_cssRuleClass, "insertRule",
+                              cssomMethod, (void*)(intptr_t)CSSOM_OP_INSERT_RULE);
+        antb_class_add_method(g_engine, g_cssRuleClass, "deleteRule",
+                              cssomMethod, (void*)(intptr_t)CSSOM_OP_DELETE_RULE);
+    }
+
+    g_cssRuleListClass = antb_class_create(g_engine, "CSSRuleList");
+    if (g_cssRuleListClass) {
+        antb_class_set_property(g_engine, g_cssRuleListClass, "",
+                                cssomGetter, (void*)(intptr_t)CSSOM_RULELIST);
+        antb_class_add_method(g_engine, g_cssRuleListClass, "item",
+                              cssomMethod, (void*)(intptr_t)CSSOM_OP_ITEM);
+    }
+
+    g_mediaListClass = antb_class_create(g_engine, "MediaList");
+    if (g_mediaListClass) {
+        antb_class_set_property(g_engine, g_mediaListClass, "",
+                                cssomGetter, (void*)(intptr_t)CSSOM_MEDIA);
+        antb_class_add_method(g_engine, g_mediaListClass, "item",
+                              cssomMethod, (void*)(intptr_t)CSSOM_OP_ITEM);
+    }
+
+    g_cssDeclarationClass = antb_class_create(g_engine, "CSSStyleDeclaration");
+    if (g_cssDeclarationClass) {
+        antb_class_set_property(g_engine, g_cssDeclarationClass, "",
+                                cssomGetter, (void*)(intptr_t)CSSOM_DECL);
+        antb_class_add_method(g_engine, g_cssDeclarationClass, "item",
+                              cssomMethod, (void*)(intptr_t)CSSOM_OP_ITEM);
+        antb_class_add_method(g_engine, g_cssDeclarationClass, "getPropertyValue",
+                              cssomMethod, (void*)(intptr_t)CSSOM_OP_GET_VALUE);
+        antb_class_add_method(g_engine, g_cssDeclarationClass, "getPropertyPriority",
+                              cssomMethod, (void*)(intptr_t)CSSOM_OP_GET_PRIORITY);
+        antb_class_add_method(g_engine, g_cssDeclarationClass, "setProperty",
+                              cssomMethod, (void*)(intptr_t)CSSOM_OP_SET_PROPERTY);
+        antb_class_add_method(g_engine, g_cssDeclarationClass, "removeProperty",
+                              cssomMethod, (void*)(intptr_t)CSSOM_OP_REMOVE_PROPERTY);
+    }
 }
 
 /* ------------------------------------------------------------------------- */
@@ -6769,6 +7455,53 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
             antb_value_release(global);
         }
         return 1;
+    }
+
+    /* document.styleSheets on a document wrapper (document.documentElement...
+     * ownerDocument.styleSheets), and <style>/<link>.sheet; both are live
+     * wrapper objects (see the CSSOM block above). */
+    if (!strcmp(name, "styleSheets") && n->isDocumentNode()) {
+        AntbValue* list = cssomWrap(engine,
+            static_cast<WebCore::Document*>(n)->styleSheets(), CSSOM_LIST);
+
+        if (!list)
+            return 0;
+        antb_value_assign(out, list);
+        antb_value_release(list);
+        return 1;
+    }
+
+    if (!strcmp(name, "sheet") && n->isElementNode()) {
+        WebCore::Element* el = static_cast<WebCore::Element*>(n);
+
+        if (el->hasTagName(WebCore::HTMLNames::styleTag)
+                || el->hasTagName(WebCore::HTMLNames::linkTag)) {
+            AntbValue* sheet = NULL;
+            WebCore::Document* doc = n->document();
+
+            if (doc) {
+                WebCore::StyleSheetList* sheets = doc->styleSheets();
+                unsigned count = sheets ? sheets->length() : 0;
+                unsigned i;
+
+                for (i = 0; i < count; ++i) {
+                    WebCore::StyleSheet* s = sheets->item(i);
+
+                    if (s && s->ownerNode() == n) {
+                        sheet = cssomWrap(engine, s, CSSOM_SHEET);
+                        break;
+                    }
+                }
+            }
+
+            if (!sheet)
+                sheet = antb_make_null(engine);
+            if (sheet) {
+                antb_value_assign(out, sheet);
+                antb_value_release(sheet);
+            }
+            return 1;
+        }
     }
 
     /* node.constructor: React's input value tracker runs

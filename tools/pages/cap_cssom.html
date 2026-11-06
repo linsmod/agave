@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>cssom</title>
+<style id="s1">
+  .a { color: rgb(1, 2, 3); width: 120px; }
+  #b { margin-left: 7px !important; }
+  @media (min-width: 1px) { .c { height: 33px; } }
+</style>
+<style id="s2">
+  .d { width: unset; }
+  @font-face { font-family: "probe"; src: local("Arial"); }
+</style>
+</head>
+<body>
+<div class="a" id="b">x</div>
+<div class="c d">y</div>
+</body>
+</html>

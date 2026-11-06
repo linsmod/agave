@@ -18,6 +18,8 @@
                   follow the new viewport.
     * zoom      - the same page at --zoom 125: 100vw/50vh/calc are CSS pixels,
                   so they shrink with innerWidth instead of the device pixels.
+    * cssom     - document.styleSheets / cssRules / <style>.sheet, including a
+                  @media rule, @font-face and a <style> added after load.
 
   Exit code is the verdict: 0 all green, 1 any failure.
 
@@ -121,6 +123,35 @@ try {
             }
         }
         if ($missing) { $failed++ } else { Write-Host 'zoom: ok' }
+    }
+
+    Write-Host '== CSSOM (document.styleSheets / cssRules / style.sheet)'
+    $url = 'file:///' + (Join-Path $root 'tools/pages/cap_cssom.html').Replace('\', '/')
+    $out = & (Join-Path $root 'build-zig-native\agave_shell.exe') --probe $url `
+        --eval-file (Join-Path $root 'tools/pages/check_cssom.js') `
+        --wait 500 --settle 200 --timeout 30000 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host 'cssom: probe failed'
+        $failed++
+    } else {
+        $text = $out -join "`n"
+        $missing = 0
+        foreach ($needle in @('sheets=2', 'list.item=function', 'sheet0.rules=3',
+                              'rule0.sel=.a', 'rule0.color=rgb(1, 2, 3)',
+                              'rule1.ml=7px', 'rule1.prio=important',
+                              'rule2.media=all and (min-width: 1px)', 'rule2.inner=1',
+                              'sheet1.fontface=5', 'stylesheet.sheet=3',
+                              'stylesheet.owner=true', 'identity.list=true',
+                              'identity.sheet=true', 'insert.index=3', 'insert.length=4',
+                              'insert.color=rgb(9, 8, 7)', 'delete.length=3',
+                              'doc.url=string', 'doc.title=cssom',
+                              'dynamic.sheets=3', 'dynamic.rules=1')) {
+            if ($text -notmatch [regex]::Escape($needle)) {
+                Write-Host ('cssom: missing ' + $needle)
+                $missing++
+            }
+        }
+        if ($missing) { $failed++ } else { Write-Host 'cssom: ok' }
     }
 
     if ($failed) {
