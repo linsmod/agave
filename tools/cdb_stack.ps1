@@ -36,6 +36,14 @@
   pwsh -File tools/cdb_stack.ps1 -Attach 12345
 
 .EXAMPLE
+  pwsh -File tools/cdb_stack.ps1 -Attach 12345 -JsStack
+  # native stacks of all threads + the engine's own JS stack written to
+  # debug\jsstack_<stamp>.txt (the debuggee keeps running: the session ends in qd)
+
+.EXAMPLE
+  pwsh -File tools/cdb_stack.ps1 -Hang -Url https://v.qq.com/ -HangAfter 8 -JsStack
+
+.EXAMPLE
   pwsh -File tools/cdb_stack.ps1 -Symbolize debug/wxstyle.out
 #>
 param(
@@ -48,6 +56,8 @@ param(
     [int]$Attach = 0,
     [switch]$Hang,
     [int]$HangAfter = 10,
+    [switch]$JsStack,               # -Attach: also dump the JS stack to a file
+    [string]$JsStackPath = '',      # default: debug\jsstack_<stamp>.txt
     [string]$Symbolize,
     [string]$Log,
     [switch]$DebugBuild,
@@ -237,6 +247,20 @@ function Invoke-Run {
 
 function Invoke-Attach {
     param([int]$TargetPid)
+
+    # -JsStack hands the JS stack to tools/js_stack.ps1 first: it runs the
+    # engine's own export on a real thread inside the target (CreateRemoteThread),
+    # which is the only route that works. A cdb .call faults on ant's first
+    # __declspec(thread) access - the call context's TLS array is not the one the
+    # dll initialised - and a failed cdb command table skips qd, so the debuggee
+    # is terminated (docs/dev-debugging.md).
+    if ($JsStack) {
+        $jsArgs = @('-NoProfile', '-File', (Join-Path $root 'tools\js_stack.ps1'), '-Pid', "$TargetPid")
+        if ($JsStackPath) { $jsArgs += @('-Out', $JsStackPath) }
+        & pwsh @jsArgs
+        Write-Host ""
+    }
+
     $cmd = ".lines; ~*kb $Frames; lm; qd"
     Write-Host "== attach pid $TargetPid =="
     Write-Host "  log : $Log"
