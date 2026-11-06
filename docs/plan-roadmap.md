@@ -289,12 +289,19 @@
   NAVIGATE/LOAD_HTML/BACK/FORWARD/RELOAD/STOP/EVAL 在引擎忙 >300 ms 时先中断再入队；
   busy 是**进程级**（一条引擎线程服务所有 view）；`agave_webview_interrupt/busy` 暴露给宿主；
   ③shell 刷新（按钮/F5/Ctrl+R/右键菜单）与地址栏导航都走这条；④探针 `--interrupt-after <ms>` / `--nav-after <ms>` 可直接回归。
-- 验收（`tools/run_hang_recovery_tests.ps1`，三条全绿）：`debug/hang_loop.html`（20 s 死循环）
+- 验收（`tools/run_hang_recovery_tests.ps1`，**五条全绿**）：`debug/hang_loop.html`（20 s 死循环）
   + `--interrupt-after 2000` → **5.6 s** 结束（此前要等 20 s 循环自己跑完，`[hang]` 之外毫无办法）；
   + `--nav-after 2000` → 导航在中途生效、**3.1 s** 结束（此前 21 s）；空闲页 `--interrupt-after 300`
-  不影响文档、不写崩溃文件。GUI 刷新/导航的手感验证由人工完成。
+  不影响文档、不写崩溃文件；④慢页面（1.5 s 解析）连刷 3 次：**0 次 abort**、内容 `done`（修前会白页）；
+  ⑤卡死页刷到同一 URL：脚本被中断、新文档 `title === ready`（修前刷新后仍白，因为中断请求没被消费）。
+  GUI 刷新/导航的手感验证由人工完成。
 - 已知限制：中断后页面状态不可信，必须配重载/导航；`<script>` 里的死循环能中断，
   但引擎线程若卡在 **native 代码**（非 JS 循环）则没有 safepoint，仍需杀进程。
+- **2026-11-06 修正（白页回归）**：第一版用“引擎线程心跳”判卡死，但心跳在**加载中**和**空闲**时都会过期，
+  于是每次刷新都被当成卡死 → 中断正在解析的脚本 → 文档半途而废 → **连刷几次就白页**。
+  现在判据改成**队列是否排空**（命令在队头停留 >1.5 s 才算卡死，执行中的命令已出队所以长 eval 不受影响），
+  由控件里的看门狗线程（200 ms）驱动；另外 `js_interrupt_raise()` 改为**消费一次**（清 `interrupt_pending`），
+  否则中断标志会一直挂着，把**刷新后的新文档**脚本也一起杀掉 —— 这正是“卡死页怎么刷都白”的根因。
 - 两个实现要点（踩过才知道）：①**中断轮询必须在建引擎时就 arm**（`sv_jit_arm_interrupts`），
   因为 `interrupts_armed` 是在 **JIT 编译期**决定要不要插 safepoint 的；中断时才 arm，已经编译好的
   热循环没有轮询点，请求只能等脚本自己返回。②忙判定不能只看“命令在跑”：导航命令几毫秒就返回，

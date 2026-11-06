@@ -304,7 +304,7 @@ ant 自身 CLI / 基础设施的开关（`ANT_MANIFEST_URL`、`ANT_SANDBOX_*`、
 - **卡死的页面怎么恢复（不用杀进程）**：刷新/导航在控件里是排队命令，脚本不返回时队列永不 drain，
   所以窗口“活着但没反应”。现在链接/执行类命令在 `agwPost()` 收口处先发中断：引擎在下一个
   safepoint（解释器调用点 / JIT 循环回边）抛终止错误，脚本退出 → 队列继续 → reload 拿到新 realm。
-  锚点：`agave_webview_interrupt()` / `agave_webview_busy()` / `antb_interrupt_all_engines()`。
+  锚点：`agave_webview_interrupt()` / `agave_webview_busy()` / `antb_interrupt_all_engines()`。\n  刷新在**任何状态**都安全：慢页面不会被误中断（判据是队列没排空，不是“引擎忙”），卡死页的脚本\n  被中断一次后标志即被消费（`js_interrupt_raise()`），新文档照常执行。回归\n  `pwsh -File tools/run_hang_recovery_tests.ps1`（5 条：中断、导航中断、空闲误中断、慢页连刷、卡死页刷新恢复）。
   验证手段：`--probe <卡死页> --interrupt-after 2000`（到点中断，页面继续加载）或
   `--nav-after 2000`（模拟“卡着时重新导航”）；回归 `pwsh -File tools/run_hang_recovery_tests.ps1`。
   卡死时先 `tools/js_stack.ps1 -Pid <pid>` 留证据再点刷新。`AGB_CRASH_POPUP=0` 可关崩溃弹框

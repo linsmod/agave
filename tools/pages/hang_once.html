@@ -1,0 +1,18 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>hang once</title>
+<body>
+<p id="out">start</p>
+<script>
+/* Hangs only on the first visit of a profile, so a single test can exercise
+ * "the page is stuck -> the user reloads -> the reloaded page must work". */
+var seen = localStorage.getItem('agb_hang_once');
+if (!seen) {
+  localStorage.setItem('agb_hang_once', '1');
+  var t0 = Date.now();
+  while (Date.now() - t0 < 8000) { }
+}
+document.title = 'ready';
+document.getElementById('out').textContent = 'ready';
+</script>
+</body>

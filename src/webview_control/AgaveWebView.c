@@ -26,14 +26,12 @@
 static volatile LONG g_engineBusy;
 static DWORD         g_engineBusySince;
 
-/* Engine-thread heartbeat: the control's frame-pump timer fires ~every 10ms, so
- * a stale timestamp means the engine thread is not processing messages at all -
- * stuck inside JS (or a native loop). A queued command is only "busy" while it
- * runs, which is the wrong signal for a page stuck in a parse/timer callback
- * that was never a command (navigation returns immediately). */
-static volatile LONG g_enginePumpTick;
+/* How long a command may sit at the head of the queue before we conclude the
+ * engine thread is not draining it. Long enough that a slow parse/settling page
+ * does not trip it, short enough that Reload/navigate on a hung page responds. */
+#define AGW_STUCK_QUEUE_MS 1500u
 static int agwEngineBusyFor(int minMs);
-static int agwEngineStuckFor(int minMs);
+static int agwQueueStuckFor(int minMs);
 static int agwCommandAbortsScript(int type);
 
 /* The control window class is registered as a Unicode class: see agwRegisterClass. */
@@ -84,6 +82,12 @@ typedef struct {
      * engine then reported a bogus SyntaxError in the middle of the script. */
     char  text[8192];
     char* heapText;
+    /* When the host queued it. A command that still sits at the queue head this
+     * long after being posted means the engine thread is not draining at all -
+     * the only reliable "stuck" signal: the engine being merely idle also stops
+     * pumping window messages, and a page legitimately parsing for seconds looks
+     * identical from the outside. */
+    DWORD at;
 } AgwCommand;
 
 struct AgaveWebView {
@@ -260,14 +264,13 @@ static void agwPost(int type, AgaveWebView* view, const char* text,
      * script for a while, the command would sit behind that script forever -
      * so this is where "navigation aborts the current page" belongs, not in
      * each caller. */
-    if (agwCommandAbortsScript(type) && (agwEngineBusyFor(300) || agwEngineStuckFor(500))) {
-        fprintf(stderr, "[ui] engine busy for %lu ms: aborting the page script before command %d\n",
-                (unsigned long)(GetTickCount() - g_engineBusySince), type);
-        antb_interrupt_all_engines();
-    }
+    /* Abort decisions are made by the watchdog thread below: at post time the
+     * command has just been queued (age 0), and an idle engine looks exactly
+     * like a hung one from here. */
 
     memset(&command, 0, sizeof(command));
     command.type = type;
+    command.at = GetTickCount();
     command.x = x;
     command.y = y;
     command.a = a;
@@ -805,14 +808,48 @@ static int agwEngineBusyFor(int minMs)
     return (int)(GetTickCount() - g_engineBusySince) >= minMs;
 }
 
-/* 1 when the engine thread has not pumped a message for minMs. */
-static int agwEngineStuckFor(int minMs)
-{
-    DWORD last = (DWORD)InterlockedCompareExchange(&g_enginePumpTick, 0, 0);
+/* Watchdog: the queue is the only honest signal that the engine thread stopped
+ * draining. A command sits at the head while the engine is inside a script that
+ * never returns; once it has waited AGW_STUCK_QUEUE_MS, abort the script so the
+ * queue can move. Commands that are *executing* were popped already, so a long
+ * but legitimate eval never trips this. */
+static HANDLE g_watchdog;
+static volatile LONG g_watchdogStop;
 
-    if (!last) return 0;
+static DWORD WINAPI agwWatchdogThread(LPVOID param)
+{
+    (void)param;
+
+    while (!InterlockedCompareExchange(&g_watchdogStop, 0, 0)) {
+        Sleep(200);
+
+        if (agwQueueStuckFor((int)AGW_STUCK_QUEUE_MS)) {
+            fprintf(stderr, "[ui] engine not draining: aborting the page script\n");
+            antb_interrupt_all_engines();
+        }
+    }
+
+    return 0;
+}
+
+static void agwWatchdogStart(void)
+{
+    if (g_watchdog) return;
+    g_watchdog = CreateThread(NULL, 0, agwWatchdogThread, NULL, 0, NULL);
+}
+
+/* 1 when the oldest queued command has been waiting at least minMs. */
+static int agwQueueStuckFor(int minMs)
+{
+    DWORD at = 0;
+
+    agwLock();
+    if (g_queueHead != g_queueTail) at = g_queue[g_queueHead].at;
+    agwUnlock();
+
+    if (!at) return 0;
     if (minMs <= 0) return 1;
-    return (int)(GetTickCount() - last) >= minMs;
+    return (int)(GetTickCount() - at) >= minMs;
 }
 
 /* Commands that replace or start page execution: they are what a browser makes
@@ -1289,7 +1326,6 @@ static LRESULT CALLBACK agwProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
 {
     AgaveWebView* item = (AgaveWebView*)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
 
-    InterlockedExchange(&g_enginePumpTick, (LONG)GetTickCount());
 
     switch (message) {
     case WM_PAINT: {
@@ -1757,6 +1793,7 @@ AgaveWebView* agave_webview_create(void* parent, int x, int y, int width, int he
     if (!g_lockReady) {
         InitializeCriticalSection(&g_lock);
         g_lockReady = 1;
+        agwWatchdogStart();
     }
 
     agwRegisterClass((HINSTANCE)GetWindowLongPtrW((HWND)parent, GWLP_HINSTANCE));
@@ -1930,7 +1967,7 @@ void agave_webview_interrupt(AgaveWebView* item)
 int agave_webview_busy(AgaveWebView* item, int minMs)
 {
     (void)item;
-    return agwEngineBusyFor(minMs) || agwEngineStuckFor(minMs < 300 ? 300 : minMs);
+    return agwQueueStuckFor(minMs < 300 ? 300 : minMs);
 }
 
 void agave_webview_reload(AgaveWebView* item)  { agwPost(AGW_CMD_RELOAD, item, NULL, 0, 0, 0, 0); }

@@ -1,0 +1,13 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>slow parse</title>
+<body>
+<p id="out">start</p>
+<script>
+/* 1.5 s of legitimate parse-time work: slow, but not hung. A reload issued
+ * while this runs must still end with a rendered page. */
+var t0 = Date.now();
+while (Date.now() - t0 < 1500) { }
+document.getElementById('out').textContent = 'done';
+</script>
+</body>
