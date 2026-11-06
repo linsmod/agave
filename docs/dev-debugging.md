@@ -195,6 +195,7 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
 | 事件派发链 | `AGB_EVT_TRACE=1` | 每次派发沿冒泡链打印 `[evt-trace] <type> node=<ptr> listeners=<n>`：看某个监听器到底在不在链上、有没有被调用（R45 就是靠它确认 React 的委托监听器确实执行了） |
 | 崩溃 | `AGB_TRACE_CRASH=1` | 记录最近 256 条内部 trace（崩溃后能回看走到哪） |
 | 性能 | `AGB_PROFILE=1` / `AGB_PERF_LOG=1` | RIP 采样直方图（退出时 dump `[profjs]`）/ 帧耗时（paint+js > 100ms 才打） |
+| 性能 | `AGB_PUMP_BREAKDOWN=1` | 每帧 `pumpAsyncRequests()` 分段计时（`[pumpbd] xhr=/module=/arrived=/vm=`，单帧 >2ms 才打）：`vm=` 大 = `antb_pump` 里的页面脚本/React 调度器；`xhr=` 大 = XHR 回调；用于区分"网络慢"和"JS 执行慢" |
 | 页面脚本 | `AGB_PAGE_EVAL=eval` | 页面脚本回到 direct-eval 语义（**默认 classic script**，顶层 `var`/`function` 进 `window`，R66）；A/B 与 `run_script_mode_tests.ps1` 用 |
 | GC | `AGB_GC_OFF=1` | 关掉引擎 GC；"关掉就好"是"对象被提前回收"的决定性判据（R60/R63/R67） |
 | Realm | `AGB_PER_FRAME_REALM=0` | 关掉"每 frame 一个 realm"（[design-per-frame-realm.md](design-per-frame-realm.md) S1/S2，**默认开启**）：回到一 view 一 realm + per-frame window 代理的旧模型，用于 A/B。`run_realm_tests.ps1` 覆盖两条路径 |

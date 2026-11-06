@@ -151,10 +151,25 @@
   互相放大：`ResourceHandleManager::downloadTimerCallback()` 在引擎线程上泵，`net.deliver lag` 就是
   「网络已好、引擎没空」的直接证据；`WebEngine::macross_view_update()` 把 paint + `pumpAsyncRequests()`
   + `antb_pump()` 串在同一帧，`js=1225ms` 里既跑页面脚本又投递全部 XHR/定时器回调。
-- 优化方向（按性价比，需先有判据再动）：①把 `net.pump` 的完成事件投递与 JS 求值错开
-  （完成事件先入队、下帧再回调，避免一帧内 1.1 s 的连锁回调）；②`default-vendors.js` 的编译缓存
-  （按 URL+内容缓存字节码，刷新/多标签复用，R18 已修过列号 O(n²) 但没做跨导航缓存）；
-  ③`AGB_SKIPRES` 跳过首屏用不到的 `katex`/`web-tts`/`opus-decoder` chunk（见 4290 ms 之后
+- **2026-11-06 精确归因（新增 `AGB_PUMP_BREAKDOWN=1`，`debug/ds_pumpbd.log`、
+  `debug/ds_budget_on.log`、`debug/ds_budget_off.log`）**：`pumpAsyncRequests()` 四段计时
+  显示 `xhr=0ms module=0ms arrived=0ms vm=1203ms` —— 慢的 1.2 s **全部在 `antb_pump()`
+  里的 React 调度器/提交代码**，XHR 回调、模块投递、网络完成事件本身都是 0–20 ms。
+  `AGB_HANG_WATCH=1` 的 JS 栈（`sF=2`、`switch(a.tag)` fiber 遍历）与此一致。
+- **①「网络完成事件与 JS 求值错帧」已实测否决，不推进**：两种实现都试过——
+  (a) 每 tick 只投一个完成事件（含 `m_cached` 与 `WinHttpSession::pump()` 两条路径）、
+  (b) 自适应时间预算（`AGB_NET_SLICE_MS`，默认 8 ms，只在某个投递真的超过预算时把尾部留到下帧）。
+  单帧最长 `net.pump` 确实从 1099/1178 ms 降到 178/518/304 ms，但 `net.deliver lag`
+  从 ~200 ms 恶化到 800–2400 ms（人为排队），首屏 `load` 4431–5001 ms vs 基线 3953–4681 ms
+  **没有改善甚至变慢**。原因：瓶颈是单次 1.1 s 的同步 React commit，切片既切不开它，
+  又让后续资源白等。代码已回退，保留 `AGB_PUMP_BREAKDOWN` 诊断。
+- 优化方向（按性价比，需先有判据再动）：①`default-vendors.js` 的**执行期**优化
+  （ant 的 JIT/对象属性 IC，见 P1-g；或让站点的 `requestIdleCallback`/调度器分片，属能力缺口）；
+  ②**编译缓存已实测否决，不推进**：`tools/bench_compile_exec.cjs`（用法：`ant.exe tools/bench_compile_exec.cjs <bundle.js>`）对 1 MB vendor bundle
+  测得 `compile≈110ms execute≈105ms`（裸 sandbox，3 轮稳定）；浏览器里 1.2 s 是 React 对
+  真实 DOM 的逐节点桥接，不是编译。为省 ≤110 ms 新增桥 API + `sv_func_t` 生命周期管理
+  不划算，结论写进 R76；
+  ③`AGB_SKIPRES` 跳过首屏用不到的 `katex`/`web-tts`/`opus-decoder` chunk（4290 ms 之后
   6061/6087 ms 仍在下 TTS、6084 ms 还发了一条 `url=` 空请求）；④`load` 双发（iframe + 主文档
   各一条 `listeners=310`）要确认不是 P0-c 的残留。
 - 验收：`--probe https://chat.deepseek.com/ --wait 5000` 的 `[evt] window event load` ≤ 2.5 s，

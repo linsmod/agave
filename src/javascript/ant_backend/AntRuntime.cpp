@@ -3989,10 +3989,32 @@ int evaluate(const char* src, size_t len, char** out, char** err)
 
 void pumpAsyncRequests(void)
 {
+    /* Opt-in breakdown: a slow frame is usually attributed to "the network
+     * pump" but the time can be XHR callbacks, module deliveries or the VM's
+     * own timers. AGB_PUMP_BREAKDOWN=1 prints each leg when it exceeds 2 ms
+     * so the culprit is visible on the same timeline as [perf] update js=. */
+    static int breakdown = -1;
+    LARGE_INTEGER bdFreq, bdT0, bdT1, bdT2, bdT3, bdT4;
+
+    memset(&bdFreq, 0, sizeof(bdFreq));
+    memset(&bdT0, 0, sizeof(bdT0));
+    memset(&bdT1, 0, sizeof(bdT1));
+    memset(&bdT2, 0, sizeof(bdT2));
+    memset(&bdT3, 0, sizeof(bdT3));
+    memset(&bdT4, 0, sizeof(bdT4));
+
+    if (breakdown < 0)
+        breakdown = getenv("AGB_PUMP_BREAKDOWN") ? 1 : 0;
+    if (breakdown) {
+        QueryPerformanceFrequency(&bdFreq);
+        QueryPerformanceCounter(&bdT0);
+    }
+
     /* Deliver finished requests first (JS callbacks), then let the engine run
      * its own timers/microtasks - both happen on the frame loop, never inside
      * the network pump. */
     collectXhrJobs();
+    if (breakdown) QueryPerformanceCounter(&bdT1);
 
     /* The module session has no driver of its own: prefetches and routed
      * entry scripts only complete when someone pumps. The frame loop is the
@@ -4006,6 +4028,8 @@ void pumpAsyncRequests(void)
     /* Entry bodies that arrived during the pump above: outside the network
      * pump now. Hand them to the waiting tokenizer - the module itself runs
      * later, in the parse flow (see HTMLTokenizer::notifyModuleEntry). */
+    if (breakdown) QueryPerformanceCounter(&bdT2);
+
     if (g_arrivedEntryBodies && !g_arrivedEntryBodies->empty()) {
         std::vector<ArrivedEntryBody> arrived;
 
@@ -4017,7 +4041,9 @@ void pumpAsyncRequests(void)
     }
 
     if (g_engine) {
+        if (breakdown) QueryPerformanceCounter(&bdT3);
         antb_pump(g_engine);
+        if (breakdown) QueryPerformanceCounter(&bdT4);
 
         /* Timer callbacks are outside evaluate(), so report and clear anything
          * they threw instead of leaving it pending in the engine. */
@@ -4025,6 +4051,17 @@ void pumpAsyncRequests(void)
             fprintf(stderr, "[antjs] (timer) %s\n", pending);
             free(pending);
         }
+    }
+
+    if (breakdown) {
+        double msXhr = (double)(bdT1.QuadPart - bdT0.QuadPart) * 1000.0 / (double)bdFreq.QuadPart;
+        double msMod = (double)(bdT2.QuadPart - bdT1.QuadPart) * 1000.0 / (double)bdFreq.QuadPart;
+        double msArr = (double)(bdT3.QuadPart - bdT2.QuadPart) * 1000.0 / (double)bdFreq.QuadPart;
+        double msVm  = (double)(bdT4.QuadPart - bdT3.QuadPart) * 1000.0 / (double)bdFreq.QuadPart;
+
+        if (msXhr + msMod + msArr + msVm > 2.0)
+            fprintf(stderr, "[pumpbd] xhr=%.0fms module=%.0fms arrived=%.0fms vm=%.0fms\n",
+                    msXhr, msMod, msArr, msVm);
     }
 }
 
