@@ -413,6 +413,17 @@
   ④`committedLoad` 会接受陈旧 loader 的提交。
   验收：`tools/run_hang_recovery_tests.ps1` **六条全绿**（新增“HTTP 渐进响应连刷 8 次文档完好”），
   deepseek sign_in 1.2 s 间隔连刷 6 次 → exit 0、正文非空、无“页面资源加载异常”兜底页。
+- **2026-11-06 第三轮（连刷白屏的真因，R77）**：R73 的三处不是全部。桥的 native-method 表
+  （`g_methods[1024]` / `g_method_count`）是**进程级且只增不减**，`antb_engine_destroy()` 没回收；
+  每个 realm 注册约 170 个桥方法，约 6 次刷新就耗尽，之后 `antb_define_method()` **静默 no-op**
+  → 新 `document` 只剩 `implementation`、load 监听器注册不上、`listeners=0`。已在 ant 侧修
+  （按 engine 释放 + 复用空槽）；验收改成 `tools/run_hang_recovery_tests.ps1` **七条全绿**
+  （第七条：`/chain.html` 连刷 10 次后最终文档仍有 `document.addEventListener`、5 个脚本全跑完）。
+- **待办（不阻塞白屏修复）**：reload 仍没有“导航事务”收口 —— 连按刷新会为每次按键各发一个主资源
+  请求（前一个由 `stopAllLoaders` 取消），且 `WebView::reload()` 的 `stopLoading(true)` 会在旧文档
+  仍解析时提前派发它的 DCL/load。它们不丢 realm/监听器（realm 在 commit 时整体重建），但浪费一次
+  往返、事件时序不现代。若要做：在 `FrameLoader` 加导航代次令牌，把 in-flight 的 reload 合并/排队，
+  并让 `committedLoad`/`dispatchWillClose` 校验令牌。先记在这，等有真实站点依赖事件时序再动。
 - **2026-11-06 修正（白页回归）**：第一版用“引擎线程心跳”判卡死，但心跳在**加载中**和**空闲**时都会过期，
   于是每次刷新都被当成卡死 → 中断正在解析的脚本 → 文档半途而废 → **连刷几次就白页**。
   现在判据改成**队列是否排空**（命令在队头停留 >1.5 s 才算卡死，执行中的命令已出队所以长 eval 不受影响），

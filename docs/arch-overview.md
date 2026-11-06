@@ -101,7 +101,10 @@ WebCore 内部的渲染管线（DOM → 样式 → 渲染树 → 布局 → 绘�
   父/顶层 realm 的全局对象（同 VM，属性访问和调用照常，`parent !== self`、`top.Array !== Array`）。
   ES module map 仍是引擎级（两个 frame import 同一模块共享实例，S3 待做）。
 - **进程级共享**：模块会话（`g_moduleSession`）、`DownloadManager` 单例、generation 计数器、
-  桥的 wrapper/class 表（wrapper 按 `(js, realm, ptr, tag)` 存，class 表仍是引擎级）。
+  桥的 wrapper/class/method-trampoline 表（wrapper 按 `(js, realm, ptr, tag)` 存，class 和
+  method 表按 engine 归属）。**契约**：任何进程级桥表在新增条目时，`antb_engine_destroy()`
+  必须释放该 engine 的条目（wrapper/class 已这样做；method 表此前漏了，见 R77），否则
+  “每文档一个新 engine”的隔离会被表容量上限击穿，而不是被 JS 状态泄漏击穿。
 
 ## 4. 一次导航
 

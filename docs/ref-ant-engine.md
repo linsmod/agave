@@ -79,7 +79,9 @@ git -C H:\ant-v16 rev-parse HEAD
 ## 6. 桥接的边界
 
 - `AntBridge.c` 是**所有 JS↔C 的唯一漏斗**（`agb_dispatch(slot, js, ...)`），每个 native 方法注册一个
-  trampoline 槽（`AGB_TRAMPOLINE_COUNT`）。
+  trampoline 槽（`AGB_TRAMPOLINE_COUNT`）。**这张表是进程级的，按 engine 释放**：engine 销毁时
+  `agbReleaseEngineMethods()` 清掉它的槽，下一次 `antb_define_method()` 先复用空槽。漏掉释放时
+  表会在约 6 次文档刷新后耗尽，之后注册**静默失败**（R77）。
 - wrapper 表（native 指针 ↔ JS 对象）是**进程级**的，随 engine 创建/销毁：`antb_wrap_native_owner` /
   `antb_release_owner` / `antb_engine_destroy`。
 - 每个 view 一个 `RuntimeState`，每个文档一个新 engine（`beginNewRealm`/`stopRealm`），

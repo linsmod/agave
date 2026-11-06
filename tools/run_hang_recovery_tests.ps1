@@ -10,6 +10,9 @@
 #      (the "several reloads and the page goes white" bug)
 #   5. a hung page reloads into a working page (the interrupt request is consumed
 #      once, so the reloaded document's scripts are not killed as well)
+#   6. reload hammered over a progressive HTTP response keeps the document
+#   7. more reloads in a row than the bridge's method-slot table used to hold:
+#      the final document must keep the host API and its listeners (R77)
 #
 # Usage:  pwsh -File tools/run_hang_recovery_tests.ps1 [-TimeoutMs 60000]
 # Exit:   0 all passed, 1 a case failed.
@@ -134,6 +137,28 @@ if ((Test-Path $srvScript) -and (Get-Command python -ErrorAction SilentlyContinu
     $aborts = ([regex]::Matches($r.Text, 'aborting the page script')).Count
     Check 'hammered reload over HTTP keeps the document' ($r.Code -eq 0 -and $aborts -eq 0) `
           ("exit={0} aborts={1} {2}ms" -f $r.Code, $aborts, $r.Ms)
+}
+
+# 7. More reloads in a row than the bridge's native-method table used to have
+#    slots for. Each document realm installs ~170 bridged methods, and the table
+#    is process wide: after ~6 reloads antb_define_method() started failing
+#    silently, so the next document got a `document` object without methods, its
+#    load listener was never registered and the page stayed blank. The final
+#    document must still have the host API and must have run all its scripts.
+if ((Test-Path $srvScript) -and (Get-Command python -ErrorAction SilentlyContinue)) {
+    $srv = Start-Process -FilePath 'python' -ArgumentList @($srvScript, '8984') -PassThru -WindowStyle Hidden
+    try {
+        Start-Sleep -Milliseconds 800
+        $r = Invoke-Probe @('--probe', 'http://127.0.0.1:8984/chain.html',
+                            '--reload-every', '150', '--reload-count', '10',
+                            '--wait', '5000', '--settle', '400', '--timeout', '40000',
+                            '--eval', "probeExit((document.readyState === 'complete' && window.__loadCount === 1 && window.__scripts === 5 && typeof document.addEventListener === 'function') ? 0 : 7)")
+    } finally {
+        Stop-Process -Id $srv.Id -Force -ErrorAction SilentlyContinue
+    }
+    $emptyLoad = ([regex]::Matches($r.Text, 'window event load listeners=0')).Count
+    Check 'reload chain keeps the host API' ($r.Code -eq 0 -and $emptyLoad -eq 0) `
+          ("exit={0} emptyLoad={1} {2}ms (7 = final document lost its methods/listeners)" -f $r.Code, $emptyLoad, $r.Ms)
 }
 
 Write-Host ''
