@@ -94,6 +94,8 @@ namespace WebCore {
         unsigned size() const { return m_values.size(); }
         Value* current() { return m_current < m_values.size() ? &m_values[m_current] : 0; }
         Value* next() { ++m_current; return current(); }
+        unsigned currentIndex() const { return m_current; }
+        void setCurrent(unsigned i) { m_current = i < m_values.size() ? i : m_values.size(); }
 
         Value* valueAt(unsigned i) { return i < m_values.size() ? &m_values[i] : 0; }
         void deleteValueAt(unsigned i) { m_values.remove(i); }

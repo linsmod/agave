@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>background shorthand</title>
+<style>
+  html, body { margin: 0; padding: 0; }
+  .sw { width: 60px; height: 20px; display: block; margin-bottom: 2px; }
+  :root {
+    --primary-background-color: hsl(200 60% 20%);
+    --img: url("noise10.png");
+  }
+  /* the pattern from css3test: url() plus a colour coming from a variable */
+  #b1 { background: url("noise10.png") var(--primary-background-color); }
+  #b2 { background: var(--primary-background-color) url("noise10.png"); }
+  #b3 { background: var(--img) var(--primary-background-color); }
+  /* CSS Color 4 colour in the shorthand, no var() */
+  #b4 { background: url("noise10.png") hsl(200 60% 20%); }
+  /* position / size */
+  #b5 { background: url("noise10.png") 0 0 / 16px 16px; }
+  #b6 { background: url("noise10.png") center / cover; }
+  #b7 { background: url("noise10.png") center / contain no-repeat; }
+  /* repeat + position keywords */
+  #b8 { background: url("noise10.png") no-repeat right top; }
+  /* colour + image + repeat */
+  #b9 { background: #00ff00 url("noise10.png") repeat-x; }
+  /* longhand after shorthand (must win) */
+  #b10 { background: url("noise10.png") var(--primary-background-color); background-color: #0000ff; }
+  /* longhand only */
+  #b11 { background-color: var(--primary-background-color); }
+  #b12 { background-size: 16px auto; background-image: url("noise10.png"); }
+</style>
+</head>
+<body>
+<div id="b1" class="sw" data-case="b1" data-props="background-color,background-position,background-size,background-repeat"></div>
+<div id="b2" class="sw" data-case="b2" data-props="background-color,background-position,background-size,background-repeat"></div>
+<div id="b3" class="sw" data-case="b3" data-props="background-color,background-position,background-size,background-repeat"></div>
+<div id="b4" class="sw" data-case="b4" data-props="background-color,background-position,background-size,background-repeat"></div>
+<div id="b5" class="sw" data-case="b5" data-props="background-color,background-position,background-size,background-repeat"></div>
+<div id="b6" class="sw" data-case="b6" data-props="background-color,background-position,background-size,background-repeat"></div>
+<div id="b7" class="sw" data-case="b7" data-props="background-color,background-position,background-size,background-repeat"></div>
+<div id="b8" class="sw" data-case="b8" data-props="background-color,background-position,background-size,background-repeat"></div>
+<div id="b9" class="sw" data-case="b9" data-props="background-color,background-position,background-size,background-repeat"></div>
+<div id="b10" class="sw" data-case="b10" data-props="background-color"></div>
+<div id="b11" class="sw" data-case="b11" data-props="background-color"></div>
+<div id="b12" class="sw" data-case="b12" data-props="background-size"></div>
+<div style="height:1200px"></div>
+</body>
+</html>

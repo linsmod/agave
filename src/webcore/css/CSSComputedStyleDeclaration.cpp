@@ -580,12 +580,18 @@ PassRefPtr<CSSValue> CSSComputedStyleDeclaration::getPropertyCSSValue(int proper
                 (style->backgroundSize().width.value() == -1 || style->backgroundSize().width.value() == -2)) {
                 const char* keyword = style->backgroundSize().width.value() == -1 ? "cover" : "contain";
 
-                return new CSSPrimitiveValue(String(keyword), CSSPrimitiveValue::CSS_IDENT);
+                return new CSSPrimitiveValue(String(keyword), CSSPrimitiveValue::CSS_IDENT_TEXT);
             }
 
             RefPtr<CSSValueList> list = new CSSValueList(true);
-            list->append(valueForLength(style->backgroundSize().width));
-            list->append(valueForLength(style->backgroundSize().height));
+            /* Chrome prints a single `auto` when both components are auto
+             * (the initial value); otherwise both are printed ("16px auto"). */
+            if (style->backgroundSize().width.isAuto() && style->backgroundSize().height.isAuto())
+                list->append(new CSSPrimitiveValue(String("auto"), CSSPrimitiveValue::CSS_IDENT_TEXT));
+            else {
+                list->append(valueForLength(style->backgroundSize().width));
+                list->append(valueForLength(style->backgroundSize().height));
+            }
             return list.release();
         }  
         case CSS_PROP_BACKGROUND_REPEAT:

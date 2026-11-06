@@ -66,6 +66,10 @@ public:
         CSS_COUNTER = 23,
         CSS_RECT = 24,
         CSS_RGBCOLOR = 25,
+        /* Verbatim identifier text for values whose keyword has no id in this
+         * build (e.g. `background-size: cover`, whose writer could otherwise
+         * only emit the empty getValueName(0)). Used by computed styles only. */
+        CSS_IDENT_TEXT = 26,
         CSS_PAIR = 100, // We envision this being exposed as a means of getting computed style values for pairs (border-spacing/radius, background-position, etc.)
         CSS_DASHBOARD_REGION = 101, // FIXME: What on earth is this doing as a primitive value? It should not be!
         /* calc() that mixes a percentage with a pixel offset, e.g.

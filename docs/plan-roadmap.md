@@ -45,6 +45,22 @@
   `deg` hue 全部接受（以前只认逗号，整条声明静默被丢）；hsl→rgb 与百分比分量改成四舍五入（对齐 Chrome），
   alpha 序列化按两位有效数字。验收：新增 `tools/pages/layout/color_syntax.html` 13 个 case 对拍 Chrome 全绿。
   未完成：`turn` 单位（没有 `CSS_TURN`）；`getComputedStyle` 读自定义属性仍返回内部名 `-agb-…`。
+- **`background` 简写的 `/ <size>`**（R84，2026-11-06）：`url() 0 0 / 16px 16px`、`center / cover`、
+  `contain no-repeat` 以前整条声明被丢（简写里没有 `-webkit-background-size`，`/` 没人消费）；`cover`/`contain`
+  的 computed 也返回空串。现在简写带 size、像素与 Chrome 对齐、computed 输出 `cover`/`contain`/单个 `auto`。
+  验收：`background_shorthand.html` 12 case 对拍 Chrome 全绿、`background_paint.html` 7 像素（接进
+  `run_layout_tests.ps1`）、`LAYOUT=PASS`。
+
+### P1 `var()` 展开的值拿不到图片资源（R84 实测，未修）
+
+- 现象：`background: url(x) var(--color)` 的 computed 有 `background-image`，但画面上只有底色；
+  把颜色写成字面量就正常。
+- 根因方向：`CSSStyleSelector::applyExpandedProperty()` 用 `new CSSMutableStyleDeclaration(0)` +
+  全新 `CSSParser` 解析展开后的文本，`styleElement` 为空；`CSSParser::parseBackgroundImage()` 用这个
+  空 `styleElement` 造 `CSSImageValue`，同一 URL 于是有**两个 `CachedImage`**（只有一个在被加载）。
+- 验收：`background_paint.html` 里把 `#tile` 的颜色换回 `var(--tint)` 后 7 像素仍然全过
+  （现在用字面量绕开了，见页面注释）。
+- 顺带：`data:` URI 图片整体不加载（`<img>` 与 `background` 都不画），需要单独排。
 
 ## P0：先修正确性
 

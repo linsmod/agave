@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>background shorthand paint</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #ffffff; }
+  /* NOTE: the tint below is a literal colour on purpose. With `var(--tint)`
+     the rule still parses but the image never loads (a second CachedImage is
+     created for the same URL, see hist-lessons R84 / plan-roadmap P1), so
+     this page would fail with the variable spelling. */
+  :root { --tint: hsl(200 60% 20%); }
+  #tile {
+    width: 100px; height: 100px;
+    background: url("noise10.png") #00ff00;
+  }
+  #cover {
+    position: absolute; left: 120px; top: 0;
+    width: 60px; height: 60px;
+    background: #00ff00 url("noise10.png") center / cover no-repeat;
+  }
+  #scaled {
+    position: absolute; left: 200px; top: 0;
+    width: 40px; height: 40px;
+    background: url("noise10.png") 0 0 / 40px 40px no-repeat;
+  }
+</style>
+</head>
+<body>
+<div id="tile"></div>
+<div id="cover"></div>
+<div id="scaled"></div>
+</body>
+</html>

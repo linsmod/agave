@@ -81,6 +81,24 @@ try {
         if ($LASTEXITCODE -ne 0) { $failed++ }
     }
 
+    Write-Host '== paint: background shorthand (image + colour / position / size)'
+    $bmp = Join-Path $root 'debug\layout_background.bmp'
+    $url = 'file:///' + (Join-Path $root 'tools/pages/layout/background_paint.html').Replace('\', '/')
+    & (Join-Path $root 'build-zig-native\agave_shell.exe') --probe $url `
+        --wait 1200 --settle 200 --timeout 30000 --shot $bmp | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host 'background_paint: probe failed'
+        $failed++
+    } else {
+        # (5,5)/(95,95) prove the 10x10 texture repeats over the tint, (130,5)
+        # and (175,55) that `center / cover` scaled it, (205,5)/(235,35) that
+        # `0 0 / 40px 40px` did, and the page below stays white.
+        & python tools/pixel_check.py $bmp `
+            5,5,ff0000 95,95,ff0000 130,5,ff0000 175,55,ff0000 `
+            205,5,ff0000 235,35,ff0000 50,200,ffffff
+        if ($LASTEXITCODE -ne 0) { $failed++ }
+    }
+
     Write-Host '== scrollbar hiding (::-webkit-scrollbar)'
     $url = 'file:///' + (Join-Path $root 'tools/pages/layout/scrollbar_hidden.html').Replace('\', '/')
     $out = & (Join-Path $root 'build-zig-native\agave_shell.exe') --probe $url `

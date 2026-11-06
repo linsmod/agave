@@ -176,6 +176,7 @@ void CSSPrimitiveValue::cleanup()
 {
     switch (m_type) {
         case CSS_STRING:
+        case CSS_IDENT_TEXT:
         case CSS_URI:
         case CSS_ATTR:
             if (m_value.string)
@@ -420,6 +421,7 @@ String CSSPrimitiveValue::getStringValue() const
 {
     switch (m_type) {
         case CSS_STRING:
+        case CSS_IDENT_TEXT:
         case CSS_ATTR:
         case CSS_URI:
             return m_value.string;
@@ -528,6 +530,9 @@ String CSSPrimitiveValue::cssText() const
             break;
         case CSS_STRING:
             text = quoteStringIfNeeded(m_value.string);
+            break;
+        case CSS_IDENT_TEXT:
+            text = m_value.string;
             break;
         case CSS_URI:
             text = "url(" + quoteURLIfNeeded(m_value.string) + ")";

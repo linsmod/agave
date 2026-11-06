@@ -3670,9 +3670,10 @@ bool CSSParser::parseBackgroundShorthand(bool important)
 {
     // Position must come before color in this array because a plain old "0" is a legal color
     // in quirks mode but it's usually the X coordinate of a position.
-    // FIXME: Add CSS_PROP__KHTML_BACKGROUND_SIZE to the shorthand.
-    const int properties[] = { CSS_PROP_BACKGROUND_IMAGE, CSS_PROP_BACKGROUND_REPEAT, 
-        CSS_PROP_BACKGROUND_ATTACHMENT, CSS_PROP_BACKGROUND_POSITION, CSS_PROP__WEBKIT_BACKGROUND_CLIP,
+    const int properties[] = { CSS_PROP_BACKGROUND_IMAGE, CSS_PROP_BACKGROUND_REPEAT,
+        CSS_PROP_BACKGROUND_ATTACHMENT, CSS_PROP_BACKGROUND_POSITION,
+        CSS_PROP__WEBKIT_BACKGROUND_SIZE,
+        CSS_PROP__WEBKIT_BACKGROUND_CLIP,
         CSS_PROP__WEBKIT_BACKGROUND_ORIGIN, CSS_PROP_BACKGROUND_COLOR };
     const int numProperties = sizeof(properties) / sizeof(properties[0]);
     
@@ -3685,6 +3686,12 @@ bool CSSParser::parseBackgroundShorthand(bool important)
 
     while (valueList->current()) {
         Value* val = valueList->current();
+        /* `background: url() 0 0 / 16px 16px`: the slash only separates the
+         * position from the size, it is not a value of its own. */
+        if (val->unit == Value::Operator && val->iValue == '/') {
+            valueList->next();
+            continue;
+        }
         if (val->unit == Value::Operator && val->iValue == ',') {
             // We hit the end.  Fill in all remaining values with the initial value.
             valueList->next();
@@ -4379,16 +4386,18 @@ CSSValue* CSSParser::parseBackgroundSize()
     }
     
     CSSPrimitiveValue* parsedValue2 = parsedValue1;
+    /* The second value is optional: in a shorthand (`background: url() 0 0/16px
+     * no-repeat`) the next token may belong to another property, so a
+     * non-length simply means "one value" instead of failing the whole
+     * declaration. */
+    unsigned index = valueList->currentIndex();
     if ((value = valueList->next())) {
         if (value->id == CSS_VAL_AUTO)
             parsedValue2 = new CSSPrimitiveValue(0, CSSPrimitiveValue::CSS_UNKNOWN);
-        else {
-            if (!validUnit(value, FLength|FPercent, strict)) {
-                delete parsedValue1;
-                return 0;
-            }
+        else if (validUnit(value, FLength|FPercent, strict))
             parsedValue2 = new CSSPrimitiveValue(value->fValue, (CSSPrimitiveValue::UnitTypes)value->unit);
-        }
+        else
+            valueList->setCurrent(index);
     }
     
     Pair* pair = new Pair(parsedValue1, parsedValue2);

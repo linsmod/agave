@@ -665,6 +665,10 @@ void RenderBox::paintBackgroundExtended(GraphicsContext* context, const Color& c
 
     CachedImage* bg = bgLayer->backgroundImage();
     bool shouldPaintBackgroundImage = bg && bg->canRender(style()->effectiveZoom());
+    if (getenv("AGB_BG_DEBUG"))
+        fprintf(stderr, "[bgimg] bg=%p canRender=%d image=%p\n",
+                (void*)bg, bg ? (int)bg->canRender(style()->effectiveZoom()) : -1,
+                (void*)(bg ? bg->image() : 0));
     Color bgColor = c;
 
     // When this style flag is set, change existing background colors and images to a solid white background.
