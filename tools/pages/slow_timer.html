@@ -1,0 +1,21 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>slow timer</title>
+<body>
+<p id="out">start</p>
+<script>
+/* 3 s of legitimate work in a *timer* callback, not in the page's parse or in
+ * the host's eval command. This is the shape that made the GUI disagree with
+ * the headless probe: the script runs inside macross_event_dispatch(), so the
+ * host's commands queue up behind it and the queue head ages while the page is
+ * doing real work. Before R92 a 1.5 s queue timeout aborted it.
+ *
+ * The probe is told to eval at ~500 ms, while the timer is still running, so a
+ * command really is waiting at the head for the whole 3 s. */
+setTimeout(function () {
+    var t0 = Date.now();
+    while (Date.now() - t0 < 3000) { }
+    document.getElementById('out').textContent = 'done';
+}, 300);
+</script>
+</body>

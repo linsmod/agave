@@ -314,20 +314,37 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
 | `AGB_GC_OFF=1` | `src/gc/gc.c:380` | **完全关闭 GC**（诊断） | "关掉就不崩" = 对象被提前回收的判据（R60/R63/R67） |
 | `AGB_PROXY_DEBUG=1` | `src/ant.c:19779,19792` | Proxy `get` 不变量失败时打印 `[proxy] key=… result=… target=…` | 命中即读 |
 | `ANT_GC_STRESS=1` | `src/verify.c` | 每次分配都触发 GC（测试用） | meson `put-elem-gc` 用它跑 |
-| `AGB_STUCK_EXEC_MS=<ms>` | `src/webview_control/AgaveWebView.c`（`agwWatchdogStart`） | 一个命令（一次页面脚本）跑多久算"卡死"，默认 12000。调小可以复现挂起检测：`AGB_STUCK_EXEC_MS=1000` + 3 s 死循环 → `[evt] page script still running: aborting it` | 看门狗启动时读一次；只影响"命令正在执行"这一档，队列阈值仍是 1.5 s（R90） |
+| `AGB_USER_ABORT_MS=<ms>` | `src/webview_control/AgaveWebView.c`（`agwWatchdogStart`） | 用户动作（导航/刷新/停止/查找）被页面脚本挡住的容忍时间，默认 1500 | 看门狗启动时读一次 |
+| `AGB_UNRESPONSIVE_MS=<ms>` | 同上 | JS 连续在跑多久算"页面无响应"，默认 12000（`AGB_STUCK_EXEC_MS` 是它的旧名，仍然认） | 调小可复现：`AGB_UNRESPONSIVE_MS=2000` + 20 s 死循环 → `[evt] watchdog: aborting an unresponsive page script` |
+| `AGB_NATIVE_STALL_MS=<ms>` | 同上 | 没有 JS、命令却多久不 drain 算"引擎在 JS 之外卡住"，默认 10000；这一档**不中断**，只记日志 | — |
+| `AGB_WD_DEBUG=1` | 同上 | 每个 tick 打印 `wd js=… jsbusy=… busy=… queue=… head=…` | 调阈值、判断"真卡/慢"的第一手数据 |
+| `AGB_HANG_POPUP=0` | `examples/browser_shell/main.c`（`onUnresponsive`） | 关掉"页面无响应"提示框（无人值守/自动化时用） | — |
 
 ant 自身 CLI / 基础设施的开关（`ANT_MANIFEST_URL`、`ANT_SANDBOX_*`、`ANT_NO_CRASH_HANDLER` 等）
 在 `H:\ant-v16` 里读，**和 agave 的运行无关**，排查浏览器问题时不用管。
 
 - **卡死的页面怎么恢复（不用杀进程）**：刷新/导航在控件里是排队命令，脚本不返回时队列永不 drain，
-  所以窗口“活着但没反应”。现在链接/执行类命令在 `agwPost()` 收口处先发中断：引擎在下一个
-  safepoint（解释器调用点 / JIT 循环回边）抛终止错误，脚本退出 → 队列继续 → reload 拿到新 realm。
-  锚点：`agave_webview_interrupt()` / `agave_webview_busy()` / `antb_interrupt_all_engines()`。
-  刷新在**任何状态**都安全，但"多久算卡死"分两档（R90）：命令**正在执行**（`g_engineBusy`）时按
-  `AGW_STUCK_EXEC_MS`（默认 12 s，环境变量 `AGB_STUCK_EXEC_MS` 可覆盖）—— 页面脚本跑几秒是合法的；
-  引擎**空闲**却还有命令排在队首时才用 1.5 s 的队列阈值（drain 循环真的卡住了）。卡死页的脚本被中断一次后
-  标志即被消费（`js_interrupt_raise()`），新文档照常执行。回归
-  `pwsh -File tools/run_hang_recovery_tests.ps1`（5 条：中断、导航中断、空闲误中断、慢页连刷、卡死页刷新恢复）。
+  所以窗口“活着但没反应”。中断机制：引擎在下一个 safepoint（解释器调用点 / JIT 循环回边）抛终止错误，
+  脚本退出 → 队列继续 → reload 拿到新 realm；标志被中断一次后即被消费（`js_interrupt_raise()`），
+  新文档照常执行。锚点：`agave_webview_interrupt()` / `agave_webview_busy()` /
+  `antb_interrupt_all_engines()`。
+- **怎么区分"真卡"和"慢"**（R90/R92，判据在 `agwWatchdogThread()`）：单看时长永远分不出来，所以看两件事 ——
+  **VM 里有没有 JS 在栈上**（`antb_engines_js_depth()`，ant 自己用它判 job 边界）和**谁在等**（队首命令类型）：
+
+  | 现象 | 判定 | 动作 |
+  |---|---|---|
+  | 用户动作（导航/刷新/停止/查找）被脚本挡住 ≥1.5 s | 用户要离开 | 中断（`AGB_USER_ABORT_MS`） |
+  | JS 连续在跑 ≥12 s，没有人在等 | 页面无响应（Chrome 同量级） | 中断并弹提示（`AGB_UNRESPONSIVE_MS`） |
+  | 没有 JS、命令却 ≥10 s 不 drain | 引擎在 JS 之外卡住（模态/死锁/原生长活） | **不中断**（没人轮询标志），只记日志（`AGB_NATIVE_STALL_MS`） |
+
+  页面脚本在 `macross_event_dispatch()` 里跑（load 事件、timer），**不在命令里** —— 所以"队首等了 1.5 s"
+  不能当成卡死（css3test 的 2.9 s onload 就是这样被误杀成 0% 的）。看门狗每 200 ms 采样一次，
+  `AGB_WD_DEBUG=1` 打印每个 tick 的四元组（`js/jsbusy/busy/queue/head`），是调这三个阈值的第一手数据。
+  中断只对 A 类（失控 JS）有效；B 类（原生阻塞）中断标志挂在那里没人看，所以第三档只记录不动作。
+  每次判定同时写一行 `build-zig-native\agb_watchdog.txt`（pid / kind / jsdepth / 队首命令 / busy / queue）——
+  GUI 里没有 stderr，"探针好好的、窗口里是 0%" 这种问题就靠它。
+  回归：`pwsh -File tools/run_hang_recovery_tests.ps1`（8 条：中断、导航中断、空闲误中断、慢页连刷、
+  timer 长脚本不被杀、卡死页刷新恢复、HTTP 连刷、reload 链）。
   验证手段：`--probe <卡死页> --interrupt-after 2000`（到点中断，页面继续加载）或
   `--nav-after 2000`（模拟“卡着时重新导航”）；回归 `pwsh -File tools/run_hang_recovery_tests.ps1`。
   卡死时先 `tools/js_stack.ps1 -Pid <pid>` 留证据再点刷新。`AGB_CRASH_POPUP=0` 可关崩溃弹框

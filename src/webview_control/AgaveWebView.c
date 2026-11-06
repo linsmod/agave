@@ -26,18 +26,21 @@
 static volatile LONG g_engineBusy;
 static DWORD         g_engineBusySince;
 
-/* How long a command may sit at the head of the queue before we conclude the
- * engine thread is not draining it. Long enough that a slow parse/settling page
- * does not trip it, short enough that Reload/navigate on a hung page responds. */
-#define AGW_STUCK_QUEUE_MS 1500u
-
-/* How long one command (i.e. one page script) may run before it counts as a
- * hung page rather than a slow one. Chrome asks the user around 15 s; killing
- * at 1.5 s (the queue threshold) is what broke css3test. AGB_STUCK_EXEC_MS
- * overrides it for regression runs. */
-#define AGW_STUCK_EXEC_MS 12000u
-static DWORD g_stuckExecMs = AGW_STUCK_EXEC_MS;
+/* The three responsiveness budgets (see the watchdog for how they are used):
+ * a user action blocked by a page script, a page script with nobody waiting on
+ * it, and an engine that stopped draining without running JS (reported, not
+ * aborted). AGW_REPORT_GAP_MS rate-limits the report so a script that ignores
+ * the abort cannot fill the log or pop a dialog every tick. */
+#define AGW_USER_ABORT_MS     1500u
+#define AGW_UNRESPONSIVE_MS  12000u
+#define AGW_NATIVE_STALL_MS  10000u
+#define AGW_REPORT_GAP_MS     5000u
+static DWORD g_userAbortMs = AGW_USER_ABORT_MS;
+static DWORD g_unresponsiveMs = AGW_UNRESPONSIVE_MS;
+static DWORD g_nativeStallMs = AGW_NATIVE_STALL_MS;
+static int   g_watchdogDebug;
 static int agwQueueStuckFor(int minMs);
+static DWORD agwQueueWaitType(int* type);
 
 /* The control window class is registered as a Unicode class: see agwRegisterClass. */
 #define AGW_MAX_VIEWS  32
@@ -46,6 +49,7 @@ static int agwQueueStuckFor(int minMs);
 #define AGW_MSG_REPAINT (WM_APP + 0x52)
 #define AGW_MSG_DOWNLOAD (WM_APP + 0x53)
 #define AGW_MSG_CONTEXT (WM_APP + 0x54)
+#define AGW_MSG_UNRESPONSIVE (WM_APP + 0x55)
 
 #define AGW_MAX_DOWNLOADS 32
 
@@ -82,6 +86,39 @@ enum {
     AGW_CMD_CHAR, AGW_CMD_FOCUS, AGW_CMD_SEARCH, AGW_CMD_CONTEXT,
     AGW_CMD_DL_CANCEL
 };
+
+/* Commands that mean "the user wants the page to change": while one of them
+ * waits, a page script is not merely slow, it is in the way, and aborting it is
+ * exactly what the user asked for. Input/resize/download commands are not worth
+ * killing a script for - and they are the ones a busy page keeps queuing. */
+static int agwCommandIsUserAction(int type)
+{
+    switch (type) {
+    case AGW_CMD_NAVIGATE:
+    case AGW_CMD_LOAD_HTML:
+    case AGW_CMD_BACK:
+    case AGW_CMD_FORWARD:
+    case AGW_CMD_RELOAD:
+    case AGW_CMD_STOP:
+    case AGW_CMD_SEARCH:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+/* Why the watchdog spoke up. AGW_HANG_STALL is the one case where aborting is
+ * pointless: the engine is not in JS, so nothing would poll the flag. */
+enum { AGW_HANG_NONE, AGW_HANG_USER_ACTION, AGW_HANG_UNRESPONSIVE, AGW_HANG_STALL };
+
+/* Watchdog -> UI thread payload (the reason text and the numbers behind it). */
+typedef struct {
+    int          kind;
+    unsigned int jsDepth;
+    int          headType;
+    unsigned int busyMs;
+    unsigned int queueMs;
+} AgwHangPayload;
 
 typedef struct {
     int  type;
@@ -859,42 +896,196 @@ static void agwApplyPendingResizes(void)
 /* engine thread                                                              */
 /* ------------------------------------------------------------------------- */
 
-/* Watchdog. Two failure modes, and conflating them kills working pages:
+/* Watchdog: is the page stuck, or just busy?
  *
- *  - The engine thread is *inside* a command (g_engineBusy): page JS is
- *    running. A legitimate script may take seconds - css3test runs 525
- *    synchronous tests in one `onload` call - so the budget here must be the
- *    browser "unresponsive page" scale, not the queue scale.
- *  - The engine thread is *idle* but commands pile up: the drain loop itself
- *    is wedged (modal dialog, deadlock) and the head cannot move at all.
+ * Time alone cannot answer that, and neither can the command queue alone. What
+ * separates the two is *what the engine is doing* and *who is waiting*:
  *
- * Measuring only the queue head (all this did before) mixed them up: while an
- * eval ran, any command posted behind it - the host's timer tick is enough -
- * started the 1.5 s clock, and a script longer than that was aborted with an
- * uncatchable "Script execution interrupted". css3test therefore never got to
- * write its score, and every page with a >1.5 s synchronous script lost its
- * JS. */
+ *   JS on the stack (antb_engines_js_depth)  -> a page script is running, i.e.
+ *       interruptible.  Load events and timers run in macross_event_dispatch(),
+ *       outside any command, so the queue head ages while the page works.
+ *   A user action waiting (navigate/reload/stop/eval/search)  -> the user asked
+ *       to leave; 1.5 s of a blocked user action is already too long.
+ *   Neither JS nor a command running, and the queue still does not move ->
+ *       the engine is wedged outside JS (modal dialog, deadlock, native loop).
+ *       Aborting does nothing here: nobody polls the flag.
+ *
+ * Three verdicts, three actions:
+ *
+ *   user action blocked by JS   -> abort after AGW_USER_ABORT_MS   (1.5 s)
+ *   JS running with nobody waiting -> abort after AGW_UNRESPONSIVE_MS (12 s,
+ *       the browser "page unresponsive" scale; a legitimate 2.9 s onload
+ *       (css3test) is not touched)
+ *   wedged outside JS          -> do NOT abort; record + tell the user
+ *
+ * A wall-clock budget still exists, because "unresponsive" is by definition a
+ * patience threshold (Chrome settles on ~15 s) - but it is now applied to the
+ * right clock. */
 static HANDLE g_watchdog;
 static volatile LONG g_watchdogStop;
 
+static const char* agwHangReason(int kind)
+{
+    switch (kind) {
+    case AGW_HANG_USER_ACTION:
+        return "A page script was blocking a navigation, so it was aborted.";
+    case AGW_HANG_UNRESPONSIVE:
+        return "The page script was unresponsive, so it was aborted.";
+    case AGW_HANG_STALL:
+        return "The engine stopped processing commands while no script was running; "
+               "aborting cannot help, so nothing was killed.";
+    default:
+        return "";
+    }
+}
+
+/* GUI-only failures leave no stderr behind: the page simply stays broken. Keep
+ * one line next to the exe (same idea as agb_crash.txt) so "it works in the
+ * probe but not in the window" has evidence - including the command that was
+ * waiting and the VM depth, which is what the three verdicts are made of. */
+static void agwWatchdogRecord(int kind, unsigned int jsDepth, int headType,
+                              DWORD busyMs, DWORD queueMs)
+{
+    char path[MAX_PATH];
+    DWORD len = GetModuleFileNameA(NULL, path, sizeof(path) - 1);
+    SYSTEMTIME st;
+    FILE* f;
+
+    if (!len || len >= sizeof(path) - 1)
+        return;
+
+    path[len] = 0;
+    while (len > 0 && path[len - 1] != '\\' && path[len - 1] != '/')
+        --len;
+    path[len] = 0;
+
+    if (strlen(path) + sizeof("agb_watchdog.txt") >= sizeof(path))
+        return;
+    strcat(path, "agb_watchdog.txt");
+
+    f = fopen(path, "a");
+    if (!f)
+        return;
+
+    GetLocalTime(&st);
+    fprintf(f, "%04d-%02d-%02d %02d:%02d:%02d pid=%lu kind=%d jsdepth=%u head=%d busy=%lums queue=%lums\n",
+            (int)st.wYear, (int)st.wMonth, (int)st.wDay,
+            (int)st.wHour, (int)st.wMinute, (int)st.wSecond,
+            (unsigned long)GetCurrentProcessId(),
+            kind, jsDepth, headType,
+            (unsigned long)busyMs, (unsigned long)queueMs);
+    fclose(f);
+}
+
+/* Hand the verdict to the UI thread(s): postMessage is the only thing the
+ * engine thread is allowed to do to a window. Every live view gets it because
+ * one engine thread runs every view and the hung script does not say which one
+ * it belongs to. */
+static void agwNotifyHang(int kind, unsigned int jsDepth, int headType,
+                          DWORD busyMs, DWORD queueMs)
+{
+    AgaveWebView* views[AGW_MAX_VIEWS];
+    int count = 0;
+    int i;
+
+    agwLock();
+    for (i = 0; i < g_viewCount; ++i) {
+        if (g_views[i] && !g_views[i]->destroyed && g_views[i]->hwnd && g_views[i]->callbacks.on_unresponsive)
+            views[count++] = g_views[i];
+    }
+    agwUnlock();
+
+    for (i = 0; i < count; ++i) {
+        AgwHangPayload* payload = (AgwHangPayload*)malloc(sizeof(AgwHangPayload));
+
+        if (!payload)
+            continue;
+
+        payload->kind = kind;
+        payload->jsDepth = jsDepth;
+        payload->headType = headType;
+        payload->busyMs = (unsigned int)busyMs;
+        payload->queueMs = (unsigned int)queueMs;
+
+        if (!PostMessageA(views[i]->hwnd, AGW_MSG_UNRESPONSIVE, 0, (LPARAM)payload))
+            free(payload);
+    }
+}
+
 static DWORD WINAPI agwWatchdogThread(LPVOID param)
 {
+    DWORD jsBusyMs = 0;      /* how long JS has been continuously on the stack */
+    DWORD lastTick = GetTickCount();
+    DWORD lastReport = 0;    /* rate limit: one verdict per AGW_REPORT_GAP_MS */
+    int stallReported = 0;
+
     (void)param;
 
     while (!InterlockedCompareExchange(&g_watchdogStop, 0, 0)) {
+        DWORD now, delta, busyMs = 0, queueMs = 0;
+        unsigned int jsDepth;
+        int headType = -1;
+        int kind = AGW_HANG_NONE;
+
         Sleep(200);
 
-        if (InterlockedCompareExchange(&g_engineBusy, 0, 0)) {
-            DWORD running = (DWORD)(GetTickCount() - g_engineBusySince);
+        now = GetTickCount();
+        delta = now - lastTick;
+        lastTick = now;
 
-            if (running >= g_stuckExecMs) {
-                agbLog(AGB_LOG_EVT, "page script still running: aborting it");
-                antb_interrupt_all_engines();
-            }
-        } else if (agwQueueStuckFor((int)AGW_STUCK_QUEUE_MS)) {
-            agbLog(AGB_LOG_EVT, "engine not draining: aborting the page script");
-            antb_interrupt_all_engines();
+        jsDepth = antb_engines_js_depth();
+        if (jsDepth)
+            jsBusyMs += delta;
+        else
+            jsBusyMs = 0;
+
+        if (InterlockedCompareExchange(&g_engineBusy, 0, 0))
+            busyMs = (DWORD)(now - g_engineBusySince);
+
+        queueMs = agwQueueWaitType(&headType);
+        if (headType < 0)
+            stallReported = 0;
+
+        /* AGB_WD_DEBUG=1: one line per tick. This is the only way to see what
+         * the three verdicts are made of while a page is being slow-but-fine. */
+        if (g_watchdogDebug)
+            agbLog(AGB_LOG_EVT, "wd js=%u jsbusy=%lums busy=%lums queue=%lums head=%d",
+                   jsDepth, (unsigned long)jsBusyMs, (unsigned long)busyMs,
+                   (unsigned long)queueMs, headType);
+
+        if (jsDepth && headType >= 0 && agwCommandIsUserAction(headType) && queueMs >= g_userAbortMs) {
+            kind = AGW_HANG_USER_ACTION;
+        } else if (jsBusyMs >= g_unresponsiveMs || busyMs >= g_unresponsiveMs) {
+            kind = AGW_HANG_UNRESPONSIVE;
+        } else if (!jsDepth && !busyMs && headType >= 0 && queueMs >= g_nativeStallMs && !stallReported) {
+            kind = AGW_HANG_STALL;
         }
+
+        if (kind == AGW_HANG_NONE)
+            continue;
+
+        if (kind == AGW_HANG_STALL)
+            stallReported = 1;
+        else
+            antb_interrupt_all_engines();
+
+        /* A script that ignores the abort would otherwise report every tick. */
+        if (lastReport && (DWORD)(now - lastReport) < AGW_REPORT_GAP_MS)
+            continue;
+        lastReport = now;
+
+        agbLog(AGB_LOG_EVT,
+               "watchdog: %s (jsdepth=%u head=%d busy=%lums queue=%lums)",
+               kind == AGW_HANG_USER_ACTION ? "aborting a script that blocks a user action"
+               : kind == AGW_HANG_UNRESPONSIVE ? "aborting an unresponsive page script"
+               : "engine stalled outside JS",
+               jsDepth, headType, (unsigned long)busyMs, (unsigned long)queueMs);
+        agwWatchdogRecord(kind, jsDepth, headType, busyMs, queueMs);
+        /* Only a verdict that changed something is worth a dialog. The stall
+         * verdict kills nothing and is the one a merely slow (big layout, slow
+         * image decode) page can produce, so it stays in the log. */
+        if (kind != AGW_HANG_STALL)
+            agwNotifyHang(kind, jsDepth, headType, busyMs, queueMs);
     }
 
     return 0;
@@ -906,13 +1097,19 @@ static void agwWatchdogStart(void)
 
     if (g_watchdog) return;
 
-    env = getenv("AGB_STUCK_EXEC_MS");
-    if (env) {
-        int ms = atoi(env);
-
-        if (ms > 0)
-            g_stuckExecMs = (DWORD)ms;
+    if ((env = getenv("AGB_USER_ABORT_MS")) != NULL && atoi(env) > 0)
+        g_userAbortMs = (DWORD)atoi(env);
+    if ((env = getenv("AGB_UNRESPONSIVE_MS")) != NULL && atoi(env) > 0)
+        g_unresponsiveMs = (DWORD)atoi(env);
+    if ((env = getenv("AGB_STUCK_EXEC_MS")) != NULL && atoi(env) > 0) {
+        /* Older name for the unresponsive budget, kept so existing scripts and
+         * the hang regression keep working. */
+        g_unresponsiveMs = (DWORD)atoi(env);
     }
+    if ((env = getenv("AGB_NATIVE_STALL_MS")) != NULL && atoi(env) > 0)
+        g_nativeStallMs = (DWORD)atoi(env);
+
+    g_watchdogDebug = getenv("AGB_WD_DEBUG") != NULL;
 
     g_watchdog = CreateThread(NULL, 0, agwWatchdogThread, NULL, 0, NULL);
 }
@@ -929,6 +1126,29 @@ static int agwQueueStuckFor(int minMs)
     if (!at) return 0;
     if (minMs <= 0) return 1;
     return (int)(GetTickCount() - at) >= minMs;
+}
+
+/* How long the command at the head has been waiting and what it is; 0/0 when
+ * the queue is empty (an empty queue means the engine is simply doing its own
+ * work, which is not the host's business). */
+static DWORD agwQueueWaitType(int* type)
+{
+    DWORD at = 0;
+    int queuedType = 0;
+
+    agwLock();
+    if (g_queueHead != g_queueTail) {
+        at = g_queue[g_queueHead].at;
+        queuedType = g_queue[g_queueHead].type;
+    }
+    agwUnlock();
+
+    /* -1, not 0: AGW_CMD_NAVIGATE *is* 0, so 0 cannot double as "empty". */
+    if (type)
+        *type = at ? queuedType : -1;
+
+    if (!at) return 0;
+    return (DWORD)(GetTickCount() - at);
 }
 
 /* Commands that replace or start page execution: they are what a browser makes
@@ -1414,6 +1634,20 @@ static LRESULT CALLBACK agwProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
         agwDeliverDownloads(item);
         InvalidateRect(hwnd, NULL, FALSE);
         return 0;
+
+    case AGW_MSG_UNRESPONSIVE: {
+        /* UI thread: tell the host. A modal notice belongs to the thread that
+         * owns the window, so the engine thread only posts the payload. */
+        AgwHangPayload* payload = (AgwHangPayload*)(INT_PTR)lParam;
+
+        if (item && payload && item->callbacks.on_unresponsive) {
+            item->callbacks.on_unresponsive(item, agwHangReason(payload->kind),
+                                            payload->busyMs, item->user);
+        }
+
+        free(payload);
+        return 0;
+    }
 
     case AGW_MSG_CONTEXT: {
         /* UI thread: the host shows its menu here. TrackPopupMenu and the

@@ -78,10 +78,18 @@
   是两处静默失败叠在一起 —— ①`Document::recalcStyleSelector()` 的遍历遇到 `<body>` 就停（2008 的 HTML4 规则），
   脚本 appendChild 到 `documentElement` 的 `<style>` 因此不进样式表，`<style>.sheet` 是 null，css3test 的
   harness 在第一个 `@rules` 测试抛 `TypeError`，`runTests()` 整个被掀翻；②修好①之后 2.6 s 的脚本又被
-  `AgaveWebView` 的"卡住队列"看门狗在 1.5 s 打断（不可 catch）。现在遍历收整棵树，看门狗按"命令正在执行
-  （`AGW_STUCK_EXEC_MS`，默认 12 s，`AGB_STUCK_EXEC_MS` 可覆盖）"与"引擎空闲但有命令排队（1.5 s）"分开判。
+  `AgaveWebView` 的"卡住队列"看门狗在 1.5 s 打断（不可 catch）。现在遍历收整棵树，看门狗的判据见 R92。
   验收：`#hgroup` = "100% / 525 out of 525 / 122 features"（`#timeTaken≈2.9s`）；spin 4000 ms 不被杀、
   `AGB_STUCK_EXEC_MS=1000` 仍能打断死循环；`check_cssom.js` 的 `append-body`/`append-root`（`LAYOUT=PASS`）。
+
+- **看门狗：真卡 vs 假卡**（R92，2026-11-07）：GUI 里 css3test 仍然 0%（探针 100%）—— 页面 `onload` 跑在
+  `macross_event_dispatch()` 里，`g_engineBusy` 是 0，1.5 s 的"队首等待"把 GUI 载入期排着的
+  resize/focus/按键命令当成卡死，2.9 s 的 onload 被中断。现在桥加了 `antb_engines_js_depth()`
+  （`js->vm_exec_depth`，ant 判 job 边界用的同一个字段），看门狗按三档判：JS 在跑 + 队首是用户动作
+  ≥1.5 s → 中断；JS ≥12 s 无人等 → 中断并弹提示；没有 JS 且 ≥10 s 不 drain → 只记录（中断没用）。
+  附带：队首类型 `-1` 表示空（`AGW_CMD_NAVIGATE` 是 0）、`eval` 不算用户动作、判定写 `agb_watchdog.txt`、
+  新增 `on_unresponsive` 回调 + GUI 提示（`AGB_HANG_POPUP=0` 关闭）。验收：`run_hang_recovery_tests.ps1`
+  8 条全绿（含 `slow_timer.html`），导航打断卡死页 4.6 s，`AGB_UNRESPONSIVE_MS=2000` 可复现，css3test 仍 525/525。
 - **CSSOM 补齐：`CSS.supports('selector()')`、`@page`、`content`/`quotes`/`blink`**（R91，2026-11-06）：
   `selector(::before)` 被当声明按第一个冒号切开、`@page {…}` 在 2008 语法里只剩 error 分支、`content` 的关键字
   分支是空 FIXME、`quotes` 字符串对没有分支、`text-decoration: blink` 只接受不记录 —— 28 个 feature 因此全挂。

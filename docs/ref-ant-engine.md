@@ -101,5 +101,11 @@ git -C H:\ant-v16 rev-parse HEAD
   真跑起来会在**引擎线程之外** `jit_drop_all_code()`（释放正在执行的代码页）；`g_engines` 无锁，
   与 `antb_engine_destroy` 有极窄的 UAF 窗口；`Atomics.wait()` 无 timeout 走 `pthread_cond_wait`，
   只置标志唤不醒它。
+- **"有没有 JS 在跑"（`antb_engines_js_depth()`）**：读每个 engine 的 `js->vm_exec_depth` 取最大值，
+  0 = 没有页面脚本在栈上。ant 自己就用这个字段判断 job 边界（`src/modules/timer.c`:
+  `at_job_boundary = js->vm_exec_depth == 0`），所以语义现成；宿主侧只是一次字段读，可以从看门狗线程轮询。
+  agave 用它把"页面在跑 JS（可中断）"和"引擎在 JS 之外卡住（中断没用）"分开（见
+  [dev-debugging.md](dev-debugging.md)）。⚠ `vm_exec_depth` 只覆盖 silver 解释器里的调用，
+  JIT 代码走 `jit_active_depth`；需要更精确时把两者一起报。
 - 日志：ant 不直接依赖 agave 的 `AgbLog.h`；桥通过 `antb_set_logger` 回调，
   `AntRuntime.cpp` 把 `[flag]` 行接回 agave 的统一日志。

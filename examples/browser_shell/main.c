@@ -992,6 +992,42 @@ static void onDownload(AgaveWebView* view, const MC_DOWNLOAD_INFO* info, void* u
         updateStatus();
 }
 
+/* The watchdog stepped in (see AgaveWebView.c): a page script was blocking the
+ * page and got aborted, or the engine stopped draining while no script was
+ * running (nothing was killed there - aborting cannot help). Runs on the UI
+ * thread, so a notice is allowed to be a plain dialog; AGB_HANG_POPUP=0 keeps
+ * unattended runs quiet. */
+static void onUnresponsive(AgaveWebView* view, const char* reason,
+                           unsigned int busy_ms, void* user)
+{
+    Tab* tab = (Tab*)user;
+    const char* show = getenv("AGB_HANG_POPUP");
+    char message[700];
+
+    (void)view;
+
+    if (tab) {
+        strncpy(tab->status, reason ? reason : "", sizeof(tab->status) - 1);
+        tab->status[sizeof(tab->status) - 1] = 0;
+
+        if (tab == &g_tabs[g_activeTab])
+            updateStatus();
+    }
+
+    agbLog(AGB_LOG_SHELL, "page unresponsive: %s (busy=%ums)", reason ? reason : "",
+           busy_ms);
+
+    if (show && show[0] == '0' && show[1] == 0)
+        return;
+
+    _snprintf(message, sizeof(message),
+              "%s\n\n(%.1f s)\n\nAGB_HANG_POPUP=0 turns this notice off.",
+              reason ? reason : "", busy_ms / 1000.0);
+    message[sizeof(message) - 1] = 0;
+    MessageBoxA(g_hwnd, message, "agave - page unresponsive",
+                MB_OK | MB_ICONWARNING | MB_SETFOREGROUND);
+}
+
 /* Right click: the control reports the hit-test; the shell owns the menu. */
 static void navigateActive(const char* text, int newTab);
 static void addBookmarkCurrent(void);
@@ -1682,6 +1718,7 @@ static void createTab(const char* url)
     callbacks.on_close_window = onCloseWindow;
     callbacks.on_download = onDownload;
     callbacks.on_context_menu = onContextMenu;
+    callbacks.on_unresponsive = onUnresponsive;
 
     tab->used = 1;
     tab->view = agave_webview_create(g_hwnd, 0, TAB_HEIGHT + TOOLBAR_H,
@@ -2681,6 +2718,19 @@ static int probeOnDialog(AgaveWebView* view, int type, const char* message,
     return 1;
 }
 
+/* The watchdog's notice, on the UI thread. The probe has no window to show it
+ * in, so it prints one line: that is what makes "the engine aborted a page and
+ * told the host" testable headlessly (AGB_UNRESPONSIVE_MS=2000 on a spinner). */
+static void probeOnUnresponsive(AgaveWebView* view, const char* reason,
+                                unsigned int busy_ms, void* user)
+{
+    (void)view;
+    (void)user;
+
+    probePrint("[probe] unresponsive", reason ? reason : "");
+    (void)busy_ms;
+}
+
 /* Right click reaches the host on the UI thread (the control copies the payload
  * and posts it there; a menu cannot be built from the engine thread). The probe
  * only records it - no menu, so the run stays headless - which is what makes the
@@ -3037,6 +3087,7 @@ static int probeRun(const char* url)
     callbacks.on_close_window = probeOnCloseWindow;
     callbacks.on_dialog = probeOnDialog;
     callbacks.on_context_menu = probeOnContextMenu;
+    callbacks.on_unresponsive = probeOnUnresponsive;
 
     g_probeView = agave_webview_create(g_probeWnd, 0, 0, 1100, 800, &callbacks, NULL);
     if (!g_probeView) {

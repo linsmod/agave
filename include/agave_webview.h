@@ -79,6 +79,16 @@ typedef struct AgaveWebViewCallback {
     /* The page called window.close(); runs on the engine thread, so keep the
      * work short (post to your own thread if you touch GUI state). */
     void (*on_close_window)(AgaveWebView* view, void* user);
+
+    /* The watchdog had to step in: it aborted a page script that was blocking a
+     * navigation or that had been running with nobody waiting on it, or it found
+     * the engine not draining while no script was running at all (that last case
+     * kills nothing - aborting cannot help there). Runs on the UI thread, so a
+     * notice dialog belongs here. `reason` is one short sentence, `busy_ms` is
+     * how long the offending script had been running. A slow but working page
+     * never reaches this callback. */
+    void (*on_unresponsive)(AgaveWebView* view, const char* reason,
+                            unsigned int busy_ms, void* user);
 } AgaveWebViewCallback;
 
 /* Creates the control as a child of `parent`. Returns NULL on failure. */

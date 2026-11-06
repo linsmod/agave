@@ -8,6 +8,7 @@
 #   3. an interrupt on an idle page changes nothing
 #   4. repeated reloads of a *slow but legitimate* page are never interrupted
 #      (the "several reloads and the page goes white" bug)
+#   4b. a long script in a *timer* (outside the command queue) is never aborted
 #   5. a hung page reloads into a working page (the interrupt request is consumed
 #      once, so the reloaded document's scripts are not killed as well)
 #   6. reload hammered over a progressive HTTP response keeps the document
@@ -96,6 +97,23 @@ if (Test-Path $slow) {
     $aborts = ([regex]::Matches($r.Text, 'aborting the page script')).Count
     Check 'slow page survives repeated reloads' ($r.Code -eq 0 -and $aborts -eq 0) `
           ("exit={0} aborts={1} {2}ms" -f $r.Code, $aborts, $r.Ms)
+}
+
+# 4b. A long script in a *timer* callback: it runs inside macross_event_dispatch(),
+#     not inside a command, so the host's commands queue up behind it and the queue
+#     head ages for the whole script. That is the GUI-only shape (the guard against it
+#     is what kept css3test at 0% in the window while the probe said 100%). Nothing may
+#     be aborted, and the queued eval must still see the finished page.
+$slowTimer = Join-Path $root 'tools\pages\slow_timer.html'
+if (Test-Path $slowTimer) {
+    Remove-Item (Join-Path $root 'build-zig-native\agb_watchdog.txt') -ErrorAction SilentlyContinue
+    $r = Invoke-Probe @('--probe', (PageUrl $slowTimer), '--wait', '500', '--settle', '100',
+                        '--timeout', '40000',
+                        '--eval', "probeExit(document.getElementById('out').textContent)")
+    $watchdog = Test-Path (Join-Path $root 'build-zig-native\agb_watchdog.txt')
+    $done = $r.Text -match '\[exit\] done'
+    Check 'timer script longer than the queue timeout survives' ($done -and -not $watchdog) `
+          ("done={0} watchdogFile={1} {2}ms" -f $done, $watchdog, $r.Ms)
 }
 
 # 5. Hung page reloaded: the stuck script is aborted, the reload runs, and the
