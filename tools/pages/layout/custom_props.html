@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>custom properties: computed values</title>
+<style>
+  html, body { margin: 0; padding: 0; }
+  .row { height: 20px; line-height: 20px; box-sizing: border-box; }
+  :root {
+    --tint: rgb(1, 2, 3);
+    --pad: 4px 8px;
+  }
+  #a { color: var(--tint); }
+  #b { padding: var(--pad); }
+</style>
+</head>
+<body>
+<div id="a" class="row" data-case="a" data-props="color">a</div>
+<div id="b" class="row" data-case="b" data-props="padding-top,padding-left">b</div>
+<div id="d" class="row" data-case="d" data-props="--tint,--pad">d</div>
+<div style="height:1200px"></div>
+</body>
+</html>

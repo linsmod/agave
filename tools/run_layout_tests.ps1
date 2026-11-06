@@ -102,6 +102,27 @@ try {
         if ($LASTEXITCODE -ne 0) { $failed++ }
     }
 
+    Write-Host '== custom properties (computed values + inline API)'
+    $url = 'file:///' + (Join-Path $root 'tools/pages/layout/custom_props.html').Replace('\', '/')
+    $out = & (Join-Path $root 'build-zig-native\agave_shell.exe') --probe $url `
+        --eval-file (Join-Path $root 'tools/pages/layout/check_custom_props.js') `
+        --wait 700 --settle 200 --timeout 30000 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host 'custom_props: probe failed'
+        $failed++
+    } else {
+        $text = $out -join "`n"
+        $missing = 0
+        foreach ($needle in @('sheetTint=rgb(1, 2, 3)', 'sheetPad=4px 8px', 'inlineOwn=rgb(1, 2, 3)',
+                              'inlineCssText=[--mine: rgb(1, 2, 3); ]', 'inlineColor=rgb(1, 2, 3)',
+                              'chainedColor=rgb(1, 2, 3)', 'removed=[var(--tint)]', 'afterRemove=[]')) {
+            if ($text -notmatch [regex]::Escape($needle)) {
+                Write-Host ('custom_props: missing ' + $needle)
+                $missing++
+            }
+        }
+        if ($missing) { $failed++ } else { Write-Host 'custom_props: ok' }
+    }
     Write-Host '== scrollbar hiding (::-webkit-scrollbar)'
     $url = 'file:///' + (Join-Path $root 'tools/pages/layout/scrollbar_hidden.html').Replace('\', '/')
     $out = & (Join-Path $root 'build-zig-native\agave_shell.exe') --probe $url `

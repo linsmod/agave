@@ -57,6 +57,11 @@
   `ResourceHandleManager::add()` 本地解码 data: 并走 `CachedDelivery`。验收：
   `background_paint.html` 的 `#varrel`/`#data`/`#dataimg` 4 个像素，`LAYOUT=PASS`。
 
+- **自定义属性的读写与序列化**（R87，2026-11-06）：`getComputedStyle().getPropertyValue('--x')` 以前返回内部名
+  `-agb-…`（值里的 `var(-agb-y)` 同样），`el.style.setProperty('--x', v)` 被静默丢弃。现在读/序列化还原作者拼写，
+  name 版 `setProperty/getPropertyValue/removeProperty` 走 `setCustomProperty/customPropertyValue/removeCustomProperty`，
+  `valueText()` 也不再把逗号写成 `" , "`（变量套变量因此能算出色值）。验收：
+  `custom_props.html` 3 case 对拍 Chrome 全绿 + `check_custom_props.js`（`run_layout_tests.ps1` 的 `custom_props: ok`）。
 ## P0：先修正确性
 
 ### P0-b 图就绪与执行解耦
