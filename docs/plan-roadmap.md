@@ -270,3 +270,17 @@
   3. 回归：`ANT_GC_STRESS=1` 下循环 `obj[动态键]=v`（含 `obj[i/2]`、负数键）新增 meson 用例；
      163 用 `tools/cdb_stack.ps1 -Url https://www.163.com/` 跑 3 次确认 `hash_key` 不再出现；
   4. 顺带：`agwPost` 收口（`02db00b`）缺自动化用例；GUI “卡死页重新导航”手感验证未做。
+
+### P0-k 卡死的页面可恢复（中断 + 重载/导航，**已完成 2026-11-06**）
+
+- 问题：页面脚本不返回时引擎线程被占，刷新/导航/关标签页都只是排队，窗口“活着但没反应”。
+- 已做：①ant 侧 `antb_interrupt_all_engines()`（`sv_jit_arm_interrupts` + 原子置位，任意线程可调），
+  顶层 eval 入口清 `interrupt_pending`/`terminating`，避免误杀下一段脚本；②控件侧 `agwPost()` 收口：
+  NAVIGATE/LOAD_HTML/BACK/FORWARD/RELOAD/STOP/EVAL 在引擎忙 >300 ms 时先中断再入队；
+  busy 是**进程级**（一条引擎线程服务所有 view）；`agave_webview_interrupt/busy` 暴露给宿主；
+  ③shell 刷新（按钮/F5/Ctrl+R/右键菜单）与地址栏导航都走这条；④探针 `--interrupt-after <ms>` 可直接回归。
+- 验收：`--probe debug/hang_loop.html --interrupt-after 2000` 在 2 s 中止死循环、页面继续加载
+  （无此开关时只能等 `--timeout`）；`--probe <卡死页> --wait 2000 --eval "probeExit(0)"` 能跑出 exit 0
+  （eval 排在卡死脚本后面，收口处先中断）。GUI 刷新/导航的手感验证由人工完成。
+- 已知限制：中断后页面状态不可信，必须配重载/导航；`<script>` 里的死循环能中断，
+  但引擎线程若卡在 **native 代码**（非 JS 循环）则没有 safepoint，仍需杀进程。

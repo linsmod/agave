@@ -19,6 +19,8 @@
 | 301/302 重定向 | `WinHttpSession.cpp`（`Request::followRedirects=false` → `WINHTTP_OPTION_REDIRECT_POLICY_NEVER`）；`ResourceHandleNet.cpp` `onResponse()`（3xx → `willSendRequest` → `ResourceHandleManager::redirect()`）；回归 `tools/nav_redirect_server.py` |
 | 入口模块时序（三条泳道图） | [arch-module-loading.md](arch-module-loading.md) |
 | 桥接释放 | `H:\ant-v16\bridge\AntBridge.c`：`antb_wrap_native_owner` / `antb_release_owner` / `agbReleaseEngineWrappers` / `agbReleaseEngineClasses` / `antb_engine_destroy` |
+| 卡死页恢复（中断 + 重载） | `src/webview_control/AgaveWebView.c`：`agwPost()`（唯一排队口，导航/执行类命令先中断）、`agwEngineBusyFor()`（进程级 busy）、`agave_webview_interrupt()` / `agave_webview_busy()`；桥 `antb_interrupt_all_engines()`（`bridge/AntBridge.c`）；引擎侧 `js_interrupt_pending` + `sv_jit_arm_interrupts()` + `js_interrupt_raise()`；壳 `--interrupt-after`、`shellAnnounceCrashFile()` |
+| 浏览历史 | `examples/browser_shell/main.c`：`loadHistory()` / `recordHistory()` / `statePath()`（`history.txt` 是追加写，启动时读回并按连续重复去重） |
 | 页面时序挂点 | `FrameLoaderClientMC.cpp`：`dispatchWillClose` / `committedLoad` / `dispatchDidFinishDocumentLoad` / `dispatchDidFinishLoad` |
 | 默认日志收口 | `src/webview/AgbLog.h`：`agbLog(channel, fmt, ...)` + `agbLogElapsedMs()`；通道 `evt/nav/ui/shell/probe/flag`，时间原点跨 DLL 共享；格式 `[<ms>ms] [tag] 正文` |
 | `[nav]` 导航日志 | 钩子在 `FrameLoaderClientMC.cpp`（request/new-window/submit/redirect/fail/blocked）、`WebEngine.cpp`（`macross_view_open_url/back/forward/reload/stop`）、`AgaveWebView.c`（popup/download）；开关 `AGB_NAV_LOG=0` |

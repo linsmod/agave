@@ -66,6 +66,11 @@ git -C H:\ant-v16 rev-parse HEAD
 - ant 的 ESM `esm_is_url` 只认 http(s)：`file:` 模块靠 agave 侧伪装成 `http://file.ant/...`，
   fetcher 再还原（见 [arch-module-loading.md](arch-module-loading.md)）。
 - 一个 error 没有栈时（页面关掉 `Error.stackTraceLimit`）用 `AGB_ERR_SNIPPET=1` 定位。
+- **interned 字符串（`intern_string`）是 isolate 级永生的**：条目从 `intern_chunk_t` 顺序切出（`src/ant.c:206`），
+  扩容只换 slot 表、不移位（`:188`），整块只在 `js_destroy` 里 `intern_table_free()`（`:222` 唯一调用点）。
+  所以 `const char* interned` 可以安全缓存（`js->intern.idx[]` / `idx_hash` 就是靠这个）——
+  但 **JS 字符串值** 不保证：`sv_key_to_propstr` 之类转换出来的字节可能是临时/rope buffer，
+  不能只靠“pin 住值”当永久键用（R71 的崩溃就是这么来的：错误值被当键 + 转换在 root scope 之前）。
 - **C 侧持有 JS 值一律走 `antb_retain()`**（监听器、定时器、XHR 回调……）；它内部是
   `gc_pin_permanent()`。对象走 `permanent_roots`（`gc_permanent` 免扫），**函数/闭包走
   `permanent_values`**（每次 GC 重新 mark）——两者都不要绕过桥自己 pin，且必须检查返回值：

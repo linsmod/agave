@@ -183,7 +183,16 @@ try {
 } finally { [void][JsStackNative]::CloseHandle($proc) }
 
 # -------------------------------------------------------------------- report --
-if (-not (Test-Path $Out)) { throw "pid $ProcessId did not write $Out (engine gone, or the VM walk faulted)" }
+if (-not (Test-Path $Out)) {
+    # Only the dump-to-file exports produce the file. -Export also lets callers
+    # run other void exports (e.g. antb_interrupt_all_engines) through the same
+    # remote-thread channel; those must not look like a failure.
+    if ($Export -eq 'antb_dump_last_js_stack_to_file' -or $Export -eq 'antb_dump_js_stack_to_file') {
+        throw "pid $ProcessId did not write $Out (engine gone, or the VM walk faulted)"
+    }
+    Write-Host "(no file expected: '$Export' is not a dump-to-file export)" -ForegroundColor DarkGray
+    return
+}
 $lines = @(Get-Content $Out)
 Write-Host ("== {0} line(s)" -f $lines.Count) -ForegroundColor Cyan
 $lines | ForEach-Object { Write-Host "  $_" }

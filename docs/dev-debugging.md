@@ -282,6 +282,13 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
   `.call` 里带字符串字面量）。
   产物形如 `at j (https://vfiles.gtimg.cn/…/vendor-common-*.js:1:52943)` × N —— v.qq 的卡死能直接看到
   字节码 VM 的递归分发帧，比看门狗的单帧信息多。
+- **卡死的页面怎么恢复（不用杀进程）**：刷新/导航在控件里是排队命令，脚本不返回时队列永不 drain，
+  所以窗口“活着但没反应”。现在链接/执行类命令在 `agwPost()` 收口处先发中断：引擎在下一个
+  safepoint（解释器调用点 / JIT 循环回边）抛终止错误，脚本退出 → 队列继续 → reload 拿到新 realm。
+  锚点：`agave_webview_interrupt()` / `agave_webview_busy()` / `antb_interrupt_all_engines()`。
+  验证手段：`--probe <卡死页> --interrupt-after 2000`（到点中断，页面继续加载）；或卡死时先
+  `tools/js_stack.ps1 -Pid <pid>` 留证据再点刷新。`AGB_CRASH_POPUP=0` 可关崩溃弹框
+  （弹框会给出 `agb_crash.txt` 的绝对路径与符号化命令）。
 - **一条命令跑站点冒烟**：`pwsh -File tools/run_site_smoke.ps1`
   —— deepseek / baidu / v.qq 各跑一次探针，输出退出码、耗时、元素数与 title；退出码 0 且元素数
   达到下限才算过。**需要网络**：exit 5/6 先确认站点可达再当引擎问题查。v.qq 目前带

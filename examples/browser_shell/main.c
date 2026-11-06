@@ -135,7 +135,23 @@ static void dataDirInit(void)
         }
     }
 
-    /* Portable mode: next to the executable. */
+    /* Fallback: %LOCALAPPDATA%\AgaveShellData. Never default next to the
+     * executable: in a dev tree that is build-zig-native\, which a -Fresh
+     * build deletes (history/bookmarks/session would vanish with it). */
+    {
+        const char* local = getenv("LOCALAPPDATA");
+
+        if (local && local[0]) {
+            _snprintf(g_dataDir, sizeof(g_dataDir), "%s\\AgaveShellData", local);
+            g_dataDir[sizeof(g_dataDir) - 1] = 0;
+
+            if (CreateDirectoryA(g_dataDir, NULL) ||
+                GetFileAttributesA(g_dataDir) != INVALID_FILE_ATTRIBUTES)
+                return;
+        }
+    }
+
+    /* Last resort: next to the executable (portable USB-ish setups). */
     {
         char module[MAX_PATH];
 
@@ -244,6 +260,41 @@ static void loadBookmarks(void)
     fclose(file);
 }
 
+/* Read the history back. It used to be append-only: recordHistory() wrote the
+ * file but nothing ever loaded it, so the History menu only ever showed the
+ * current session and every restart looked like "history lost". */
+static void loadHistory(void)
+{
+    char path[MAX_PATH_CHARS];
+    char line[1400];
+    FILE* file;
+
+    g_historyCount = 0;
+    statePath(path, sizeof(path), "history.txt");
+    file = fopen(path, "rb");
+
+    if (!file)
+        return;
+
+    while (g_historyCount < AGW_MAX_HISTORY && fgets(line, sizeof(line), file)) {
+        size_t len = strlen(line);
+
+        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
+            line[--len] = 0;
+        if (len == 0)
+            continue;
+        if (g_historyCount > 0 && !strcmp(g_history[g_historyCount - 1], line))
+            continue;
+
+        strncpy(g_history[g_historyCount], line, MAX_PATH_CHARS - 1);
+        g_history[g_historyCount][MAX_PATH_CHARS - 1] = 0;
+        ++g_historyCount;
+    }
+
+    fclose(file);
+    fprintf(stderr, "[ui] history loaded: %d entr%s from %s\n",
+            g_historyCount, g_historyCount == 1 ? "y" : "ies", path);
+}
 static void saveBookmarks(void)
 {
     char path[MAX_PATH_CHARS];
@@ -307,6 +358,9 @@ static void recordHistory(const char* url)
     if (file) {
         fprintf(file, "%s\n", url);
         fclose(file);
+    } else {
+        /* Silent before: "history keeps disappearing" started here. */
+        fprintf(stderr, "[ui] history: cannot append to %s\n", path);
     }
 }
 
@@ -1052,20 +1106,6 @@ static void injectVConsole(AgaveWebView* view)
         "})();");
 }
 
-/* Reload is a queued command: on a page whose script never returns the queue
- * never drains, so the reload sits behind the script forever (the window looks
- * alive, but nothing responds). Abort the script first - the engine stops at
- * its next safepoint (interpreter call / JIT loop backedge) and the queued
- * reload then runs, giving the page a fresh realm. */
-static void shellReloadView(AgaveWebView* view)
-{
-    if (!view) return;
-    if (agave_webview_busy(view, 300)) {
-        fprintf(stderr, "[ui] reload: engine busy, interrupting the page script\n");
-        agave_webview_interrupt(view);
-    }
-    agave_webview_reload(view);
-}
 static void injectInspector(AgaveWebView* view)
 {
     injectScriptFile(view, "inspector.js", "AGB_INSPECTOR");
@@ -1114,7 +1154,7 @@ static void onContextMenu(AgaveWebView* view, int x, int y,
     switch (choice) {
     case 1: if (tab->used) agave_webview_back(tab->view); break;
     case 2: if (tab->used) agave_webview_forward(tab->view); break;
-    case 3: if (tab->used) shellReloadView(tab->view); break;
+    case 3: if (tab->used) agave_webview_reload(tab->view); break;
     case 4: if (linkUrl && linkUrl[0]) navigateActive(linkUrl, 0); break;
     case 5: if (linkUrl && linkUrl[0]) navigateActive(linkUrl, 1); break;
     case 6:
@@ -1696,7 +1736,7 @@ static void showMainMenu(void)
     case 4: g_zoom = 100; applyZoomToActive(); updateStatus(); break;
     case 5: navigateActive("about:blank", 1); break;
     case 6: toggleFind(); break;
-    case 7: if (g_tabs[g_activeTab].used) shellReloadView(g_tabs[g_activeTab].view); break;
+    case 7: if (g_tabs[g_activeTab].used) agave_webview_reload(g_tabs[g_activeTab].view); break;
     case 8: injectVConsole(g_tabs[g_activeTab].view); break;
     case 9: injectInspector(g_tabs[g_activeTab].view); break;
     default: break;
@@ -1864,7 +1904,7 @@ static LRESULT CALLBACK shellProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM
         switch (id) {
         case ID_BACK:    if (tab->used) agave_webview_back(tab->view); break;
         case ID_FORWARD: if (tab->used) agave_webview_forward(tab->view); break;
-        case ID_RELOAD:  if (tab->used) shellReloadView(tab->view); break;
+        case ID_RELOAD:  if (tab->used) agave_webview_reload(tab->view); break;
         case ID_STOP:    if (tab->used) agave_webview_stop(tab->view); break;
 
         case ID_GO: {
@@ -1914,6 +1954,8 @@ static HWND makeButton(const char* text, int id)
 /* Set when --probe was given: headless runs must not pop dialogs (their stderr
  * already carries the same information, and a modal box would hang CI). */
 static int g_probeMode;
+/* --interrupt-after <ms>: abort the page script once, mid-load (hang recovery). */
+static int g_probeInterruptAfterMs;
 /* GUI runs only: tell the user where the crash dump landed. The file name is
  * relative to the process CWD, so show the absolute path - the shell may have
  * been started from anywhere. */
@@ -2149,6 +2191,7 @@ static void shellExitTrace(void)
 #define PROBE_TIMER_SETTLE  2
 #define PROBE_TIMER_TIMEOUT 3
 #define PROBE_TIMER_POLL    4   /* repeating: poll new document after reload */
+#define PROBE_TIMER_INTERRUPT 5 /* one-shot: --interrupt-after (hang recovery) */
 
 /* Engine-thread callbacks post this to the probe window (main thread) to arm
  * the eval timer: window timers must be installed by the owning thread. */
@@ -2758,6 +2801,8 @@ static int probeRun(const char* url)
            (unsigned long)GetCurrentProcessId());
 
     SetTimer(g_probeWnd, PROBE_TIMER_TIMEOUT, g_probeTimeoutMs, NULL);
+    if (g_probeInterruptAfterMs > 0)
+        SetTimer(g_probeWnd, PROBE_TIMER_INTERRUPT, (UINT)g_probeInterruptAfterMs, NULL);
 
     /* Focus only makes sense for a visible window; a hidden control that grabs
      * focus activates a window nobody can see. */
@@ -2780,6 +2825,15 @@ static int probeRun(const char* url)
                 g_probeTimedOut = 1;
                 probePrint("[probe]", g_probeFinished ? "timeout, exiting" : "timeout, load never finished");
                 break;
+            }
+
+            if (msg.wParam == PROBE_TIMER_INTERRUPT) {
+                KillTimer(g_probeWnd, PROBE_TIMER_INTERRUPT);
+                if (g_probeView) {
+                    probePrint("[probe]", "interrupt-after: aborting the page script");
+                    agave_webview_interrupt(g_probeView);
+                }
+                continue;
             }
 
             if (msg.wParam == PROBE_TIMER_EVAL) {
@@ -3247,6 +3301,11 @@ static void parseShellArgv(void)
             g_probeSettleMs = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--timeout") && i + 1 < argc) {
             g_probeTimeoutMs = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "--interrupt-after") && i + 1 < argc) {
+            /* Abort the page's script N ms after the probe starts. A hung page
+             * (or a page whose JS never returns) otherwise only ends at
+             * --timeout; this exercises the same path Reload uses. */
+            g_probeInterruptAfterMs = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--reload") && i + 1 < argc) {
             g_probeReloadsLeft = atoi(argv[++i]);
             g_probeReloadMode = 1;
@@ -3372,6 +3431,7 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
 
     dataDirInit();
     loadBookmarks();
+    loadHistory();
 
     g_back = makeButton("<", ID_BACK);
     g_forward = makeButton(">", ID_FORWARD);
@@ -3469,7 +3529,7 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
                     continue;
                 }
                 if (msg.wParam == 'W' && !shift) { closeTab(g_activeTab); continue; }
-                if (msg.wParam == 'R' && !shift) { if (g_tabs[g_activeTab].used) shellReloadView(g_tabs[g_activeTab].view); continue; }
+                if (msg.wParam == 'R' && !shift) { if (g_tabs[g_activeTab].used) agave_webview_reload(g_tabs[g_activeTab].view); continue; }
                 if (msg.wParam == VK_TAB) { switchTab(shift ? -1 : 1); continue; }
                 /* Ctrl+L selects the current URL: typing then replaces it, which
                  * is also what stops "http://" + a typed path from being glued
