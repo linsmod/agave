@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>css unset</title>
+<style>
+  html, body { margin: 0; padding: 0; }
+  #stage { width: 600px; background: #eee; color: rgb(1, 2, 3); font-size: 20px; }
+  .base { width: 200px; margin-left: 50px; border-left: 10px solid #000; padding-left: 5px; }
+  .unset { width: unset; margin-left: unset; border-left: unset; padding-left: unset; }
+  .color { color: rgb(200, 0, 0); }
+  .color-unset { color: unset; }
+  .font { font-size: 30px; }
+  .font-unset { font-size: unset; }
+  .vis { visibility: hidden; }
+  .vis-unset { visibility: unset; }
+  /* Text rows use a fixed line box: Chrome and agave have different font
+   * metrics, and this page is about `unset`, not about line height. */
+  .line { height: 20px; line-height: 20px; overflow: hidden; }
+  .bubble { line-height: 0; }
+  .bubble img { width: 16px; height: 17px; }
+  .bubble.auto img { width: unset; height: 17px; margin-right: 9px; }
+  #spacer { height: 1200px; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div class="base" data-case="w-fixed" data-props="width"></div>
+  <div class="base unset" data-case="w-unset" data-props="width"></div>
+  <div class="color line" data-case="color-fixed" data-props="color">text</div>
+  <div class="color color-unset line" data-case="color-unset" data-props="color">text</div>
+  <div class="font line" data-case="font-fixed" data-props="font-size">text</div>
+  <div class="font font-unset line" data-case="font-unset" data-props="font-size">text</div>
+  <div class="vis line" data-case="vis-fixed" data-props="visibility">text</div>
+  <div class="vis vis-unset line" data-case="vis-unset" data-props="visibility">text</div>
+  <div class="bubble"><img src="unset_logo.png" alt="" data-case="img-fixed" data-props="width,height"></div>
+  <div class="bubble auto"><img src="unset_logo.png" alt="" data-case="img-unset" data-props="width,height"></div>
+</div>
+<div id="spacer"></div>
+</body>
+</html>

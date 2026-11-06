@@ -2408,6 +2408,64 @@ static bool propertyAcceptsCalcLength(int propId)
     }
 }
 
+/* CSS-wide keyword `unset`: inherited properties behave as `inherit`, every
+ * other property as `initial`. This engine has no per-property inherited flag,
+ * so the list covers the properties it implements. Unknown/new properties
+ * default to non-inherited, which is the common case in CSS. */
+static bool isInheritedProperty(int propId)
+{
+    switch (propId) {
+    case CSS_PROP_BORDER_COLLAPSE:
+    case CSS_PROP_BORDER_SPACING:
+    case CSS_PROP_CAPTION_SIDE:
+    case CSS_PROP_COLOR:
+    case CSS_PROP_CURSOR:
+    case CSS_PROP_DIRECTION:
+    case CSS_PROP_EMPTY_CELLS:
+    case CSS_PROP_FONT:
+    case CSS_PROP_FONT_FAMILY:
+    case CSS_PROP_FONT_SIZE:
+    case CSS_PROP_FONT_STRETCH:
+    case CSS_PROP_FONT_STYLE:
+    case CSS_PROP_FONT_VARIANT:
+    case CSS_PROP_FONT_WEIGHT:
+    case CSS_PROP_LETTER_SPACING:
+    case CSS_PROP_LINE_HEIGHT:
+    case CSS_PROP_LIST_STYLE:
+    case CSS_PROP_LIST_STYLE_IMAGE:
+    case CSS_PROP_LIST_STYLE_POSITION:
+    case CSS_PROP_LIST_STYLE_TYPE:
+    case CSS_PROP_ORPHANS:
+    case CSS_PROP_QUOTES:
+    case CSS_PROP_TEXT_ALIGN:
+    case CSS_PROP_TEXT_INDENT:
+    case CSS_PROP_TEXT_SHADOW:
+    case CSS_PROP_TEXT_TRANSFORM:
+    case CSS_PROP_VISIBILITY:
+    case CSS_PROP_WHITE_SPACE:
+    case CSS_PROP_WIDOWS:
+    case CSS_PROP_WORD_BREAK:
+    case CSS_PROP_WORD_SPACING:
+    case CSS_PROP_WORD_WRAP:
+    case CSS_PROP__WEBKIT_BORDER_HORIZONTAL_SPACING:
+    case CSS_PROP__WEBKIT_BORDER_VERTICAL_SPACING:
+    case CSS_PROP__WEBKIT_FONT_SIZE_DELTA:
+    case CSS_PROP__WEBKIT_LINE_BREAK:
+    case CSS_PROP__WEBKIT_NBSP_MODE:
+    case CSS_PROP__WEBKIT_RTL_ORDERING:
+    case CSS_PROP__WEBKIT_TEXT_DECORATIONS_IN_EFFECT:
+    case CSS_PROP__WEBKIT_TEXT_FILL_COLOR:
+    case CSS_PROP__WEBKIT_TEXT_SECURITY:
+    case CSS_PROP__WEBKIT_TEXT_SIZE_ADJUST:
+    case CSS_PROP__WEBKIT_TEXT_STROKE_COLOR:
+    case CSS_PROP__WEBKIT_TEXT_STROKE_WIDTH:
+    case CSS_PROP__WEBKIT_USER_MODIFY:
+        return true;
+    default:
+        return false;
+    }
+}
+
 bool CSSParser::parseValue(int propId, bool important)
 {
     if (!valueList)
@@ -2458,6 +2516,21 @@ bool CSSParser::parseValue(int propId, bool important)
         if (num != 1)
             return false;
         addProperty(propId, new CSSInitialValue(false), important);
+        return true;
+    }
+    else if (!id && value->unit == CSSPrimitiveValue::CSS_IDENT
+             && equalIgnoringCase(domString(value->string), "unset")) {
+        /* `unset` is not in the generated keyword table; recognise it by text
+         * so pages that use the CSS-wide keyword (Baidu's guide bubble sets
+         * `img { width: unset }`) do not lose the declaration and fall back to
+         * a lower-specificity width. */
+        if (num != 1)
+            return false;
+
+        if (isInheritedProperty(propId))
+            addProperty(propId, new CSSInheritedValue(), important);
+        else
+            addProperty(propId, new CSSInitialValue(false), important);
         return true;
     }
 
