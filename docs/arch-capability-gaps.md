@@ -150,7 +150,7 @@ bareMedia=2px schemeBg=rgb(0, 0, 200) mediaDark=1 mediaMin=1
 | `display: grid` | `block` | **不支持**：`CSSParser::modernKeywordID()` 明确把 grid 降级成 block（`CSS.supports('display','grid')` 也返回 false）；P1 |
 | `transform: translateX(10px)` | 绘制生效（computed 仍返回空） | **部分支持（R52）**：别名表补无前缀 `transform`，修掉 parseTransform 的三个上游 bug；translate/scale/rotate 在 `RenderBlock::paint()` 里按 transform-origin 合成矩阵绘制。**限制**：局部重绘按未变换的脏矩形裁剪（图片类内容 repaint 时被切）、hit-test 未映射、未建 stacking context；computed style 的 `transform` 仍为空 |
 | `box-shadow: 0 0 4px red` | `rgb(255, 0, 0) 0px 0px 4px` | **已支持**（R11 把 `box-shadow` 别名到 `-webkit-box-shadow`）；旧文档里“非 `-webkit-` 未实现”已过时；绘制未逐像素验证 |
-| `width/height: 100vw/100vh` | `100vw=1100px`、`50vh=400px`（resize 到 500x400 后是 `500x200`） | **已支持（R53/R69）**：vw/vh 是文档级 CSS 变量（`rewriteViewportUnits()` 写 `var(--vwunit-…)`，`Document::viewportCustomProperties()` 按当前 FrameView 尺寸给值），窗口 resize 时随样式重算；`vmin/vmax` 同。`calc(100vw - 100px)` 这类含 vw/vh 的 calc 由 `Document::addViewportCalc()` 存模板按视口代入（2008 语法没有 `+`/`-` 产出式，var-in-calc 进不了语法）。限制：zoom 下仍按设备像素算 |
+| `width/height: 100vw/100vh` | `100vw=1100px`、`50vh=400px`（resize 到 500x400 后是 `500x200`） | **已支持（R53/R69）**：vw/vh 是文档级 CSS 变量（`rewriteViewportUnits()` 写 `var(--vwunit-…)`，`Document::viewportCustomProperties()` 按当前 FrameView 尺寸给值），窗口 resize 时随样式重算；`vmin/vmax` 同。`calc(100vw - 100px)` 这类含 vw/vh 的 calc 由 `Document::addViewportCalc()` 存模板按视口代入（2008 语法没有 `+`/`-` 产出式，var-in-calc 进不了语法）。zoom 变化按 `effectiveZoom` 折算成 CSS px（R70）。 |
 | 嵌套自定义属性的 `calc()`（`--card: calc((var(--w) - var(--count) * var(--gap)) / var(--n))`） | `265.333px` | **已支持（R53）**：`substituteCalcVariables`+`foldCalcConstants` 迭代 3 轮；纯数字 `calc()` 也可折叠（`calc(3 - 1)`→2）；**含 `%` 的混合单位已支持（R54）**：`calc(100% - 24px)`、`calc(20px + 10%)`、`calc((100% - 20px)/2)`、`calc(100%/3)` 在布局期按包含块求值（`Length::Calculated`） |
 | `flex-wrap: wrap`（含 flex 子项） | 按 contentWidth 断行、行内按 grow 分配 | **已支持（R54）**：三趟布局（首选尺寸 → 断行 → 每行 grow/shrink 后用 override size 重排），再按 `justify-content`/`align-items`/`align-content` 摆放 |
 | `flex: 1 1 0` / `flex: 0 0 200px` / `flex-basis` | grow/shrink/basis 生效 | **已支持（R54）**：`flex` 简写展开成 `-webkit-box-flex` + `flex-shrink` + `flex-basis`（`flex:1`→1 1 0%，`auto`→1 1 auto，`none`→0 0 auto）；新增属性走 `CSSPropertyNames` 末尾追加 + `extraProps` 旁路 |
@@ -241,5 +241,6 @@ DeepSeek 登录页的对照组：开 polyfills `inputs=2 all=124`；关掉后 `i
 5. 仍未完成：二维码在 200×200 的 iframe 里**右侧/底部被裁掉**（内容宽于视口，出现滚动条）。
    下一步是 per-frame `window` 代理（`window.parent`/`top`/`frames` 现在都指向自身），
    然后再看子文档布局；`__agbActivateSlot(1)` 可以直接读子 frame 文档来量。
+
 
 

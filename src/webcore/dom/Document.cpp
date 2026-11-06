@@ -85,6 +85,7 @@
 #include "RegisteredEventListener.h"
 #include "RegularExpression.h"
 #include "RenderArena.h"
+#include "RenderObject.h"
 #include "RenderView.h"
 #include "RenderWidget.h"
 #include "SegmentedString.h"
@@ -310,6 +311,7 @@ Document::Document(DOMImplementation* impl, Frame* frame, bool isXHTML)
 
     m_frame = frame;
     m_renderArena = 0;
+    m_viewportZoom = -1;
 
     // FIXME: DocLoader probably no longer needs the frame argument
     m_docLoader = new DocLoader(frame, this);
@@ -2226,13 +2228,24 @@ static String substituteViewportUnitsInText(const String& text, int vw, int vh)
 
 PassRefPtr<StyleCustomPropertyData> Document::viewportCustomProperties()
 {
-    if (m_viewportProperties)
+    /* vw/vh are CSS pixels while FrameView measures device pixels: the page
+     * zoom divides it out, exactly like adjustForAbsoluteZoom() does for
+     * innerWidth/clientWidth. A zoom change also invalidates the cached map. */
+    RenderObject* rootRenderer = renderer();
+    float zoom = rootRenderer ? rootRenderer->style()->effectiveZoom() : 1.0f;
+
+    if (m_viewportProperties && m_viewportZoom == zoom)
         return m_viewportProperties;
 
     RefPtr<StyleCustomPropertyData> properties = StyleCustomPropertyData::create();
     FrameView* v = view();
     int vw = v ? v->width() : 0;
     int vh = v ? v->height() : 0;
+
+    if (rootRenderer) {
+        vw = adjustForAbsoluteZoom(vw, rootRenderer);
+        vh = adjustForAbsoluteZoom(vh, rootRenderer);
+    }
 
     HashMap<String, ViewportUnit>::iterator end = m_viewportUnits.end();
     for (HashMap<String, ViewportUnit>::iterator it = m_viewportUnits.begin(); it != end; ++it) {
@@ -2265,6 +2278,7 @@ PassRefPtr<StyleCustomPropertyData> Document::viewportCustomProperties()
             fprintf(stderr, "[viewport] %s = [%s]\n", name.utf8().data(), value.utf8().data());
     }
 
+    m_viewportZoom = zoom;
     m_viewportProperties = properties;
     return properties;
 }

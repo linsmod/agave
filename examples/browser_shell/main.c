@@ -2160,6 +2160,8 @@ static int  g_probeInjectDone;    /* --inject already ran for this document    *
 static int  g_probeResizeW;       /* --resize WxH: control size before --eval   */
 static int  g_probeResizeH;
 static int  g_probeResizeDone;    /* the probe window was resized already      */
+static int  g_probeZoom;          /* --zoom <percent>: page zoom before --eval  */
+static int  g_probeZoomDone;
 
 /* Offscreen capture. A hidden window gets no WM_PAINT, so PrintWindow has
  * nothing to render; the control keeps its own mirror buffer, and
@@ -2791,6 +2793,17 @@ static int probeRun(const char* url)
                     continue;
                 }
 
+                /* --zoom <percent>: apply page zoom before --eval (order with
+                 * --resize does not matter, both are settled before the eval
+                 * reads the viewport). */
+                if (g_probeZoom > 0 && !g_probeZoomDone) {
+                    g_probeZoomDone = 1;
+                    probePrint("[probe]", "applying zoom");
+                    agave_webview_set_zoom(g_probeView, g_probeZoom);
+                    SetTimer(g_probeWnd, PROBE_TIMER_EVAL, 400, NULL);
+                    continue;
+                }
+
                 /* --resize WxH: resize the control once before --eval, so a run
                  * can measure what the page does when the window changes size
                  * (relayout, viewport units, media queries, resize event). The
@@ -3054,6 +3067,7 @@ static void probeUsage(void)
             "  --resize <WxH>  resize the control (and its hidden parent) once\n"
             "            after the page settled, then wait 400ms so the engine can\n"
             "            relayout before --eval reads the new viewport\n"
+            "  --zoom <percent>  page zoom before --eval (10..500, default 100)\n"
             "  --reload <n>  reload the page n times and run the eval after\n"
             "                every round (page lifecycle comparison)\n"
             "  --offline module fetches are served from the cache only\n"
@@ -3167,6 +3181,16 @@ static void parseShellArgv(void)
                 g_probeResizeH = rh;
             } else {
                 fprintf(stderr, "[shell] --resize wants WxH (e.g. 500x400), got %s\n", argv[i]);
+                g_argError = 1;
+                return;
+            }
+        } else if (!strcmp(argv[i], "--zoom") && i + 1 < argc) {
+            int percent = atoi(argv[++i]);
+
+            if (percent >= 10 && percent <= 500)
+                g_probeZoom = percent;
+            else {
+                fprintf(stderr, "[shell] --zoom wants 10..500 (percent), got %s\n", argv[i]);
                 g_argError = 1;
                 return;
             }

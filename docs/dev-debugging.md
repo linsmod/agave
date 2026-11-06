@@ -3,7 +3,7 @@
 ## 1. 无头探针（主力度量工具）
 
 ```powershell
-agave_shell.exe --probe <url> [--eval <js>] [--wait ms] [--settle ms] [--timeout ms] [--reload n] [--offline] [--resize WxH]
+agave_shell.exe --probe <url> [--eval <js>] [--wait ms] [--settle ms] [--timeout ms] [--reload n] [--offline] [--resize WxH] [--zoom percent]
 ```
 
 - **eval 时机** = 页面 `window load` 事件 + `--wait`；`on_progress finished` 只是长延迟兜底
@@ -30,6 +30,8 @@ agave_shell.exe --probe <url> [--eval <js>] [--wait ms] [--settle ms] [--timeout
   页面与复测命令：`tools/pages/resize/resize_probe.html` +
   `--eval-file tools/pages/resize/check_resize.js`（现状见
   [arch-capability-gaps.md](arch-capability-gaps.md) §2「窗口 resize」）。
+- `--zoom <percent>`：eval 前调 `agave_webview_set_zoom`（10..500）。和 `--resize` 可叠加；
+  用来复测 zoom 下的视口语义（`100vw == innerWidth`，两者都是 CSS px；R70）。
 - URL 参数走**地址栏同一套规则**（`normalizeUrl`），所以可以直接传本地路径 / 文件 URL。
 
 **退出码（先看它，再翻日志）**

@@ -16,6 +16,8 @@
                   the probe (real WM_SIZE path); the check asserts that vw/vh,
                   calc(100vw ...), @media breakpoints and the resize event all
                   follow the new viewport.
+    * zoom      - the same page at --zoom 125: 100vw/50vh/calc are CSS pixels,
+                  so they shrink with innerWidth instead of the device pixels.
 
   Exit code is the verdict: 0 all green, 1 any failure.
 
@@ -99,6 +101,26 @@ try {
             }
         }
         if ($missing) { $failed++ } else { Write-Host 'resize: ok' }
+    }
+
+    Write-Host '== page zoom (vw/vh are CSS px like innerWidth)'
+    $out = & (Join-Path $root 'build-zig-native\agave_shell.exe') --probe $url --zoom 125 `
+        --eval-file (Join-Path $root 'tools/pages/resize/check_resize.js') `
+        --wait 1000 --settle 200 --timeout 30000 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host 'zoom: probe failed'
+        $failed++
+    } else {
+        $text = $out -join "`n"
+        $missing = 0
+        foreach ($needle in @('viewport inner=880x640', 'vwBox=880x320', 'calcBox=780x270',
+                              'pctBox=440')) {
+            if ($text -notmatch [regex]::Escape($needle)) {
+                Write-Host ('zoom: missing ' + $needle)
+                $missing++
+            }
+        }
+        if ($missing) { $failed++ } else { Write-Host 'zoom: ok' }
     }
 
     if ($failed) {

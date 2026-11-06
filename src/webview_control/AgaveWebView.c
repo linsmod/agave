@@ -684,15 +684,24 @@ static int agwCreateSurface(AgaveWebView* item, int width, int height)
 
 static void agwEnsureSurface(AgaveWebView* item, int width, int height)
 {
+    int created;
+
     if (width < 1) width = 1;
     if (height < 1) height = 1;
 
     if (item->bits && item->width == width && item->height == height)
         return;
 
+    /* The UI thread blits the mirror DIB from agwPaint() under agwLock.
+     * Replacing the surface without the lock can free the mirror DC while
+     * BitBlt() is using it - and a window resize is exactly when the surface
+     * is replaced. */
+    agwLock();
     agwDestroySurface(item);
+    created = agwCreateSurface(item, width, height);
+    agwUnlock();
 
-    if (!agwCreateSurface(item, width, height))
+    if (!created)
         return;
 
     if (item->view) {
@@ -713,6 +722,39 @@ static void agwEnsureSurface(AgaveWebView* item, int width, int height)
 
     if (item->hwnd)
         InvalidateRect(item->hwnd, NULL, FALSE);
+}
+
+/* Applies the last size queued for each view, once per drain instead of once
+ * per WM_SIZE. A live drag posts a resize command for every mouse step; doing
+ * the surface rebuild + resize right there made the engine drop behind the
+ * drag on heavy pages. */
+static void agwApplyPendingResizes(void)
+{
+    AgaveWebView* batch[AGW_MAX_VIEWS];
+    int count = 0;
+    int i;
+
+    agwLock();
+    for (i = 0; i < g_viewCount; ++i) {
+        AgaveWebView* item = g_views[i];
+
+        if (!item || item->destroyed || !item->pendingResize)
+            continue;
+
+        item->pendingResize = 0;
+        item->refs++;
+        batch[count++] = item;
+    }
+    agwUnlock();
+
+    for (i = 0; i < count; ++i) {
+        AgaveWebView* item = batch[i];
+
+        if (!item->destroyed)
+            agwEnsureSurface(item, item->wantWidth, item->wantHeight);
+
+        agwRelease(item);
+    }
 }
 
 /* ------------------------------------------------------------------------- */
@@ -804,9 +846,14 @@ static void agwDrainCommands(void)
             break;
 
         case AGW_CMD_RESIZE:
+            /* Only remember the size: a live drag queues one of these per
+             * WM_SIZE, and recreating the DIB (plus a restyle) for every one of
+             * them is wasted work - the page only ever sees the last size of
+             * the batch. agwApplyPendingResizes() applies it after the queue
+             * has drained. */
             item->wantWidth = command.a;
             item->wantHeight = command.b;
-            agwEnsureSurface(item, command.a, command.b);
+            item->pendingResize = 1;
             break;
 
         case AGW_CMD_UA:
@@ -917,6 +964,7 @@ static DWORD WINAPI agwEngineThread(LPVOID param)
         }
 
         agwDrainCommands();
+        agwApplyPendingResizes();
 
         macross_event_dispatch();
 
@@ -963,16 +1011,23 @@ static DWORD WINAPI agwEngineThread(LPVOID param)
                 /* Copy the finished frame into the mirror buffer the window
                  * paints from. Doing this under the lock keeps the UI thread
                  * from blitting a half-written frame (that tore while
-                 * scrolling); the copy is ~1ms, the engine paints outside it. */
-                if (item->mirrorBits && item->bits && item->width > 0 && item->height > 0) {
-                    size_t bytes = (size_t)item->width * (size_t)item->height * 4u;
+                 * scrolling); the copy is ~1ms, the engine paints outside it.
+                 * The size check is inside the lock too: agwEnsureSurface()
+                 * replaces both buffers (and their dimensions) under it. */
+                {
+                    int copied = 0;
 
                     agwLock();
-                    memcpy(item->mirrorBits, item->bits, bytes);
-                    item->lastMirrorMs = GetTickCount();
+                    if (item->mirrorBits && item->bits && item->width > 0 && item->height > 0) {
+                        size_t bytes = (size_t)item->width * (size_t)item->height * 4u;
+
+                        memcpy(item->mirrorBits, item->bits, bytes);
+                        item->lastMirrorMs = GetTickCount();
+                        copied = 1;
+                    }
                     agwUnlock();
 
-                    if (item->hwnd && IsWindowVisible(item->hwnd))
+                    if (copied && item->hwnd && IsWindowVisible(item->hwnd))
                         InvalidateRect(item->hwnd, NULL, FALSE);
                 }
 

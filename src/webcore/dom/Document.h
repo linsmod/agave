@@ -737,6 +737,9 @@ private:
      * the units substituted (see viewportCustomProperties). */
     Vector<String> m_viewportCalcTemplates;
     RefPtr<StyleCustomPropertyData> m_viewportProperties;
+    /* effectiveZoom the cached map was built with (-1 = never built). A zoom
+     * change alters what 100vw means, so the cache has to follow it. */
+    float m_viewportZoom;
 
     Frame* m_frame;
     DocLoader* m_docLoader;

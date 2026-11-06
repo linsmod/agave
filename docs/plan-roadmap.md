@@ -23,6 +23,11 @@
   wrapper 按 realm（S2）、iframe 自己的 DCL 且 DCL 只发一次（顺带修 P0-c）、prelude/polyfills 每
   realm 一次且 eval 漏斗兜底装宿主 API。设计见 [design-per-frame-realm.md](design-per-frame-realm.md)，
   验收 `tools/run_realm_tests.ps1`；未完成项（模块 map 按 realm、WindowProxy 转发）仍列在 P0-i。
+- **resize 收尾：vw/vh × zoom + surface 生命周期**（R70）：探针新增 `--zoom`，`Document::viewportCustomProperties()`
+  用 `adjustForAbsoluteZoom()` 折算 CSS px（zoom 变化靠 `m_viewportZoom` 使缓存失效）；控件侧 surface 重建
+  进 `agwLock`，`AGW_CMD_RESIZE` 只记尺寸、`agwApplyPendingResizes()` 每轮 drain 后应用一次（拖动按批合并）。
+  验收：`--zoom 125` 下 `innerWidth == 100vw`（880/880）、`--zoom 125 --resize 500x400` → 400×320；
+  `run_layout_tests.ps1`（含 resize 组）+ nav/typing/worker/realm/site smoke 全绿。
 
 ## P0：先修正确性
 
@@ -212,29 +217,6 @@
 5. `document.scripts` 空 → 脚本扫描型库会误判。
 6. canvas `fillText`/`measureText` → 图表/文字库画不出字或排版错位。
 7. `WebSocket`/`EventSource` 存在但不可用 → 要么接通，要么显式 `undefined`。
-
-### P2 视口单位 × 页面 zoom（vw/vh 仍按设备像素）
-
-- **现状**：`Document::viewportCustomProperties()` 用 `FrameView::width()/height()`（设备像素）算 `Nvw`，
-  而 `window.innerWidth` / `__agbViewportWidth()` 已经按 `effectiveZoom` 折算成 CSS px。zoom=125% 时
-  `100vw` 会比 `innerWidth` 大 25%，Chrome 里两者都是 CSS px（R53 起就有这个偏差，R69 变量化后修起来更容易）。
-- **修法**：`viewportCustomProperties()` 里除以文档 `renderer()->style()->effectiveZoom()`
-  （与 `Element::clientWidth()` 的 `adjustForAbsoluteZoom` 同源），`Document::addViewportCalc()` 的模板代入同理。
-- **验收**：探针加 `--zoom <percent>`（`agave_webview_set_zoom`，与 `--resize` 同型）后跑
-  `tools/pages/resize/resize_probe.html`，期望 `innerWidth == 100vw`、`clientWidth == innerWidth - 滚动条`。
-
-### P2 resize 的 surface 生命周期（代码审查发现，未复现）
-
-- **并发窗口**：`agwEnsureSurface()`（引擎线程，`src/webview_control/AgaveWebView.c`）销毁/重建
-  `mirrorBitmap`/`mirrorDc` 时不持 `agwLock`，而 UI 线程 `agwPaint()` 是持锁 `BitBlt` 同一对句柄的。
-  拖窗口时每个 `WM_SIZE` 都会走一次重建，理论上存在"删 DC 与 BitBlt 并发"的窄窗口（画错或 `BitBlt` 失败），
-  目前只在代码审查里发现，探针没复现。
-- **修法**：surface 的销毁+重建放进 `agwLock()`/`agwUnlock()`（`CRITICAL_SECTION` 同线程可重入，
-  `agwOnOpenWindow` 那条调用路径不会死锁）；或改成双缓冲指针的原子交换，UI 只读旧指针。
-- **另一个代价**：每个 `WM_SIZE` 都重建一对 DIB（2×`CreateDIBSection` + 2×`CreateCompatibleDC`）。
-  可以让 `AGW_CMD_RESIZE` 只记 `wantWidth/wantHeight`，在 `agwDrainCommands()` 之后应用一次 ——
-  和布局的按帧合并对齐。
-- **验收**：拖窗口时用 `[ui] resize` + `AGB_LOOP_DEBUG` 统计重建次数；`--resize` 探针覆盖单次路径。
 
 ### P2 不推进（已评估，保留理由）
 
