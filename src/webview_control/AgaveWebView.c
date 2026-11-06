@@ -18,6 +18,7 @@
 
 #include "macross.h"
 #include "agave_webview.h"
+#include "AntBridge.h"   /* antb_interrupt_all_engines: abort a stuck page script */
 #include "../webview/AgbLog.h"
 
 /* The control window class is registered as a Unicode class: see agwRegisterClass. */
@@ -95,6 +96,12 @@ struct AgaveWebView {
     int                id;
     volatile int       destroyed;
     int                refs;
+
+    /* Set on the engine thread while a queued command is executing. The UI
+     * thread reads it to decide whether Reload should first abort the page
+     * (a script stuck in a loop never returns to drain the queue). */
+    volatile LONG      busy;
+    DWORD              busySince;
 
     char               url[2048];
     char               title[512];
@@ -808,6 +815,9 @@ static void agwDrainCommands(void)
             continue;
         }
 
+        item->busySince = GetTickCount();
+        InterlockedExchange(&item->busy, 1);
+
         switch (command.type) {
         case AGW_CMD_NAVIGATE:
             item->navigatePending = 0;
@@ -931,6 +941,7 @@ static void agwDrainCommands(void)
         }
 
         free(command.heapText);
+        InterlockedExchange(&item->busy, 0);
         /* Drop the pin: if the host destroyed the control while the command
          * was running, this is where the engine view is finally torn down
          * (on the engine thread, never under a running script). */
@@ -1833,6 +1844,24 @@ void agave_webview_load_html(AgaveWebView* item, const char* html, const char* b
 
 void agave_webview_back(AgaveWebView* item)    { agwPost(AGW_CMD_BACK, item, NULL, 0, 0, 0, 0); }
 void agave_webview_forward(AgaveWebView* item) { agwPost(AGW_CMD_FORWARD, item, NULL, 0, 0, 0, 0); }
+/* Abort whatever script the engine is running (Reload/Stop on a page whose JS
+ * never returns). Runs on the caller's thread: the bridge only sets an atomic
+ * flag the VM polls, so this does not need the command queue - which is exactly
+ * the queue a stuck script never drains. */
+void agave_webview_interrupt(AgaveWebView* item)
+{
+    (void)item;
+    antb_interrupt_all_engines();
+}
+
+/* 1 when a queued command has been running for at least minMs (0 = any). */
+int agave_webview_busy(AgaveWebView* item, int minMs)
+{
+    if (!item || !item->busy) return 0;
+    if (minMs <= 0) return 1;
+    return (int)(GetTickCount() - item->busySince) >= minMs;
+}
+
 void agave_webview_reload(AgaveWebView* item)  { agwPost(AGW_CMD_RELOAD, item, NULL, 0, 0, 0, 0); }
 void agave_webview_stop(AgaveWebView* item)    { agwPost(AGW_CMD_STOP, item, NULL, 0, 0, 0, 0); }
 

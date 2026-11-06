@@ -1052,6 +1052,20 @@ static void injectVConsole(AgaveWebView* view)
         "})();");
 }
 
+/* Reload is a queued command: on a page whose script never returns the queue
+ * never drains, so the reload sits behind the script forever (the window looks
+ * alive, but nothing responds). Abort the script first - the engine stops at
+ * its next safepoint (interpreter call / JIT loop backedge) and the queued
+ * reload then runs, giving the page a fresh realm. */
+static void shellReloadView(AgaveWebView* view)
+{
+    if (!view) return;
+    if (agave_webview_busy(view, 300)) {
+        fprintf(stderr, "[ui] reload: engine busy, interrupting the page script\n");
+        agave_webview_interrupt(view);
+    }
+    agave_webview_reload(view);
+}
 static void injectInspector(AgaveWebView* view)
 {
     injectScriptFile(view, "inspector.js", "AGB_INSPECTOR");
@@ -1100,7 +1114,7 @@ static void onContextMenu(AgaveWebView* view, int x, int y,
     switch (choice) {
     case 1: if (tab->used) agave_webview_back(tab->view); break;
     case 2: if (tab->used) agave_webview_forward(tab->view); break;
-    case 3: if (tab->used) agave_webview_reload(tab->view); break;
+    case 3: if (tab->used) shellReloadView(tab->view); break;
     case 4: if (linkUrl && linkUrl[0]) navigateActive(linkUrl, 0); break;
     case 5: if (linkUrl && linkUrl[0]) navigateActive(linkUrl, 1); break;
     case 6:
@@ -1682,7 +1696,7 @@ static void showMainMenu(void)
     case 4: g_zoom = 100; applyZoomToActive(); updateStatus(); break;
     case 5: navigateActive("about:blank", 1); break;
     case 6: toggleFind(); break;
-    case 7: if (g_tabs[g_activeTab].used) agave_webview_reload(g_tabs[g_activeTab].view); break;
+    case 7: if (g_tabs[g_activeTab].used) shellReloadView(g_tabs[g_activeTab].view); break;
     case 8: injectVConsole(g_tabs[g_activeTab].view); break;
     case 9: injectInspector(g_tabs[g_activeTab].view); break;
     default: break;
@@ -1850,7 +1864,7 @@ static LRESULT CALLBACK shellProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM
         switch (id) {
         case ID_BACK:    if (tab->used) agave_webview_back(tab->view); break;
         case ID_FORWARD: if (tab->used) agave_webview_forward(tab->view); break;
-        case ID_RELOAD:  if (tab->used) agave_webview_reload(tab->view); break;
+        case ID_RELOAD:  if (tab->used) shellReloadView(tab->view); break;
         case ID_STOP:    if (tab->used) agave_webview_stop(tab->view); break;
 
         case ID_GO: {
@@ -3422,7 +3436,7 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
                     continue;
                 }
                 if (msg.wParam == 'W' && !shift) { closeTab(g_activeTab); continue; }
-                if (msg.wParam == 'R' && !shift) { if (g_tabs[g_activeTab].used) agave_webview_reload(g_tabs[g_activeTab].view); continue; }
+                if (msg.wParam == 'R' && !shift) { if (g_tabs[g_activeTab].used) shellReloadView(g_tabs[g_activeTab].view); continue; }
                 if (msg.wParam == VK_TAB) { switchTab(shift ? -1 : 1); continue; }
                 /* Ctrl+L selects the current URL: typing then replaces it, which
                  * is also what stops "http://" + a typed path from being glued

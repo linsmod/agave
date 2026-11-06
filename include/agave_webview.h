@@ -110,6 +110,13 @@ AGW_API void agave_webview_load_html(AgaveWebView* view, const char* html, const
 AGW_API void agave_webview_back(AgaveWebView* view);
 AGW_API void agave_webview_forward(AgaveWebView* view);
 AGW_API void agave_webview_reload(AgaveWebView* view);
+/* Abort the running page script (does not need the command queue, so it works
+ * while a script is stuck in a loop). Call agave_webview_reload() afterwards:
+ * the aborted page's state is not trustworthy. */
+AGW_API void agave_webview_interrupt(AgaveWebView* view);
+/* 1 when a queued command has been running for at least minMs (0 = busy at all).
+ * Lets the host decide whether Reload means "interrupt, then reload". */
+AGW_API int  agave_webview_busy(AgaveWebView* view, int minMs);
 AGW_API void agave_webview_stop(AgaveWebView* view);
 
 /* Runs a script in the page (thread safe, queued). */
