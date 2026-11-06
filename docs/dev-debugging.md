@@ -125,7 +125,7 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
 | `[evt]` 生命周期 | commit → realm start/stop → bindDocument → pagehide/unload → DOMContentLoaded → load | `AGB_EVT_LOG=0` | `AGB_EVT_DEBUG=1`（evaluate 深度、listener 记账、JS `dispatchEvent`） |
 | `[nav]` 导航动作 | 宿主 `open`/`back`/`forward`/`reload`/`stop`；`request`（type=link/form/back-forward/reload/other + method + URL）；`submit`；`new-window`/`popup create`；`client-redirect`（meta refresh、JS 定时跳转）；`fail provisional`/`fail load`（主资源失败，带 `_mc_error` 码）/`fail resource`（子资源失败）/`cannot implement`（引擎拒绝显示）/`blocked` | `AGB_NAV_LOG=0` | 无（每条只有一行） |
 | `[ui]` 界面事件 | resize / focus / blur / mouse down/up / wheel / key down/up / char | `AGB_UI_LOG=0` | `AGB_UI_DEBUG=1` 连 `mouse move` 也打（默认不打，太吵） |
-| `[shell]` 宿主 | window ready / 进入与退出消息循环 / `CreateWindowEx` 失败 / `atexit` 模块基址 | — | — |
+| `[shell]` 宿主 | window ready / 进入与退出消息循环 / `CreateWindowEx` 失败 / `atexit` 模块基址 / profile 的 bookmarks+history 载入与写失败 | — | — |
 | `[probe]` 探针 | userdata、headless 状态、加载错误、对话框、退出码 | — | — |
 | `[flag]` 引擎开关 | 桥接开关（`uncaught_nonfatal` 等），来自 antjsb.dll | — | — |
 | `[style]` 渲染树 | 指定元素的 attach / detach / recalcStyle（是否拿到 renderer、computed display）。**opt-in** | 默认关 | `AGB_STYLE_LOG=1` 打开，`AGB_STYLE_FILTER=<子串>` 按 tag/id/class 过滤 |
@@ -136,6 +136,8 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
 - `[ui]` 主要是 GUI 模式的输入（focus/blur/mouse/wheel/key/char）：输入事件在控件窗口过程里产生。
   `--probe` 也会打**控件创建时的 `[ui] resize`**（控件窗口真实存在，只是父窗口 `WS_POPUP` 隐藏）；
   `agave_view_host` 不走控件，所以完全没有 `[ui]`。
+- `[ui]` 是**窗口过程里同步打**的（`agbLog` 直接 `fprintf(stderr)`，见 `src/webview/AgbLog.h`），
+  在 `agwPost()` 把事件交给引擎线程**之前**；不经过 JS/引擎，所以页面脚本卡死时 `[ui]` 照样出。
 - `[evt]` / `[nav]` 在 `--probe` 里照样有（与窗口无关）。
 - **探针的 stdout**（`[probe] running eval`、`[exit] ...`、`[probe] main url=`）也改用同一个时间格式
   （`[ 1234.5ms]`），但它走 stdout，和上面的 stderr 时间线分开重定向。

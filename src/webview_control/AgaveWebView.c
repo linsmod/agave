@@ -829,7 +829,7 @@ static DWORD WINAPI agwWatchdogThread(LPVOID param)
         Sleep(200);
 
         if (agwQueueStuckFor((int)AGW_STUCK_QUEUE_MS)) {
-            fprintf(stderr, "[ui] engine not draining: aborting the page script\n");
+            agbLog(AGB_LOG_EVT, "engine not draining: aborting the page script");
             antb_interrupt_all_engines();
         }
     }

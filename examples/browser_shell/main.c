@@ -292,8 +292,8 @@ static void loadHistory(void)
     }
 
     fclose(file);
-    fprintf(stderr, "[ui] history loaded: %d entr%s from %s\n",
-            g_historyCount, g_historyCount == 1 ? "y" : "ies", path);
+    agbLog(AGB_LOG_SHELL, "history loaded: %d entr%s from %s",
+           g_historyCount, g_historyCount == 1 ? "y" : "ies", path);
 }
 /* Profile-backed shell state. Both the GUI and the probe need it: the probe
  * reads history/bookmarks too (a probe run could otherwise not verify that the
@@ -370,7 +370,7 @@ static void recordHistory(const char* url)
         fclose(file);
     } else {
         /* Silent before: "history keeps disappearing" started here. */
-        fprintf(stderr, "[ui] history: cannot append to %s\n", path);
+        agbLog(AGB_LOG_SHELL, "history: cannot append to %s", path);
     }
 }
 
