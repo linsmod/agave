@@ -424,6 +424,22 @@
   页面是卡在**解析/定时器回调**里，所以用**引擎线程心跳**（`g_enginePumpTick`，控件消息泵每 ~10 ms 更新）
   —— 超过 500 ms 没泵消息即视为卡死，与命令无关。
 
+### P2 多 tab 并行
+
+- 现状：一条引擎线程串行跑所有 view（[arch-overview.md](arch-overview.md) §1），所以 tab 之间既不并行，
+  卡死的 tab 还会挡住宿主命令与别的 tab 的定时器/XHR（只有 1.5 s 看门狗中断能救）。
+- 第一步（便宜、可先做）：**隐藏 view 不画** —— 帧泵对每个 view 都 `macross_view_update()`
+  （`paintView()` + `pumpAsyncRequests()`），隐藏 tab 的绘制纯浪费。动作：帧泵按 `IsWindowVisible`
+  分流，不可见只泵定时器/XHR、不画不拷 mirror。判据：`AGB_LOOP_DEBUG` 的 `update=` 均值随 tab 数
+  不再线性增长；切回该 tab 时首帧正确（可能要一次强制重绘）。
+- 真正并行两条路，**都不是"加个线程"**：
+  1. **引擎线程局部化**：先把进程级无锁全局拆掉 —— `AntRuntime` 的 `g_currentState`（当前 realm）、
+     桥的 `g_wrappers`/`g_classes`/trampoline 表、ant 的 interned 字符串表；再做 per-view 线程 + 线程局部表。
+     风险高（R71 那类静默崩溃面），收益是进程内并行。
+  2. **每 tab 一个子进程**（site-per-process 简化版）：`agave_view_host` 已是不建控件的现成宿主，
+     可当子进程引擎；shell 侧做 IPC + 共享内存位图。风险中、隔离性最好（顺带拿到崩溃隔离）。
+- 验收：两个 tab，一个跑 `while(true){}`，另一个点击/刷新在 200 ms 内响应（当前要等 1.5 s 中断）。
+
 ### P2 工具栏文本闪烁（`<` / `>` 在刷新时闪）
 
 - 现象：刷新时前进/后退按钮上的箭头文本闪一下；history 状态并没有变化（`cb_history_status` 在刷新期间一次都不触发，

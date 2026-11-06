@@ -32,6 +32,15 @@
 - **回调线程**：标题/进度/对话框在引擎线程触发；下载状态是例外——控件深拷贝后 `PostMessage`，
   在 UI 线程派发。宿主不要在回调里做同步跨线程等待（契约见 `include/agave_webview.h`）。
 - 一个进程的所有控件**共用一条引擎线程**，所以多个控件不会真正并行；但每个控件的 JS 上下文是独立的。
+  具体后果（真实行为，不是"理论上"）：①一个 tab 的长脚本会挡住其他 tab 的命令（点击/刷新/导航）**和**
+  它们的定时器/XHR 回调 —— 唯一出路是看门狗的队列判据（头部长于 1.5 s 未动 → `antb_interrupt_all_engines()`）；
+  ②帧泵对**每个** view 依次 `macross_view_update()`（画 + 泵定时器），不分可见与否，所以 N 个 tab
+  时每个 tab 每次都要画一遍（隐藏 tab 的绘制是纯浪费，见 [plan-roadmap.md](plan-roadmap.md)）；
+  ③重 tab 会拖慢其他 tab 的帧率（同一条循环）。
+  想真正并行只有两条路（都不是"加个线程"）：桥/运行时的**进程级单线程假设**要先拆掉
+  （`g_currentState` 当前 realm、`g_wrappers`/`g_classes`/trampoline 表、ant 的 interned 字符串表都是无锁全局），
+  或者改成**每 tab 一个子进程**（site-per-process 的简化版，`agave_view_host` 已经是现成的无控件宿主）。
+  评估见 [plan-roadmap.md](plan-roadmap.md) 的 "P2 多 tab 并行"。
 
 ## 2. 代码层
 
