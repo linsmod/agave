@@ -421,11 +421,15 @@ bool gfx_font_adapter::prepare_glyph(unsigned int code)
         m_impl->cur_glyph_index = code;
         m_impl->cur_advance_x = INT_TO_SCALAR(gm.gmCellIncX);
         m_impl->cur_advance_y = -INT_TO_SCALAR(gm.gmCellIncY);
+        /* The pen has to move through the same text matrix as the outline
+         * below, otherwise rotated/scaled text stacks every glyph on the same
+         * spot (the advance stays in font space). Identity is a no-op, so the
+         * plain upright path is untouched. */
+        m_impl->matrix.transform(&m_impl->cur_advance_x, &m_impl->cur_advance_y);
 
         if (m_impl->antialias) {
             // outline text
             m_impl->cur_data_type = glyph_type_outline;
-            m_impl->matrix.transform(&m_impl->cur_advance_x, &m_impl->cur_advance_y);
             m_impl->cur_font_path.remove_all();
 
             if (decompose_win32_glyph_outline(m_impl->buf, total_size,

@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>transform text</title>
+<style>
+  /* Glyphs must follow the same matrix as the box, not only be translated
+   * (docs/hist-lessons.md R80). Both cases use a fixed box so the pixel
+   * assertions in tools/run_layout_tests.ps1 do not depend on font metrics.
+   *
+   * #tab is the classic "vertical label on the left edge":
+   *   rotate(-90deg) translateX(-100%) around top left
+   * A 140x56 box becomes the column x 0..56, y 0..140. A box that was only
+   * laid out (never rotated) would cover x 0..140, y 0..56, so (120,20) is
+   * blue only when the rotation did not happen and (20,120) only when it did.
+   *
+   * #scale doubles a 40x40 box around its centre; its ink is four times the
+   * unscaled area, which the ink count catches even if the glyphs shift. */
+  :root { --tab-bg: #204080; --tab-fg: #ffffff; }
+  html, body { margin: 0; padding: 0; background: #fff; }
+  body { height: 1200px; }
+  #tab {
+    position: absolute; left: 0; top: 0; margin: 0;
+    width: 140px; height: 56px;
+    line-height: 56px; text-align: center;
+    background: var(--tab-bg); color: var(--tab-fg);
+    font: bold 32px monospace;
+    transform: rotate(-90deg) translateX(-100%);
+    transform-origin: top left;
+  }
+  #scale {
+    position: absolute; left: 300px; top: 40px; margin: 0;
+    width: 40px; height: 40px;
+    line-height: 40px; text-align: center;
+    color: #000; font: bold 32px monospace;
+    transform: scale(2);
+  }
+</style>
+</head>
+<body>
+<div id="tab">TAB</div>
+<div id="scale">S</div>
+</body>
+</html>

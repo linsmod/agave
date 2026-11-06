@@ -61,6 +61,26 @@ try {
         if ($LASTEXITCODE -ne 0) { $failed++ }
     }
 
+    Write-Host '== paint: transform text (glyphs follow the matrix)'
+    $bmp = Join-Path $root 'debug\layout_transform_text.bmp'
+    $url = 'file:///' + (Join-Path $root 'tools/pages/layout/transform_text.html').Replace('\', '/')
+    & (Join-Path $root 'build-zig-native\agave_shell.exe') --probe $url `
+        --wait 1200 --settle 100 --timeout 30000 --shot $bmp | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host 'transform_text: probe failed'
+        $failed++
+    } else {
+        # (8,8) inside the rotated tab; (20,120) only blue when the box really
+        # rotated (an unrotated 140x56 box stops at y=56); (120,20) only blue
+        # when it did not. The rect specs count ink: white glyphs inside the
+        # tab, ink near the far end of the run (collapsed advances leave the
+        # top of the column empty) and the doubled glyph area of #scale.
+        & python tools/pixel_check.py $bmp `
+            8,8,204080 20,120,204080 120,20,ffffff `
+            0,0,55,139,ffffff,700 0,40,55,59,ffffff,250 280,20,360,100,000000,600
+        if ($LASTEXITCODE -ne 0) { $failed++ }
+    }
+
     Write-Host '== scrollbar hiding (::-webkit-scrollbar)'
     $url = 'file:///' + (Join-Path $root 'tools/pages/layout/scrollbar_hidden.html').Replace('\', '/')
     $out = & (Join-Path $root 'build-zig-native\agave_shell.exe') --probe $url `

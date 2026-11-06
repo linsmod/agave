@@ -218,7 +218,9 @@ DOM attach（Element::attach / Text::attach）
 - `display:flex` 落到 2008 的 `-webkit-box`：无 `flex-basis`/`flex-shrink`/`align-self`/
   `align-content`；`flex:1` 只等于 `box-flex:1`。
 - `display:grid` 降级成 `block`（声明不丢，子项按块堆叠，不是 bug）。
-- `position:sticky` 按 static 布局；`transform` 不参与布局也不绘制。
+- `position:sticky` 按 static 布局；`transform` 只影响绘制：translate/scale/rotate 在
+  `RenderBlock::paint()` 里合成矩阵，文字字形也走同一矩阵（R80），但**不参与布局**，
+  hit-test 不映射、不建 stacking context，`getComputedStyle().transform` 仍为空。
 - `calc()` 只在解析期折叠**纯常量**；含 `%`/`em`/`vw` 的混合 calc 仍不支持。
 - 没有 `contain`/`will-change`/合成层；多列是 2008 的部分实现（`RenderBlock::layoutColumns()`），
   无现代 `break-*` 语义；`RenderLayer` 只做 z-order 与裁剪。
