@@ -67,6 +67,13 @@
   （em/rem/ex/ch），样式表解析时把这类 calc 十六进制编码成 ident 留成 raw value，渲染时用元素 font-size 折成
   `CSS_CALC_LENGTH`；顺带修掉数字扫描把 `1em` 的 `e` 当指数的问题。验收：
   `calc_terms.html`（7 case 对拍 Chrome）与 `float_carbon.html`（广告真实结构）全绿。
+- **加载中刷新崩溃（两处）**（R89，2026-11-06）：GUI 里 loading 时点刷新必崩两次 ——
+  ①`DocumentLoader::updateLoading()` 的 `ASSERT(this == activeDocumentLoader())`（断言在本 build 是
+  写 `0xbbadbeef` 的崩溃），由被替换掉的旧文档的子资源完成回调触发；②`RenderBox::destroy()` 原地释放
+  仍在父层兄弟链里的 `RenderLayer`，刷新打断加载后 `FrameView::layout()` 的 `updateLayerPositions()`
+  走到已释放层。现在前者对非活动 loader 只 `setLoading(false)`，后者先 `removeChild()` 摘链再销毁。
+  验收：`run_hang_recovery_tests.ps1` 七条全绿、deepseek/baidu 连刷 0 crash（`tools/slow_reload_server.py`
+  是手工复现页）。
 ## P0：先修正确性
 
 ### P0-b 图就绪与执行解耦

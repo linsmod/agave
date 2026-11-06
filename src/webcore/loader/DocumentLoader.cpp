@@ -407,7 +407,15 @@ void DocumentLoader::updateLoading()
         setLoading(false);
         return;
     }
-    ASSERT(this == frameLoader()->activeDocumentLoader());
+    /* A subresource of a document that has already been replaced (reload or a
+     * new navigation while it was still loading) can finish afterwards and call
+     * back here; only the frame's active loader owns the loading state. This
+     * used to be an ASSERT — in this build an assertion is a release-mode crash
+     * (writes 0xbbadbeef), see hist-lessons R89. */
+    if (this != frameLoader()->activeDocumentLoader()) {
+        setLoading(false);
+        return;
+    }
     setLoading(frameLoader()->isLoading());
 }
 

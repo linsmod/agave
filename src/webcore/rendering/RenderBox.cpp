@@ -173,6 +173,15 @@ void RenderBox::destroy()
     if (layer)
         layer->clearClipRect();
 
+    /* Unlink before freeing. RenderContainer::removeChildNode() skips
+     * removeLayers() while the document is being destroyed, so a layer can still
+     * be in its parent's sibling chain here; freeing it in place left a dangling
+     * pointer that the next RenderLayer::updateLayerPositions() walked — that is
+     * the "clicked reload while the page was loading" crash (hist-lessons R89). */
+    if (layer)
+        if (RenderLayer* layerParent = layer->parent())
+            layerParent->removeChild(layer);
+
     RenderObject::destroy();
 
     if (layer)
