@@ -328,6 +328,19 @@
   `agave_webview_get_html()` → shell 用 `agave_webview_load_html()` 在新标签页打开（`<pre>` 转义）。
 - 验收：右键 "View page source" → 新标签页显示源码，`document.URL` 仍是 `file:`/`http:` 原地址的派生标记。
 
+### P2 ant 中断路径收口
+
+- `antb_interrupt_all_engines()` 里那句 `sv_jit_arm_interrupts(engine->js)` 是空转：engine 创建时已
+  arm（`antb_engine_create()`），`interrupts_armed` 只置 true、从不清零。真跑起来会在**引擎线程之外**
+  `jit_drop_all_code()` —— 释放的正是对方正在执行的代码页。动作：删掉这句，arm 只在创建时做，
+  并在 `AntBridge.h` 注明"arm 只能在引擎线程"。
+- `g_engines[]`/`g_engineCount` 无锁：写只在引擎线程（create/destroy），读在看门狗/UI 线程；
+  `antb_engine_destroy()` 是"先摘表、再 `js_destroy`、再 `free`"，读侧有极窄的 UAF 窗口。
+  动作：加一把 `SRWLOCK`（中断是冷路径，无热点代价），或改成原子槽位指针 + 死亡标记。
+- `Atomics.wait(sab, i, v)` 无 timeout 走 `pthread_cond_wait`（`src/modules/atomics.c`），中断只置标志、
+  没人 `signal` → 真·不可中断。动作：改成 100 ms 超时轮询标志，或中断路径 `broadcast`。
+- worker VM 不在注册表里，"停掉所有脚本"覆盖不到 worker（worker 走自家 `terminate()`）。
+
 ### P2 下载
 
 - 异步写、并发上限、断点续传、另存为、`<a download>`、`agave://history`。

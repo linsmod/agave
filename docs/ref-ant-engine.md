@@ -85,5 +85,19 @@ git -C H:\ant-v16 rev-parse HEAD
 - 每个 view 一个 `RuntimeState`，每个文档一个新 engine（`beginNewRealm`/`stopRealm`），
   回调进来前靠 `antb_set_context_activate` 切状态（细节见
   [design-per-view-js-context.md](design-per-view-js-context.md)）。
+- **engine 是多实例的**：`antb_engine_create()` 每次造一个独立 `ant_t`，注册进 `AntBridge.c`
+  的 `g_engines[32]`；活跃数量 = 打开的 view 数（tab/弹窗），导航时旧 engine 销毁、新 engine 建。
+  **frame 不是独立 engine**，是同一 VM 里的独立 realm（P0-i）。**worker 不在这张表里**：
+  `worker_thread_main()` 自己 `ant_create()` 一个 VM 跑在 `uv_thread` 上（`src/modules/worker/core.c`），
+  由 worker 自己的 `terminate()` 打断。
+- **中断（`antb_interrupt_all_engines()`）**：给注册表里**每个** engine 置 `interrupt_pending`。
+  "全部"是对的 —— 所有 view engine 都由**同一个引擎线程**串行执行，任一时刻最多一个在跑，
+  调用方（看门狗线程 / UI 线程）也无从知道是哪一个；没在跑的 engine 只是带着标志，下次顶层
+  eval 由 `antb_begin_top_level()` 把 `terminating` + `interrupt_pending` 一起清掉。
+  ⚠ 已知粗糙处（见 [plan-roadmap.md](plan-roadmap.md) 的 "P2 ant 中断路径收口"）：
+  循环里的 `sv_jit_arm_interrupts()` 实际是空转（创建时已 arm，`interrupts_armed` 只置不清），
+  真跑起来会在**引擎线程之外** `jit_drop_all_code()`（释放正在执行的代码页）；`g_engines` 无锁，
+  与 `antb_engine_destroy` 有极窄的 UAF 窗口；`Atomics.wait()` 无 timeout 走 `pthread_cond_wait`，
+  只置标志唤不醒它。
 - 日志：ant 不直接依赖 agave 的 `AgbLog.h`；桥通过 `antb_set_logger` 回调，
   `AntRuntime.cpp` 把 `[flag]` 行接回 agave 的统一日志。
