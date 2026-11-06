@@ -307,9 +307,43 @@
      * follow the bound document. */
     defineViewport('outerWidth', innerW);
     defineViewport('outerHeight', innerH);
-    g.pageXOffset = 0; g.pageYOffset = 0; g.scrollX = 0; g.scrollY = 0;
-    g.scrollTo = function (x, y) { if (g.document && g.document.documentElement) { g.document.documentElement.scrollLeft = x; g.document.documentElement.scrollTop = y; } };
-    g.scrollBy = function (x, y) { g.scrollTo((g.pageXOffset||0)+x, (g.pageYOffset||0)+y); };
+    /* Scroll offsets follow the document scroller (see RenderObject::scrollTop:
+     * <html>/<body> route to the FrameView), so they have to be read on demand
+     * instead of frozen at 0. */
+    function scrollX() {
+      var d = g.document;
+      if (!d) return 0;
+      var se = d.documentElement, b = d.body;
+      var v = se ? se.scrollLeft : 0;
+      if (!v && b && b.scrollLeft) v = b.scrollLeft;
+      return v || 0;
+    }
+    function scrollY() {
+      var d = g.document;
+      if (!d) return 0;
+      var se = d.documentElement, b = d.body;
+      var v = se ? se.scrollTop : 0;
+      if (!v && b && b.scrollTop) v = b.scrollTop;
+      return v || 0;
+    }
+    if (Object.defineProperty) {
+      Object.defineProperty(g, 'pageXOffset', { get: scrollX, configurable: true });
+      Object.defineProperty(g, 'pageYOffset', { get: scrollY, configurable: true });
+      Object.defineProperty(g, 'scrollX', { get: scrollX, configurable: true });
+      Object.defineProperty(g, 'scrollY', { get: scrollY, configurable: true });
+    } else {
+      g.pageXOffset = g.scrollX = 0;
+      g.pageYOffset = g.scrollY = 0;
+    }
+    g.scrollTo = function (x, y) {
+      var d = g.document;
+      if (!d) return;
+      var se = d.scrollingElement || d.documentElement || d.body;
+      if (!se) return;
+      if (x !== undefined && x !== null) se.scrollLeft = x;
+      if (y !== undefined && y !== null) se.scrollTop = y;
+    };
+    g.scrollBy = function (x, y) { g.scrollTo(scrollX() + (x || 0), scrollY() + (y || 0)); };
   }
   g.__agbSafe = function (fn, label) {
     return function () {

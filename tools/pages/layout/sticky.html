@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>position: sticky</title>
+<style>
+  html, body { margin: 0; padding: 0; }
+  /* Viewport-level sticky: pinned while the document scrolls, released when the
+     containing block ends. */
+  #head { position: sticky; top: 0; height: 40px; background: #cc0000; color: #fff; }
+  #spacer { height: 2000px; background: #eeeeee; }
+  #foot { position: sticky; bottom: 0; height: 30px; background: #0000cc; color: #fff; }
+  #tail { height: 240px; background: #00cc00; }
+  /* Sticky inside an overflow box: pinned to the box's own scrollport. */
+  #box { height: 200px; overflow: auto; border: 2px solid #000; }
+  #s { position: sticky; top: 0; height: 20px; background: #ff00ff; }
+  #inner { height: 600px; background: #dddddd; }
+</style>
+</head>
+<body>
+<div id="head">HEAD</div>
+<div id="spacer"></div>
+<div id="foot">FOOT</div>
+<div id="tail"></div>
+<div id="box"><div id="s">S</div><div id="inner"></div></div>
+</body>
+</html>

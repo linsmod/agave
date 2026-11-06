@@ -1385,6 +1385,8 @@ PassRefPtr<CSSValue> CSSComputedStyleDeclaration::getPropertyCSSValue(int proper
                     return new CSSPrimitiveValue(CSS_VAL_ABSOLUTE);
                 case FixedPosition:
                     return new CSSPrimitiveValue(CSS_VAL_FIXED);
+                case StickyPosition:
+                    return new CSSPrimitiveValue(String("sticky"), CSSPrimitiveValue::CSS_STRING);
             }
             ASSERT_NOT_REACHED();
             return 0;

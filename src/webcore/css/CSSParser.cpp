@@ -2563,12 +2563,24 @@ bool CSSParser::parseValue(int propId, bool important)
             valid_primitive = true;
         break;
 
-    case CSS_PROP_POSITION:             // static | relative | absolute | fixed | inherit
+    case CSS_PROP_POSITION:             // static | relative | absolute | fixed | sticky | inherit
         if (id == CSS_VAL_STATIC ||
              id == CSS_VAL_RELATIVE ||
              id == CSS_VAL_ABSOLUTE ||
              id == CSS_VAL_FIXED)
             valid_primitive = true;
+        else if (!id && value->unit == CSSPrimitiveValue::CSS_IDENT) {
+            /* `sticky` is not in CSSValueKeywords.in and regenerating the gperf
+             * table would renumber every keyword id. Carry the word through as
+             * a string and let CSSStyleSelector map it (same trick as `unset`). */
+            String word = domString(value->string).lower();
+            if (word == "sticky" || word == "-webkit-sticky") {
+                valueList->next();
+                addProperty(propId, new CSSPrimitiveValue(String("sticky"),
+                                                          CSSPrimitiveValue::CSS_STRING), important);
+                return true;
+            }
+        }
         break;
 
     case CSS_PROP_PAGE_BREAK_AFTER:     // auto | always | avoid | left | right | inherit

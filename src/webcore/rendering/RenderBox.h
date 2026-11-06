@@ -138,6 +138,10 @@ public:
     int relativePositionOffsetX() const;
     int relativePositionOffsetY() const;
 
+    /* position: sticky — offset from the layout position to the painted one.
+     * Returns false when the box is not sticky or has no usable inset. */
+    bool stickyPositionOffset(IntSize& offset) const;
+
     virtual RenderLayer* layer() const { return m_layer; }
 
     virtual IntRect caretRect(int offset, EAffinity = UPSTREAM, int* extraWidthToEndOfLine = 0);

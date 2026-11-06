@@ -120,7 +120,7 @@ struct LengthBox {
 };
 
 enum EPosition {
-    StaticPosition, RelativePosition, AbsolutePosition, FixedPosition
+    StaticPosition, RelativePosition, AbsolutePosition, FixedPosition, StickyPosition
 };
 
 enum EFloat {
@@ -1236,7 +1236,7 @@ protected:
         unsigned _overflowY : 4; // EOverflow
         unsigned _vertical_align : 4; // EVerticalAlign
         unsigned _clear : 2; // EClear
-        unsigned _position : 2; // EPosition
+        unsigned _position : 3; // EPosition (needs 3 bits: sticky is the 5th)
         unsigned _floating : 2; // EFloat
         unsigned _table_layout : 1; // ETableLayout
         
@@ -1395,6 +1395,7 @@ public:
     Length      bottom() const {  return surround->offset.bottom; }
 
     EPosition   position() const { return  static_cast<EPosition>(noninherited_flags._position); }
+    bool        isStickyPositioned() const { return position() == StickyPosition; }
     EFloat      floating() const { return  static_cast<EFloat>(noninherited_flags._floating); }
 
     Length      width() const { return box->width; }

@@ -34,6 +34,13 @@
   对拍 Chrome 全绿（修前 14 FAIL），`flex_wrap.html` 21 个不退化，7 个 layout 差分页全绿；
   css3test `#content` 从"左窄右宽 360/452"变成"左宽右窄 541/271"（Chrome 546.6/219.8）。
   未完成：`align-self`、`order` 语义、RTL 单行、`flex-basis` 百分比/calc。
+- **`position: sticky` + 程序化滚动**（R82，2026-11-06）：sticky 的声明以前被整条丢弃（关键字不在
+  gperf 表里），偏移现在由 `RenderBox::stickyPositionOffset()` 现算并作用在
+  `RenderLayer::convertToLayerCoords`（绘制/命中）与 `absoluteBoundingBoxRect`（几何/脏矩形）；
+  文档滚动（`documentElement.scrollTop`、`window.scrollTo/scrollBy`、`pageYOffset/scrollY`）以前
+  全是 no-op，现在路由到 `FrameView`，`getBoundingClientRect()` 也改成视口坐标。
+  验收：`tools/run_sticky_tests.ps1`（11 条几何 + 4 像素）绿；8 个 layout 差分页、`LAYOUT=PASS`、
+  site smoke、nav/typing 全绿。未完成：`scrollIntoView()` 仍不滚动；sticky 的 layer 没有 z-index 细化。
 
 ## P0：先修正确性
 
@@ -361,6 +368,9 @@
 5. `document.scripts` 空 → 脚本扫描型库会误判。
 6. canvas `fillText`/`measureText` → 图表/文字库画不出字或排版错位。
 7. `WebSocket`/`EventSource` 存在但不可用 → 要么接通，要么显式 `undefined`。
+8. `el.scrollIntoView()` / `scrollIntoViewIfNeeded()` 不滚动 → `Element::scrollIntoView()` →
+   `RenderLayer::scrollRectToVisible()` 那条链没落到 `FrameView::setContentsPos`；文档滚动本身已在
+   R82 接通，这里只是入口不对（实测：调用前后 `getBoundingClientRect().top` 不变）。
 
 ### P2 不推进（已评估，保留理由）
 

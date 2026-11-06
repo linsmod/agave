@@ -311,6 +311,7 @@ public:
     bool isFloating() const { return m_floating; }
     bool isPositioned() const { return m_positioned; } // absolute or fixed positioning
     bool isRelPositioned() const { return m_relPositioned; } // relative positioning
+    bool isStickyPositioned() const { return m_stickyPositioned; } // in flow, shifted while scrolling
     bool isText() const  { return m_isText; }
     bool isInline() const { return m_inline; }  // inline object
     bool isCompact() const { return style()->display() == COMPACT; } // compact object
@@ -388,6 +389,7 @@ public:
 
     void setPositioned(bool b = true)  { m_positioned = b;  }
     void setRelPositioned(bool b = true) { m_relPositioned = b; }
+    void setStickyPositioned(bool b = true) { m_stickyPositioned = b; }
     void setFloating(bool b = true) { m_floating = b; }
     void setInline(bool b = true) { m_inline = b; }
     void setHasBoxDecorations(bool b = true) { m_paintBackground = b; }
@@ -884,6 +886,7 @@ private:
 
     bool m_positioned                : 1;
     bool m_relPositioned             : 1;
+    bool m_stickyPositioned          : 1;
     bool m_paintBackground           : 1; // if the box has something to paint in the
                                           // background painting phase (background, border, etc)
 

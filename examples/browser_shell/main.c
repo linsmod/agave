@@ -2476,6 +2476,7 @@ static int g_probeRoundsDone;     /* every round finished -> OK exit code   */
 static char g_probeToken[64];     /* per-reload marker for the NEW document */
 static int  g_probeVisible;       /* AGB_PROBE_SHOW: the window is on screen  */
 static char g_probeShot[512];     /* --shot: write a BMP here, then exit     */
+static int  g_probeShotSettled;   /* one frame elapsed since --eval          */
 static char g_probeKeys[512];     /* --keys: typed into the page before eval */
 static int  g_probeKeysDone;      /* the --keys list was typed out             */
 static char g_probePreScript[2048]; /* --pre-eval: runs once before --keys     */
@@ -3208,6 +3209,15 @@ static int probeRun(const char* url)
                 /* --shot: capture what the page painted and leave. The window
                  * is never shown, so this is the headless screenshot path. */
                 if (g_probeShot[0]) {
+                    /* Let one more frame run: an --eval that scrolled or mutated
+                     * the DOM has not been painted yet, and the control's mirror
+                     * still holds the pre-eval pixels. */
+                    if (!g_probeShotSettled) {
+                        g_probeShotSettled = 1;
+                        g_probeEvalDone = 0;
+                        SetTimer(g_probeWnd, PROBE_TIMER_EVAL, 300, NULL);
+                        continue;
+                    }
                     if (probeCapture(g_probeShot))
                         g_probeGotExit = 1;
                     else

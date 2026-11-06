@@ -95,6 +95,12 @@ public:
     const IntSize& layoutDelta() const { return m_layoutDelta; }
     void addLayoutDelta(const IntSize& delta) { m_layoutDelta += delta; }
 
+    /* position: sticky content does not travel with a scroll blit, so a scroll
+     * must repaint the viewport instead of shifting pixels. Set once any sticky
+     * layer exists; a stale true only costs that extra repaint. */
+    bool hasStickyContent() const { return m_hasStickyContent; }
+    void setHasStickyContent(bool b) { m_hasStickyContent = b; }
+
     void pushLayoutState(RenderBox* renderer, const IntSize& offset)
     {
         if (m_layoutStateDisableCount || m_frameView->needsFullRepaint())
@@ -144,6 +150,7 @@ private:
     int m_bestTruncatedAt;
     int m_truncatorWidth;
     bool m_forcedPageBreak;
+    bool m_hasStickyContent;
     IntSize m_layoutDelta;
     LayoutState* m_layoutState;
     unsigned m_layoutStateDisableCount;

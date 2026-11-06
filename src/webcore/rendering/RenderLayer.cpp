@@ -607,6 +607,16 @@ RenderLayer::convertToLayerCoords(const RenderLayer* ancestorLayer, int& x, int&
         y += yOff;
         return;
     }
+
+    /* position: sticky keeps its layout position but is painted and hit-tested
+     * at the offset clamped against the scrollport (RenderBox::stickyPositionOffset). */
+    if (m_object->isStickyPositioned()) {
+        IntSize stickyOffset;
+        if (static_cast<const RenderBox*>(m_object)->stickyPositionOffset(stickyOffset)) {
+            x += stickyOffset.width();
+            y += stickyOffset.height();
+        }
+    }
  
     RenderLayer* parentLayer;
     if (m_object->style()->position() == AbsolutePosition)

@@ -91,6 +91,11 @@ void RenderBox::setStyle(RenderStyle* newStyle)
         case FixedPosition:
             setPositioned(true);
             break;
+        case StickyPosition:
+            /* Sticky stays in normal flow; only its paint/hit-test position is
+             * shifted (see RenderBox::stickyPositionOffset). */
+            setStickyPositioned(true);
+            break;
         default:
             setPositioned(false);
 
@@ -122,6 +127,10 @@ void RenderBox::setStyle(RenderStyle* newStyle)
             m_layer->insertOnlyThisLayer();
             if (parent() && !needsLayout() && containingBlock())
                 m_layer->updateLayerPositions();
+            /* Sticky boxes are painted/hit-tested through layer coordinates, and
+             * a scroll must repaint them instead of blitting their pixels away. */
+            if (isStickyPositioned() && view())
+                view()->setHasStickyContent(true);
         }
     } else if (m_layer && !isRoot() && !isRenderView()) {
         ASSERT(m_layer->parent());
@@ -1125,6 +1134,134 @@ int RenderBox::relativePositionOffsetY() const
             return -style()->bottom().calcValue(containingBlockHeight());
     }
     return 0;
+}
+
+/* position: sticky. The box keeps its layout position (siblings are unaffected),
+ * but paint / hit-test / geometry report it at a position clamped between the
+ * scrollport (inset by `top`/`right`/`bottom`/`left`) and its containing block.
+ * Everything below is in document coordinates — the frame that
+ * absolutePosition() reports and that ignores the scroll offset. */
+bool RenderBox::stickyPositionOffset(IntSize& offset) const
+{
+    offset = IntSize();
+
+    if (!isStickyPositioned())
+        return false;
+
+    RenderStyle* s = style();
+    bool hasTop = !s->top().isAuto();
+    bool hasBottom = !s->bottom().isAuto();
+    bool hasLeft = !s->left().isAuto();
+    bool hasRight = !s->right().isAuto();
+
+    if (!hasTop && !hasBottom && !hasLeft && !hasRight)
+        return false;
+
+    /* Nearest scroll container: an overflow box, or the document view. */
+    RenderObject* scroller = parent();
+    while (scroller && !scroller->isRenderView() && !scroller->hasOverflowClip())
+        scroller = scroller->parent();
+    if (!scroller)
+        return false;
+
+    int portX = 0, portY = 0, portW = 0, portH = 0;
+
+    if (scroller->isRenderView()) {
+        FrameView* v = document()->view();
+        if (!v)
+            return false;
+        /* Document coordinates here: absolutePosition() does not subtract the
+         * view's own scroll (only overflow ancestors'), so the scrollport is
+         * the visible window moved by the current offset. */
+        portX = v->contentsX();
+        portY = v->contentsY();
+        portW = v->visibleWidth();
+        portH = v->visibleHeight();
+    } else {
+        RenderLayer* l = scroller->layer();
+        if (!l)
+            return false;
+        int x = 0, y = 0;
+        scroller->absolutePosition(x, y);
+        /* absolutePosition() already subtracts the scroll offsets of overflow
+         * ancestors (RenderBox::absolutePosition), so this scroller's padding
+         * box is in the same frame as the children below — no scroll added. */
+        portX = x + scroller->borderLeft() + scroller->paddingLeft();
+        portY = y + scroller->borderTop() + scroller->paddingTop();
+        portW = scroller->clientWidth();
+        portH = scroller->clientHeight();
+    }
+
+    int boxX = 0, boxY = 0;
+    absolutePosition(boxX, boxY);
+    int boxW = width();
+    int boxH = height();
+
+    RenderBlock* cb = containingBlock();
+    int cbX = 0, cbY = 0;
+    cb->absolutePosition(cbX, cbY);
+    cbX += cb->borderLeft();
+    cbY += cb->borderTop();
+    int cbW = cb->clientWidth();
+    int cbH = cb->clientHeight();
+
+    int dx = 0, dy = 0;
+
+    if (hasTop || hasBottom) {
+        /* top keeps the box at least `inset` below the scrollport top (shift
+         * down), bottom keeps it at least `inset` above the scrollport bottom
+         * (shift up). A sticky box never moves away from its layout position
+         * in the direction it is not sticking to. */
+        dy = 0;
+        if (hasTop) {
+            int desired = portY + s->top().calcValue(portH) - boxY;
+            dy = max(0, desired);
+        }
+        if (hasBottom) {
+            int desired = portY + portH - s->bottom().calcValue(portH) - (boxY + boxH);
+            dy = min(dy, desired);
+        }
+        /* Stay inside the containing block. */
+        int lower = cbY + (hasTop ? s->top().calcValue(portH) : 0) - boxY;
+        int upper = cbY + cbH - (hasBottom ? s->bottom().calcValue(portH) : 0) - boxY - boxH;
+        if (lower > upper) {
+            int t = lower;
+            lower = upper;
+            upper = t;
+        }
+        dy = max(lower, min(dy, upper));
+    }
+
+    if (hasLeft || hasRight) {
+        dx = 0;
+        if (hasLeft) {
+            int desired = portX + s->left().calcValue(portW) - boxX;
+            dx = max(0, desired);
+        }
+        if (hasRight) {
+            int desired = portX + portW - s->right().calcValue(portW) - (boxX + boxW);
+            dx = min(dx, desired);
+        }
+        int lower = cbX + (hasLeft ? s->left().calcValue(portW) : 0) - boxX;
+        int upper = cbX + cbW - (hasRight ? s->right().calcValue(portW) : 0) - boxX - boxW;
+        if (lower > upper) {
+            int t = lower;
+            lower = upper;
+            upper = t;
+        }
+        dx = max(lower, min(dx, upper));
+    }
+
+    offset = IntSize(dx, dy);
+
+    static int stickyDebug = -1;
+    if (stickyDebug < 0)
+        stickyDebug = getenv("AGB_STICKY_DEBUG") ? 1 : 0;
+    if (stickyDebug)
+        fprintf(stderr, "[sticky] box=%p top=%d bottom=%d box=(%d,%d %dx%d) port=(%d,%d %dx%d) cb=(%d,%d %dx%d) d=(%d,%d)\n",
+                (void*)this, hasTop, hasBottom, boxX, boxY, boxW, boxH,
+                portX, portY, portW, portH, cbX, cbY, cbW, cbH, dx, dy);
+    return dx || dy;
 }
 
 void RenderBox::calcWidth()

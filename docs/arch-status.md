@@ -34,7 +34,8 @@ ant 的反直觉行为（字面量属性名、`typeof`、`delete` 等）见 [ref
   有自己的 realm（独立全局/intrinsics/wrapper，默认开启），模块 map 仍按引擎共享（S3 待做），
   `parent`/`top` 是父/顶层 realm 的全局对象而不是 WindowProxy（S4 待做）。细节见
   [design-per-frame-realm.md](design-per-frame-realm.md)；旧模型用 `AGB_PER_FRAME_REALM=0` 回退。
-- **CSS 边界**：grid 布局、`position:sticky` 未实现（按 static 降级）；transform 做了
+- **CSS 边界**：grid 布局未实现（降级成 block）；`position:sticky` 已支持（R82，绘制/命中/几何随滚动平移，
+  滚动时整视口重绘）；transform 做了
   translate/scale/rotate 的绘制与变换感知的脏矩形（hit-test、stacking context 未做，R52/R55），
   文字字形也跟随同一矩阵（R80，`Font::drawGlyphs()` 走 picasso 的 text matrix）；`vw/vh`、`@media` 断点
   和 `window` 的 `resize` 事件都跟随窗口 resize（R69：vw/vh 是文档级变量，`FrameView::layout` 在尺寸变化时先重建

@@ -47,6 +47,7 @@
 #include "PlatformScreen.h"
 #include "Position.h"
 #include "RenderArena.h"
+#include "RenderBox.h"
 #include "RenderCounter.h"
 #include "RenderFlexibleBox.h"
 #include "RenderImage.h"
@@ -496,7 +497,8 @@ RenderLayer* RenderObject::enclosingLayer() const
 
 bool RenderObject::requiresLayer()
 {
-    return isRoot() || isPositioned() || isRelPositioned() || isTransparent() || hasOverflowClip();
+    return isRoot() || isPositioned() || isRelPositioned() || isStickyPositioned()
+        || isTransparent() || hasOverflowClip();
 }
 
 RenderBlock* RenderObject::firstLineBlock() const
@@ -602,26 +604,62 @@ int RenderObject::scrollHeight() const
     return hasOverflowClip() ? layer()->scrollHeight() : overflowHeight();
 }
 
+/* <html> and <body> have no overflow clip of their own: their overflow is
+ * propagated to the FrameView (FrameView::applyOverflowToViewport), so the
+ * document scroller is the view. `documentElement.scrollTop = y` and
+ * `window.scrollTo()` (prelude writes the same properties) have to land there;
+ * before this they fell into the `hasOverflowClip()` check below and silently
+ * did nothing. */
+static bool isDocumentScrollElement(const RenderObject* o)
+{
+    if (o->hasOverflowClip())
+        return false;
+    if (o->isBody())
+        return true;
+    Node* n = o->node();
+    return n && n->hasTagName(HTMLNames::htmlTag);
+}
+
 int RenderObject::scrollLeft() const
 {
-    return hasOverflowClip() ? layer()->scrollXOffset() : 0;
+    if (hasOverflowClip())
+        return layer()->scrollXOffset();
+    if (isDocumentScrollElement(this))
+        if (FrameView* v = document()->view())
+            return v->contentsX();
+    return 0;
 }
 
 int RenderObject::scrollTop() const
 {
-    return hasOverflowClip() ? layer()->scrollYOffset() : 0;
+    if (hasOverflowClip())
+        return layer()->scrollYOffset();
+    if (isDocumentScrollElement(this))
+        if (FrameView* v = document()->view())
+            return v->contentsY();
+    return 0;
 }
 
 void RenderObject::setScrollLeft(int newLeft)
 {
-    if (hasOverflowClip())
+    if (hasOverflowClip()) {
         layer()->scrollToXOffset(newLeft);
+        return;
+    }
+    if (isDocumentScrollElement(this))
+        if (FrameView* v = document()->view())
+            v->setContentsPos(max(0, newLeft), v->contentsY());
 }
 
 void RenderObject::setScrollTop(int newTop)
 {
-    if (hasOverflowClip())
+    if (hasOverflowClip()) {
         layer()->scrollToYOffset(newTop);
+        return;
+    }
+    if (isDocumentScrollElement(this))
+        if (FrameView* v = document()->view())
+            v->setContentsPos(v->contentsX(), max(0, newTop));
 }
 
 bool RenderObject::scroll(ScrollDirection direction, ScrollGranularity granularity, float multiplier)
@@ -1640,6 +1678,14 @@ IntRect RenderObject::absoluteBoundingBoxRect()
     IntRect result = rects[0];
     for (size_t i = 1; i < n; ++i)
         result.unite(rects[i]);
+
+    /* Geometry (getBoundingClientRect / getRect) reports the sticky position,
+     * which is also where the box is painted, so dirty rects stay correct. */
+    if (isStickyPositioned()) {
+        IntSize stickyOffset;
+        if (static_cast<const RenderBox*>(this)->stickyPositionOffset(stickyOffset))
+            result.move(stickyOffset.width(), stickyOffset.height());
+    }
     return result;
 }
 

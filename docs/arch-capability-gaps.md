@@ -77,7 +77,8 @@ qsChild=3 qsDesc=3 qsAdj=1 qsSib=2 qsNth=1 qsOdd=2 qsNot=2 qsFirst=1 qsList2=4 q
 | `HTMLElement.innerText` / `outerText` | **已支持（R34）**：走 `Element::innerText()`（会触发布局） | —— | 已支持 |
 | 元素树遍历 `parentElement` / `firstElementChild` / `lastElementChild` / `nextElementSibling` / `previousElementSibling` / `isConnected` / `getRootNode()` | **已支持（R34）** | —— | 已支持 |
 | 反射属性 `hidden` / `dir` / `lang` / `tabIndex` / `contentEditable` / `draggable` / `translate` / `slot` / `part` / `spellcheck` / `autofocus` | **已支持（R34）**：读写都落到属性（`el.hidden = true` → `hasAttribute('hidden')`） | —— | 已支持 |
-| `getAttributeNames()` / `toggleAttribute()` / `nodeValue` / `offsetParent` / `scrollIntoView()` / `classList.replace()` | **已支持（R34）** | —— | 已支持 |
+| `getAttributeNames()` / `toggleAttribute()` / `nodeValue` / `offsetParent` / `scrollIntoView()` / `classList.replace()` | **已支持（R34）**；⚠ `scrollIntoView()` 只是存在（R82 实测滚动前后 `getBoundingClientRect().top` 不变，**不滚动**） | —— | 部分 |
+| 文档滚动：`documentElement.scrollTop` / `body.scrollTop` / `window.scrollTo/scrollBy` / `pageYOffset` / `scrollX/Y` | **已支持（R82）**：`scrollTop/Left` 在 html/body 上路由到 `FrameView::setContentsPos`，`getBoundingClientRect()` 返回视口坐标（滚动后为负值），`pageYOffset/scrollY` 是实时 getter | 修前这四条全是 no-op（`scrollTop` 读回 0，滚动后 rect 不变） | 已支持 |
 | `document.activeElement` / `hasFocus()` / `visibilityState` / `importNode` / `adoptNode` / `elementFromPoint` | **已支持（R34）**；`visibilityState` 恒 `"visible"`，`activeElement` 无焦点时回落到 `body` | —— | 已支持 |
 | `document.fonts` | **桩（R34）**：`{status:'loaded', ready:已 resolve, add/delete/check/forEach}`。没有 web font 加载，`ready` 立即兑现 | 用 `await document.fonts.ready` 的页面不再挂住；但 `fonts.load()` 不会真的加载字体 | 桩 |
 | `window.open` 的引擎侧策略 | 可用，但**绕过** `FrameLoaderClientMC::dispatchCreatePage`，走控件 `agave_control_open_window` | 引擎级 new-window 策略/features 不生效；`[nav]` 里看到的是 `popup create`，不是 `popup open` | 管道差异，P2 |
@@ -136,7 +137,7 @@ agave_shell.exe --probe ../tools/pages/cap_input_events.html     --pre-eval "doc
 `cap_css.html` 当前输出：
 
 ```
-grid=block transform=[] boxShadow=rgb(255, 0, 0) 0px 0px 4px sticky=static aspectHeight=90px
+grid=block transform=[] boxShadow=rgb(255, 0, 0) 0px 0px 4px sticky=sticky aspectHeight=90px
 gap=8px isColor=rgb(1, 2, 3) whereColor=rgb(4, 5, 6) varColor=rgb(7, 8, 9)
 varCascade=rgb(9, 8, 7) varInherit=rgb(1, 2, 3) boxSizing=border-box boxWidth=100 flexItemW=20
 safeAlign=center safeItemY=427 absChildX=88 calcMinH=22px calcVarMinH=22px calcMixed=calc(100% - 24px)
@@ -160,7 +161,7 @@ bareMedia=2px schemeBg=rgb(0, 0, 200) mediaDark=1 mediaMin=1
 | `align-content: space-between/center/flex-end` | 行间分布生效 | **已支持（R54）**：默认 `stretch` 把单行撑满容器（`align-items:center` 因此在整个盒子里居中，与 Chrome 一致）；`space-around` 近似成 `space-between` |
 | `scrollbar-width: none` / `-ms-overflow-style: none` | 滚动条不占宽 | **已支持（R54）**：`RenderStyle::scrollbarNone()`；文档滚动条在 `FrameView::applyOverflowToViewport()`、元素滚动条在 `RenderLayer::updateScrollInfoAfterLayout()` 里不占空间 |
 | `::-webkit-scrollbar{display:none}` / `{width:0}` | 不占滚动条宽度 | **已支持（R56）**：解析期把这类规则改写成 `scrollbar-width:none`（`rewriteWebkitScrollbarRules()`，@media 内也处理）；`-thumb/-track/-button/-corner/-resizer` 规则整条丢弃（原生滚动条本来就画不了这些样式），不影响滚动本身 |
-| `position: sticky` | `static` | **不支持**，按 static 布局；P2 |
+| `position: sticky` | `sticky`（computed 也返回 `sticky`） | **已支持（R82）**：`top`/`right`/`bottom`/`left`（含 `%`）单轴或双轴；最近滚动容器可以是 overflow 盒或文档视图；绘制/命中/几何三处都随滚动平移，滚动时整视口重绘（不 blit）。复测：`tools/run_sticky_tests.ps1`（11 条几何 + 4 像素）。**限制**：`scrollIntoView()` 仍是 no-op；sticky 建 layer 参与 stacking 但没有 z-index 细化 |
 | `aspect-ratio: 16/9` + `width:160px` | `height=90px` | **已支持**（R41）：宽或高为 auto 时按比例推另一轴（按 content box），`16 / 9` 与 `16/9` 都认 |
 | flex `gap: 8px` | `8px` | **已支持**（R41）：`gap`/`row-gap`/`column-gap`，简写 1 值=两轴、2 值=row col；flex 仍是 2008 的 `-webkit-box` 体系，但间距按现代语义插在 in-flow 子项之间 |
 | `:is(p)` / `:where(p)` | `rgb(1, 2, 3)` / `rgb(4, 5, 6)` | **已支持**（R41）：解析期把 `:is()`/`:where()` 文本展开成选择器列表（`p:is(.a,.b) span` → `p.a span, p.b span`）。限制：参数必须是简单选择器（不能带组合器），且不能嵌套在别的伪类括号里 |

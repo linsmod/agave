@@ -48,6 +48,7 @@ agave 是**从零移植的浏览器**：**WebKit 2008 的 WebCore**（HTML/CSS �
 | computed style | `src/webcore/css/CSSComputedStyleDeclaration.cpp` | 未实现属性默认静默（`AGB_CSS_DEBUG` 才打） |
 | 布局 / 间距 / 元素 0×0 | 先看 [arch-rendering.md](arch-rendering.md) §3/§7；代码在 `src/webcore/rendering/` | flex 横向只有一套算法 `RenderFlexibleBox::layoutFlexLines()`（单行与换行共用，`AGB_FLEX_DEBUG=1` 可看分配） |
 | 绘制 / 裁剪 / 渐变 | `src/webcore/platform/picasso/GraphicsContextPS.cpp` | picasso 后端；`clip` 是设备坐标 |
+| `position: sticky` / 滚动位置 | `RenderBox::stickyPositionOffset()`（`src/webcore/rendering/RenderBox.cpp`）、`RenderLayer::convertToLayerCoords`、`ScrollView::valueChanged` | sticky 只平移绘制/命中/几何；文档滚动走 `FrameView::setContentsPos`（`AGB_STICKY_DEBUG=1`） |
 | 网络（HTTP/缓存/代理） | `src/webcore/platform/network/native/` | WinHTTP 后端 + `NetLog.cpp` |
 | 页面生命周期钩子（willClose/commit/DCL/load） | `src/webview/FrameLoaderClientMC.cpp` | 时序问题的第一现场；`[evt]` 钩子也在这里 |
 | 默认日志收口（`[evt]`/`[nav]`/`[ui]`/`[shell]`/`[probe]`/`[flag]`） | `src/webview/AgbLog.h` + 各调用点 | 只加日志，不动热路径；回归 `tools/run_nav_tests.ps1` |

@@ -40,6 +40,7 @@ RenderView::RenderView(Node* node, FrameView* view)
     , m_selectionEndPos(-1)
     , m_printImages(true)
     , m_maximalOutlineSize(0)
+    , m_hasStickyContent(false)
     , m_layoutState(0)
     , m_layoutStateDisableCount(0)
 {

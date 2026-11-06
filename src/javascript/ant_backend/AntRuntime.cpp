@@ -9240,8 +9240,15 @@ int nodeGetBoundingClientRect(AntbEngine* engine, AntbValue* self, AntbValue**, 
      * without filling `out` handed JS `undefined`, so the ordinary
      * `el.getBoundingClientRect().height` threw a TypeError (vConsole measures
      * its own hidden panel that way while booting). */
-    if (n && n->renderer())
+    if (n && n->renderer()) {
         rect = n->renderer()->absoluteBoundingBoxRect();
+        /* absoluteBoundingBoxRect() is in document coordinates; the DOM API is
+         * viewport-relative (Chrome: a scrolled document reports a negative
+         * top). Without this, scrolling changed nothing for measured geometry. */
+        if (WebCore::Document* doc = n->document())
+            if (WebCore::FrameView* v = doc->view())
+                rect.move(-v->contentsX(), -v->contentsY());
+    }
 
     {
         struct { const char* name; double value; } fields[] = {

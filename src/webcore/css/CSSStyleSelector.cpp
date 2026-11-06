@@ -2440,6 +2440,15 @@ void CSSStyleSelector::applyProperty(int id, CSSValue *value)
     {
         HANDLE_INHERIT_AND_INITIAL(position, Position)
         if(!primitiveValue) return;
+        /* `position: sticky` arrives as a string value: the keyword is not in the
+         * generated keyword table (see CSSParser::parseValue). */
+        if (primitiveValue->primitiveType() == CSSPrimitiveValue::CSS_STRING) {
+            if (primitiveValue->getStringValue().lower() == "sticky") {
+                style->setPosition(StickyPosition);
+                return;
+            }
+            return;
+        }
         EPosition p;
         switch(primitiveValue->getIdent())
         {

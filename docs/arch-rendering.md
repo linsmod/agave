@@ -148,6 +148,12 @@ DOM attach（Element::attach / Text::attach）
 - 布局结束后 `FrameView::layout()` 调 `RenderLayer::updateLayerPositions()`，刷新层的
   x/y/裁剪/滚动信息。
 - z-order 在绘制时按负 z → 正常流 → 正 z 三趟走（`m_negZOrderList` / `m_posZOrderList`），不做合成。
+- `position: sticky` 保持流内布局位置，只把**绘制/命中/几何**位置平移：`RenderBox::stickyPositionOffset()`
+  在每次需要时现算（最近滚动容器 = overflow 盒或 RenderView；scrollport 是它的 padding box；insets 只往
+  对应方向位移，再夹进 containing block），应用点是 `RenderLayer::convertToLayerCoords`（绘制 + 命中）、
+  `RenderObject::absoluteBoundingBoxRect`（`getBoundingClientRect` 与脏矩形）；sticky 会建 layer，
+  滚动时 `ScrollView::valueChanged` 在文档有 sticky 内容时整视口重绘而不是 blit（否则会被滚走）。
+  它**不是** positioned：`isPositioned()` 仍为 false，不参与 `m_positionedObjects`。
 
 ### 3.8 尺寸从哪来
 
@@ -223,7 +229,9 @@ DOM attach（Element::attach / Text::attach）
   `flex-basis`/`flex-grow`/`flex-shrink`/`min-width:auto`/`min|max-width` 冻结/`align-content`/`gap`
   都生效（§3.5）；**缺** `align-self`、`order`（整数分组）、`flex-basis` 的百分比/calc、RTL 单行。
 - `display:grid` 降级成 `block`（声明不丢，子项按块堆叠，不是 bug）。
-- `position:sticky` 按 static 布局；`transform` 只影响绘制：translate/scale/rotate 在
+- `position: sticky` 支持单轴/双轴 inset 与视图或 overflow 盒两种滚动容器（§3.7），但**只平移绘制/命中/几何**：
+  布局位置不变，不产生滚动链上的"滚动祖先"语义；`scrollIntoView()` 仍是 no-op。
+  `transform` 只影响绘制：translate/scale/rotate 在
   `RenderBlock::paint()` 里合成矩阵，文字字形也走同一矩阵（R80），但**不参与布局**，
   hit-test 不映射、不建 stacking context，`getComputedStyle().transform` 仍为空。
 - `calc()` 只在解析期折叠**纯常量**；含 `%`/`em`/`vw` 的混合 calc 仍不支持。

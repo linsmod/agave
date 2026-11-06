@@ -13,6 +13,7 @@
 
 #include "Frame.h"
 #include "FrameView.h"
+#include "RenderView.h"
 #include "RenderTheme.h" 
 
 #include "AffineTransform.h"
@@ -130,7 +131,19 @@ void ScrollView::ScrollViewPrivate::valueChanged(Scrollbar* bar)
     if (m_scrollbarsSuppressed)
         return;
 
-    scrollBackingStore(scrollDelta);
+    /* position: sticky boxes keep their layout position and are repainted at a
+     * scrolled-relative offset, so blitting the old pixels would drag them
+     * along. Repaint the viewport instead as soon as the document has any
+     * sticky content. */
+    {
+        FrameView* fv = static_cast<FrameView*>(m_view);
+        Document* doc = fv->frame() ? fv->frame()->document() : 0;
+        RenderView* rv = doc ? static_cast<RenderView*>(doc->renderer()) : 0;
+        if (rv && rv->hasStickyContent())
+            fv->repaintRectangle(enclosingIntRect(fv->visibleContentRect()), false);
+        else
+            scrollBackingStore(scrollDelta);
+    }
     static_cast<FrameView*>(m_view)->frame()->sendScrollEvent();
 }
 
