@@ -21,6 +21,13 @@
 #include "AntBridge.h"   /* antb_interrupt_all_engines: abort a stuck page script */
 #include "../webview/AgbLog.h"
 
+/* Defined next to the command drain loop; needed here because agwPost() is the
+ * single choke point every host call goes through. */
+static volatile LONG g_engineBusy;
+static DWORD         g_engineBusySince;
+static int agwEngineBusyFor(int minMs);
+static int agwCommandAbortsScript(int type);
+
 /* The control window class is registered as a Unicode class: see agwRegisterClass. */
 #define AGW_MAX_VIEWS  32
 #define AGW_QUEUE_SIZE 256
@@ -239,6 +246,17 @@ static void agwPost(int type, AgaveWebView* view, const char* text,
 
     if (!g_lockReady)
         return;
+
+    /* Every host entry point (address bar, link navigation, back/forward,
+     * reload, new tab, eval) queues here. If the engine has been inside a
+     * script for a while, the command would sit behind that script forever -
+     * so this is where "navigation aborts the current page" belongs, not in
+     * each caller. */
+    if (agwCommandAbortsScript(type) && agwEngineBusyFor(300)) {
+        fprintf(stderr, "[ui] engine busy for %lu ms: aborting the page script before command %d\n",
+                (unsigned long)(GetTickCount() - g_engineBusySince), type);
+        antb_interrupt_all_engines();
+    }
 
     memset(&command, 0, sizeof(command));
     command.type = type;
@@ -768,6 +786,35 @@ static void agwApplyPendingResizes(void)
 /* engine thread                                                              */
 /* ------------------------------------------------------------------------- */
 
+/* Engine-thread busy state, process wide: one engine thread serves every view,
+ * so when a script in tab A never returns, a command posted by tab B queues
+ * behind it just the same. Navigation must abort that script - otherwise the
+ * address bar and new tabs look dead while the UI thread is fine. */
+static int agwEngineBusyFor(int minMs)
+{
+    if (!g_engineBusy) return 0;
+    if (minMs <= 0) return 1;
+    return (int)(GetTickCount() - g_engineBusySince) >= minMs;
+}
+
+/* Commands that replace or start page execution: they are what a browser makes
+ * "abort whatever the page is doing" mean. Mouse/key/resize must not abort. */
+static int agwCommandAbortsScript(int type)
+{
+    switch (type) {
+    case AGW_CMD_NAVIGATE:
+    case AGW_CMD_LOAD_HTML:
+    case AGW_CMD_BACK:
+    case AGW_CMD_FORWARD:
+    case AGW_CMD_RELOAD:
+    case AGW_CMD_STOP:
+    case AGW_CMD_EVAL:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 static void agwDrainCommands(void)
 {
     for (;;) {
@@ -815,7 +862,9 @@ static void agwDrainCommands(void)
             continue;
         }
 
-        item->busySince = GetTickCount();
+        g_engineBusySince = GetTickCount();
+        InterlockedExchange(&g_engineBusy, 1);
+        item->busySince = g_engineBusySince;
         InterlockedExchange(&item->busy, 1);
 
         switch (command.type) {
@@ -942,6 +991,7 @@ static void agwDrainCommands(void)
 
         free(command.heapText);
         InterlockedExchange(&item->busy, 0);
+        InterlockedExchange(&g_engineBusy, 0);
         /* Drop the pin: if the host destroyed the control while the command
          * was running, this is where the engine view is finally torn down
          * (on the engine thread, never under a running script). */
@@ -1855,11 +1905,12 @@ void agave_webview_interrupt(AgaveWebView* item)
 }
 
 /* 1 when a queued command has been running for at least minMs (0 = any). */
+/* Process-wide on purpose: one engine thread runs every view, so a script stuck
+ * in tab A also freezes a command posted by tab B. */
 int agave_webview_busy(AgaveWebView* item, int minMs)
 {
-    if (!item || !item->busy) return 0;
-    if (minMs <= 0) return 1;
-    return (int)(GetTickCount() - item->busySince) >= minMs;
+    (void)item;
+    return agwEngineBusyFor(minMs);
 }
 
 void agave_webview_reload(AgaveWebView* item)  { agwPost(AGW_CMD_RELOAD, item, NULL, 0, 0, 0, 0); }
