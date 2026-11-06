@@ -102,7 +102,7 @@
 测量方式：同一段 JS 在 Chrome（CDP）与 agave（`--eval-file`）各跑一次、固定 1100×800 且隐藏滚动条；
 脚本 `tools/cdp_eval.py`、对比用 `debug/vqq_chrome_eval.js` / `debug/vqq_probe3.js`。
 
-### P0-l 子 frame realm 没有定时器（2026-11-06 诊断，**待修**）
+### P0-l 子 frame realm 没有定时器（2026-11-06，**已完成**）
 
 - 现象：deepseek 登录页的微信二维码 iframe 里 `jquery.min.js` 抛
   `ReferenceError: 'setTimeout' is not defined`，随即 `jQuery is not defined`，二维码交互链整条断掉
@@ -115,14 +115,20 @@
   `bindFrameRealm()` 只装 host API + prelude/polyfills，而 `prelude.js` 的定时器包装又是
   `if (typeof g.setTimeout === 'function')` 保护着的，子 realm 里静默跳过 → 子 frame 永远没有定时器。
   这是 P0-i S3「事件/定时器/模块按 realm」未做完的那一半。
-- 修复建议（ant 侧，改完走 `tools/build_antjsb.ps1`）：把 `timers_define_common()` 从
-  `init_timer_module()` 拆出可复用入口，在 `js_realm_init_intrinsics()`（或 `antb_realm_create()` 的
-  bridge 包装）里对每个新 realm 调一次；注意 timer 表 `js->timers` 是 isolate 级的，跨 realm 共用即可，
-  但要确认 `timer_callback` 进入前切回创建它的 realm（与 `slot`/`microtask_realm` 同一套机制）。
-- 验收：新增 `tools/pages/cap_frame_timers.html`（父/子各 `typeof setTimeout === 'function'` +
-  子 frame 里 `setTimeout(cb,10)` 真的回调），并入 `run_realm_tests.ps1`；deepseek 登录页
-  `[antjs]` 不再出现 `'setTimeout' is not defined` / `'jQuery' is not defined`，`run_realm_tests` /
-  nav/typing/worker/script-mode 全绿。
+- **修法（ant 仓库）**：`src/modules/timer.c` 把 `timers_define_common()` 抽成
+  `ant_realm_install_timers(js)`（只往**当前** realm 的 global 装函数，不重置 isolate 级的
+  `js->timers` / Timeout proto / template）；`bridge/AntBridge.c` 的 `antb_realm_create()` 先
+  `ant_realm_enter()` 进新 realm 再调它，使 cfunc meta 绑定到该 realm（VM 在回调时按
+  `func->realm` 自动切回）。**刻意不改 `ant_realm_create()`**：Node 的
+  `vm.runInNewContext()` 必须保持 `typeof setTimeout === 'undefined'`
+  （`tests/test_vm.cjs:97`；已用 `node:vm` 直接复测）。新增 `tests/test_realm_timers.c`
+  （meson `realm-timers`）：新 realm 默认无定时器、装完有回调、主 realm 不受影响。
+- **验收（2026-11-06）**：`debug/iframe_timer_after.log` →
+  `childTimer=function childInterval=function`；`debug/ds_after_timers.log` 里两条
+  `'setTimeout' is not defined` / `'jQuery' is not defined` 均消失、
+  `[exit] rs=complete inp=2`；`tools/run_realm_tests.ps1` 扩到 14 项全绿
+  （含 child timer 真的回调）；`tools/build_antjsb.ps1` 发布新 `antjsb.dll` 后重链
+  `libagave`。
 
 ### P1-h deepseek 首屏 4.3 s 的构成（2026-11-06 测量，**待优化**）
 
@@ -285,6 +291,27 @@
 
 - 动作：给桥接加计数输出（wrapper 数 / class 槽位 / 每 engine 的 root 数），`AGB_EVT_DEBUG` 同一开关。
 - 验收：表耗尽不再是静默失败（能提前在日志里看到余量）。
+
+### P2 shell 的 GUI-only 操作没有自动化判据
+
+- 现状：tab 新建/关闭/切换、查找、缩放、书签、右键菜单只发生在 GUI 壳里，探针跑不到，
+  回归脚本对它们零断言（日志已经补齐，见 [hist-lessons R75](hist-lessons.md)）。
+- 已具备的零件：`tools/send_ui_events.ps1`（`-RightClick` 打右键；WM_COMMAND 可直接点按钮）、
+  探针的 `on_context_menu`（只记录、不开菜单）。
+- 动作：写 `tools/run_shell_tests.ps1` —— 起 GUI（临时 `--userdata`）→ 用 `WM_COMMAND` 点
+  `ID_NEWTAB`/`ID_FIND_*`/`ID_BACK`、用 `-RightClick` 打右键 → 断言 `[shell] tab create/activate/…`、
+  `[shell] find …`、`[shell] context menu … choice=N` 出现，然后 `WM_CLOSE`。
+- 约束：会短暂显示窗口，不能进默认回归；键盘快捷键**不可测**（`GetKeyState` 读真实键盘状态，
+  PostMessage 的虚拟按键骗不过它），只能测按钮/菜单路径。
+- 验收：脚本退出码 0/1，覆盖 tab 三连 + 查找 + 右键选择。
+
+### P2 view-source
+
+- 现状：右键菜单这一项是灰的 —— 引擎没有"把当前文档序列化成字符串交给宿主"的 API，
+  旧实现 `eval("document.documentElement.outerHTML…")` 的结果没有任何出口（`agave_webview_eval` 丢弃返回值）。
+- 动作：`WebView` 增加 `documentHTML()`（`Document::toString()` 或 serializer），控制层新增
+  `agave_webview_get_html()` → shell 用 `agave_webview_load_html()` 在新标签页打开（`<pre>` 转义）。
+- 验收：右键 "View page source" → 新标签页显示源码，`document.URL` 仍是 `file:`/`http:` 原地址的派生标记。
 
 ### P2 下载
 

@@ -258,6 +258,8 @@ static void loadBookmarks(void)
     }
 
     fclose(file);
+    agbLog(AGB_LOG_SHELL, "bookmarks loaded: %d entr%s from %s",
+           g_bookmarkCount, g_bookmarkCount == 1 ? "y" : "ies", path);
 }
 
 /* Read the history back. It used to be append-only: recordHistory() wrote the
@@ -314,8 +316,10 @@ static void saveBookmarks(void)
     statePath(path, sizeof(path), "bookmarks.txt");
     file = fopen(path, "wb");
 
-    if (!file)
+    if (!file) {
+        agbLog(AGB_LOG_SHELL, "bookmarks: cannot write %s", path);
         return;
+    }
 
     for (i = 0; i < g_bookmarkCount; ++i)
         fprintf(file, "%s\t%s\n", g_bookmarks[i].url,
@@ -324,22 +328,28 @@ static void saveBookmarks(void)
     fclose(file);
 }
 
-static void addBookmark(const char* url, const char* title)
+/* 1 when the bookmark was added, 0 when nothing changed (empty URL, duplicate,
+ * table full). Callers have to tell the difference: the shell used to print
+ * "Bookmark added" even for a URL that was already saved. */
+static int addBookmark(const char* url, const char* title)
 {
     int i;
 
     if (!url || !url[0] || g_bookmarkCount >= AGW_MAX_BOOKMARKS)
-        return;
+        return 0;
 
     for (i = 0; i < g_bookmarkCount; ++i) {
         if (!strcmp(g_bookmarks[i].url, url))
-            return;
+            return 0;
     }
 
     strncpy(g_bookmarks[g_bookmarkCount].url, url, MAX_PATH_CHARS - 1);
+    g_bookmarks[g_bookmarkCount].url[MAX_PATH_CHARS - 1] = 0;
     strncpy(g_bookmarks[g_bookmarkCount].title, title ? title : "", sizeof(g_bookmarks[0].title) - 1);
+    g_bookmarks[g_bookmarkCount].title[sizeof(g_bookmarks[0].title) - 1] = 0;
     ++g_bookmarkCount;
     saveBookmarks();
+    return 1;
 }
 
 static void recordHistory(const char* url)
@@ -379,19 +389,25 @@ static void saveSession(void)
     char path[MAX_PATH_CHARS];
     FILE* file;
     int i;
+    int saved = 0;
 
     statePath(path, sizeof(path), "session.txt");
     file = fopen(path, "wb");
 
-    if (!file)
+    if (!file) {
+        agbLog(AGB_LOG_SHELL, "session: cannot write %s", path);
         return;
+    }
 
     for (i = 0; i < MAX_TABS; ++i) {
-        if (g_tabs[i].used && g_tabs[i].url[0])
+        if (g_tabs[i].used && g_tabs[i].url[0]) {
             fprintf(file, "%s\n", g_tabs[i].url);
+            ++saved;
+        }
     }
 
     fclose(file);
+    agbLog(AGB_LOG_SHELL, "session saved tabs=%d -> %s", saved, path);
 }
 
 static int loadSession(char urls[][MAX_PATH_CHARS], int max)
@@ -616,6 +632,10 @@ static void setActiveTab(int index)
     if (index < 0 || index >= MAX_TABS || !g_tabs[index].used)
         return;
 
+    if (index != g_activeTab || !g_tabs[index].hwnd)
+        agbLog(AGB_LOG_SHELL, "tab activate index=%d (was %d) url=%s",
+               index, g_activeTab, g_tabs[index].url);
+
     g_activeTab = index;
 
     for (i = 0; i < MAX_TABS; ++i) {
@@ -641,9 +661,15 @@ static void setActiveTab(int index)
 static void closeTab(int index)
 {
     int i;
+    int wasActive;
+    char url[MAX_PATH_CHARS];
 
     if (index < 0 || index >= MAX_TABS || !g_tabs[index].used)
         return;
+
+    wasActive = (index == g_activeTab);
+    strncpy(url, g_tabs[index].url, sizeof(url) - 1);
+    url[sizeof(url) - 1] = 0;
 
     /* Remember the page so ctrl+shift+T can reopen it. */
     if (g_tabs[index].url[0] && strcmp(g_tabs[index].url, "about:blank") != 0) {
@@ -677,6 +703,9 @@ static void closeTab(int index)
         }
     }
 
+    agbLog(AGB_LOG_SHELL, "tab close index=%d url=%s active=%d closed-saved=%d",
+           index, url, wasActive, g_closedCount);
+
     InvalidateRect(g_hwnd, NULL, TRUE);
 }
 
@@ -685,10 +714,13 @@ static void reopenClosedTab(void)
 {
     ClosedTab closed;
 
-    if (g_closedCount <= 0)
+    if (g_closedCount <= 0) {
+        agbLog(AGB_LOG_SHELL, "tab reopen: nothing was closed");
         return;
+    }
 
     closed = g_closed[--g_closedCount];
+    agbLog(AGB_LOG_SHELL, "tab reopen url=%s left=%d", closed.url, g_closedCount);
     createTab(closed.url);
 }
 
@@ -708,8 +740,10 @@ static void switchTab(int direction)
         ++count;
     }
 
-    if (count < 2)
+    if (count < 2) {
+        agbLog(AGB_LOG_SHELL, "tab switch: only %d tab(s) open", count);
         return;
+    }
 
     index = (index + direction + count) % count;
 
@@ -831,8 +865,16 @@ static void onError(AgaveWebView* view, int code, const char* url, void* user)
 static int onDialog(AgaveWebView* view, int type, const char* message,
                     const char* defaultValue, char* result, int resultSize, void* user)
 {
+    static const char* const names[] = { "alert", "confirm", "prompt" };
+    int answer = 1;
+
     (void)view;
     (void)user;
+
+    /* A modal box on the engine thread looks exactly like a hang in the log, so
+     * say which page called what before opening it. */
+    agbLog(AGB_LOG_SHELL, "%s msg='%s'", type >= 0 && type <= 2 ? names[type] : "dialog",
+           message ? message : "");
 
     if (type == 0) {
         MessageBoxA(g_hwnd, message ? message : "", "Page says", MB_OK | MB_ICONINFORMATION);
@@ -840,8 +882,10 @@ static int onDialog(AgaveWebView* view, int type, const char* message,
     }
 
     if (type == 1) {
-        return MessageBoxA(g_hwnd, message ? message : "", "Confirm",
-                           MB_OKCANCEL | MB_ICONQUESTION) == IDOK;
+        answer = MessageBoxA(g_hwnd, message ? message : "", "Confirm",
+                             MB_OKCANCEL | MB_ICONQUESTION) == IDOK;
+        agbLog(AGB_LOG_SHELL, "confirm answered %s", answer ? "ok" : "cancel");
+        return answer;
     }
 
     if (result && resultSize > 0) {
@@ -860,9 +904,13 @@ static int onNewWindow(AgaveWebView* from, AgaveWebView* popup,
     (void)user;
 
     if (index < 0 || !url || !url[0]) {
+        agbLog(AGB_LOG_SHELL, "new window rejected (index=%d url=%s)", index,
+               url ? url : "");
         agave_webview_destroy(popup);
         return 0;
     }
+
+    agbLog(AGB_LOG_SHELL, "new window url=%s -> tab %d", url, index);
 
     g_tabs[index].used = 1;
     g_tabs[index].view = popup;
@@ -1154,13 +1202,22 @@ static void onContextMenu(AgaveWebView* view, int x, int y,
     HMENU menu = CreatePopupMenu();
     POINT point;
     Tab* tab = (Tab*)user;
+    HWND viewHwnd = view ? (HWND)agave_webview_hwnd(view) : NULL;
     int choice;
 
     (void)text;
 
+    if (!tab) {
+        agbLog(AGB_LOG_SHELL, "context menu without a tab, ignored");
+        return;
+    }
+
+    /* x,y are client coordinates of the control, not of the shell window: with
+     * g_hwnd the menu was offset by the toolbar height, and on a multi-monitor
+     * setup the popup could open on the wrong monitor entirely. */
     point.x = x;
     point.y = y;
-    ClientToScreen(g_hwnd, &point);
+    ClientToScreen(viewHwnd ? viewHwnd : g_hwnd, &point);
 
     AppendMenuA(menu, MF_STRING, 1, "Back");
     AppendMenuA(menu, MF_STRING, 2, "Forward");
@@ -1178,7 +1235,10 @@ static void onContextMenu(AgaveWebView* view, int x, int y,
         AppendMenuA(menu, MF_STRING, 7, "Save image (not implemented)");
 
     AppendMenuA(menu, MF_STRING, 8, "Bookmark this page");
-    AppendMenuA(menu, MF_STRING, 9, "View page source (eval)");
+    /* No view-source support yet: a document->string API does not exist, and the
+     * old "View page source (eval)" evaluated outerHTML into the void (eval
+     * results are discarded), so the item did nothing at all. Say so instead. */
+    AppendMenuA(menu, MF_STRING | MF_GRAYED, 9, "View page source (not implemented)");
     AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
     appendMenuUtf8(menu, MF_STRING, 10, "注入 vConsole");
     appendMenuUtf8(menu, MF_STRING, 11, "注入 inspector.js");
@@ -1186,6 +1246,15 @@ static void onContextMenu(AgaveWebView* view, int x, int y,
     choice = (int)TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN,
                                  point.x, point.y, 0, g_hwnd, NULL);
     DestroyMenu(menu);
+
+    /* choice==0 means the menu was dismissed (or TrackPopupMenu failed): the
+     * one line that tells "the menu never opened" apart from "the item did
+     * nothing". */
+    agbLog(AGB_LOG_SHELL, "context menu at %d,%d link=%s image=%s choice=%d",
+           x, y,
+           (linkUrl && linkUrl[0]) ? linkUrl : "(none)",
+           (imageUrl && imageUrl[0]) ? imageUrl : "(none)",
+           choice);
 
     switch (choice) {
     case 1: if (tab->used) agave_webview_back(tab->view); break;
@@ -1195,25 +1264,40 @@ static void onContextMenu(AgaveWebView* view, int x, int y,
     case 5: if (linkUrl && linkUrl[0]) navigateActive(linkUrl, 1); break;
     case 6:
         if (linkUrl && linkUrl[0]) {
+            wchar_t wide[2048];
+            int copied = 0;
+            int wideBytes;
+
+            /* CF_UNICODETEXT, not CF_TEXT: a UTF-8 URL pasted into an ANSI
+             * clipboard came out as mojibake. */
+            utf8ToWide(linkUrl, wide, 2048);
+            wideBytes = (lstrlenW(wide) + 1) * (int)sizeof(wchar_t);
+
             if (OpenClipboard(g_hwnd)) {
-                HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, strlen(linkUrl) + 1);
+                HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, (SIZE_T)wideBytes);
 
                 if (memory) {
                     void* target = GlobalLock(memory);
 
                     if (target) {
-                        strcpy((char*)target, linkUrl);
+                        memcpy(target, wide, (size_t)wideBytes);
                         GlobalUnlock(memory);
                         EmptyClipboard();
-                        SetClipboardData(CF_TEXT, memory);
+                        copied = SetClipboardData(CF_UNICODETEXT, memory) != NULL;
+                        if (!copied)
+                            GlobalFree(memory);
+                    } else {
+                        GlobalFree(memory);
                     }
                 }
                 CloseClipboard();
             }
+
+            agbLog(AGB_LOG_SHELL, "clipboard copy link ok=%d url=%s", copied, linkUrl);
         }
         break;
     case 8: addBookmarkCurrent(); break;
-    case 9: if (tab->used) agave_webview_eval(tab->view, "document.documentElement.outerHTML.slice(0,2000)"); break;
+    case 9: agbLog(AGB_LOG_SHELL, "view source: not implemented"); break;
     case 10: injectVConsole(view); break;
     case 11: injectInspector(view); break;
     default: break;
@@ -1575,8 +1659,10 @@ static void createTab(const char* url)
     AgaveWebViewCallback callbacks;
     Tab* tab;
 
-    if (index < 0)
+    if (index < 0) {
+        agbLog(AGB_LOG_SHELL, "tab create failed: no free slot (max %d)", MAX_TABS);
         return;
+    }
 
     tab = &g_tabs[index];
     memset(tab, 0, sizeof(Tab));
@@ -1598,6 +1684,7 @@ static void createTab(const char* url)
                                      800, 400, &callbacks, tab);
 
     if (!tab->view) {
+        agbLog(AGB_LOG_SHELL, "tab create failed: view=null url=%s", url ? url : "");
         tab->used = 0;
         return;
     }
@@ -1606,6 +1693,8 @@ static void createTab(const char* url)
     strncpy(tab->url, url, MAX_PATH_CHARS - 1);
     ShowWindow(tab->hwnd, SW_HIDE);
 
+    agbLog(AGB_LOG_SHELL, "tab create index=%d url=%s", index, tab->url);
+
     /* The GUI saves where a user expects to find downloads; the probe keeps the
      * engine default (<AGB_USERDATA>/downloads) so tests never touch this. */
     {
@@ -1613,10 +1702,17 @@ static void createTab(const char* url)
 
         if (home && home[0]) {
             char downloads[MAX_PATH_CHARS];
+            static int logged;
 
             _snprintf(downloads, sizeof(downloads), "%s\\Downloads", home);
             downloads[sizeof(downloads) - 1] = 0;
             agave_webview_set_download_dir(tab->view, downloads);
+
+            /* Once per process: the directory is per view, the message is not. */
+            if (!logged) {
+                logged = 1;
+                agbLog(AGB_LOG_SHELL, "download dir=%s", downloads);
+            }
         }
     }
 
@@ -1660,14 +1756,24 @@ static void addBookmarkCurrent(void)
     if (!tab->used)
         return;
 
-    addBookmark(tab->url, tab->title);
-    strncpy(tab->status, "Bookmark added", sizeof(tab->status) - 1);
+    /* The status line has to match what really happened: a duplicate URL is a
+     * no-op, and claiming "Bookmark added" made the menu look broken. */
+    if (addBookmark(tab->url, tab->title)) {
+        agbLog(AGB_LOG_SHELL, "bookmark add url=%s total=%d", tab->url, g_bookmarkCount);
+        strncpy(tab->status, "Bookmark added", sizeof(tab->status) - 1);
+    } else {
+        agbLog(AGB_LOG_SHELL, "bookmark duplicate url=%s", tab->url);
+        strncpy(tab->status, "Already bookmarked", sizeof(tab->status) - 1);
+    }
+
     updateStatus();
 }
 
 static void toggleFind(void)
 {
     g_findVisible = !g_findVisible;
+
+    agbLog(AGB_LOG_SHELL, "find bar %s", g_findVisible ? "on" : "off");
 
     ShowWindow(g_findEdit, g_findVisible ? SW_SHOW : SW_HIDE);
     ShowWindow(g_findPrev, g_findVisible ? SW_SHOW : SW_HIDE);
@@ -1691,8 +1797,35 @@ static void doFind(int forward)
 
     readControlText(g_findEdit, text, sizeof(text));
 
-    if (text[0])
-        agave_webview_search(tab->view, text, forward, 0);
+    if (!text[0]) {
+        agbLog(AGB_LOG_SHELL, "find: empty query, ignored");
+        return;
+    }
+
+    /* The engine gives no "hits" back, so this line is the only evidence that
+     * the search reached the page at all. */
+    agbLog(AGB_LOG_SHELL, "find text='%s' forward=%d", text, forward);
+    agave_webview_search(tab->view, text, forward, 0);
+}
+
+/* One place that clamps, applies and logs the zoom: it used to be four copies of
+ * the same three lines, invisible in the log even though zoom changes vw/vh and
+ * every layout width bug report depends on it. */
+static void setZoom(int percent, const char* source)
+{
+    int before = g_zoom;
+
+    if (percent < 25)
+        percent = 25;
+    if (percent > 400)
+        percent = 400;
+
+    g_zoom = percent;
+    applyZoomToActive();
+    updateStatus();
+
+    if (before != g_zoom)
+        agbLog(AGB_LOG_SHELL, "zoom %d%% -> %d%% (%s)", before, g_zoom, source);
 }
 
 static void updateToolbarState(void)
@@ -1767,9 +1900,9 @@ static void showMainMenu(void)
 
     switch (choice) {
     case 1: addBookmarkCurrent(); break;
-    case 2: g_zoom = g_zoom < 400 ? g_zoom + 25 : g_zoom; applyZoomToActive(); updateStatus(); break;
-    case 3: g_zoom = g_zoom > 25 ? g_zoom - 25 : g_zoom; applyZoomToActive(); updateStatus(); break;
-    case 4: g_zoom = 100; applyZoomToActive(); updateStatus(); break;
+    case 2: setZoom(g_zoom + 25, "menu zoom in"); break;
+    case 3: setZoom(g_zoom - 25, "menu zoom out"); break;
+    case 4: setZoom(100, "menu reset zoom"); break;
     case 5: navigateActive("about:blank", 1); break;
     case 6: toggleFind(); break;
     case 7: if (g_tabs[g_activeTab].used) agave_webview_reload(g_tabs[g_activeTab].view); break;
@@ -1860,6 +1993,8 @@ static void paintStatus(HDC hdc, int width, int height)
 static void onCloseWindow(AgaveWebView* view, void* user)
 {
     (void)user;
+
+    agbLog(AGB_LOG_SHELL, "window.close() -> close tab");
 
     if (g_hwnd)
         PostMessageA(g_hwnd, AGW_SHELL_CLOSE_TAB, (WPARAM)view, 0);
@@ -2490,6 +2625,23 @@ static int probeOnDialog(AgaveWebView* view, int type, const char* message,
     return 1;
 }
 
+/* Right click reaches the host on the UI thread (the control copies the payload
+ * and posts it there; a menu cannot be built from the engine thread). The probe
+ * only records it - no menu, so the run stays headless - which is what makes the
+ * path testable without a human at the mouse. */
+static void probeOnContextMenu(AgaveWebView* view, int x, int y,
+                               const char* linkUrl, const char* imageUrl,
+                               const char* text, void* user)
+{
+    (void)view;
+    (void)user;
+    (void)text;
+
+    agbLog(AGB_LOG_PROBE, "context menu at %d,%d link=%s image=%s",
+           x, y, linkUrl && linkUrl[0] ? linkUrl : "(none)",
+           imageUrl && imageUrl[0] ? imageUrl : "(none)");
+}
+
 static void probeOnCloseWindow(AgaveWebView* view, void* user)
 {
     (void)view;
@@ -2828,6 +2980,7 @@ static int probeRun(const char* url)
     callbacks.on_new_window = probeOnNewWindow;
     callbacks.on_close_window = probeOnCloseWindow;
     callbacks.on_dialog = probeOnDialog;
+    callbacks.on_context_menu = probeOnContextMenu;
 
     g_probeView = agave_webview_create(g_probeWnd, 0, 0, 1100, 800, &callbacks, NULL);
     if (!g_probeView) {
@@ -2970,6 +3123,7 @@ static int probeRun(const char* url)
                 if (g_probeZoom > 0 && !g_probeZoomDone) {
                     g_probeZoomDone = 1;
                     probePrint("[probe]", "applying zoom");
+                    agbLog(AGB_LOG_PROBE, "zoom %d%%", g_probeZoom);
                     agave_webview_set_zoom(g_probeView, g_probeZoom);
                     SetTimer(g_probeWnd, PROBE_TIMER_EVAL, 400, NULL);
                     continue;
@@ -3490,6 +3644,18 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
     if (g_argError)
         return PROBE_EXIT_USAGE;
 
+    /* One line that answers "what was I started with": the options that succeed
+     * used to leave no trace at all, so a probe run at --zoom 150 or a GUI run
+     * with --userdata looked identical to a default start. */
+    agbLog(AGB_LOG_SHELL, "argv url=%s probe=%d zoom=%d resize=%dx%d offline=%d eval=%d bytes keys=%d",
+           g_startupUrl[0] ? g_startupUrl : "(none)",
+           g_probeMode,
+           g_probeZoom,
+           g_probeResizeW, g_probeResizeH,
+           getenv("AGB_OFFLINE") != NULL,
+           (int)strlen(g_probeScript),
+           g_probeKeys[0] ? 1 : 0);
+
     if (g_probeMode)
         return probeRun(g_startupUrl);
 
@@ -3549,9 +3715,11 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
     if (g_startupUrl[0]) {
         strncpy(initial, g_startupUrl, sizeof(initial) - 1);
         initial[sizeof(initial) - 1] = 0;
+        agbLog(AGB_LOG_SHELL, "startup url from argv: %s", initial);
     } else {
         restored = loadSession(session, 8);
         strcpy(initial, restored > 0 ? session[0] : "http://www.163.com");
+        agbLog(AGB_LOG_SHELL, "session restored tabs=%d first=%s", restored, initial);
     }
 
     if (restored > 1) {
@@ -3622,21 +3790,15 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
                     continue;
                 }
                 if (msg.wParam == VK_ADD || msg.wParam == 0xBB) {
-                    g_zoom = g_zoom < 400 ? g_zoom + 25 : g_zoom;
-                    applyZoomToActive();
-                    updateStatus();
+                    setZoom(g_zoom + 25, "ctrl+plus");
                     continue;
                 }
                 if (msg.wParam == VK_SUBTRACT || msg.wParam == 0xBD) {
-                    g_zoom = g_zoom > 25 ? g_zoom - 25 : g_zoom;
-                    applyZoomToActive();
-                    updateStatus();
+                    setZoom(g_zoom - 25, "ctrl+minus");
                     continue;
                 }
                 if (msg.wParam == '0') {
-                    g_zoom = 100;
-                    applyZoomToActive();
-                    updateStatus();
+                    setZoom(100, "ctrl+0");
                     continue;
                 }
             }

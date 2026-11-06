@@ -30,9 +30,7 @@ static DWORD         g_engineBusySince;
  * engine thread is not draining it. Long enough that a slow parse/settling page
  * does not trip it, short enough that Reload/navigate on a hung page responds. */
 #define AGW_STUCK_QUEUE_MS 1500u
-static int agwEngineBusyFor(int minMs);
 static int agwQueueStuckFor(int minMs);
-static int agwCommandAbortsScript(int type);
 
 /* The control window class is registered as a Unicode class: see agwRegisterClass. */
 #define AGW_MAX_VIEWS  32
@@ -40,6 +38,7 @@ static int agwCommandAbortsScript(int type);
 #define AGW_MSG_STATE  (WM_APP + 0x51)
 #define AGW_MSG_REPAINT (WM_APP + 0x52)
 #define AGW_MSG_DOWNLOAD (WM_APP + 0x53)
+#define AGW_MSG_CONTEXT (WM_APP + 0x54)
 
 #define AGW_MAX_DOWNLOADS 32
 
@@ -57,6 +56,17 @@ typedef struct {
     char               mime[96];
     int                pending;   /* state changed, UI thread has not seen it */
 } AgwDownloadEntry;
+
+/* Right-click payload handed from the engine thread to the UI thread: the menu
+ * is built there (see agwOnContextMenu). Strings are heap copies because the
+ * engine's own buffers are dead by the time the posted message is handled. */
+typedef struct {
+    int   x;
+    int   y;
+    char* link;
+    char* image;
+    char* text;
+} AgwContextPayload;
 
 enum {
     AGW_CMD_NAVIGATE, AGW_CMD_LOAD_HTML, AGW_CMD_BACK, AGW_CMD_FORWARD,
@@ -390,12 +400,26 @@ static char* agwOnPromptBox(MaCrossView* view, const char* message, const char* 
     return buffer;
 }
 
+/* strdup(3) is not portable here (MSVC CRT naming), and the context menu is the
+ * only place that needs it. */
+static char* agwDupOrNull(const char* text)
+{
+    char* copy;
+
+    if (!text || !text[0])
+        return NULL;
+
+    copy = (char*)malloc(strlen(text) + 1);
+
+    if (copy)
+        strcpy(copy, text);
+
+    return copy;
+}
+
 static void agwOnContextMenu(MaCrossView* view, const MC_CONTEXT_MENU_DATA* menu)
 {
     AgaveWebView* item = agwByView(view);
-
-    if (getenv("AGW_CTX_DEBUG"))
-        fprintf(stderr, "[ctx] fired view=%p item=%p\n", (void*)view, (void*)item);
 
     if (!item)
         item = g_lastActive;
@@ -403,13 +427,39 @@ static void agwOnContextMenu(MaCrossView* view, const MC_CONTEXT_MENU_DATA* menu
     if (!item || !item->callbacks.on_context_menu)
         return;
 
-    item->callbacks.on_context_menu(item,
-                                    menu ? menu->location.x : 0,
-                                    menu ? menu->location.y : 0,
-                                    menu && menu->link_url ? menu->link_url : "",
-                                    menu && menu->image_url ? menu->image_url : "",
-                                    menu && menu->text ? menu->text : "",
-                                    item->user);
+    /* The engine calls this from the engine thread, in the middle of dispatching
+     * the DOM contextmenu event. The host answers by showing a menu: a
+     * TrackPopupMenu against a window owned by the UI thread does nothing when
+     * it is called from another thread, and OpenClipboard() then fails too. So
+     * copy the payload and let the UI thread build the menu. The engine's
+     * strings and the MC_CONTEXT_MENU_DATA itself die when this returns, which
+     * is why the copies exist (same pattern as AgwDownloadEntry). */
+    {
+        AgwContextPayload* payload = (AgwContextPayload*)calloc(1, sizeof(AgwContextPayload));
+
+        if (!payload)
+            return;
+
+        payload->x = menu ? menu->location.x : 0;
+        payload->y = menu ? menu->location.y : 0;
+        payload->link = agwDupOrNull(menu ? menu->link_url : NULL);
+        payload->image = agwDupOrNull(menu ? menu->image_url : NULL);
+        payload->text = agwDupOrNull(menu ? menu->text : NULL);
+
+        agbLog(AGB_LOG_NAV, "context menu at %d,%d link=%s image=%s text=%d bytes",
+               payload->x, payload->y,
+               payload->link ? payload->link : "(none)",
+               payload->image ? payload->image : "(none)",
+               payload->text ? (int)strlen(payload->text) : 0);
+
+        /* Dropped messages (control destroyed first) leak only this payload. */
+        if (!item->hwnd || !PostMessageA(item->hwnd, AGW_MSG_CONTEXT, 0, (LPARAM)payload)) {
+            free(payload->link);
+            free(payload->image);
+            free(payload->text);
+            free(payload);
+        }
+    }
 }
 
 static void agwOnUpdateNow(MaCrossView* view)
@@ -802,17 +852,6 @@ static void agwApplyPendingResizes(void)
 /* engine thread                                                              */
 /* ------------------------------------------------------------------------- */
 
-/* Engine-thread busy state, process wide: one engine thread serves every view,
- * so when a script in tab A never returns, a command posted by tab B queues
- * behind it just the same. Navigation must abort that script - otherwise the
- * address bar and new tabs look dead while the UI thread is fine. */
-static int agwEngineBusyFor(int minMs)
-{
-    if (!g_engineBusy) return 0;
-    if (minMs <= 0) return 1;
-    return (int)(GetTickCount() - g_engineBusySince) >= minMs;
-}
-
 /* Watchdog: the queue is the only honest signal that the engine thread stopped
  * draining. A command sits at the head while the engine is inside a script that
  * never returns; once it has waited AGW_STUCK_QUEUE_MS, abort the script so the
@@ -859,22 +898,6 @@ static int agwQueueStuckFor(int minMs)
 
 /* Commands that replace or start page execution: they are what a browser makes
  * "abort whatever the page is doing" mean. Mouse/key/resize must not abort. */
-static int agwCommandAbortsScript(int type)
-{
-    switch (type) {
-    case AGW_CMD_NAVIGATE:
-    case AGW_CMD_LOAD_HTML:
-    case AGW_CMD_BACK:
-    case AGW_CMD_FORWARD:
-    case AGW_CMD_RELOAD:
-    case AGW_CMD_STOP:
-    case AGW_CMD_EVAL:
-        return 1;
-    default:
-        return 0;
-    }
-}
-
 static void agwDrainCommands(void)
 {
     for (;;) {
@@ -1356,6 +1379,27 @@ static LRESULT CALLBACK agwProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
         agwDeliverDownloads(item);
         InvalidateRect(hwnd, NULL, FALSE);
         return 0;
+
+    case AGW_MSG_CONTEXT: {
+        /* UI thread: the host shows its menu here. TrackPopupMenu and the
+         * clipboard belong to the thread that owns the window. */
+        AgwContextPayload* payload = (AgwContextPayload*)(INT_PTR)lParam;
+
+        if (item && payload && item->callbacks.on_context_menu)
+            item->callbacks.on_context_menu(item, payload->x, payload->y,
+                                            payload->link ? payload->link : "",
+                                            payload->image ? payload->image : "",
+                                            payload->text ? payload->text : "",
+                                            item->user);
+
+        if (payload) {
+            free(payload->link);
+            free(payload->image);
+            free(payload->text);
+            free(payload);
+        }
+        return 0;
+    }
 
     case WM_SIZE:
         agbLog(AGB_LOG_UI, "resize %dx%d",

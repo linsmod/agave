@@ -6,7 +6,13 @@
 # Prints the control handle it found and exits 1 when the control is missing
 # (the probe runs headless: there is no control, so use a GUI run).
 param(
-    [Parameter(Mandatory = $true)][int]$ProcessId
+    [Parameter(Mandatory = $true)][int]$ProcessId,
+    # Post only WM_RBUTTONDOWN/UP at this client point instead of the default
+    # left/move/wheel/key sequence. The right-click path is the one that ends in
+    # the host's on_context_menu callback, so it needs its own switch.
+    [switch]$RightClick,
+    [int]$X = 60,
+    [int]$Y = 60
 )
 
 Add-Type @'
@@ -52,7 +58,15 @@ function Post([uint32]$msg, [int]$w, [int]$l) {
 }
 
 # WM_MOUSEMOVE=0x200, WM_LBUTTONDOWN=0x201, WM_LBUTTONUP=0x202, WM_MOUSEWHEEL=0x20A,
-# WM_KEYDOWN=0x100, WM_KEYUP=0x101, WM_CHAR=0x102
+# WM_KEYDOWN=0x100, WM_KEYUP=0x101, WM_CHAR=0x102, WM_RBUTTONDOWN=0x204, WM_RBUTTONUP=0x205
+if ($RightClick) {
+    $lp = (($Y -shl 16) -bor $X)
+    Post 0x204 0 $lp                        # right down at X,Y
+    Post 0x205 0 $lp                        # right up (this posts AGW_CMD_CONTEXT)
+    "posted right click at $X,$Y"
+    exit 0
+}
+
 Post 0x200 0 ((40 -shl 16) -bor 30)        # move (only logged with AGB_UI_DEBUG)
 Post 0x201 0 ((40 -shl 16) -bor 30)        # left down at 30,40
 Post 0x202 0 ((40 -shl 16) -bor 30)        # left up

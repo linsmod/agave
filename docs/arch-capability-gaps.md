@@ -129,6 +129,7 @@ agave_shell.exe --probe ../tools/pages/cap_input_events.html     --pre-eval "doc
 | `change` | 支持（失焦时） | 未在测试页覆盖（需要 blur 用例） |
 | `paste`/`cut`/`copy` | 合成事件可派发 | 真实剪贴板路径未接（无 `ClipboardEvent`） |
 | 事件顺序 | **`keydown > keyup > keypress > beforeinput > input`** | Chrome 是 `keydown > keypress > beforeinput > input > keyup`；宿主按键投递顺序所致 |
+| `document.createEvent` / `new MouseEvent()` | **不支持** | `typeof document.createEvent === 'undefined'`（2026-11-06 实测），页面无法合成事件；`dispatchEvent` 本身可用（见 R45 用例） |
 
 ## 2. CSS
 
