@@ -151,3 +151,71 @@ delete、索引 accessor、超大下标（走 `idx_hash`）、5000 个槽位的�
 `test_index_elem.c` 把当前行为钉住（断言 `undefined`），将来修的时候要同时改这条断言。
 修它的代价是要在"越界读"这条热路径上加原型链索引键的失效判断（现代引擎用 Array.prototype 的
 "元素写入计数器"做 guard），所以没有塞进本轮。
+
+## 9. 第二轮规划：字符串键 92.5 ns、switch 跳表（2026-11-06 实测后修订）
+
+先修正上一轮的一个误判：之前把 `switch-dispatch-loop` 的 112 ns/轮归给 switch 分发，**不对**。
+拆开测（`tools/bench_vm.js`，N=2M）：
+
+| 场景 | ns/op | 说明 |
+|---|---|---|
+| `strkey-mono`（单键，IC 不抖动） | **92.5** | 说明 115 ns 不是 IC 抖动造成的，是**路径本身** |
+| `strkey-poly2` / `poly8` | 125.5 / 133 | 多态再叠 ~35 ns，IC 只存一个入口 |
+| `dynamic-string-key-read`（`'k'+(i&7)`） | 197 | 拼接 + interning + 分配，另算 |
+| `switch-dense10` | 13.5 | 10 个连续 case |
+| `switch-dense40` | 25 | 40 个连续 case |
+| `switch-sparse40` | **33.5** | 40 个任意 case 值（真实 VM 形状） |
+| `if-chain40`（同义手写） | 12.5 | 编译器的 if 链反而更快 |
+| `switch-dispatch-loop`（含数组读 + ++ + 循环） | 112 | 真正的成本在数组读和循环，不在 switch |
+
+结论：**字符串键是更大的杠杆（92.5 → 目标 ≤25 ns），switch 跳表是 ~20 ns/dispatch 的吞吐改进**，
+两者都不足以单独解释 v.qq/163 的 20 s 卡顿（按 33 ns/次算约 6 亿次分派），所以两条都要做完再复测站点。
+
+### 9.1 字符串键读：先不加根、不走通用 walk 的快路径
+
+现状（`src/jit/glue.c` `jit_helper_get_elem`）：非数字键先建 GC temp-root scope，再
+`intern_find_flat`（或 `intern_string`）→ `sv_try_prop_get_ic_lookup` → 命中返回；不命中落到
+`sv_getprop_by_key` 全量 walk。92.5 ns 里很大一块是 **root scope 的建立/拆解**（与稀疏数组那轮
+同一个教训：数组快路径提前到 root scope 之前后，141 → 41 ns）。
+
+实施：
+1. 在 root scope **之前**加“不可能分配”的字符串键快路径：`vtype(key)==kTypeString` 且
+   `vtype(obj)==kTypeObject`、非 exotic、shape 非空时，用**已有 intern 指针**（`vstr` 字节 + 
+   `intern_find_flat` 的 64 项 memo，memo 命中则零分配）→ `ant_shape_lookup_interned` → 
+   slot 取 `has_getter/has_setter == 0` 的值直接返回；memo 未命中就返回 false 交给原路径。
+2. 站点 IC 从 1 项扩到 4 项（`(shape, atom) → slot`，MRU 淘汰），解决 poly2/poly8 的 35 ns 抖动；
+   命中统计用 `AGB_IC_STATS` 输出每站点命中率（新增，避免“以为有 IC 其实全 miss”）。
+3. 不做：给字符串拼接结果做 interning 缓存（`dynamic` 197 ns 主要花在拼接本身，属另一个问题；
+   若要做，先测 `${}` 与 `+` 两条路径的占比）。
+
+验收：`strkey-mono ≤ 25 ns`、`poly8 ≤ 40 ns`、`dynamic` 不退化；`run_script_mode_tests.ps1` 全绿；
+v.qq/163 的 `[hang]` 时长/次数有可测量的下降（记录 before/after）。
+
+### 9.2 switch：字节码级跳表，解释器与 JIT 共用
+
+现状（`src/silver/compiler.c:7101 compile_switch`）：每个 case 编成
+`DUP; <case 表达式>; SEQ; JMP_TRUE`，即**线性链**；case 是字面量时也在每次派发时重复
+load+比较。40 个稀疏 case 就是 33.5 ns。
+
+实施（分两步，第一步就能拿到大部分收益）：
+1. **编译期线性扫描已经被 if-chain 反超**（12.5 vs 33.5），说明 JIT 对 `if` 的形态更好。
+   先做最小改动：`compile_switch` 对“全部 case 都是字面量常量”的情况，把判别式存进临时槽，
+   case 体改成复用该槽（不再每次 `DUP`），并把比较按**数值升序二分**组织（O(log n)，MIR 只需要
+   `BEQ/BNE`，无新指令依赖），不满足条件时退回现状。
+2. 真正的跳表：新增字节码 `OP_SWITCH`（表：`min, span, default_off, target_off[span]`），
+   仅当 case 全是整数常量、`span ≤ 4096`、密度 ≥ 50% 时生成。解释器 O(1) 查表；
+   JIT 侧 MIR **已经支持 `MIR_SWITCH`**（`src/jit/compile.c:203` 已把它当终止指令处理），
+   直接映射成一条 `MIR_SWITCH`。
+3. 语义要点：严格相等（`===`）→ 只对 `kTypeNumber` 且整数值查表，`-0 === 0` 视为命中，
+   `NaN` 不命中；case 表达式若有副作用（非字面量）不得跳表；`default` 位置任意。
+
+验收：`switch-sparse40 ≤ 12 ns`、`switch-dense40 ≤ 10 ns`；`run_script_mode_tests.ps1`、
+`put-elem-gc`、`index-elem` 全绿；补一个 `tests/test_switch_table.c`（语义：-0/NaN/字符串 case/
+副作用 case 回退）。
+
+### 9.3 为什么两条都要做完再看站点
+
+v.qq 的 VM 每个字节码步做：`T[++P]`（数组读 ~3 ns）→ `switch`（33.5 ns）→ `G[x]` 若干次
+（数字键 37.5 ns / 字符串键 92.5 ns）→ 可能一次自调用（30 ns）。按 20 s 反推约 6 亿步，
+把 switch 降到 12 ns、字符串键降到 25 ns 后应该能量到明显缩短，但不保证“不 hang”；
+真正的验收仍是 P1-g 的 `[hang]` 判据，改动前先记录基线（`debug/hang_probe_vqq.log`）。

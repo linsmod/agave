@@ -153,6 +153,15 @@
   稀疏下标（元素落到 shape 的 interned 字符串键属性）**141.5/206.5 ns**，字符串键 115–196 ns，
   `switch` 分发 104 ns/轮。→ 主修方向是**整数下标 → slot 的 shape 级表 + 站点 IC**，
   方案、判据、风险见 [design-elem-fastpath.md](design-elem-fastpath.md)。
+- **2026-11-06 第二轮拆解（`tools/bench_vm.js`，订正上一轮的误判）**：`switch` 本身没有 104 ns ——
+  10/40 连续 case 是 13.5/25 ns、40 个稀疏 case 33.5 ns、同义手写 if 链 12.5 ns；之前那个 112 ns/轮
+  主要花在数组读 + `++` + 循环上。字符串键是更大的杠杆：**单键（IC 不抖）就 92.5 ns**，poly8 133 ns，
+  动态拼接键 197 ns —— 说明瓶颈是 `jit_helper_get_elem` 里的 root scope + 通用 walk，不是 IC 抖动。
+  规划（[design-elem-fastpath.md](design-elem-fastpath.md) §9）：字符串键把“不可分配”的快路径提到
+  root scope 之前（目标 ≤25 ns）+ 站点 IC 扩到 4 项（poly8 ≤40 ns）；switch 先做字面量 case 的
+  判别式复用 + 二分（O(log n)），再对整数稠密 case 生成 `OP_SWITCH` 跳表（MIR 已支持
+  `MIR_SWITCH`，`src/jit/compile.c:203`），目标 sparse40 ≤12 ns。验收：两项都做完再按 P1-g 的
+  `[hang]` 判据复测 v.qq/163，改动前先留基线。
 - 2026-11-06 代价记录：中断轮询在建引擎时即 arm，JIT 每个循环回边/调用多一次 load+branch；`switch-dispatch-loop` 从 104 → 116 ns/轮、稀疏读 41 → 37.5（噪声内）。P1-g 的验收阈值仍按原样，但评测时要记得这部分固定开销。
 - 2026-11-06 现场抓取（`tools/js_stack.ps1 -Pid <pid>`，不 attach）：卡死时 JS 栈是
   **9 层嵌套的 `j`**（`vendor-common…js:1` 的 50257/50432/52943/53032/53844/55082 循环出现），
