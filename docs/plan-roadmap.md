@@ -157,10 +157,10 @@
   10/40 连续 case 是 13.5/25 ns、40 个稀疏 case 33.5 ns、同义手写 if 链 12.5 ns；之前那个 112 ns/轮
   主要花在数组读 + `++` + 循环上。字符串键是更大的杠杆：**单键（IC 不抖）就 92.5 ns**，poly8 133 ns，
   动态拼接键 197 ns —— 说明瓶颈是 `jit_helper_get_elem` 里的 root scope + 通用 walk，不是 IC 抖动。
-  规划（[design-elem-fastpath.md](design-elem-fastpath.md) §9）：字符串键把“不可分配”的快路径提到
+  **字符串键已完成**（§9.1，2026-11-06）：`jit_helper_get_elem` 在 root scope 之前解析扁平字符串键 ——`string-key-read` 115 → **22 ns**、单键 92.5 → **16.5**、poly8 133 → 24.5。规划（[design-elem-fastpath.md](design-elem-fastpath.md) §9）：字符串键把“不可分配”的快路径提到
   root scope 之前（目标 ≤25 ns）+ 站点 IC 扩到 4 项（poly8 ≤40 ns）；switch 先做字面量 case 的
   判别式复用 + 二分（O(log n)），再对整数稠密 case 生成 `OP_SWITCH` 跳表（MIR 已支持
-  `MIR_SWITCH`，`src/jit/compile.c:203`），目标 sparse40 ≤12 ns。验收：两项都做完再按 P1-g 的
+  `MIR_SWITCH`，`src/jit/compile.c:203`），目标 sparse40 ≤12 ns。⚠ 第一次尝试（中途 `add_hidden_local` 存判别式）**已回退**：该 VM 的局部槽与求值栈共用帧布局，函数中途新增局部会踩栈，语义立刻坏（见 design §9.2.1）；switch 优化必须走函数级预留槽或 `OP_SWITCH`。验收：两项都做完再按 P1-g 的
   `[hang]` 判据复测 v.qq/163，改动前先留基线。
 - 2026-11-06 代价记录：中断轮询在建引擎时即 arm，JIT 每个循环回边/调用多一次 load+branch；`switch-dispatch-loop` 从 104 → 116 ns/轮、稀疏读 41 → 37.5（噪声内）。P1-g 的验收阈值仍按原样，但评测时要记得这部分固定开销。
 - 2026-11-06 现场抓取（`tools/js_stack.ps1 -Pid <pid>`，不 attach）：卡死时 JS 栈是

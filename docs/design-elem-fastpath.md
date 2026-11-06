@@ -219,3 +219,25 @@ v.qq 的 VM 每个字节码步做：`T[++P]`（数组读 ~3 ns）→ `switch`（
 （数字键 37.5 ns / 字符串键 92.5 ns）→ 可能一次自调用（30 ns）。按 20 s 反推约 6 亿步，
 把 switch 降到 12 ns、字符串键降到 25 ns 后应该能量到明显缩短，但不保证“不 hang”；
 真正的验收仍是 P1-g 的 `[hang]` 判据，改动前先记录基线（`debug/hang_probe_vqq.log`）。
+
+### 9.2.1 第一次尝试（已回退）：隐藏局部变量存判别式不可行
+
+按 §9.2 第一步试过：在 `compile_switch` 里 `add_hidden_local()` 存判别式、case 比较改成
+`GET_LOCAL8/LOADK/SEQ/JMP_TRUE`、去掉每 case 的 `DUP` 与 stub 的 `POP`。编译通过、机器码也照常生成，
+但**语义立刻坏了**：
+
+```
+switch (2) { case 1: x = 1; break; case 2: x = 2; break; }   → x = 2      (对)
+switch ("k1") { case "k0": … case "k1": y = 2; }             → y = 0      (错)
+switch (5) { case 1: z = 1; break; default: z = 9; }         → z = console.log 的函数 (错)
+```
+
+原因：这个 VM 的局部变量槽（`local - param_locals`）和求值栈共用同一个帧布局，
+**函数中途新增一个局部**会让后续 locals 的槽位整体后移，而判别式此刻还压在求值栈上 ——
+两边互相踩，表现为“字符串 case 不命中 / 变量拿到别的值”。所以隐藏局部变量必须在
+**函数入口**一次性预留（`reserve_hidden_locals` 那类），不能在语句中途插入。
+
+结论：判别式复用/二分/跳表都要走**函数级预留槽**或**真正的 `OP_SWITCH` 指令**（§9.2 第二步），
+不能靠中途 `add_hidden_local`。这一轮的 switch 改动已回退，语义回归脚本
+[tools/bench_switch_semantics.js](../tools/bench_switch_semantics.js) 保留下来（fallthrough、middle default、
+字符串 case、`-0`/`NaN`、带副作用的 case 表达式、循环里的 break/continue），下一轮改 switch 先用它兜底。
