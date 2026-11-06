@@ -18,6 +18,11 @@
     g.navigator.cookieEnabled = true;
     if (!g.navigator.appCodeName) g.navigator.appCodeName = 'Mozilla';
     if (!g.navigator.appName) g.navigator.appName = 'Netscape';
+    if (!g.navigator.product) g.navigator.product = 'Gecko';
+    /* UA sniffers call this unconditionally (ga.js: `b.javaEnabled()`);
+     * a missing method throws "undefined is not a function" and kills the
+     * rest of the script. No JVM here, so the honest answer is false. */
+    if (!g.navigator.javaEnabled) g.navigator.javaEnabled = function () { return false; };
     if (!g.navigator.mimeTypes) g.navigator.mimeTypes = [];
     if (!g.navigator.plugins) g.navigator.plugins = [];
     if (!g.navigator.languages) g.navigator.languages = ['zh-CN', 'zh'];

@@ -69,7 +69,14 @@ document.title = [
   'visibilityState=' + typeof document.visibilityState,
   'fonts=' + (document.fonts ? typeof document.fonts.ready : 'none'),
   'importNode=' + typeof document.importNode,
-  'elementFromPoint=' + typeof document.elementFromPoint
+  'elementFromPoint=' + typeof document.elementFromPoint,
+  /* --- navigator surface (R81: UA sniffers call javaEnabled() unconditionally) --- */
+  'navJava=' + typeof navigator.javaEnabled,
+  'navJavaResult=' + (typeof navigator.javaEnabled === 'function' ? String(navigator.javaEnabled()) : 'none'),
+  'navLang=' + typeof navigator.language,
+  'navProduct=' + typeof navigator.product,
+  'navPlatform=' + typeof navigator.platform,
+  'navPlugins=' + (navigator.plugins ? navigator.plugins.length : 'none')
 ].join(' ');
 </script>
 </body>
