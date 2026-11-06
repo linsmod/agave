@@ -1,6 +1,6 @@
 # 渲染管线：DOM → 样式 → 布局 → 绘制（当前实现）
 
-> 状态：**当前态，最后核对 2026-11-05**。本文回答"一个盒子从 DOM 到像素经过谁、布局问题先看哪"。
+> 状态：**当前态，最后核对 2026-11-06**。本文回答"一个盒子从 DOM 到像素经过谁、布局问题先看哪"。
 > 进程/线程/所有权见 [arch-overview.md](arch-overview.md)；能力边界见 [arch-capability-gaps.md](arch-capability-gaps.md)；
 > 调试开关与"布局错还是绘制错"的判据见 [dev-debugging.md](dev-debugging.md) §3/§4。
 
@@ -120,13 +120,17 @@ DOM attach（Element::attach / Text::attach）
 
 ### 3.5 flex（`RenderFlexibleBox`）
 
-- 主轴：`layoutHorizontalBox()` / `layoutVerticalBox()`。`box-flex`（= `flex-grow`）按比例分剩余空间；
-  `FlexBoxIterator` 按 `box-ordinal-group`（= `order`）排序；`flexRowGap/flexColumnGap`（= `gap`）
-  在 in-flow 子项之间加一次。
-- 交叉轴：`box-align`（`BSTRETCH` 撑满 / `BSTART` / `BCENTER` / `BEND` / `BBASELINE`）。
-  绝对定位子项的 static position 也看 `boxAlign`（见 `RenderFlexibleBox::layoutVerticalBox()`）。
-- 只支持 2008 词汇表：**没有** `flex-basis`、`flex-shrink`、`align-self`、`align-content`；
-  `order` 映射到 `box-ordinal-group`（整数分组，不是现代排序语义）；`space-around` 被当作 `justify`。
+- 横向（`box-orient: horizontal`）只有**一套**算法：`layoutFlexLines(bool wrap, ...)`
+  —— 单行与 `flex-wrap: wrap` 共用，区别只在是否断行；`layoutHorizontalBox()` 在 LTR 下直接委派。
+- 三趟：①基名取 `flex-basis`（auto → 指定 `width` → max-content），同时算 floor
+  （`min-width: auto` → min-content）与 ceiling（`max-width`）；②按 Flexbox §9.7 分配 free space
+  （grow / `flex-shrink × base`），clamp 到 [floor, ceiling] 后按 violation 符号冻结、下一轮重分；
+  ③行高、`align-items`/`align-content`/`justify-content` 摆放（`placeChild`），
+  `align-items: stretch` 在这里把 auto 高的子项撑到行高（先定 `m_height` 再重排子项，
+  期间必须保持 `m_flexingChildren`，否则子项会被当成普通块重排回容器宽）。
+- 仍然缺：`align-self`、`order`（仍是 `box-ordinal-group` 的整数分组语义）、
+  `flex-basis` 的百分比/`calc()`、RTL 单行（仍走 2008 放置代码）。
+- `AGB_FLEX_DEBUG=1` 打印每行的 base/floor/ceiling/final 与 `block-end` 的 `w=/over=`。
 
 ### 3.6 表格
 
@@ -215,8 +219,9 @@ DOM attach（Element::attach / Text::attach）
 
 ## 8. 与规范不同（会误导判断）
 
-- `display:flex` 落到 2008 的 `-webkit-box`：无 `flex-basis`/`flex-shrink`/`align-self`/
-  `align-content`；`flex:1` 只等于 `box-flex:1`。
+- `display:flex` 仍落在 `-webkit-box` 的渲染对象（`RenderFlexibleBox`），但横向布局已按现代语义：
+  `flex-basis`/`flex-grow`/`flex-shrink`/`min-width:auto`/`min|max-width` 冻结/`align-content`/`gap`
+  都生效（§3.5）；**缺** `align-self`、`order`（整数分组）、`flex-basis` 的百分比/calc、RTL 单行。
 - `display:grid` 降级成 `block`（声明不丢，子项按块堆叠，不是 bug）。
 - `position:sticky` 按 static 布局；`transform` 只影响绘制：translate/scale/rotate 在
   `RenderBlock::paint()` 里合成矩阵，文字字形也走同一矩阵（R80），但**不参与布局**，

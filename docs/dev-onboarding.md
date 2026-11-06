@@ -46,7 +46,7 @@ agave 是**从零移植的浏览器**：**WebKit 2008 的 WebCore**（HTML/CSS �
 | HTML 解析、`script`/module 时序 | `src/webcore/html/HTMLTokenizer.cpp` | 等待位/`scriptExecution` 在这里 |
 | CSS 解析、选择器 | `src/webcore/css/CSSParser.cpp`、`CSSStyleSelector.cpp` | 词法/语法老，改前先看 `AGENTS.md` 里 `var()` 的写法 |
 | computed style | `src/webcore/css/CSSComputedStyleDeclaration.cpp` | 未实现属性默认静默（`AGB_CSS_DEBUG` 才打） |
-| 布局 / 间距 / 元素 0×0 | 先看 [arch-rendering.md](arch-rendering.md) §3/§7；代码在 `src/webcore/rendering/` | flex 实际走 `-webkit-box`（`RenderFlexibleBox`） |
+| 布局 / 间距 / 元素 0×0 | 先看 [arch-rendering.md](arch-rendering.md) §3/§7；代码在 `src/webcore/rendering/` | flex 横向只有一套算法 `RenderFlexibleBox::layoutFlexLines()`（单行与换行共用，`AGB_FLEX_DEBUG=1` 可看分配） |
 | 绘制 / 裁剪 / 渐变 | `src/webcore/platform/picasso/GraphicsContextPS.cpp` | picasso 后端；`clip` 是设备坐标 |
 | 网络（HTTP/缓存/代理） | `src/webcore/platform/network/native/` | WinHTTP 后端 + `NetLog.cpp` |
 | 页面生命周期钩子（willClose/commit/DCL/load） | `src/webview/FrameLoaderClientMC.cpp` | 时序问题的第一现场；`[evt]` 钩子也在这里 |

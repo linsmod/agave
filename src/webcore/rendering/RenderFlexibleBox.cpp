@@ -33,6 +33,10 @@ using namespace std;
 
 namespace WebCore {
 
+/* Defined at the bottom; layout dumps its numbers when AGB_FLEX_DEBUG=1. */
+static bool flexDebugEnabled();
+static void flexDebugChild(const char* when, RenderObject* box, RenderObject* child);
+
 class FlexBoxIterator {
 public:
     FlexBoxIterator(RenderFlexibleBox* parent) {
@@ -299,6 +303,12 @@ void RenderFlexibleBox::layoutBlock(bool relayoutChildren)
 
     view()->popLayoutState();
 
+    if (flexDebugEnabled()) {
+        fprintf(stderr, "[flex] block-end box=%p w=%d h=%d\n", (void*)this, m_width, m_height);
+        for (RenderObject* c = firstChild(); c; c = c->nextSibling())
+            flexDebugChild("end", this, c);
+    }
+
     // Update our scrollbars if we're overflow:auto/scroll/hidden now that we know if
     // we overflow or not.
     if (hasOverflowClip())
@@ -312,22 +322,32 @@ void RenderFlexibleBox::layoutBlock(bool relayoutChildren)
 }
 
 
-/* `flex-wrap: wrap` (-webkit-box-lines: multiple) for the horizontal case.
- * The 2008 engine only ever placed one line, so a wrapping row of cards stayed
- * one 3000px-wide line (v.qq.com's banner grid). Fixed-size children simply
- * break to a new line once the content width is exhausted; flexible children
- * keep using the single-line path above. */
-void RenderFlexibleBox::layoutWrappedHorizontalBox(bool relayoutChildren)
+/* Horizontal flex: the one line algorithm used by both `flex-wrap: nowrap`
+ * (one line) and `wrap` (several lines).
+ *
+ * The 2008 single-line code laid every child out at its plain block width and
+ * then grew/shrunk them by `box-flex`, which is two degrees off the spec: it
+ * ignores `flex-basis` (so `flex: 2` on a text-heavy item loses space to a
+ * narrower `flex: 1` sibling — css3test `#content` came out reversed) and it
+ * weights shrinking by grow factor instead of `flex-shrink` x base size.
+ * Start from the basis, clamp at min/max, distribute the free space. */
+void RenderFlexibleBox::layoutFlexLines(bool wrap, bool relayoutChildren)
 {
     struct LineItem {
         RenderObject* child;
         int contentWidth;   /* target content-box width */
         int outerWidth;     /* margin box width */
         int outerHeight;    /* margin box height */
+        int minContent;     /* content-box floor (min-width / min-content) */
+        int maxContent;     /* content-box ceiling (max-width), INT_MAX if none */
+        int extraWidth;     /* border + padding + horizontal margins */
+        int breakOuterWidth; /* outer size with min/max applied, used for line breaking */
         float grow;
         float shrink;
         int marginLeft, marginRight, marginTop, marginBottom;
         int line;
+        bool frozen;
+        int violationSign;  /* +1 clamped up to min, -1 clamped down to max, 0 none */
     };
 
     const int contentLeft = borderLeft() + paddingLeft();
@@ -337,10 +357,10 @@ void RenderFlexibleBox::layoutWrappedHorizontalBox(bool relayoutChildren)
 
     Vector<LineItem> items;
 
-    /* ---- pass 1: preferred size of every item, then line breaking.
-     * The preferred size follows flexbox: an explicit flex-basis wins, an
-     * auto-basis item uses its width, and an auto width uses the max-content
-     * size (a text run should not claim the whole row). */
+    /* ---- pass 1: base size of every item (flex-basis), its floor/ceiling,
+     * then line breaking. An explicit flex-basis wins; an auto basis uses the
+     * specified width, or the max-content size when the width is auto (a text
+     * run should not claim the whole row). */
     FlexBoxIterator iterator(this);
     for (RenderObject* child = iterator.first(); child; child = iterator.next()) {
         if (child->isPositioned()) {
@@ -371,18 +391,58 @@ void RenderFlexibleBox::layoutWrappedHorizontalBox(bool relayoutChildren)
         else
             contentW = max(0, child->width() - bordersPlusPadding);
 
+        /* Floor and ceiling. `min-width: auto` (the initial value) keeps an
+         * item at or above its min-content size; `min-width: 0` is the escape
+         * hatch authors write to opt out of that clamp, so it must not. */
+        int minContent = 0;
+        Length minWidth = child->style()->minWidth();
+        if (child->style()->minWidthIsAuto()) {
+            minContent = max(0, child->minPrefWidth() - bordersPlusPadding);
+            /* With a specified width, calcPrefWidths() short-circuits and
+             * reports that width as the min-content size, so the clamp would
+             * never let the item shrink. The automatic minimum really follows
+             * the content, which is not tracked separately here; letting such
+             * an item shrink matches Chrome for content that fits its width. */
+            if (!child->style()->width().isAuto())
+                minContent = 0;
+        } else if (minWidth.isFixed())
+            minContent = max(0, minWidth.value() - bordersPlusPadding);
+        else if (!minWidth.isAuto())
+            minContent = max(0, minWidth.calcValue(innerWidth) - bordersPlusPadding);
+
+        int maxContent = INT_MAX;
+        Length maxWidth = child->style()->maxWidth();
+        if (maxWidth.isFixed() && !maxWidth.isUndefined())
+            maxContent = max(0, maxWidth.value() - bordersPlusPadding);
+        else if (maxWidth.isPercent() || maxWidth.isCalculated())
+            maxContent = max(0, maxWidth.calcValue(innerWidth) - bordersPlusPadding);
+        else if (maxWidth.type() == Intrinsic)
+            maxContent = max(0, child->maxPrefWidth() - bordersPlusPadding);
+        else if (maxWidth.type() == MinIntrinsic)
+            maxContent = max(0, child->minPrefWidth() - bordersPlusPadding);
+
+        if (minContent > maxContent)
+            minContent = maxContent;
+
         LineItem item;
         item.child = child;
         item.contentWidth = contentW;
+        item.breakOuterWidth = max(minContent, min(contentW, maxContent)) + bordersPlusPadding
+                             + max(0, child->marginLeft()) + max(0, child->marginRight());
+        item.minContent = minContent;
+        item.maxContent = maxContent;
         item.marginLeft = child->marginLeft();
         item.marginRight = child->marginRight();
         item.marginTop = child->marginTop();
         item.marginBottom = child->marginBottom();
         item.outerWidth = contentW + bordersPlusPadding + item.marginLeft + item.marginRight;
+        item.extraWidth = bordersPlusPadding + item.marginLeft + item.marginRight;
         item.outerHeight = child->height() + item.marginTop + item.marginBottom;
         item.grow = max(0.0f, child->style()->boxFlex());
         item.shrink = max(0.0f, child->style()->flexShrink());
         item.line = 0;
+        item.frozen = false;
+        item.violationSign = 0;
 
         items.append(item);
     }
@@ -390,10 +450,10 @@ void RenderFlexibleBox::layoutWrappedHorizontalBox(bool relayoutChildren)
     int line = 0;
     int lineWidth = 0;
     for (unsigned i = 0; i < items.size(); ++i) {
-        int outer = items[i].outerWidth;
+        int outer = items[i].breakOuterWidth;
         int gap = lineWidth > 0 ? columnGap : 0;
 
-        if (lineWidth > 0 && lineWidth + gap + outer > innerWidth) {
+        if (wrap && lineWidth > 0 && lineWidth + gap + outer > innerWidth) {
             ++line;
             lineWidth = 0;
             gap = 0;
@@ -408,65 +468,105 @@ void RenderFlexibleBox::layoutWrappedHorizontalBox(bool relayoutChildren)
     m_flexingChildren = true;
 
     for (int l = 0; l < lineCount; ++l) {
-        int first = -1;
-        int last = -1;
         int sumOuter = 0;
         int count = 0;
-        float growSum = 0.0f;
-        float shrinkSum = 0.0f;
 
         for (unsigned i = 0; i < items.size(); ++i) {
             if (items[i].line != l)
                 continue;
-            if (first < 0)
-                first = (int)i;
-            last = (int)i;
             sumOuter += items[i].outerWidth;
-            growSum += items[i].grow;
-            shrinkSum += items[i].shrink * items[i].outerWidth;
             ++count;
         }
 
         int freeSpace = innerWidth - sumOuter - columnGap * (count > 0 ? count - 1 : 0);
 
-        if (freeSpace > 0 && growSum > 0.0f) {
-            int distributed = 0;
-            int seen = 0;
+        /* Resolve flexible lengths (spec §9.7 in miniature). The base size is
+         * the flex-basis; free space is shared by the flex factors, then each
+         * item is clamped to its floor/ceiling and the items that got clamped
+         * freeze — the rest is re-shared next pass. Clamping at the *end* (and
+         * not before distribution) is what keeps `flex: 2` / `flex: 1` at 2:1
+         * while still honouring a sibling's min-content floor. */
+        if (freeSpace != 0 && count > 0) {
+            bool expanding = freeSpace > 0;
+
             for (unsigned i = 0; i < items.size(); ++i) {
                 if (items[i].line != l)
                     continue;
-                ++seen;
-                int share;
-                if (seen == count)
-                    share = freeSpace - distributed;
-                else
-                    share = (int)(freeSpace * (items[i].grow / growSum));
-                distributed += share;
-                items[i].contentWidth = max(0, items[i].contentWidth + share);
-                items[i].outerWidth = max(0, items[i].outerWidth + share);
+                if ((expanding ? items[i].grow : items[i].shrink) <= 0.0f)
+                    items[i].frozen = true;
             }
-        } else if (freeSpace < 0 && shrinkSum > 0.0f) {
-            int deficit = -freeSpace;
-            int taken = 0;
-            int seen = 0;
-            for (unsigned i = 0; i < items.size(); ++i) {
-                if (items[i].line != l)
-                    continue;
-                ++seen;
-                int share;
-                if (seen == count)
-                    share = deficit - taken;
-                else
-                    share = (int)(deficit * ((items[i].shrink * items[i].outerWidth) / shrinkSum));
-                int reduce = min(share, max(0, items[i].contentWidth));
-                taken += reduce;
-                items[i].contentWidth -= reduce;
-                items[i].outerWidth = max(0, items[i].outerWidth - reduce);
+
+            for (int pass = 0; pass < count + 1; ++pass) {
+                int remaining = innerWidth - columnGap * (count > 0 ? count - 1 : 0);
+                float factorSum = 0.0f;
+                for (unsigned i = 0; i < items.size(); ++i) {
+                    const LineItem& it = items[i];
+                    if (it.line != l)
+                        continue;
+                    remaining -= it.outerWidth;
+                    if (it.frozen)
+                        continue;
+                    factorSum += expanding ? it.grow : it.shrink * it.outerWidth;
+                }
+                if (factorSum <= 0.0f || !remaining)
+                    break;
+
+                /* One sequential pass: each item takes its cut of what is
+                 * still unassigned, so rounding never drifts. */
+                float factorLeft = factorSum;
+                for (unsigned i = 0; i < items.size(); ++i) {
+                    LineItem& it = items[i];
+                    if (it.line != l || it.frozen)
+                        continue;
+                    float factor = expanding ? it.grow : it.shrink * it.outerWidth;
+                    if (factor <= 0.0f)
+                        continue;
+                    int share = (int)(remaining * (factor / factorLeft));
+                    factorLeft -= factor;
+                    remaining -= share;
+                    it.contentWidth = max(0, it.contentWidth + share);
+                    it.outerWidth = it.contentWidth + it.extraWidth;
+                }
+
+                /* Clamp and remember who moved: min violations (positive) have
+                 * to freeze in a growing line, max violations in a shrinking
+                 * one; a pass with no violation is the answer. */
+                int totalViolation = 0;
+                for (unsigned i = 0; i < items.size(); ++i) {
+                    LineItem& it = items[i];
+                    if (it.line != l || it.frozen)
+                        continue;
+                    int clamped = max(it.minContent, min(it.contentWidth, it.maxContent));
+                    int violation = clamped - it.contentWidth;
+                    it.violationSign = 0;
+                    if (violation) {
+                        it.contentWidth = clamped;
+                        it.outerWidth = it.contentWidth + it.extraWidth;
+                        totalViolation += violation;
+                        it.violationSign = violation > 0 ? 1 : -1;
+                    }
+                }
+                if (!totalViolation)
+                    break;
+
+                /* A positive total means min violations dominated: freeze just
+                 * those and let the others absorb the difference next pass. */
+                int freezeSign = totalViolation > 0 ? 1 : -1;
+                for (unsigned i = 0; i < items.size(); ++i) {
+                    LineItem& it = items[i];
+                    if (it.line != l || it.frozen)
+                        continue;
+                    if (it.violationSign == freezeSign)
+                        it.frozen = true;
+                }
             }
         }
     }
 
-    /* Re-layout with the final widths. */
+    /* Re-layout with the final widths. `m_flexingChildren` is what makes
+     * RenderBox::calcWidth() take the override size at all, so it has to stay
+     * set until every child layout below (including the stretch pass) is done. */
+    m_flexingChildren = true;
     for (unsigned i = 0; i < items.size(); ++i) {
         RenderObject* child = items[i].child;
         int borderBox = items[i].contentWidth + child->borderLeft() + child->borderRight()
@@ -477,6 +577,43 @@ void RenderFlexibleBox::layoutWrappedHorizontalBox(bool relayoutChildren)
         child->layoutIfNeeded();
         items[i].outerWidth = child->width() + child->marginLeft() + child->marginRight();
         items[i].outerHeight = child->height() + child->marginTop() + child->marginBottom();
+    }
+
+    if (flexDebugEnabled()) {
+        fprintf(stderr, "[flex] lines box=%p inner=%d wrap=%d lines=%d\n",
+                (void*)this, innerWidth, (int)wrap, lineCount);
+        for (unsigned i = 0; i < items.size(); ++i) {
+            flexDebugChild("line", this, items[i].child);
+            if (flexDebugEnabled())
+                fprintf(stderr, "[flex]   item %p base=%d min=%d max=%d final=%d extra=%d\n",
+                        (void*)items[i].child, items[i].contentWidth - 0, items[i].minContent,
+                        items[i].maxContent, static_cast<RenderBox*>(items[i].child)->width(),
+                        items[i].extraWidth);
+        }
+    }
+
+    const int contentTop = borderTop() + paddingTop();
+
+    /* align-items: stretch — an item without an explicit height fills the line.
+     * The 2008 children read the parent's content height through
+     * isStretchingChildren(), so the container height has to be settled first;
+     * that is the order the old single-line code used. */
+    if (style()->boxAlign() == BSTRETCH && !items.isEmpty()) {
+        int tallest = 0;
+        for (unsigned i = 0; i < items.size(); ++i)
+            tallest = max(tallest, items[i].outerHeight);
+        m_height = contentTop + tallest + borderBottom() + paddingBottom() + horizontalScrollbarHeight();
+        calcHeight();
+        m_stretchingChildren = true;
+        for (unsigned i = 0; i < items.size(); ++i) {
+            RenderObject* child = items[i].child;
+            if (!child->style()->height().isAuto())
+                continue;
+            child->setChildNeedsLayout(true, false);
+            child->layoutIfNeeded();
+            items[i].outerHeight = child->height() + child->marginTop() + child->marginBottom();
+        }
+        m_stretchingChildren = false;
     }
 
     m_flexingChildren = false;
@@ -499,7 +636,6 @@ void RenderFlexibleBox::layoutWrappedHorizontalBox(bool relayoutChildren)
     int containerHeight = style()->height().isFixed()
         ? style()->height().value()
         : height() - borderTop() - borderBottom() - paddingTop() - paddingBottom();
-    int contentTop = borderTop() + paddingTop();
     int lineGap = rowGap;
     int alignOffset = 0;
 
@@ -604,8 +740,48 @@ void RenderFlexibleBox::layoutWrappedHorizontalBox(bool relayoutChildren)
     calcHeight();
 }
 
+/* `AGB_FLEX_DEBUG=1` dumps the numbers the flex algorithms work with: the
+ * single-line (2008) path grows children from their *preferred* width, so a
+ * content-heavy item can end up wider than a `flex: 2` sibling (css3test
+ * `#content`: `#tests{flex:2}` came out narrower than `aside{flex:1}`).
+ * Off unless the variable is set, so it can stay in the tree. */
+static bool flexDebugEnabled()
+{
+    static int enabled = -1;
+    if (enabled < 0)
+        enabled = getenv("AGB_FLEX_DEBUG") ? 1 : 0;
+    return enabled != 0;
+}
+
+static void flexDebugChild(const char* when, RenderObject* box, RenderObject* child)
+{
+    if (!flexDebugEnabled())
+        return;
+
+    RenderStyle* s = child->style();
+    Length basis = s->flexBasis();
+    int w = static_cast<RenderBox*>(child)->width();
+    fprintf(stderr, "[flex] %s box=%p child=%p %s grow=%g shrink=%g basis=%s(%d) w=%d over=%d minPref=%d maxPref=%d minW=%d maxW=%d\n",
+            when, (void*)box, (void*)child, child->renderName(),
+            (double)s->boxFlex(), (double)s->flexShrink(),
+            basis.isAuto() ? "auto" : "fixed", basis.isAuto() ? -1 : basis.calcValue(0),
+            w, child->overrideWidth(), child->minPrefWidth(), child->maxPrefWidth(),
+            s->minWidth().isFixed() ? s->minWidth().value() : -1,
+            s->maxWidth().isUndefined() ? -1 : 0);
+}
+
 void RenderFlexibleBox::layoutHorizontalBox(bool relayoutChildren)
 {
+    /* LTR rows all go through the line algorithm in layoutFlexLines(); the
+     * 2008 code below grows children from their plain block width and ignores
+     * flex-basis, which reverses `flex: 2` / `flex: 1` rows with uneven content
+     * (css3test `#content`). RTL keeps the 2008 placement for now: the line
+     * placer only walks left-to-right. */
+    if (style()->direction() == LTR) {
+        layoutFlexLines(style()->boxLines() == MULTIPLE, relayoutChildren);
+        return;
+    }
+
     int toAdd = borderBottom() + paddingBottom() + horizontalScrollbarHeight();
     int yPos = borderTop() + paddingTop();
     int xPos = borderLeft() + paddingLeft();
@@ -622,6 +798,7 @@ void RenderFlexibleBox::layoutHorizontalBox(bool relayoutChildren)
     FlexBoxIterator iterator(this);
     RenderObject* child = iterator.next();
     while (child) {
+        flexDebugChild("scan", this, child);
         // Check to see if this child flexes.
         if (!child->isPositioned() && child->style()->boxFlex() > 0.0f) {
             // We always have to lay out flexible objects again, since the flex distribution
@@ -641,10 +818,10 @@ void RenderFlexibleBox::layoutHorizontalBox(bool relayoutChildren)
         child = iterator.next();
     }
     
-    /* A wrapping row without flexible children uses the simple line layout
-     * below; the single-line code has no concept of lines. */
+    /* A wrapping row without flexible children uses the line layout below; the
+     * single-line code has no concept of lines. */
     if (!haveFlex && style()->boxLines() == MULTIPLE) {
-        layoutWrappedHorizontalBox(relayoutChildren);
+        layoutFlexLines(true, relayoutChildren);
         return;
     }
 
@@ -876,7 +1053,17 @@ void RenderFlexibleBox::layoutHorizontalBox(bool relayoutChildren)
     } while (haveFlex);
 
     m_flexingChildren = false;
-    
+
+    if (flexDebugEnabled()) {
+        fprintf(stderr, "[flex] final box=%p content=%d x=%d h=%d\n",
+                (void*)this, contentWidth(), borderLeft() + paddingLeft(), m_height);
+        RenderObject* c = iterator.first();
+        while (c) {
+            flexDebugChild("final", this, c);
+            c = iterator.next();
+        }
+    }
+
     if (remainingSpace > 0 && ((style()->direction() == LTR && style()->boxPack() != BSTART) ||
                                (style()->direction() == RTL && style()->boxPack() != BEND))) {
         // Children must be repositioned.

@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>flex single line: basis, shrink, min/max clamp</title>
+<style>
+  html, body { margin: 0; padding: 0; }
+  .box { width: 800px; display: flex; margin-bottom: 6px; background: #eee; }
+  .item { height: 20px; background: #333; }
+  .g2 { flex: 2 1 0%; }
+  .g1 { flex: 1 1 0%; }
+  .grow1 { flex: 1 1 0%; }
+  .wide { width: 300px; height: 20px; background: #666; }
+  .text { height: 20px; }
+  #spacer { height: 1200px; }
+</style>
+</head>
+<body>
+
+<!-- s1: flex:2 / flex:1 with empty items: the pure ratio -->
+<div class="box">
+  <div class="item g2" data-case="s1a"></div>
+  <div class="item g1" data-case="s1b"></div>
+</div>
+
+<!-- s2: same ratio, but the flex:1 side has more text (a content-heavy
+     item must not win space from a bigger flex-grow) -->
+<div class="box">
+  <div class="item g2 text" data-case="s2a">short</div>
+  <div class="item g1 text" data-case="s2b">a much longer run of words that wraps onto several lines inside this column</div>
+</div>
+
+<!-- s3: the flex:1 side has a 300px child, so min-width:auto clamps it -->
+<div class="box">
+  <div class="item g2" data-case="s3a"></div>
+  <div class="item g1" data-case="s3b"><div class="wide"></div></div>
+</div>
+
+<!-- s4: auto basis takes the content width, flex:1 1 0 takes the rest -->
+<div class="box">
+  <div class="item deep" data-case="s4a" style="flex: 0 1 auto"><div class="wide"></div></div>
+  <div class="item grow1" data-case="s4b"></div>
+</div>
+
+<!-- s5: three equal grow:1 1 0 items -->
+<div class="box">
+  <div class="item grow1" data-case="s5a"></div>
+  <div class="item grow1" data-case="s5b"></div>
+  <div class="item grow1" data-case="s5c"></div>
+</div>
+
+<!-- s6: shrinking is weighted by flex-shrink * base size (300 + 300 in 400) -->
+<div class="box" style="width: 400px">
+  <div class="item" data-case="s6a" style="width: 300px; flex: 0 1 2"></div>
+  <div class="item" data-case="s6b" style="width: 300px; flex: 0 1 1"></div>
+</div>
+
+<!-- s7: min-width:auto clamps both sides; the rest grows the other item -->
+<div class="box">
+  <div class="item grow1" data-case="s7a"><div class="wide"></div></div>
+  <div class="item grow1" data-case="s7b"></div>
+</div>
+
+<!-- s8: explicit flex-basis + grow factors -->
+<div class="box">
+  <div class="item" data-case="s8a" style="flex: 1 1 200px"></div>
+  <div class="item" data-case="s8b" style="flex: 3 1 200px"></div>
+</div>
+
+<!-- s9: max-width freezes an item; the rest goes to its sibling -->
+<div class="box">
+  <div class="item grow1" data-case="s9a" style="max-width: 100px"></div>
+  <div class="item grow1" data-case="s9b"></div>
+</div>
+
+<!-- s10: justify-content on a single line -->
+<div class="box" style="justify-content: center">
+  <div class="item" data-case="s10a" style="flex: 0 0 100px"></div>
+  <div class="item" data-case="s10b" style="flex: 0 0 100px"></div>
+</div>
+
+<!-- s11: align-items on a single line -->
+<div class="box" style="align-items: center; height: 60px">
+  <div class="item" data-case="s11a" style="flex: 1; height: 20px"></div>
+  <div class="item" data-case="s11b" style="flex: 1; height: 40px"></div>
+</div>
+
+<div id="spacer"></div>
+</body>
+</html>

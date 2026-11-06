@@ -41,7 +41,7 @@ public:
     virtual void layoutBlock(bool relayoutChildren);
     void layoutHorizontalBox(bool relayoutChildren);
     void layoutVerticalBox(bool relayoutChildren);
-    void layoutWrappedHorizontalBox(bool relayoutChildren);
+    void layoutFlexLines(bool wrap, bool relayoutChildren);
 
     virtual bool avoidsFloats() const { return true; }
 

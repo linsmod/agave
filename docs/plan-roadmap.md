@@ -28,6 +28,12 @@
   进 `agwLock`，`AGW_CMD_RESIZE` 只记尺寸、`agwApplyPendingResizes()` 每轮 drain 后应用一次（拖动按批合并）。
   验收：`--zoom 125` 下 `innerWidth == 100vw`（880/880）、`--zoom 125 --resize 500x400` → 400×320；
   `run_layout_tests.ps1`（含 resize 组）+ nav/typing/worker/realm/site smoke 全绿。
+- **单行 flex 按 `flex-basis` 分配**（R81，P0-e M3 的收尾，2026-11-06）：横向单行不再走 2008 的
+  "普通块宽度 + box-flex"，与 `flex-wrap` 共用 `layoutFlexLines()`（basis/floor/ceiling → 按 grow 或
+  `shrink×base` 分配 → clamp 冻结重分）。验收：新增 `tools/pages/layout/flex_single.html` 23 个 case
+  对拍 Chrome 全绿（修前 14 FAIL），`flex_wrap.html` 21 个不退化，7 个 layout 差分页全绿；
+  css3test `#content` 从"左窄右宽 360/452"变成"左宽右窄 541/271"（Chrome 546.6/219.8）。
+  未完成：`align-self`、`order` 语义、RTL 单行、`flex-basis` 百分比/calc。
 
 ## P0：先修正确性
 

@@ -50,7 +50,7 @@ bool StyleSurroundData::operator==(const StyleSurroundData& o) const
 }
 
 StyleBoxData::StyleBoxData()
-    : z_index(0), z_auto(true), boxSizing(CONTENT_BOX)
+    : z_index(0), z_auto(true), boxSizing(CONTENT_BOX), minWidthAuto(true)
 {
     // Initialize our min/max widths/heights.
     min_width = min_height = RenderStyle::initialMinSize();
@@ -67,6 +67,7 @@ StyleBoxData::StyleBoxData(const StyleBoxData& o)
     , max_height(o.max_height)
     , z_index(o.z_index)
     , z_auto(o.z_auto)
+    , minWidthAuto(o.minWidthAuto)
     , boxSizing(o.boxSizing)
 {
 }
@@ -81,6 +82,7 @@ bool StyleBoxData::operator==(const StyleBoxData& o) const
            max_height == o.max_height &&
            z_index == o.z_index &&
            z_auto == o.z_auto &&
+           minWidthAuto == o.minWidthAuto &&
            boxSizing == o.boxSizing;
 }
 

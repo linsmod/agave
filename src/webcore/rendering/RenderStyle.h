@@ -364,6 +364,11 @@ public:
     int z_index;
     bool z_auto : 1;
     unsigned boxSizing : 1; // EBoxSizing
+    /* Flex items clamp at their min-content size when `min-width` is `auto`
+     * (the initial value), and only then: `min-width: 0` is the idiom authors
+     * use to opt out of that clamp. The resolved Length cannot tell the two
+     * apart (unset and `0` both end up Fixed 0), so the cascade records it. */
+    unsigned minWidthAuto : 1;
 };
 
 //------------------------------------------------
@@ -1395,6 +1400,7 @@ public:
     Length      width() const { return box->width; }
     Length      height() const { return box->height; }
     Length      minWidth() const { return box->min_width; }
+    bool        minWidthIsAuto() const { return box->minWidthAuto; }
     Length      maxWidth() const { return box->max_width; }
     Length      minHeight() const { return box->min_height; }
     Length      maxHeight() const { return box->max_height; }
@@ -1658,6 +1664,7 @@ public:
     void setHeight(Length v) { SET_VAR(box,height,v) }
 
     void setMinWidth(Length v)  { SET_VAR(box,min_width,v) }
+void setMinWidthIsAuto(bool v) { SET_VAR(box,minWidthAuto,v) }
     void setMaxWidth(Length v)  { SET_VAR(box,max_width,v) }
     void setMinHeight(Length v) { SET_VAR(box,min_height,v) }
     void setMaxHeight(Length v) { SET_VAR(box,max_height,v) }

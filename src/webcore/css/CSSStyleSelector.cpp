@@ -3020,7 +3020,11 @@ void CSSStyleSelector::applyProperty(int id, CSSValue *value)
             HANDLE_INHERIT_COND(CSS_PROP_LEFT, left, Left)
             HANDLE_INHERIT_COND(CSS_PROP_RIGHT, right, Right)
             HANDLE_INHERIT_COND(CSS_PROP_WIDTH, width, Width)
-            HANDLE_INHERIT_COND(CSS_PROP_MIN_WIDTH, minWidth, MinWidth)
+            if (id == CSS_PROP_MIN_WIDTH) {
+                style->setMinWidth(parentStyle->minWidth());
+                style->setMinWidthIsAuto(parentStyle->minWidthIsAuto());
+                return;
+            }
             HANDLE_INHERIT_COND(CSS_PROP_PADDING_TOP, paddingTop, PaddingTop)
             HANDLE_INHERIT_COND(CSS_PROP_PADDING_RIGHT, paddingRight, PaddingRight)
             HANDLE_INHERIT_COND(CSS_PROP_PADDING_BOTTOM, paddingBottom, PaddingBottom)
@@ -3039,7 +3043,11 @@ void CSSStyleSelector::applyProperty(int id, CSSValue *value)
             HANDLE_INITIAL_COND_WITH_VALUE(CSS_PROP_LEFT, Left, Offset)
             HANDLE_INITIAL_COND_WITH_VALUE(CSS_PROP_RIGHT, Right, Offset)
             HANDLE_INITIAL_COND_WITH_VALUE(CSS_PROP_WIDTH, Width, Size)
-            HANDLE_INITIAL_COND_WITH_VALUE(CSS_PROP_MIN_WIDTH, MinWidth, MinSize)
+            if (id == CSS_PROP_MIN_WIDTH) {
+                style->setMinWidth(RenderStyle::initialMinSize());
+                style->setMinWidthIsAuto(true);
+                return;
+            }
             HANDLE_INITIAL_COND_WITH_VALUE(CSS_PROP_PADDING_TOP, PaddingTop, Padding)
             HANDLE_INITIAL_COND_WITH_VALUE(CSS_PROP_PADDING_RIGHT, PaddingRight, Padding)
             HANDLE_INITIAL_COND_WITH_VALUE(CSS_PROP_PADDING_BOTTOM, PaddingBottom, Padding)
@@ -3087,6 +3095,7 @@ void CSSStyleSelector::applyProperty(int id, CSSValue *value)
             case CSS_PROP_WIDTH:
                 style->setWidth(l); break;
             case CSS_PROP_MIN_WIDTH:
+                style->setMinWidthIsAuto(l.isAuto());
                 style->setMinWidth(l); break;
             case CSS_PROP_PADDING_TOP:
                 style->setPaddingTop(l); break;
