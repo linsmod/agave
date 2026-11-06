@@ -1,0 +1,19 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>calc variants</title><style>
+  html, body { margin: 0; padding: 0; }
+  .box { width: 300px; font-size: 12px; }
+  #a { max-width: calc(100% - 142px); }
+  #b { max-width: calc(100% - 130px - 12px); }
+  #c { max-width: calc(100% - 130px - 1em); }
+  #d { max-width: calc(100% - 1em); }
+  #e { max-width: calc(100% - 142px + 0px); }
+  #f { max-width: calc(100% - 12em - 130px); }
+  #g { max-width: calc((100% - 130px) - 1em); }
+</style></head><body><div class="box">
+<div id="a" data-case="a" data-props="max-width">a</div>
+<div id="b" data-case="b" data-props="max-width">b</div>
+<div id="c" data-case="c" data-props="max-width">c</div>
+<div id="d" data-case="d" data-props="max-width">d</div>
+<div id="e" data-case="e" data-props="max-width">e</div>
+<div id="f" data-case="f" data-props="max-width">f</div>
+<div id="g" data-case="g" data-props="max-width">g</div>
+</div><div style="height:1200px"></div></body></html>

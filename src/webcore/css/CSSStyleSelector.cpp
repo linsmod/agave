@@ -1884,6 +1884,19 @@ void CSSStyleSelector::applyExpandedProperty(int propId, const String& text)
              * the document base; without it they resolve to an empty URL and
              * the image is never requested (hist-lessons R85). */
             parser.setValueDocument(m_document);
+            /* calc() kept back because it has em/rem terms needs this element's
+             * font size; a stylesheet parse has no style in hand (R88). */
+            {
+                double emPx = style ? style->fontSize() : 0.0;
+                double rootPx = emPx;
+
+                if (m_document && m_document->documentElement()) {
+                    if (RenderStyle* rootStyle = m_document->documentElement()->computedStyle())
+                        rootPx = rootStyle->fontSize();
+                }
+
+                parser.setValueFont(emPx, rootPx);
+            }
             parser.parseValue(parsed.get(), propId, text, false);
         }
 

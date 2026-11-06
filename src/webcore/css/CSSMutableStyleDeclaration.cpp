@@ -30,6 +30,7 @@
 #include "CSSStyleSheet.h"
 #include "CSSValueList.h"
 #include "Document.h"
+#include "RenderStyle.h"
 #include "ExceptionCode.h"
 #include "StyledElement.h"
 
@@ -584,6 +585,13 @@ bool CSSMutableStyleDeclaration::setProperty(int propertyID, const String& value
     // When replacing an existing property value, this moves the property to the end of the list.
     // Firefox preserves the position, and MSIE moves the property to the beginning.
     CSSParser parser(useStrictParsing());
+    /* Inline styles are parsed with the element font in hand, so
+     * `calc(100% - 1em)` folds here (a stylesheet parse defers that to the
+     * per-element pass, R88). */
+    if (m_node) {
+        if (RenderStyle* nodeStyle = m_node->computedStyle())
+            parser.setValueFont(nodeStyle->fontSize(), nodeStyle->fontSize());
+    }
     bool success = parser.parseValue(this, propertyID, value, important);
     if (!success) {
         // CSS DOM requires raising SYNTAX_ERR here, but this is too dangerous for compatibility,

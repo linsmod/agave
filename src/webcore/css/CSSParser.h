@@ -133,6 +133,9 @@ namespace WebCore {
         static CSSParser* current() { return currentParser; }
 
         Document* document() const;
+        /* Font context for the per-element calc() pass (em/rem); a stylesheet
+         * parse leaves it at 0, which keeps font units unfolded. */
+        void setValueFont(double emPx, double rootPx) { m_valueFontPx = emPx; m_valueRootFontPx = rootPx; }
         /* `var()` expanded declarations are re-parsed by a fresh parser that
          * has no style element; without a document the relative URLs inside
          * them (background-image etc.) resolve to nothing. */
@@ -270,6 +273,8 @@ namespace WebCore {
         int id;
         StyleList* styleElement;
     Document* m_valueDocument;
+    double m_valueFontPx;
+    double m_valueRootFontPx;
         RefPtr<CSSRule> rule;
         MediaQuery* mediaQuery;
         ValueList* valueList;

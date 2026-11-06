@@ -115,6 +115,8 @@ CSSParser::CSSParser(bool strictParsing)
     , m_floatingMediaQueryExp(0)
     , m_floatingMediaQueryExpList(0)
     , m_valueDocument(0)
+    , m_valueFontPx(0)
+    , m_valueRootFontPx(0)
 {
 #ifdef CSS_DEBUG
     kdDebug(6080) << "CSSParser::CSSParser this=" << this << endl;
@@ -215,7 +217,7 @@ void CSSParser::setupParser(const char* prefix, const String& string, const char
 static String rewriteBareMediaQueries(const String& css);
 static String rewriteIsWhereSelectors(const String& css);
 static String rewriteWebkitScrollbarRules(const String& css);
-static String foldCalcConstants(const String& css);
+static String foldCalcConstants(const String& css, double emPx = 0, double remPx = 0);
 static String substituteCalcVariables(const String& css);
 
 /* ---------------------------------------------------------------------------
@@ -248,7 +250,13 @@ struct CalcValue {
 
 class CalcEvaluator {
 public:
-    CalcEvaluator(const char* begin, const char* end) : m_p(begin), m_end(end), m_ok(true) {}
+    /* mPx/
+emPx are the element's font size (0 when unknown, which makes
+     * font-relative units unfoldable and keeps the old behaviour). x/ch`r
+     * are approximated as half an em — the engine has no x-height/zero-width
+     * metrics in the style layer. */
+    CalcEvaluator(const char* begin, const char* end, double emPx = 0, double remPx = 0)
+        : m_p(begin), m_end(end), m_ok(true), m_emPx(emPx), m_remPx(remPx) {}
 
     bool evaluate(CalcValue& out)
     {
@@ -265,6 +273,8 @@ private:
     const char* m_p;
     const char* m_end;
     bool m_ok;
+    double m_emPx;
+    double m_remPx;
 
     void skipSpace()
     {
@@ -272,7 +282,7 @@ private:
             ++m_p;
     }
 
-    static double unitToPx(const char* u, int len)
+    double unitToPx(const char* u, int len) const
     {
         struct { const char* name; double factor; } units[] = {
             { "px", 1.0 },
@@ -287,6 +297,14 @@ private:
         for (unsigned i = 0; i < sizeof(units) / sizeof(units[0]); ++i)
             if ((int)strlen(units[i].name) == len && !strncmp(u, units[i].name, len))
                 return units[i].factor;
+
+        /* Font-relative units resolve only when the caller supplied a size. */
+        if (len == 2 && !strncmp(u, "em", 2))
+            return m_emPx > 0 ? m_emPx : -1.0;
+        if (len == 3 && !strncmp(u, "rem", 3))
+            return (m_remPx > 0 ? m_remPx : m_emPx) > 0 ? (m_remPx > 0 ? m_remPx : m_emPx) : -1.0;
+        if ((len == 2 && !strncmp(u, "ex", 2)) || (len == 2 && !strncmp(u, "ch", 2)))
+            return m_emPx > 0 ? m_emPx * 0.5 : -1.0;
 
         return -1.0;   /* unknown unit -> cannot fold */
     }
@@ -370,10 +388,21 @@ private:
         CalcValue v;
         const char* start = m_p;
         if (m_p < m_end && (*m_p == '.' || (*m_p >= '0' && *m_p <= '9'))) {
-            while (m_p < m_end && (*m_p == '.' || *m_p == '-' || *m_p == '+' ||
-                                   *m_p == 'e' || *m_p == 'E' ||
-                                   (*m_p >= '0' && *m_p <= '9')))
-                ++m_p;
+            /* `e`/`E` belongs to the number only as an exponent (1e3); eating it
+             * unconditionally made `1em` scan as "1e" + "m", strtod stopped at
+             * the dangling 'e' and the whole calc() was rejected — which is why
+             * em/ex inside calc() never folded. */
+            while (m_p < m_end) {
+                if ((*m_p >= '0' && *m_p <= '9') || *m_p == '.')
+                    ++m_p;
+                else if ((*m_p == 'e' || *m_p == 'E') && m_p + 1 < m_end
+                         && ((m_p[1] >= '0' && m_p[1] <= '9')
+                             || ((m_p[1] == '+' || m_p[1] == '-') && m_p + 2 < m_end
+                                 && m_p[2] >= '0' && m_p[2] <= '9')))
+                    ++m_p;
+                else
+                    break;
+            }
             char buf[64];
             int len = (int)(m_p - start);
             if (len > 63) len = 63;
@@ -551,7 +580,7 @@ static String substituteCalcVariables(const String& css)
 
 /* Replace every foldable calc(...) in `css` with its computed value. The
  * returned string has the same length only when nothing was folded. */
-static String foldCalcConstants(const String& css)
+static String foldCalcConstants(const String& css, double emPx, double remPx)
 {
     if (!css.contains("calc("))
         return css;
@@ -581,7 +610,7 @@ static String foldCalcConstants(const String& css)
                 expr[j - i - 6] = 0;
 
                 CalcValue result;
-                CalcEvaluator ev(&expr[0], &expr[0] + strlen(&expr[0]));
+                CalcEvaluator ev(&expr[0], &expr[0] + strlen(&expr[0]), emPx, remPx);
                 if (ev.evaluate(result)) {
                     /* Six decimals are plenty for a pixel length; trailing
                      * zeroes are trimmed so `18px + 4px` becomes exactly `22px`. */
@@ -619,6 +648,52 @@ static String foldCalcConstants(const String& css)
                         appendNumber(result.number, "px");
                     } else {
                         appendNumber(result.number, 0);
+                    }
+                    changed = true;
+                    i = j;
+                    continue;
+                }
+            }
+            /* Not foldable. A calc() with font-relative units only needs the
+             * element's font size, which a stylesheet parse does not have: wrap
+             * the expression in a quoted placeholder so the declaration still
+             * parses (`expr` accepts a string term), and let parseValue() keep
+             * it as a raw value for the per-element pass (hist-lessons R88). */
+            {
+                bool fontRelative = false;
+
+                for (unsigned k = i + 5; k + 1 < j; ++k) {
+                    if ((chars[k] >= '0' && chars[k] <= '9')) {
+                        unsigned u = k + 1;
+
+                        while (u < j && ((chars[u] >= '0' && chars[u] <= '9') || chars[u] == '.'))
+                            ++u;
+                        if (u + 2 <= j && ((chars[u] == 'e' && chars[u+1] == 'm')
+                                           || (chars[u] == 'e' && chars[u+1] == 'x')
+                                           || (chars[u] == 'c' && chars[u+1] == 'h'))) {
+                            fontRelative = true;
+                            break;
+                        }
+                        if (u + 3 <= j && chars[u] == 'r' && chars[u+1] == 'e' && chars[u+2] == 'm') {
+                            fontRelative = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (fontRelative && emPx <= 0) {
+                    /* An ident token is the one term the 2008 grammar always
+                     * accepts; hex keeps the expression inside identifier
+                     * characters. parseValue() turns it back into a raw
+                     * `calc(...)` value for the per-element pass. */
+                    const char* prefix = "agbfontcalcx";
+                    static const char hex[] = "0123456789abcdef";
+
+                    for (const char* p = prefix; *p; ++p) out.push_back((UChar)*p);
+                    for (unsigned k = i + 5; k < j - 1; ++k) {
+                        UChar ch = chars[k];
+                        out.push_back((UChar)hex[(ch >> 4) & 0xF]);
+                        out.push_back((UChar)hex[ch & 0xF]);
                     }
                     changed = true;
                     i = j;
@@ -1973,12 +2048,67 @@ bool CSSParser::parseExpandedValue(int propId, const String& text, bool importan
     return true;
 }
 
+/* Does any calc() in `css` use a font-relative unit? Those cannot be folded
+ * without the element's font size (see foldCalcConstants). */
+static bool hasFontRelativeCalc(const String& css)
+{
+    const UChar* text = css.characters();
+    unsigned length = css.length();
+
+    for (unsigned i = 0; i + 5 <= length; ++i) {
+        if (!(text[i] == 'c' && text[i + 1] == 'a' && text[i + 2] == 'l'
+              && text[i + 3] == 'c' && text[i + 4] == '('))
+            continue;
+
+        unsigned depth = 0;
+
+        for (unsigned j = i + 5; j < length; ++j) {
+            if (text[j] == '(')
+                ++depth;
+            else if (text[j] == ')') {
+                if (!depth)
+                    break;
+                --depth;
+            } else if (text[j] >= '0' && text[j] <= '9') {
+                unsigned k = j + 1;
+
+                while (k < length && ((text[k] >= '0' && text[k] <= '9') || text[k] == '.'))
+                    ++k;
+
+                if (k + 2 <= length) {
+                    String unit(text + k, 2);
+
+                    if (unit == "em" || unit == "ex" || unit == "ch")
+                        return true;
+                }
+                if (k + 3 <= length && String(text + k, 3) == "rem")
+                    return true;
+            }
+        }
+    }
+
+    return false;
+}
+
 bool CSSParser::parseValue(CSSMutableStyleDeclaration *declaration, int _id, const String &string, bool _important)
 {
     styleElement = declaration->stylesheet();
 
     {
-        String text = foldCalcConstants(rewriteCustomPropertyNames(rewriteViewportUnits(rewriteHexAlphaColors(string, true), document())));
+        String text = foldCalcConstants(rewriteCustomPropertyNames(rewriteViewportUnits(rewriteHexAlphaColors(string, true), document())),
+                                        m_valueFontPx, m_valueRootFontPx);
+
+        /* `calc(100% - 1em)` needs the element's font size, which a stylesheet
+         * parse does not have; keep the declaration so the per-element pass
+         * (CSSStyleSelector::applyExpandedProperty) can fold it with the style
+         * in hand. Without this the grammar dropped the whole declaration and
+         * the element fell back to `none` (hist-lessons R88). */
+        if (text.contains("calc(") && hasFontRelativeCalc(text) && m_valueFontPx <= 0) {
+            addRawValueProperty(_id, text, String(), _important);
+            declaration->addParsedProperties(parsedProperties, numParsedProperties);
+            clearProperties();
+            return true;
+        }
 
         if (text.contains("var(")) {
             /* The variables are only known once the cascade at the element is
@@ -2561,6 +2691,38 @@ bool CSSParser::parseValue(int propId, bool important)
     if (!value)
         return false;
 
+    /* A calc() with font-relative units was wrapped in a quoted placeholder by
+     * foldCalcConstants (no font context at sheet parse time). Keep the
+    /* A calc() with font-relative units was hex-encoded into an identifier by
+     * foldCalcConstants (a stylesheet parse has no font size). Turn it back
+     * into a raw `calc(...)` declaration; CSSStyleSelector re-parses it per
+     * element, where the font is known, and folds it there (hist-lessons R88). */
+    if (value->unit == CSSPrimitiveValue::CSS_IDENT) {
+        String placeholder = domString(value->string);
+
+        if (placeholder.startsWith("agbfontcalcx")) {
+            std::vector<UChar> decoded;
+            bool ok = true;
+
+            for (unsigned k = 12; k + 1 < placeholder.length(); k += 2) {
+                int high = placeholder[k] <= '9' ? placeholder[k] - '0' : placeholder[k] - 'a' + 10;
+                int low = placeholder[k + 1] <= '9' ? placeholder[k + 1] - '0' : placeholder[k + 1] - 'a' + 10;
+
+                if (high < 0 || high > 15 || low < 0 || low > 15) {
+                    ok = false;
+                    break;
+                }
+                decoded.push_back((UChar)((high << 4) | low));
+            }
+
+            if (ok && !decoded.empty()) {
+                String expression(&decoded[0], (unsigned)decoded.size());
+
+                addRawValueProperty(propId, String("calc(") + expression + String(")"), String(), important);
+                return true;
+            }
+        }
+    }
     int id = value->id;
 
     /* flex / grid spellings translated to the box vocabulary this engine
@@ -6200,3 +6362,4 @@ typedef unsigned YY_CHAR;
 #include "tokenizer.cpp"
 
 }
+

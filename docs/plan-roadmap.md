@@ -62,6 +62,11 @@
   name 版 `setProperty/getPropertyValue/removeProperty` 走 `setCustomProperty/customPropertyValue/removeCustomProperty`，
   `valueText()` 也不再把逗号写成 `" , "`（变量套变量因此能算出色值）。验收：
   `custom_props.html` 3 case 对拍 Chrome 全绿 + `check_custom_props.js`（`run_layout_tests.ps1` 的 `custom_props: ok`）。
+- **`calc()` 混合字体单位**（R88，2026-11-06）：`calc(100% - 130px - 1em)` 以前整条声明被丢
+  （`max-width: none` → 浮动元素换行，css3test 的 Carbon 广告块就是它）。现在 `CalcEvaluator` 接受字体上下文
+  （em/rem/ex/ch），样式表解析时把这类 calc 十六进制编码成 ident 留成 raw value，渲染时用元素 font-size 折成
+  `CSS_CALC_LENGTH`；顺带修掉数字扫描把 `1em` 的 `e` 当指数的问题。验收：
+  `calc_terms.html`（7 case 对拍 Chrome）与 `float_carbon.html`（广告真实结构）全绿。
 ## P0：先修正确性
 
 ### P0-b 图就绪与执行解耦
