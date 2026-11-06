@@ -7,6 +7,15 @@
      differ from what the parent gets for the same node. */
   window.__selfBody = document.body;
 
+  /* Browser hosts install timers into every frame realm (P0-l). The child
+     must see them during parsing, not just after load. */
+  window.__childTimer = typeof setTimeout;
+  window.__childInterval = typeof setInterval;
+  window.__childTimerWorks = 0;
+  if (typeof setTimeout === 'function') {
+    setTimeout(function () { window.__childTimerWorks = 1; }, 1);
+  }
+
   /* Frame DOMContentLoaded must fire in the frame's own realm (S3). */
   window.__childDcl = 0;
   document.addEventListener('DOMContentLoaded', function () {

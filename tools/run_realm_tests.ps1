@@ -52,7 +52,10 @@ probeExit([
   'sameBody=' + (cd && cd.body && cw && cw.__selfBody
       ? (cd.body === cw.__selfBody) : 'n/a'),
   'childDcl=' + (cw ? cw.__childDcl : 'n/a'),
-  'parentDcl=' + window.__parentDcl
+  'parentDcl=' + window.__parentDcl,
+  'childTimer=' + (cw ? cw.__childTimer : 'n/a'),
+  'childInterval=' + (cw ? cw.__childInterval : 'n/a'),
+  'childTimerWorks=' + (cw ? cw.__childTimerWorks : 'n/a')
 ].join('|'));
 '@ | Set-Content -Path $checkJs -Encoding ascii
 
@@ -139,7 +142,10 @@ if ($perFrame.Code -ne 0) {
         @{ Name = 'contentWindow reachable';  Want = 'childReachable=string';    Ok = ($perFrameText -match 'childReachable=string') },
         @{ Name = 'node wrappers per realm';  Want = 'sameBody=false';           Ok = ($perFrameText -match 'sameBody=false') },
         @{ Name = 'frame DOMContentLoaded';   Want = 'childDcl=1';               Ok = ($perFrameText -match 'childDcl=1') },
-        @{ Name = 'parent DCL ran once';      Want = 'parentDcl=1';              Ok = ($perFrameText -match 'parentDcl=1') }
+        @{ Name = 'parent DCL ran once';      Want = 'parentDcl=1';              Ok = ($perFrameText -match 'parentDcl=1') },
+        @{ Name = 'child realm has timers';   Want = 'childTimer=function';      Ok = ($perFrameText -match 'childTimer=function') },
+        @{ Name = 'child realm has interval'; Want = 'childInterval=function';   Ok = ($perFrameText -match 'childInterval=function') },
+        @{ Name = 'child timer fires';        Want = 'childTimerWorks=1';        Ok = ($perFrameText -match 'childTimerWorks=1') }
     )
 
     foreach ($c in $checks) {
