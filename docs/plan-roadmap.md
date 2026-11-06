@@ -250,4 +250,23 @@
 - **onresize 的验收方式**：不再单独为属性写法做回归；`tools/pages/resize/` 里 `<body onresize>` 只当
   "属性路径仍然存在"的观察项（用 DOM 属性记录，因为它的全局与页面不通）。
 
+### P0-j `obj[dynamicKey] = v` 仍会崩在 `hash_key`（163 adtracker，**未修完**）
 
+- 现象：163 `adtracker2022.be06f843.js`（`requireTdidSass2_2_7`）在 `obj[key] = v` 时 first-chance AV；
+  `agb_crash.txt` + `tools/cdb_stack.ps1 -Symbolize` 得到：
+  `hash_key(hash.h:126) ← intern_find ← setprop_impl/lkp ← js_setprop_keyed ← jit_put_elem ← jit_helper_put_elem_strict`，
+  读地址是垃圾（如 `0x1a933d30000`），即**键的字节指针已失效**。
+- 已修（ant `e86c54b2`）：`jit_put_elem` 原来在 root scope **之前**做 `sv_key_to_propstr()`（原始 key 未根），
+  且**非索引数字键**分支（小数/负数/>2^32）把转换结果直接传进去、完全没 pin。现在先根 obj/key/val，
+  两个分支都 pin 转换后的 key。效果：163 从 2/2 崩（`-1073741819`）降到 0/2，同模块的 `TypeError: oom` 也消失。
+- **仍有残留**（2026-11-06 13:19 又崩一次，栈同上、`jit_put_elem` 在已 pin 的分支）：已确认
+  `gc_push_root` 存 slot 地址、`gc_visit_roots` 会访问所有值，所以不是“字符串没进根表”。
+  当前最可能的假设：`sv_key_to_propstr()` 产出的字节来自 **rope/临时扁平化 buffer**，不是稳定字符串，
+  所以 pin 住“值”也保不住“字节”。
+- 下一步（做法已定）：
+  1. `jit_put_elem` 里先 `intern_string(js, bytes, len)` 把键拷进**永久 intern chunk**（只有 `js_destroy` 释放，
+     生命周期已核实：`intern_table_free` 唯一调用点在 `js_destroy`）；
+  2. 用永久指针走 `setprop_cstr(js, obj, interned, len, val)`，不再把临时 JS 字符串交给 `js_setprop_keyed`；
+  3. 回归：`ANT_GC_STRESS=1` 下循环 `obj[动态键]=v`（含 `obj[i/2]`、负数键）新增 meson 用例；
+     163 用 `tools/cdb_stack.ps1 -Url https://www.163.com/` 跑 3 次确认 `hash_key` 不再出现；
+  4. 顺带：`agwPost` 收口（`02db00b`）缺自动化用例；GUI “卡死页重新导航”手感验证未做。
