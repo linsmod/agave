@@ -62,6 +62,11 @@ FOR SOME BUGS OR REQUIREMENTS THAT REQUIRE INFRASTRUCTURE ADJUSTMENTS, MAKE A DE
 
 MAKE HELPER SCRIPTS REUSABLE; WHEN A SCRIPT IS HIGH-FREQUENCY USED, PLACE IT IN THE PROJECT.
 
+**谁改谁负责收尾和提交**：改动方自己跑完验证、补/改覆盖它的测试、同步受影响的文档，并在同一次工作里提交。
+两个仓库各提各的：ant 的改动提交在 `H:\ant-v16`（或导出 patch 到 `tools/ant-patches/`），
+发布产物（`3rdparty/ant/{bin,lib,include}`）提交在本仓库。不要把未提交的改动留给下一个人——
+这里 `antjsb.dll` 是预编译发布的，未提交等于 dll 与源码静默分叉，下次同步基线/重建就丢了。
+
 任务中经历的本该优化的阻塞点，可以临时用脚本方式绕过，但需要记录并提示延后处置。
 
 **发现缺口必须记录并推进**：凡是发现能力缺口、半成品路径、与现代浏览器不一致的行为（不只是这次修的那个 bug），
