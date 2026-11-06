@@ -501,6 +501,32 @@ static void layoutTab(int index)
                            client.right, client.bottom - top - STATUS_H);
 }
 
+/* Move a child only when it actually has to move. MoveWindow(..., TRUE) repaints
+ * the control every time, and the toolbar is laid out on every WM_SIZE - a load
+ * that makes the scrollbar appear/disappear fires those repeatedly, which is why
+ * the "<" / ">" captions appeared to flicker during reloads. */
+static void placeChild(HWND child, int x, int y, int w, int h)
+{
+    RECT r;
+    POINT origin = { 0, 0 };
+
+    if (!child)
+        return;
+
+    if (!GetWindowRect(child, &r))
+        return;
+
+    MapWindowPoints(NULL, g_hwnd, (POINT*)&r, 2);
+    origin.x = r.left;
+    origin.y = r.top;
+
+    if (origin.x == x && origin.y == y &&
+        (r.right - r.left) == w && (r.bottom - r.top) == h)
+        return;
+
+    MoveWindow(child, x, y, w, h, TRUE);
+}
+
 static void layoutAll(void)
 {
     RECT client;
@@ -512,25 +538,25 @@ static void layoutAll(void)
     GetClientRect(g_hwnd, &client);
     width = client.right;
 
-    MoveWindow(g_back, x, y, BUTTON_W, 26, TRUE);        x += BUTTON_W + 2;
-    MoveWindow(g_forward, x, y, BUTTON_W, 26, TRUE);     x += BUTTON_W + 2;
-    MoveWindow(g_reload, x, y, BUTTON_W, 26, TRUE);      x += BUTTON_W + 2;
-    MoveWindow(g_stop, x, y, BUTTON_W, 26, TRUE);        x += BUTTON_W + 6;
+    placeChild(g_back, x, y, BUTTON_W, 26);             x += BUTTON_W + 2;
+    placeChild(g_forward, x, y, BUTTON_W, 26);          x += BUTTON_W + 2;
+    placeChild(g_reload, x, y, BUTTON_W, 26);           x += BUTTON_W + 2;
+    placeChild(g_stop, x, y, BUTTON_W, 26);             x += BUTTON_W + 6;
 
     reserved = (BUTTON_W + 6) * 3 + 20;
-    MoveWindow(g_address, x, y + 1, width - x - reserved, 24, TRUE);
+    placeChild(g_address, x, y + 1, width - x - reserved, 24);
     x = width - reserved + 6;
-    MoveWindow(g_go, x, y, 46, 26, TRUE);                x += 46 + 4;
-    MoveWindow(g_newtab, x, y, BUTTON_W, 26, TRUE);      x += BUTTON_W + 4;
-    MoveWindow(g_menu, x, y, BUTTON_W, 26, TRUE);
+    placeChild(g_go, x, y, 46, 26);                     x += 46 + 4;
+    placeChild(g_newtab, x, y, BUTTON_W, 26);           x += BUTTON_W + 4;
+    placeChild(g_menu, x, y, BUTTON_W, 26);
 
     if (g_findVisible) {
         int fy = TAB_HEIGHT + TOOLBAR_H + 2;
 
-        MoveWindow(g_findEdit, 8, fy, 260, 24, TRUE);
-        MoveWindow(g_findPrev, 274, fy, 34, 24, TRUE);
-        MoveWindow(g_findNext, 312, fy, 34, 24, TRUE);
-        MoveWindow(g_findClose, 350, fy, 28, 24, TRUE);
+        placeChild(g_findEdit, 8, fy, 260, 24);
+        placeChild(g_findPrev, 274, fy, 34, 24);
+        placeChild(g_findNext, 312, fy, 34, 24);
+        placeChild(g_findClose, 350, fy, 28, 24);
     }
 
     for (i = 0; i < MAX_TABS; ++i)
@@ -1862,6 +1888,7 @@ static LRESULT CALLBACK shellProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM
         layoutAll();
         updateToolbarState();
         return 0;
+
 
     case WM_PAINT: {
         PAINTSTRUCT ps;
@@ -3476,7 +3503,7 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
     RegisterClassA(&wc);
 
     g_hwnd = CreateWindowExA(0, "AgaveShellWindow", "BrowserShell - Agave",
-                             WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
+                             WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT,
                              1100, 800, NULL, NULL, instance, NULL);
 
     if (!g_hwnd) {
