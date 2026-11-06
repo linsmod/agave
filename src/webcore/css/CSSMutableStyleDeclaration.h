@@ -82,6 +82,17 @@ public:
 
     void clear();
 
+    /* Custom properties ('--x') have no generated id: they live in m_values
+     * with CSS_PROP_CUSTOM_PROPERTY and the tokenizer-safe name in customName.
+     * These take the author spelling and back the name-based
+     * CSSStyleDeclaration API (inline styles, `el.style.setProperty('--x', …)`,
+     * CSSRules). */
+    bool setCustomProperty(const String& name, const String& value, bool important, bool notifyChanged);
+    String customPropertyValue(const String& name) const;
+    String removeCustomProperty(const String& name, bool notifyChanged);
+
+    virtual bool isMutableStyleDeclaration() const { return true; }
+
     void setChanged(StyleChangeType changeType = FullStyleChange);
  
     // setLengthProperty treats integers as pixels! (Needed for conversion of HTML attributes.)

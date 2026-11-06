@@ -35,6 +35,7 @@ namespace WebCore { bool prefersDarkColorScheme(); }
 #include "RenderObject.h"
 #include "Node.h"
 #include "CSSComputedStyleDeclaration.h"
+#include "CSSParser.h"
 #include "CSSMutableStyleDeclaration.h"
 #include "CSSStyleDeclaration.h"
 #include "CSSStyleSheet.h"
@@ -9969,8 +9970,12 @@ int globalComputedStyle(AntbEngine* engine, AntbValue*, AntbValue** args, int ar
                 WebCore::String name = WebCore::String("-agb-") + WebCore::String(property + 2);
                 WebCore::String custom = style->customProperties()->getProperty(name);
 
-                if (!custom.isNull())
-                    value = std::string(custom.utf8().data());
+                if (!custom.isNull()) {
+                    /* The value text also carries the rewritten spelling of any
+                     * var() it references; hand back the author's names. */
+                    WebCore::String restored = WebCore::CSSParser::restoreCustomPropertyNames(custom);
+                    value = std::string(restored.utf8().data());
+                }
             }
         }
 

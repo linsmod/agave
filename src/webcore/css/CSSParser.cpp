@@ -211,7 +211,7 @@ void CSSParser::setupParser(const char* prefix, const String& string, const char
     yy_hold_char = *yy_c_buf_p;
 }
 
-static String rewriteCustomPropertyNames(const String& css);
+/* declared in CSSParser.h (public: the custom property API stores the same canonical form) */
 static String rewriteBareMediaQueries(const String& css);
 static String rewriteIsWhereSelectors(const String& css);
 static String rewriteWebkitScrollbarRules(const String& css);
@@ -1567,7 +1567,7 @@ static bool isCssIdentChar(UChar c)
  * parsed. Rename '--x' to '-agb-x' up front (comments and strings are left
  * alone): definitions, var() references and the lookup table all agree on the
  * rewritten name. */
-static String rewriteCustomPropertyNames(const String& css)
+String CSSParser::rewriteCustomPropertyNames(const String& css)
 {
     /* One growing buffer, then a single String: `out += String(c)` per character
      * made this quadratic, which turned a multi-megabyte stylesheet into tens
@@ -1635,8 +1635,79 @@ static String rewriteCustomPropertyNames(const String& css)
     return out.empty() ? css : String(&out[0], (unsigned)out.size());
 }
 
-static void appendCssNumber(String& out, double value)
+String CSSParser::rewriteCustomPropertyName(const String& name)
 {
+    if (!name.startsWith("--") || name.length() < 3)
+        return name;
+
+    return String("-agb-") + name.substring(2);
+}
+
+/* Turns the internal `-agb-x` spelling back into `--x`. Used when a resolved
+ * value is handed back to a page (getComputedStyle of a custom property), so
+ * authors see the name they wrote instead of the tokenizer's safe form. */
+String CSSParser::restoreCustomPropertyNames(const String& css)
+{
+    if (!css.contains("-agb-"))
+        return css;
+
+    std::vector<UChar> out;
+    const UChar* text = css.characters();
+    unsigned i = 0;
+    unsigned length = css.length();
+
+    out.reserve(length);
+
+    while (i < length) {
+        UChar c = text[i];
+
+        if (c == '/' && i + 1 < length && text[i + 1] == '*') {
+            unsigned end = i + 2;
+
+            while (end + 1 < length && !(text[end] == '*' && text[end + 1] == '/'))
+                ++end;
+            end = (end + 1 < length) ? end + 2 : length;
+
+            out.insert(out.end(), text + i, text + end);
+            i = end;
+            continue;
+        }
+
+        if (c == '"' || c == 39) {
+            UChar quote = c;
+            unsigned end = i + 1;
+
+            while (end < length && text[end] != quote) {
+                if (text[end] == '\\')
+                    ++end;
+                ++end;
+            }
+            end = (end < length) ? end + 1 : length;
+
+            out.insert(out.end(), text + i, text + end);
+            i = end;
+            continue;
+        }
+
+        /* `-agb-` only stands for `--` at a token start (the same rule the
+         * rewrite applies in reverse); `.ds-button--agb-x` must stay as is. */
+        if (c == '-' && i + 4 < length && text[i + 1] == 'a' && text[i + 2] == 'g'
+            && text[i + 3] == 'b' && text[i + 4] == '-'
+            && (i == 0 || !isCssIdentChar(text[i - 1]))) {
+            out.push_back('-');
+            out.push_back('-');
+            i += 5;
+            continue;
+        }
+
+        out.push_back(c);
+        ++i;
+    }
+
+    return out.empty() ? css : String(&out[0], (unsigned)out.size());
+}
+
+static void appendCssNumber(String& out, double value){
     char buffer[64];
 
     if (value == (double)(long long)value)
@@ -1683,11 +1754,16 @@ String CSSParser::valueText(ValueList* list)
         if (!v)
             continue;
 
-        if (i)
+        /* Separators hug the token before them: `rgb(1, 2, 3)`, not
+         * `rgb(1 , 2 , 3)` — the latter does not parse back as a colour, which
+         * broke custom properties that chain through another variable. */
+        if (v->unit == Value::Operator) {
+            out += charToString((UChar)v->iValue);
+        } else if (i)
             out += " ";
 
         if (v->unit == Value::Operator) {
-            out += charToString((UChar)v->iValue);
+            /* already emitted above */
         } else if (v->unit == Value::QFunction && v->function) {
             /* A function name already carries its '('. */
             out += domString(v->function->name);
@@ -1800,8 +1876,11 @@ static String expandVariablesOnce(const String& text, WebCore::StyleCustomProper
                 String name = trimCopy(text.substring(i + 4, (comma ? comma : j) - (i + 4)));
                 String value;
 
+                /* The resolved map is keyed by the tokenizer-safe name; accept
+                 * the author spelling too (inline `--x: var(--y)` stores the
+                 * value as given unless the declaration went through a sheet). */
                 if (properties)
-                    value = properties->getProperty(name);
+                    value = properties->getProperty(CSSParser::rewriteCustomPropertyName(name));
 
                 if (value.isEmpty()) {
                     if (!comma) {

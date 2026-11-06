@@ -23,6 +23,7 @@
 #include "config.h"
 #include "CSSProperty.h"
 
+#include "CSSParser.h"
 #include "CSSPropertyNames.h"
 #include "PlatformString.h"
 
@@ -30,6 +31,18 @@ namespace WebCore {
 
 String CSSProperty::cssText() const
 {
+    /* A custom property has no generated name; print the author spelling and
+     * restore the var() references inside the kept raw text. */
+    if (m_id == CSS_PROP_CUSTOM_PROPERTY) {
+        String name = m_customName;
+
+        if (name.startsWith("-agb-"))
+            name = String("--") + name.substring(5);
+
+        return name + ": " + CSSParser::restoreCustomPropertyNames(m_rawValue)
+             + (isImportant() ? " !important" : "") + "; ";
+    }
+
     return String(getPropertyName(static_cast<CSSPropertyID>(id()))) + ": " + m_value->cssText() + (isImportant() ? " !important" : "") + "; ";
 }
 

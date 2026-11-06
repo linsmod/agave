@@ -144,8 +144,8 @@ safeAlign=center safeItemY=427 absChildX=88 calcMinH=22px calcVarMinH=22px calcM
 bareMedia=2px schemeBg=rgb(0, 0, 200) mediaDark=1 mediaMin=1
 ```
 
-（`schemeBg`/`mediaDark` 随系统深浅色变化：浅色时是 `rgb(200, 0, 0)` / `0`。要固定看某一种，
-探针前设 `AGB_COLOR_SCHEME=dark` 或 `light`，宿主不会覆盖显式设置的值。）
+（`schemeBg`/`mediaDark` 默认是**浅色**：`rgb(200, 0, 0)` / `0`。要跟系统走设 `AGB_COLOR_SCHEME=auto`，
+要钉死设 `dark` / `light` —— 见 R86。）
 
 | 特性 | 当前 computed | 判定 / 建议 |
 |---|---|---|
@@ -167,7 +167,7 @@ bareMedia=2px schemeBg=rgb(0, 0, 200) mediaDark=1 mediaMin=1
 | `:is(p)` / `:where(p)` | `rgb(1, 2, 3)` / `rgb(4, 5, 6)` | **已支持**（R41）：解析期把 `:is()`/`:where()` 文本展开成选择器列表（`p:is(.a,.b) span` → `p.a span, p.b span`）。限制：参数必须是简单选择器（不能带组合器），且不能嵌套在别的伪类括号里 |
 | `var(--missing, rgb(7,8,9))` | `rgb(7, 8, 9)` | 支持（fallback 正常）；**级联/继承已按规范工作**（R39：元素级覆盖、`!important`、继承都对，`getComputedStyle(el).getPropertyValue('--x')` 可读）；`calc()` 内的 `var(--常量token)` 在解析期代入（R43）；仍未做：`@property`、混合单位的 `calc()` 求值 |
 | `box-sizing: border-box` | `border-box` | **已支持**（R39）：无前缀名此前整条被丢（只有 `-webkit-box-sizing` 有词条），现在走别名表；布局按 border-box 计算，`getComputedStyle(el).boxSizing` 可读 |
-| `@media (prefers-color-scheme: dark)` | 深色时匹配 | **已支持**（R39）：`AGB_COLOR_SCHEME` 由宿主按注册表 `AppsUseLightTheme` 设置；`matchMedia` 与 CSS 用同一答案 |
+| `@media (prefers-color-scheme: dark)` | **默认 `light`**（不跟随系统）；`AGB_COLOR_SCHEME=dark` 时匹配 | **已支持**（R39，默认值见 R86）：`matchMedia` 与 CSS 用同一答案（`prefersDarkColorScheme()`）。**默认不跟随系统深浅色** —— 宿主不再按 `AppsUseLightTheme` 注入（那会让所有带 dark 块的站点在深色系统上整页变黑，css3test 就是例子）；要看系统值用 `AGB_COLOR_SCHEME=auto`（读注册表），或显式 `dark`/`light` 钉死 |
 | `matchMedia('(min-width: …)')` | `matches` 正确 | **已支持**（R39）：width/height/device-*/orientation/resolution/prefers-* 都按真实视口求值，`not`/`only`/媒体类型/逗号列表也处理；未做：`addListener` 的变更回调（返回的 list 是静态快照） |
 | 窗口 resize（`--resize WxH` / 拖窗口；1100x800 → 500x400） | `inner=500x400`、`pct=250`（50%）、`vwBox=500x200`、`calcBox=400x150`、`mediaCSS=rgb(200, 30, 40)`（移动端断点）、`mediaCSSwide` 回到基准色、`matchMedia=true`、三种 `resize` 监听都收到 `500x400` | **全部跟随（R69）**：`WM_SIZE → AGW_CMD_RESIZE → macross_view_resize` 走 `FrameView::resize`；`FrameView::layout()` 发现 `styleViewportSize` 变了就先 `Document::viewportSizeChanged()` + `updateStyleIfNeeded()`（selector 重建 → `@media` 按新视口重滤；vw/vh 变量换成新值），再正常布局并按尺寸变化全量重绘（放大到 1400x900 新区域是白的）。`resize` 事件在布局后由 `Frame::sendResizeEvent()` 派发，Ant 侧由 `AntRuntime::dispatchResizeEvent()` 送到页面的 `addEventListener("resize")`/`window.onresize`。代价：每次尺寸变化一次全文档样式重算 + 重排（拖动时按帧合并）。残留：`<body onresize>` 这类 HTML 属性 handler 跑在旧的 KJS 世界，读不到页面 JS 全局 |
 | `@media (min-width: 1px)`（无媒体类型） | 生效 | **已支持**（R39）：`rewriteBareMediaQueries()` 补 `all and `；2008 的语法要求媒体类型在前，否则整块丢弃 |

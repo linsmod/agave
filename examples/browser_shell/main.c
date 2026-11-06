@@ -3649,18 +3649,27 @@ static void parseShellArgv(void)
     }
 }
 
-/* The engine answers `(prefers-color-scheme: dark)` from AGB_COLOR_SCHEME; the
- * host is the only place that can ask Windows. Read once, before any view (and
- * therefore any stylesheet) exists. Set it with SetEnvironmentVariableA, not
- * putenv: the shell and the engine DLL each link their own static CRT, so a
- * CRT-local environment would never reach the engine. */
+/* The engine answers `(prefers-color-scheme: dark)` from AGB_COLOR_SCHEME and
+ * defaults to light. Following the Windows "app mode" here turned every page
+ * with a `@media (prefers-color-scheme: dark)` block dark on a dark-mode
+ * machine (css3test rendered its dark theme, which reads as "the viewport is
+ * black"). The default is now light — the conventional canvas — and the OS
+ * theme is only consulted when the host is asked for it explicitly with
+ * `AGB_COLOR_SCHEME=auto`.
+ *
+ * Read once, before any view (and therefore any stylesheet) exists. Set it with
+ * SetEnvironmentVariableA, not putenv: the shell and the engine DLL each link
+ * their own static CRT, so a CRT-local environment would never reach the
+ * engine. */
 static void applySystemColorScheme(void)
 {
+    char setting[16];
+    DWORD length = GetEnvironmentVariableA("AGB_COLOR_SCHEME", setting, sizeof(setting));
     DWORD light = 1;
     DWORD size = sizeof(light);
 
-    /* An explicit AGB_COLOR_SCHEME wins (probes and tests pin the scheme). */
-    if (GetEnvironmentVariableA("AGB_COLOR_SCHEME", NULL, 0) > 0)
+    /* An explicit dark/light wins; only `auto` follows the OS. */
+    if (length == 0 || length >= sizeof(setting) || _stricmp(setting, "auto") != 0)
         return;
 
     /* NOTE: the path must be a double-backslash C literal; with single

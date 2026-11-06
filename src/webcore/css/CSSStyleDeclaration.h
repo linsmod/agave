@@ -37,6 +37,9 @@ typedef int ExceptionCode;
 class CSSStyleDeclaration : public StyleBase {
 public:
     virtual bool isStyleDeclaration();
+    /* Custom properties ('--x') are not in the generated property table; the
+     * name-based API needs to know whether it can mutate this declaration. */
+    virtual bool isMutableStyleDeclaration() const { return false; }
 
     static bool isPropertyName(const String&);
 

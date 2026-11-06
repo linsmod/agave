@@ -73,6 +73,11 @@ PassRefPtr<CSSValue> CSSStyleDeclaration::getPropertyCSSValue(const String& prop
 
 String CSSStyleDeclaration::getPropertyValue(const String &propertyName)
 {
+    /* '--x' has no generated id; the mutable declaration keeps it keyed by the
+     * tokenizer-safe name, so ask it directly. */
+    if (propertyName.startsWith("--") && isMutableStyleDeclaration())
+        return static_cast<CSSMutableStyleDeclaration*>(this)->customPropertyValue(propertyName);
+
     int propID = propertyID(propertyName);
     if (!propID)
         return String();
@@ -117,6 +122,13 @@ void CSSStyleDeclaration::setProperty(const String& propertyName, const String& 
 
 void CSSStyleDeclaration::setProperty(const String& propertyName, const String& value, const String& priority, ExceptionCode& ec)
 {
+    if (propertyName.startsWith("--")) {
+        if (isMutableStyleDeclaration())
+            static_cast<CSSMutableStyleDeclaration*>(this)->setCustomProperty(
+                propertyName, value, priority.find("important", 0, false) != -1, true);
+        return;
+    }
+
     int propID = propertyID(propertyName);
     if (!propID)
         // FIXME: set exception?
@@ -127,6 +139,11 @@ void CSSStyleDeclaration::setProperty(const String& propertyName, const String& 
 
 String CSSStyleDeclaration::removeProperty(const String& propertyName, ExceptionCode& ec)
 {
+    if (propertyName.startsWith("--") && isMutableStyleDeclaration()) {
+        ec = 0;
+        return static_cast<CSSMutableStyleDeclaration*>(this)->removeCustomProperty(propertyName, true);
+    }
+
     int propID = propertyID(propertyName);
     if (!propID)
         return String();

@@ -446,6 +446,64 @@ String CSSMutableStyleDeclaration::removeProperty(int propertyID, bool notifyCha
     return value;
 }
 
+/* --- custom properties ('--x') -------------------------------------------- */
+/* They have no generated id, so they ride in m_values as
+ * `CSS_PROP_CUSTOM_PROPERTY` with the tokenizer-safe name (`-agb-x`) in
+ * customName and the value text in rawValue — the same shape the stylesheet
+ * grammar produces. Without these, `el.style.setProperty('--x', v)` was dropped
+ * on the floor (propertyID('--x') is 0, so the setter returned early). */
+
+bool CSSMutableStyleDeclaration::setCustomProperty(const String& name, const String& value,
+                                                   bool important, bool notifyChanged)
+{
+    if (name.isEmpty())
+        return false;
+
+    removeCustomProperty(name, false);
+
+    CSSProperty property(CSS_PROP_CUSTOM_PROPERTY, new CSSPrimitiveValue(), important);
+
+    property.setRawValue(CSSParser::rewriteCustomPropertyNames(value));
+    property.setCustomName(CSSParser::rewriteCustomPropertyName(name));
+    m_values.append(property);
+
+    if (notifyChanged)
+        setChanged();
+    return true;
+}
+
+String CSSMutableStyleDeclaration::customPropertyValue(const String& name) const
+{
+    String stored = CSSParser::rewriteCustomPropertyName(name);
+    DeprecatedValueListConstIterator<CSSProperty> end;
+
+    for (DeprecatedValueListConstIterator<CSSProperty> it = m_values.begin(); it != end; ++it) {
+        if ((*it).id() == CSS_PROP_CUSTOM_PROPERTY && (*it).customName() == stored)
+            return CSSParser::restoreCustomPropertyNames((*it).rawValue());
+    }
+
+    return String();
+}
+
+String CSSMutableStyleDeclaration::removeCustomProperty(const String& name, bool notifyChanged)
+{
+    String stored = CSSParser::rewriteCustomPropertyName(name);
+    DeprecatedValueListIterator<CSSProperty> end;
+
+    for (DeprecatedValueListIterator<CSSProperty> it = m_values.fromLast(); it != end; --it) {
+        if ((*it).id() == CSS_PROP_CUSTOM_PROPERTY && (*it).customName() == stored) {
+            String text = CSSParser::restoreCustomPropertyNames((*it).rawValue());
+
+            m_values.remove(it);
+            if (notifyChanged)
+                setChanged();
+            return text;
+        }
+    }
+
+    return String();
+}
+
 void CSSMutableStyleDeclaration::clear()
 {
     m_values.clear();

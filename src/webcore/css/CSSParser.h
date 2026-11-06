@@ -157,6 +157,15 @@ namespace WebCore {
          * variable is undefined and has no fallback (the declaration is invalid
          * at computed-value time and must be ignored). */
         static String expandVariables(const String& text, StyleCustomPropertyData* properties);
+        /* Inverse of the internal `--x` -> `-agb-x` rewrite: turns the stored
+         * form back into the author's spelling so getComputedStyle() reports
+         * `var(--x)` instead of `var(-agb-x)`. */
+        static String restoreCustomPropertyNames(const String& css);
+        /* Rewrites a single author name ('--x') to the tokenizer-safe form the
+         * declaration stores ('-agb-x'); anything else is returned unchanged. */
+        static String rewriteCustomPropertyName(const String& name);
+        /* The bulk form: every token-initial '--x' in a declaration value. */
+        static String rewriteCustomPropertyNames(const String& css);
         /* Serializes a parsed value list back to CSS text. */
         String valueText(ValueList*);
         /* True when the value list contains a var() call anywhere (cheap walk,
