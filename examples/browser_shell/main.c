@@ -1911,6 +1911,37 @@ static HWND makeButton(const char* text, int id)
 /* Exit forensics: if some library calls exit() from inside a callback, the
  * message loop never returns and we never see why. This handler runs on exit()
  * and prints who did it. */
+/* Set when --probe was given: headless runs must not pop dialogs (their stderr
+ * already carries the same information, and a modal box would hang CI). */
+static int g_probeMode;
+/* GUI runs only: tell the user where the crash dump landed. The file name is
+ * relative to the process CWD, so show the absolute path - the shell may have
+ * been started from anywhere. */
+static void shellAnnounceCrashFile(const char* file)
+{
+    const char* opt = getenv("AGB_CRASH_POPUP");
+    static volatile LONG announced;
+    char full[MAX_PATH];
+    char msg[640];
+    DWORD n;
+
+    if (g_probeMode) return;
+    if (InterlockedExchange(&announced, 1) != 0) return;
+    if (opt && opt[0] && strcmp(opt, "0") == 0) return;
+
+    n = GetFullPathNameA(file, (DWORD)sizeof(full), full, NULL);
+    if (n == 0 || n >= (DWORD)sizeof(full))
+        lstrcpynA(full, file, (int)sizeof(full));
+
+    snprintf(msg, sizeof(msg),
+             "agave crashed and wrote the crash report here:\n\n%s\n\n"
+             "Frames are module+offset; symbolize with:\n"
+             "  pwsh -File tools\\cdb_stack.ps1 -Symbolize \"%s\"\n"
+             "Set AGB_CRASH_POPUP=0 to disable this dialog.",
+             full, full);
+
+    MessageBoxA(NULL, msg, "agave crash", MB_OK | MB_ICONERROR | MB_TOPMOST | MB_SETFOREGROUND);
+}
 static void shellPrintFrames(int skip, int depth)
 {
     void* frames[64];
@@ -2044,6 +2075,8 @@ static LONG WINAPI shellVehHandler(EXCEPTION_POINTERS* ep)
         }
     }
 
+    shellAnnounceCrashFile("agb_crash.txt");
+
     /* Ask ant for the JS stack: without it the native frames only say
      * "JIT code". Resolved dynamically - the shell does not link antjsb. */
     {
@@ -2090,6 +2123,7 @@ static LONG WINAPI shellCrashFilter(EXCEPTION_POINTERS* ep)
     shellPrintFrames(1, 48);
     fflush(stderr);
     shellWriteCrashFile(rec);
+    shellAnnounceCrashFile("agb_crash.txt");
 
     /* Keep the OS behaviour (exit code 0xC0000005 etc.): let the default
      * handler / WER terminate the process. */
@@ -2247,7 +2281,6 @@ static int probeCapture(const char* path)
 /* Command line, parsed before any window exists: a --probe run must never
  * create the browser window (it used to be shown, then left on screen for the
  * whole capture because probeRun runs its own message loop). */
-static int  g_probeMode;                        /* --probe was given          */
 static int  g_showUsage;                        /* --help                     */
 static int  g_argError;                         /* --probe without a URL       */
 static char g_startupUrl[MAX_PATH_CHARS];       /* normalized, may be empty   */
