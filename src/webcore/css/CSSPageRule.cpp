@@ -37,21 +37,33 @@ CSSPageRule::~CSSPageRule()
 {
 }
 
-String CSSPageRule::selectorText() const
+void CSSPageRule::setDeclaration(PassRefPtr<CSSMutableStyleDeclaration> style)
 {
-    // FIXME: Implement!
-    return String();
+    m_style = style;
 }
 
-void CSSPageRule::setSelectorText(const String& /*selectorText*/, ExceptionCode& /*ec*/)
+void CSSPageRule::setSelectorText(const String& selectorText, ExceptionCode&)
 {
-    // FIXME: Implement!
+    /* No reparse: the selector only picks which page box the rule applies to,
+     * and nothing here implements paged media yet. Keeping the text makes
+     * `rule.selectorText = x; rule.selectorText` consistent. */
+    m_selectorText = selectorText;
 }
 
 String CSSPageRule::cssText() const
 {
-    // FIXME: Implement!
-    return String();
+    String result("@page");
+
+    if (!m_selectorText.isEmpty()) {
+        result += " ";
+        result += m_selectorText;
+    }
+
+    result += " { ";
+    if (m_style)
+        result += m_style->cssText();
+    result += " }";
+    return result;
 }
 
 } // namespace WebCore

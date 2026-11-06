@@ -30,6 +30,13 @@ static DWORD         g_engineBusySince;
  * engine thread is not draining it. Long enough that a slow parse/settling page
  * does not trip it, short enough that Reload/navigate on a hung page responds. */
 #define AGW_STUCK_QUEUE_MS 1500u
+
+/* How long one command (i.e. one page script) may run before it counts as a
+ * hung page rather than a slow one. Chrome asks the user around 15 s; killing
+ * at 1.5 s (the queue threshold) is what broke css3test. AGB_STUCK_EXEC_MS
+ * overrides it for regression runs. */
+#define AGW_STUCK_EXEC_MS 12000u
+static DWORD g_stuckExecMs = AGW_STUCK_EXEC_MS;
 static int agwQueueStuckFor(int minMs);
 
 /* The control window class is registered as a Unicode class: see agwRegisterClass. */
@@ -852,11 +859,21 @@ static void agwApplyPendingResizes(void)
 /* engine thread                                                              */
 /* ------------------------------------------------------------------------- */
 
-/* Watchdog: the queue is the only honest signal that the engine thread stopped
- * draining. A command sits at the head while the engine is inside a script that
- * never returns; once it has waited AGW_STUCK_QUEUE_MS, abort the script so the
- * queue can move. Commands that are *executing* were popped already, so a long
- * but legitimate eval never trips this. */
+/* Watchdog. Two failure modes, and conflating them kills working pages:
+ *
+ *  - The engine thread is *inside* a command (g_engineBusy): page JS is
+ *    running. A legitimate script may take seconds - css3test runs 525
+ *    synchronous tests in one `onload` call - so the budget here must be the
+ *    browser "unresponsive page" scale, not the queue scale.
+ *  - The engine thread is *idle* but commands pile up: the drain loop itself
+ *    is wedged (modal dialog, deadlock) and the head cannot move at all.
+ *
+ * Measuring only the queue head (all this did before) mixed them up: while an
+ * eval ran, any command posted behind it - the host's timer tick is enough -
+ * started the 1.5 s clock, and a script longer than that was aborted with an
+ * uncatchable "Script execution interrupted". css3test therefore never got to
+ * write its score, and every page with a >1.5 s synchronous script lost its
+ * JS. */
 static HANDLE g_watchdog;
 static volatile LONG g_watchdogStop;
 
@@ -867,7 +884,14 @@ static DWORD WINAPI agwWatchdogThread(LPVOID param)
     while (!InterlockedCompareExchange(&g_watchdogStop, 0, 0)) {
         Sleep(200);
 
-        if (agwQueueStuckFor((int)AGW_STUCK_QUEUE_MS)) {
+        if (InterlockedCompareExchange(&g_engineBusy, 0, 0)) {
+            DWORD running = (DWORD)(GetTickCount() - g_engineBusySince);
+
+            if (running >= g_stuckExecMs) {
+                agbLog(AGB_LOG_EVT, "page script still running: aborting it");
+                antb_interrupt_all_engines();
+            }
+        } else if (agwQueueStuckFor((int)AGW_STUCK_QUEUE_MS)) {
             agbLog(AGB_LOG_EVT, "engine not draining: aborting the page script");
             antb_interrupt_all_engines();
         }
@@ -878,7 +902,18 @@ static DWORD WINAPI agwWatchdogThread(LPVOID param)
 
 static void agwWatchdogStart(void)
 {
+    const char* env;
+
     if (g_watchdog) return;
+
+    env = getenv("AGB_STUCK_EXEC_MS");
+    if (env) {
+        int ms = atoi(env);
+
+        if (ms > 0)
+            g_stuckExecMs = (DWORD)ms;
+    }
+
     g_watchdog = CreateThread(NULL, 0, agwWatchdogThread, NULL, 0, NULL);
 }
 

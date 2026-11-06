@@ -544,8 +544,12 @@ String CSSPrimitiveValue::cssText() const
             // FIXME
             break;
         case CSS_COUNTER:
+            /* m_value.num aliases the Counter pointer, so this printed
+             * whatever double those bits happened to be: `content:
+             * counter(x)` came back as `counter(1.14484e-311)`. */
             text = "counter(";
-            text += String::number(m_value.num);
+            if (m_value.counter)
+                text += m_value.counter->identifier();
             text += ")";
             // FIXME: Add list-style and separator
             break;

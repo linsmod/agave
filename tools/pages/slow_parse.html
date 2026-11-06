@@ -4,10 +4,14 @@
 <body>
 <p id="out">start</p>
 <script>
-/* 1.5 s of legitimate parse-time work: slow, but not hung. A reload issued
- * while this runs must still end with a rendered page. */
+/* 2.5 s of legitimate parse-time work: slow, but not hung - and well past the
+ * 1.5 s queue threshold. Before R90 the watchdog measured the queue head, so a
+ * script this long was aborted ("Script execution interrupted") and the page
+ * never reached "done": css3test runs 525 synchronous tests in a single onload
+ * call and stayed at 0% that way. A reload issued while this runs must still
+ * end with a rendered page. */
 var t0 = Date.now();
-while (Date.now() - t0 < 1500) { }
+while (Date.now() - t0 < 2500) { }
 document.getElementById('out').textContent = 'done';
 </script>
 </body>

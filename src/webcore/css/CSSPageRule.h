@@ -25,6 +25,8 @@
 #define CSSPageRule_h
 
 #include "CSSRule.h"
+#include "PlatformString.h"
+#include <wtf/PassRefPtr.h>
 #include <wtf/RefPtr.h>
 
 namespace WebCore {
@@ -40,10 +42,14 @@ public:
 
     virtual bool isPageRule() { return true; }
 
-    String selectorText() const;
+    /* ":left" / ":right" / ":first" / "" - the text between `@page` and `{`.
+     * Stored at parse time; there is no reparse path for assignment yet. */
+    String selectorText() const { return m_selectorText; }
     void setSelectorText(const String&, ExceptionCode&);
+    void setSelectorTextFromParser(const String& text) { m_selectorText = text; }
 
     CSSMutableStyleDeclaration* style() const { return m_style.get(); }
+    void setDeclaration(PassRefPtr<CSSMutableStyleDeclaration>);
 
     // Inherited from CSSRule
     virtual unsigned short type() const { return PAGE_RULE; }
@@ -52,6 +58,7 @@ public:
 
 protected:
     RefPtr<CSSMutableStyleDeclaration> m_style;
+    String m_selectorText;
 };
 
 } // namespace WebCore

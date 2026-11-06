@@ -44,7 +44,9 @@
 #include "CSSInitialValue.h"
 #include "CSSMediaRule.h"
 #include "CSSMutableStyleDeclaration.h"
+#include "CSSPageRule.h"
 #include "CSSPrimitiveValue.h"
+#include "StyleList.h"
 #include "CSSProperty.h"
 #include "StyleCustomPropertyData.h"
 #include "CSSPropertyNames.h"
@@ -1253,14 +1255,208 @@ void CSSParser::parseSheet(CSSStyleSheet* sheet, const String& string)
     clearCustomProperties();
 
     setupParser("", rewriteWebkitScrollbarRules(foldCalcConstants(rewriteIsWhereSelectors(rewriteBareMediaQueries(
-                     rewriteCustomPropertyNames(foldCalcIteratively(rewriteViewportUnits(rewriteHexAlphaColors(string, false), document()))))))), "");
+                     rewriteCustomPropertyNames(foldCalcIteratively(rewriteViewportUnits(rewriteHexAlphaColors(hoistPageRules(string), false), document()))))))), "");
 
     CSSParser* old = currentParser;
     currentParser = this;
     cssyyparse(this);
     currentParser = old;
 
+    /* The agb-page-<n> placeholder rules are @page rules: put the real rule
+     * type back, in the position the author wrote it. */
+    if (!m_pageRuleSelectors.isEmpty())
+        restorePageRules();
+
     rule = 0;
+}
+
+static bool isPageRuleIdentChar(UChar c)
+{
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+           c == '-' || c == '_' || c > 127;
+}
+
+/* Index just past the '}' matching the '{' at `open`, skipping comments and
+ * strings; css.length() when the block is unterminated. */
+static unsigned skipCssBlock(const String& css, unsigned open)
+{
+    unsigned len = css.length();
+    unsigned depth = 0;
+    unsigned i = open;
+
+    while (i < len) {
+        UChar c = css[i];
+
+        if (c == '/' && i + 1 < len && css[i + 1] == '*') {
+            i += 2;
+            while (i + 1 < len && !(css[i] == '*' && css[i + 1] == '/'))
+                ++i;
+            i += 2;
+            continue;
+        }
+
+        if (c == '"' || c == '\'') {
+            ++i;
+            while (i < len && css[i] != c) {
+                if (css[i] == '\\' && i + 1 < len)
+                    ++i;
+                ++i;
+            }
+            ++i;
+            continue;
+        }
+
+        if (c == '{')
+            ++depth;
+        else if (c == '}') {
+            --depth;
+            if (!depth)
+                return i + 1;
+        }
+        ++i;
+    }
+
+    return len;
+}
+
+/* @page is not in the 2008 grammar: `page` only has its error alternatives
+ * (the real production is commented out in CSSGrammar.y, and regenerating with
+ * a different bison major version would rewrite the whole checked-in parser).
+ * So lift the rule out of the text here, the same way calc(), custom
+ * properties, viewport units and `:is()` are handled: the block body becomes
+ * the declaration list of a placeholder style rule whose selector is
+ * `agb-page-<n>` (a valid type selector that matches no element), and
+ * restorePageRules() swaps each placeholder for a CSSPageRule once the
+ * grammar has parsed the declarations. Source order is preserved, which a
+ * simpler "parse @page separately and append" would lose.
+ *
+ * `@page` nested in another at-rule stays a placeholder (the nested rule is
+ * not in m_parsedStyleObjects): it parses harmlessly and the page rule is
+ * lost, as it was before. @page margin boxes (@top-left { ... }) are CSS3
+ * Paged Media and are not handled at all. */
+String CSSParser::hoistPageRules(const String& css)
+{
+    unsigned len = css.length();
+    unsigned i = 0;
+    String out;
+
+    m_pageRuleSelectors.clear();
+
+    while (i < len) {
+        UChar c = css[i];
+
+        if (c == '/' && i + 1 < len && css[i + 1] == '*') {
+            unsigned end = i + 2;
+
+            while (end + 1 < len && !(css[end] == '*' && css[end + 1] == '/'))
+                ++end;
+            end = (end + 1 < len) ? end + 2 : len;
+            out += css.substring(i, end - i);
+            i = end;
+            continue;
+        }
+
+        if (c == '"' || c == '\'') {
+            unsigned end = i + 1;
+
+            while (end < len && css[end] != c) {
+                if (css[end] == '\\' && end + 1 < len)
+                    ++end;
+                ++end;
+            }
+            if (end < len)
+                ++end;
+            out += css.substring(i, end - i);
+            i = end;
+            continue;
+        }
+
+        if (c == '@' && i + 5 <= len && css.substring(i, 5).lower() == "@page" &&
+            (i + 5 == len || !isPageRuleIdentChar(css[i + 5]))) {
+            unsigned brace = i + 5;
+
+            /* selector text up to '{', skipping comments */
+            while (brace < len && css[brace] != '{') {
+                if (css[brace] == '/' && brace + 1 < len && css[brace + 1] == '*') {
+                    brace += 2;
+                    while (brace + 1 < len && !(css[brace] == '*' && css[brace + 1] == '/'))
+                        ++brace;
+                    brace += 2;
+                    continue;
+                }
+                ++brace;
+            }
+
+            if (brace < len) {
+                unsigned end = skipCssBlock(css, brace);
+
+                if (end > brace + 1 && css[end - 1] == '}') {
+                    String selectorText = css.substring(i + 5, brace - (i + 5)).stripWhiteSpace();
+                    String body = css.substring(brace + 1, end - 1 - (brace + 1));
+                    String placeholder = "agb-page-";
+                    placeholder += String::number((int)m_pageRuleSelectors.size());
+
+                    m_pageRuleSelectors.append(selectorText);
+                    out += placeholder;
+                    out += " {";
+                    out += body;
+                    out += "} ";
+                    i = end;
+                    continue;
+                }
+            }
+        }
+
+        out.append(c);
+        ++i;
+    }
+
+    return out;
+}
+
+void CSSParser::restorePageRules()
+{
+    if (!styleElement || !styleElement->isCSSStyleSheet())
+        return;
+
+    /* The grammar appends each parsed rule to the sheet itself
+     * (`p->styleElement->append($2)` in the rule_list action), so the
+     * placeholder has to be swapped there, not in m_parsedStyleObjects. */
+    StyleList* sheet = static_cast<StyleList*>(styleElement);
+    unsigned count = sheet->length();
+    unsigned i;
+
+    for (i = 0; i < count; ++i) {
+        StyleBase* base = sheet->item(i);
+
+        if (!base || !base->isStyleRule())
+            continue;
+
+        CSSStyleRule* styleRule = static_cast<CSSStyleRule*>(base);
+        String selector = styleRule->selectorText();
+
+        if (!selector.startsWith("agb-page-"))
+            continue;
+
+        int index = selector.substring(9).toInt();
+
+        if (index < 0 || (unsigned)index >= m_pageRuleSelectors.size())
+            continue;
+
+        /* Keep the parsed declaration, drop the placeholder selector. The
+         * RefPtr adds a reference before the declaration changes owner, so the
+         * placeholder rule can go away without taking it along. */
+        RefPtr<CSSMutableStyleDeclaration> declaration = styleRule->declaration();
+        CSSPageRule* pageRule = new CSSPageRule(sheet);
+
+        pageRule->setSelectorTextFromParser(m_pageRuleSelectors[index]);
+        pageRule->setDeclaration(declaration.release());
+
+        sheet->insert(i, pageRule);
+        sheet->remove(i + 1);
+    }
+
+    m_pageRuleSelectors.clear();
 }
 
 PassRefPtr<CSSRule> CSSParser::parseRule(CSSStyleSheet *sheet, const String &string)
@@ -2691,8 +2887,14 @@ bool CSSParser::parseValue(int propId, bool important)
     if (!value)
         return false;
 
-    /* A calc() with font-relative units was wrapped in a quoted placeholder by
-     * foldCalcConstants (no font context at sheet parse time). Keep the
+    /* quotes: [ <string> <string> ]+ | none | auto | inherit. The ident forms
+     * fall into the generic "any ident is fine" group far below, but the
+     * string list has to become a value list here or the whole declaration is
+     * dropped (`quotes: '"' '"'` is legal CSS 2.1 and css3test's probe uses
+     * it). */
+    if (propId == CSS_PROP_QUOTES && value->unit == CSSPrimitiveValue::CSS_STRING)
+        return parseQuotes(propId, important);
+
     /* A calc() with font-relative units was hex-encoded into an identifier by
      * foldCalcConstants (a stylesheet parse has no font size). Turn it back
      * into a raw `calc(...)` declaration; CSSStyleSelector re-parses it per
@@ -3370,6 +3572,11 @@ bool CSSParser::parseValue(int propId, bool important)
             while(is_valid && value) {
                 switch (value->id) {
                 case CSS_VAL_BLINK:
+                    /* Parsed and kept (CSS 2.1 accepts it, Chrome reports it
+                     * as supported) even though nothing blinks. Dropping it
+                     * left the list empty, so `text-decoration: blink` was
+                     * silently discarded. */
+                    list->append(new CSSPrimitiveValue(value->id));
                     break;
                 case CSS_VAL_UNDERLINE:
                 case CSS_VAL_OVERLINE:
@@ -4184,6 +4391,18 @@ bool CSSParser::parse4Values(int propId, const int *properties,  bool important)
 bool CSSParser::parseContent(int propId, bool important)
 {
     RefPtr<CSSValueList> values = new CSSValueList;
+    Value* first = valueList->current();
+
+    /* content: normal | none - no generated content at all. Both are keywords,
+     * not lists; without this the declaration was dropped and the computed
+     * value stayed at the initial `normal`, which is not the same thing for a
+     * pseudo element that already had content. */
+    if (first && first->unit == CSSPrimitiveValue::CSS_IDENT &&
+        (first->id == CSS_VAL_NORMAL || first->id == CSS_VAL_NONE)) {
+        addProperty(propId, new CSSPrimitiveValue(first->id), important);
+        valueList->next();
+        return true;
+    }
 
     while (Value* val = valueList->current()) {
         RefPtr<CSSValue> parsedValue;
@@ -4216,11 +4435,14 @@ bool CSSParser::parseContent(int propId, bool important)
             } else
                 return false;
         } else if (val->unit == CSSPrimitiveValue::CSS_IDENT) {
-            // open-quote
-            // close-quote
-            // no-open-quote
-            // no-close-quote
-            // FIXME: These are not yet implemented (http://bugs.webkit.org/show_bug.cgi?id=6503).
+            /* open-quote | close-quote | no-open-quote | no-close-quote.
+             * The renderer here has no quote generation (ContentData has no
+             * OPEN_QUOTE/etc. type), so these stay inert primitives that
+             * CSSStyleSelector ignores - but they have to parse, or a
+             * `content: open-quote` declaration vanishes entirely. */
+            if (val->id == CSS_VAL_OPEN_QUOTE || val->id == CSS_VAL_CLOSE_QUOTE ||
+                val->id == CSS_VAL_NO_OPEN_QUOTE || val->id == CSS_VAL_NO_CLOSE_QUOTE)
+                parsedValue = new CSSPrimitiveValue(val->id);
         } else if (val->unit == CSSPrimitiveValue::CSS_STRING) {
             parsedValue = new CSSPrimitiveValue(domString(val->string), CSSPrimitiveValue::CSS_STRING);
         }
@@ -4237,6 +4459,29 @@ bool CSSParser::parseContent(int propId, bool important)
     }
 
     return false;
+}
+
+// quotes: [ <string> <string> ]+ | none | auto | inherit
+bool CSSParser::parseQuotes(int propId, bool important)
+{
+    RefPtr<CSSValueList> values = new CSSValueList;
+    bool needSecond = false;
+
+    while (Value* val = valueList->current()) {
+        if (val->unit != CSSPrimitiveValue::CSS_STRING)
+            return false;
+
+        values->append(new CSSPrimitiveValue(domString(val->string), CSSPrimitiveValue::CSS_STRING));
+        needSecond = !needSecond;
+        valueList->next();
+    }
+
+    // An odd number of strings is not a list of pairs.
+    if (needSecond || !values->length())
+        return false;
+
+    addProperty(propId, values.release(), important);
+    return true;
 }
 
 CSSValue* CSSParser::parseBackgroundColor()

@@ -64,6 +64,62 @@
     out.push('doc.title=' + document.title);
     out.push('doc.body=' + (document.body ? document.body.tagName : 'null'));
 
+    /* A <style> is a sheet wherever it lands. The 2008 walk stopped at
+     * <body>, so a style written in the body (the parser parks it in head),
+     * appended into <body> by script, or appended to <html> after <body> was
+     * invisible: <style>.sheet was null and its rules did nothing. css3test
+     * appends its probe <style> to documentElement. */
+    var s3 = document.getElementById('s3');
+    out.push('bodystyle.sheet=' + (s3.sheet ? s3.sheet.cssRules.length : -1));
+    out.push('bodystyle.color=' +
+             getComputedStyle(document.getElementById('body-style')).color);
+
+    var target = document.createElement('div');
+    target.id = 'appended';
+    target.textContent = 'w';
+    document.body.appendChild(target);
+
+    var inBody = document.createElement('style');
+    inBody.textContent = '#appended { color: rgb(21, 22, 23); }';
+    document.body.appendChild(inBody);
+    out.push('append-body.sheet=' + (inBody.sheet ? inBody.sheet.cssRules.length : -1));
+    out.push('append-body.color=' + getComputedStyle(target).color);
+
+    var afterBody = document.createElement('style');
+    afterBody.textContent = '#appended { color: rgb(31, 32, 33); }';
+    document.documentElement.appendChild(afterBody);
+    out.push('append-root.sheet=' + (afterBody.sheet ? afterBody.sheet.cssRules.length : -1));
+    out.push('append-root.color=' + getComputedStyle(target).color);
+
+    var afterBodyDynamic = document.createElement('style');
+    document.documentElement.appendChild(afterBodyDynamic);
+    afterBodyDynamic.textContent = '#appended { color: rgb(41, 42, 43); }';
+    out.push('append-root-late=' +
+             (afterBodyDynamic.sheet ? afterBodyDynamic.sheet.cssRules.length : -1));
+    out.push('append-root-late.color=' + getComputedStyle(target).color);
+
+    /* CSS.supports('selector(...)'): must consult the selector parser, not
+     * treat the argument as a declaration. */
+    out.push('supports.sel-type=' + CSS.supports('selector(h1)'));
+    out.push('supports.sel-pseudo=' + CSS.supports('selector(::first-letter)'));
+    out.push('supports.sel-attr=' + CSS.supports('selector([title="x"])'));
+    out.push('supports.sel-bad=' + CSS.supports('selector(!!!'));
+
+    /* @page is a CSSOM page rule with its declaration block, and it does not
+     * leak into the cascade. */
+    var pageSheet = document.createElement('style');
+    pageSheet.textContent = '@page :left { margin: 2cm; } .pg { color: rgb(31, 32, 33); }';
+    document.head.appendChild(pageSheet);
+    var pageRules = pageSheet.sheet ? pageSheet.sheet.cssRules : null;
+    out.push('page.count=' + (pageRules ? pageRules.length : -1));
+    out.push('page.type=' + (pageRules && pageRules.length ? pageRules[0].type : -1));
+    out.push('page.selector=' +
+             (pageRules && pageRules.length ? pageRules[0].selectorText : '-'));
+    out.push('page.styleLen=' + (pageRules && pageRules.length ? pageRules[0].style.length : -1));
+    out.push('page.margin=' +
+             (pageRules && pageRules.length
+                 ? pageRules[0].style.getPropertyValue('margin-left') : '-'));
+
     /* A <style> added after load must show up on the next read: the list is
      * live (Document::styleSheets() calls updateStyleIfNeeded). */
     var dyn = document.createElement('style');

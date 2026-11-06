@@ -169,8 +169,56 @@
     if (!g.CSS) g.CSS = {};
 
     if (!g.CSS.supports) {
+        /* `CSS.supports('selector(...)')`: the argument is a selector, not a
+         * declaration, and the answer is "does the selector parser accept it".
+         * The 2008 selector engine is the authority, so parse it for real: a
+         * throwaway <style> gets the selector inside a media query that never
+         * matches, so the rule is parsed - an invalid selector is dropped and
+         * leaves no inner rule - but never applied: no first-letter boxes are
+         * created and nothing is restyled. querySelector cannot answer this,
+         * a valid selector that matches nothing and garbage both come back
+         * null. */
+        var selectorProbe = null;
+
+        function selectorSupported(sel) {
+            var sheet, media, ok, parent;
+
+            if (!selectorProbe)
+                selectorProbe = document.createElement('style');
+
+            /* The element has to be in the document for `sheet` to exist, but
+             * it must not stay there: an empty <style> left behind shows up in
+             * document.styleSheets and shifts every index a page holds on to.
+             * So it is attached for the check and detached right after. */
+            parent = document.head || document.documentElement;
+
+            try {
+                parent.appendChild(selectorProbe);
+                selectorProbe.textContent =
+                    '@media (min-width: 99999px) { ' + sel + ' { --agb-probe: 1 } }';
+                sheet = selectorProbe.sheet;
+                media = (sheet && sheet.cssRules && sheet.cssRules.length === 1)
+                    ? sheet.cssRules[0] : null;
+                ok = !!(media && media.cssRules && media.cssRules.length === 1);
+            } catch (e) {
+                ok = false;
+            }
+
+            try {
+                selectorProbe.textContent = '';
+                if (selectorProbe.parentNode)
+                    selectorProbe.parentNode.removeChild(selectorProbe);
+            } catch (e2) {}
+
+            return ok;
+        }
+
         g.CSS.supports = function (a, b) {
             var decl = (b !== undefined) ? String(a) + ':' + String(b) : String(a);
+            var selForm = (b === undefined) ? decl.match(/^\s*selector\(([\s\S]*)\)\s*$/i) : null;
+
+            if (selForm) return selectorSupported(selForm[1]);
+
             var colon = decl.indexOf(':');
 
             if (colon < 0) return false;

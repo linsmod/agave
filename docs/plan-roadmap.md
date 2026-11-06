@@ -74,6 +74,21 @@
   走到已释放层。现在前者对非活动 loader 只 `setLoading(false)`，后者先 `removeChild()` 摘链再销毁。
   验收：`run_hang_recovery_tests.ps1` 七条全绿、deepseek/baidu 连刷 0 crash（`tools/slow_reload_server.py`
   是手工复现页）。
+- **css3test 0% → 100%：`<style>` 收集与脚本看门狗**（R90，2026-11-06）：分数一直显示 0% 不是布局问题，
+  是两处静默失败叠在一起 —— ①`Document::recalcStyleSelector()` 的遍历遇到 `<body>` 就停（2008 的 HTML4 规则），
+  脚本 appendChild 到 `documentElement` 的 `<style>` 因此不进样式表，`<style>.sheet` 是 null，css3test 的
+  harness 在第一个 `@rules` 测试抛 `TypeError`，`runTests()` 整个被掀翻；②修好①之后 2.6 s 的脚本又被
+  `AgaveWebView` 的"卡住队列"看门狗在 1.5 s 打断（不可 catch）。现在遍历收整棵树，看门狗按"命令正在执行
+  （`AGW_STUCK_EXEC_MS`，默认 12 s，`AGB_STUCK_EXEC_MS` 可覆盖）"与"引擎空闲但有命令排队（1.5 s）"分开判。
+  验收：`#hgroup` = "100% / 525 out of 525 / 122 features"（`#timeTaken≈2.9s`）；spin 4000 ms 不被杀、
+  `AGB_STUCK_EXEC_MS=1000` 仍能打断死循环；`check_cssom.js` 的 `append-body`/`append-root`（`LAYOUT=PASS`）。
+- **CSSOM 补齐：`CSS.supports('selector()')`、`@page`、`content`/`quotes`/`blink`**（R91，2026-11-06）：
+  `selector(::before)` 被当声明按第一个冒号切开、`@page {…}` 在 2008 语法里只剩 error 分支、`content` 的关键字
+  分支是空 FIXME、`quotes` 字符串对没有分支、`text-decoration: blink` 只接受不记录 —— 28 个 feature 因此全挂。
+  现在 `selector()` 走真正的选择器解析器（不匹配的 `@media` 里解析，读完摘掉临时 `<style>`，不留空表）；
+  `@page` 在 yacc 前改写成 `agb-page-<n>` 占位规则、解析完原地换成 `CSSPageRule`（顺序、`type=6`、`style`、
+  `selectorText` 都对）；`parseQuotes()` 新增，`content` 接受 `normal`/`none` 与四个 quote 关键字，`blink` 保留。
+  验收：css3test `?filter=css2.2` 525/525、122 features（与 Chrome 一致）；`check_cssom.js` 新增 14 条断言。
 ## P0：先修正确性
 
 ### P0-b 图就绪与执行解耦

@@ -86,6 +86,8 @@ Check 'idle page survives a stray interrupt' ($r.Code -eq 6 -and $crash.Count -e
 
 # 4. Slow-but-legitimate page reloaded three times: every load must complete with
 #    its content, and nothing may be aborted (the white-page regression).
+#    slow_parse.html spins 2.5 s - past the 1.5 s queue threshold, so before R90 the
+#    watchdog aborted it outright (exit 7 = "done" never written).
 $slow = Join-Path $root 'tools\pages\slow_parse.html'
 if (Test-Path $slow) {
     $r = Invoke-Probe @('--probe', (PageUrl $slow), '--reload', '3',

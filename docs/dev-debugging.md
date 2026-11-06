@@ -314,6 +314,7 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
 | `AGB_GC_OFF=1` | `src/gc/gc.c:380` | **完全关闭 GC**（诊断） | "关掉就不崩" = 对象被提前回收的判据（R60/R63/R67） |
 | `AGB_PROXY_DEBUG=1` | `src/ant.c:19779,19792` | Proxy `get` 不变量失败时打印 `[proxy] key=… result=… target=…` | 命中即读 |
 | `ANT_GC_STRESS=1` | `src/verify.c` | 每次分配都触发 GC（测试用） | meson `put-elem-gc` 用它跑 |
+| `AGB_STUCK_EXEC_MS=<ms>` | `src/webview_control/AgaveWebView.c`（`agwWatchdogStart`） | 一个命令（一次页面脚本）跑多久算"卡死"，默认 12000。调小可以复现挂起检测：`AGB_STUCK_EXEC_MS=1000` + 3 s 死循环 → `[evt] page script still running: aborting it` | 看门狗启动时读一次；只影响"命令正在执行"这一档，队列阈值仍是 1.5 s（R90） |
 
 ant 自身 CLI / 基础设施的开关（`ANT_MANIFEST_URL`、`ANT_SANDBOX_*`、`ANT_NO_CRASH_HANDLER` 等）
 在 `H:\ant-v16` 里读，**和 agave 的运行无关**，排查浏览器问题时不用管。
@@ -321,7 +322,12 @@ ant 自身 CLI / 基础设施的开关（`ANT_MANIFEST_URL`、`ANT_SANDBOX_*`、
 - **卡死的页面怎么恢复（不用杀进程）**：刷新/导航在控件里是排队命令，脚本不返回时队列永不 drain，
   所以窗口“活着但没反应”。现在链接/执行类命令在 `agwPost()` 收口处先发中断：引擎在下一个
   safepoint（解释器调用点 / JIT 循环回边）抛终止错误，脚本退出 → 队列继续 → reload 拿到新 realm。
-  锚点：`agave_webview_interrupt()` / `agave_webview_busy()` / `antb_interrupt_all_engines()`。\n  刷新在**任何状态**都安全：慢页面不会被误中断（判据是队列没排空，不是“引擎忙”），卡死页的脚本\n  被中断一次后标志即被消费（`js_interrupt_raise()`），新文档照常执行。回归\n  `pwsh -File tools/run_hang_recovery_tests.ps1`（5 条：中断、导航中断、空闲误中断、慢页连刷、卡死页刷新恢复）。
+  锚点：`agave_webview_interrupt()` / `agave_webview_busy()` / `antb_interrupt_all_engines()`。
+  刷新在**任何状态**都安全，但"多久算卡死"分两档（R90）：命令**正在执行**（`g_engineBusy`）时按
+  `AGW_STUCK_EXEC_MS`（默认 12 s，环境变量 `AGB_STUCK_EXEC_MS` 可覆盖）—— 页面脚本跑几秒是合法的；
+  引擎**空闲**却还有命令排在队首时才用 1.5 s 的队列阈值（drain 循环真的卡住了）。卡死页的脚本被中断一次后
+  标志即被消费（`js_interrupt_raise()`），新文档照常执行。回归
+  `pwsh -File tools/run_hang_recovery_tests.ps1`（5 条：中断、导航中断、空闲误中断、慢页连刷、卡死页刷新恢复）。
   验证手段：`--probe <卡死页> --interrupt-after 2000`（到点中断，页面继续加载）或
   `--nav-after 2000`（模拟“卡着时重新导航”）；回归 `pwsh -File tools/run_hang_recovery_tests.ps1`。
   卡死时先 `tools/js_stack.ps1 -Pid <pid>` 留证据再点刷新。`AGB_CRASH_POPUP=0` 可关崩溃弹框

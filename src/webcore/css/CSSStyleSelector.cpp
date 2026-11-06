@@ -3474,7 +3474,13 @@ void CSSStyleSelector::applyProperty(int id, CSSValue *value)
             style->clearContent();
             return;
         }
-        
+
+        /* content: normal | none - both mean "no generated content". */
+        if (value->isPrimitiveValue()) {
+            style->clearContent();
+            return;
+        }
+
         if (!value->isValueList())
             return;
 

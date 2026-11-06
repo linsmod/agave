@@ -190,6 +190,13 @@ namespace WebCore {
         bool parseFlexShorthand(bool important);
         bool parse4Values(int propId, const int* properties, bool important);
         bool parseContent(int propId, bool important);
+        bool parseQuotes(int propId, bool important);
+
+        /* @page has no production in the 2008 grammar: the block is rewritten
+         * into an `agb-page-<n>` placeholder rule before yacc runs, and the
+         * placeholders become CSSPageRules afterwards (see hoistPageRules). */
+        String hoistPageRules(const String& css);
+        void restorePageRules();
 
         CSSValue* parseBackgroundColor();
         bool parseBackgroundImage(CSSValue*&);
@@ -318,6 +325,9 @@ namespace WebCore {
 
         Vector<RefPtr<StyleBase> > m_parsedStyleObjects;
         Vector<RefPtr<CSSRuleList> > m_parsedRuleLists;
+        /* selectorText of each @page encountered while parsing this sheet, in
+         * source order (index == the n in agb-page-<n>). */
+        Vector<String> m_pageRuleSelectors;
         HashSet<CSSSelector*> *m_floatingSelectors;
         HashSet<ValueList*> *m_floatingValueLists;
         HashSet<Function*> *m_floatingFunctions;

@@ -4123,12 +4123,27 @@ void RenderBlock::updateFirstLetter()
 
     // If the child does not already have style, we create it here.
     if (currChild->isText() && !currChild->isBR() && currChild->parent()->style()->styleType() != RenderStyle::FIRST_LETTER) {
+        RenderText* textObj = static_cast<RenderText*>(currChild);
+
+        // The original string is going to be either a generated content string or a DOM node's
+        // string.  We want the original string before it got transformed in case first-letter has
+        // no text-transform or a different text-transform applied to it.
+        RefPtr<StringImpl> oldText = textObj->originalText();
+
+        /* An empty text node has no string to split (a formatting-only
+         * newline next to an image, an empty <span>, a text node emptied by
+         * script). The 2008 code asserted here, which in this build is
+         * 0xbbadbeef and takes the whole process down - css3test, which uses
+         * `::first-letter` in its feature probes, died that way. There is
+         * also nothing to do: bail before the anonymous first-letter box is
+         * created, so no empty pseudo box is left in the tree. */
+        if (!oldText)
+            return;
+
         // Our layout state is not valid for the repaints we are going to trigger by
         // adding and removing children of firstLetterContainer.
         view()->disableLayoutState();
 
-        RenderText* textObj = static_cast<RenderText*>(currChild);
-        
         // Create our pseudo style now that we have our firstLetterContainer determined.
         RenderStyle* pseudoStyle = firstLetterBlock->getPseudoStyle(RenderStyle::FIRST_LETTER,
                                                                     firstLetterContainer->firstLineStyle());
@@ -4142,13 +4157,7 @@ void RenderBlock::updateFirstLetter()
         // firstLetterContainer->addChild(firstLetter, currChild);
         firstLetterContainer->addChild(firstLetter, firstLetterContainer->firstChild());
         
-        // The original string is going to be either a generated content string or a DOM node's
-        // string.  We want the original string before it got transformed in case first-letter has
-        // no text-transform or a different text-transform applied to it.
-        RefPtr<StringImpl> oldText = textObj->originalText();
-        ASSERT(oldText);
-        
-        if (oldText && oldText->length() > 0) {
+        if (oldText->length() > 0) {
             unsigned int length = 0;
             
             // account for leading spaces and punctuation

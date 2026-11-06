@@ -2402,10 +2402,15 @@ void Document::recalcStyleSelector()
             m_styleSheets->styleSheets.append(sheet);
         }
     
-        // For HTML documents, stylesheets are not allowed within/after the <BODY> tag. So we
-        // can stop searching here.
-        if (isHTMLDocument() && n->hasTagName(bodyTag))
-            break;
+        /* Do NOT stop at <BODY>. The 2008 rule ("stylesheets are not allowed
+         * within/after BODY") is not what a modern browser does: <style> is
+         * valid in the body and applies, and a script that appends a <style>
+         * as a child of <html> (after <body>) expects it to work too.
+         * css3test's support harness does exactly that - it appends its
+         * probe <style> to documentElement, sets textContent and reads
+         * style.sheet.cssRules; with the old break the walk never reached it,
+         * the sheet never entered m_styleSheets, <style>.sheet was null and
+         * the harness threw on the first @-rule test, leaving the score at 0%. */
     }
 
     // De-reference all the stylesheets in the old list

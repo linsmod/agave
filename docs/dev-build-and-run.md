@@ -55,6 +55,22 @@ pwsh -File tools\build_antjsb.ps1        # 编 libant.a + 重链 antjsb.dll
 | 改 `OPT_JS_ANT` / `OPT_USE_KJS` | 重新 configure + 全量重编（开关改变整个源列表） | 全量 |
 | 加/删源文件、改 CMakeLists | `src/` 下的源文件由 `file(GLOB_RECURSE ... CONFIGURE_DEPENDS)` 收集，ninja 会自己重跑 configure；改 `CMakeLists.txt` 仍要手动 configure | 秒级 ~ 数分钟 |
 
+### 生成物：CSS 语法（`CSSGrammar.cpp`）与属性/关键字表
+
+`src/webcore/buildKJS/CSSGrammar.cpp`/`.h`、`CSSPropertyNames.*`、`CSSValueKeywords.h` 都是**签入的生成物**，
+CMake 不跑 bison。只有改了 `src/webcore/css/CSSGrammar.y` 才需要手工重新生成：
+
+```powershell
+bison -d -p cssyy src\webcore\css\CSSGrammar.y -o debug\CSSGrammar.tab.c
+# 然后按 src\webcore\css\makegrammar.pl 的做法拼：.h = "#ifndef CSSGRAMMAR_H/#define CSSGRAMMAR_H" + tab.h + "#endif"，
+# .cpp = tab.c 的内容
+```
+
+- **本机没有 bison 时（2026-11-06 就是这样）优先不碰语法**：`calc()`、`var()`、`:is()`/`:where()`、`@page`
+  都是在 yacc 之前改写文本（见 `CSSParser::parseSheet` 的 rewrite 链），比改语法便宜得多，也不动签入的生成物。
+- ⚠ 用 bison 3.8 重新生成会把整个文件换掉（原来那份是 bison 2.5 的骨架），diff 约 4k 行，必须整体回归
+  （`run_layout_tests.ps1` + 站点冒烟），不适合夹在别的改动里做。
+
 ## 4. 产物与运行拓扑
 
 `build-zig-native\` 是**唯一可以直接运行的目录**（所有 DLL 和运行时 JS 都在这里）：

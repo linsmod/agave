@@ -19,7 +19,8 @@
     * zoom      - the same page at --zoom 125: 100vw/50vh/calc are CSS pixels,
                   so they shrink with innerWidth instead of the device pixels.
     * cssom     - document.styleSheets / cssRules / <style>.sheet, including a
-                  @media rule, @font-face and a <style> added after load.
+                  @media rule, @font-face, @page, CSS.supports('selector(...)')
+                  and <style> elements added after load (in body and in <html>).
 
   Exit code is the verdict: 0 all green, 1 any failure.
 
@@ -198,7 +199,7 @@ try {
     } else {
         $text = $out -join "`n"
         $missing = 0
-        foreach ($needle in @('sheets=2', 'list.item=function', 'sheet0.rules=3',
+        foreach ($needle in @('sheets=3', 'list.item=function', 'sheet0.rules=3',
                               'rule0.sel=.a', 'rule0.color=rgb(1, 2, 3)',
                               'rule1.ml=7px', 'rule1.prio=important',
                               'rule2.media=all and (min-width: 1px)', 'rule2.inner=1',
@@ -207,7 +208,21 @@ try {
                               'identity.sheet=true', 'insert.index=3', 'insert.length=4',
                               'insert.color=rgb(9, 8, 7)', 'delete.length=3',
                               'doc.url=string', 'doc.title=cssom',
-                              'dynamic.sheets=3', 'dynamic.rules=1')) {
+                              'dynamic.sheets=8', 'dynamic.rules=1',
+                              # <style> is a sheet wherever it is: written in the
+                              # body, appended into body, appended to <html>
+                              # after <body> (css3test's harness does that).
+                              'bodystyle.sheet=1', 'bodystyle.color=rgb(11, 12, 13)',
+                              'append-body.sheet=1', 'append-body.color=rgb(21, 22, 23)',
+                              'append-root.sheet=1', 'append-root.color=rgb(31, 32, 33)',
+                              'append-root-late=1', 'append-root-late.color=rgb(41, 42, 43)',
+                              # CSS.supports('selector(...)') goes through the
+                              # selector parser and leaves no probe sheet behind.
+                              'supports.sel-type=true', 'supports.sel-pseudo=true',
+                              'supports.sel-attr=true', 'supports.sel-bad=false',
+                              # @page is a PAGE_RULE with its declaration block.
+                              'page.count=2', 'page.type=6', 'page.selector=:left',
+                              'page.styleLen=4', 'page.margin=2cm')) {
             if ($text -notmatch [regex]::Escape($needle)) {
                 Write-Host ('cssom: missing ' + $needle)
                 $missing++
