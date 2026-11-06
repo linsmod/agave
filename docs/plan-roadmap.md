@@ -379,3 +379,17 @@
 - 已修（2026-11-06）：新增 `placeChild()`，几何未变就不 `MoveWindow`；主窗口加 `WS_CLIPCHILDREN`；
   `WM_ERASEBKGND` 保持返回 1（原实现已有，避免重复擦除）。
 - 验收：GUI 里刷新时箭头不再闪；回归 `run_hang_recovery_tests.ps1` 六条全绿（布局代码不影响探针）。
+
+### P1-x deepseek 内联监控脚本抛 `undefined is not a function`（站点兼容，**未修**）
+
+- 现象：`https://chat.deepseek.com/` 与 `/sign_in` 的**第一段内联脚本**（`_sriCk` / volcengine 监控，
+  正文里的 `"use strict";(()=>{…}）`）在 agave 里抛
+  `TypeError: undefined is not a function`（列号 ~1497，指向 `a("scriptLoadError", …)` 之前的初始化段），
+  于是这段监控/兜底逻辑不生效；同时更早出现的
+  `NotSupportedError: Only raw key import is supported`（`H:\ant-v16\src\modules\crypto.c:1217`）说明
+  `crypto.subtle.importKey` 只支持 `raw`，站点用 SPKI/PKCS8 导入会失败。
+- 影响：站点自身功能不受致命影响（主 SPA 仍能启动），但 Any 依赖该监控/兜底的分支会走错；
+  排查白屏时容易被这条错误带偏（R73 的真因是缓存污染，不是它）。
+- 下一步：①补 `crypto.subtle.importKey` 的 `spki`/`pkcs8`（至少 RSA/EC 公钥解析，或返回可用的空实现并打日志）；
+  ②用 `debug/ds_index.html` 里的那段脚本单独跑，定位 `undefined is not a function` 具体缺的 API；
+  ③把结论写回 `arch-capability-gaps.md`。

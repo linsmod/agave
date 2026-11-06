@@ -479,6 +479,11 @@ static void agwOnHistoryStatus(MaCrossView* view, unsigned int backCount, unsign
 {
     AgaveWebView* item = agwByView(view);
 
+    /* Diagnostics for the "back/forward buttons flicker on reload" report: this
+     * callback is the only thing that changes their enabled state. */
+    if (getenv("AGB_HISTORY_DEBUG"))
+        fprintf(stderr, "[hist] view=%p back=%u fwd=%u\n", (void*)view, backCount, forwardCount);
+
     if (!item)
         return;
 
