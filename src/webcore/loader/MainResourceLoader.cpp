@@ -134,7 +134,7 @@ bool MainResourceLoader::isPostOrRedirectAfterPost(const ResourceRequest& newReq
 void MainResourceLoader::addData(const char* data, int length, bool allAtOnce)
 {
     ResourceLoader::addData(data, length, allAtOnce);
-    frameLoader()->receivedData(data, length);
+    frameLoader()->receivedData(this, data, length);
 }
 
 void MainResourceLoader::willSendRequest(ResourceRequest& newRequest, const ResourceResponse& redirectResponse)

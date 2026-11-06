@@ -134,9 +134,17 @@ void Loader::didFinishLoading(SubresourceLoader* loader)
     servePendingRequests();
 }
 
-void Loader::didFail(SubresourceLoader* loader, const ResourceError&)
+void Loader::didFail(SubresourceLoader* loader, const ResourceError& error)
 {
-    didFail(loader);
+    /* A null error means the load was cancelled (FrameLoaderClientMC::cancelledError
+     * returns one by design, see R46), and a cancellation must not be recorded as
+     * "this URL failed": cached entries are process-wide, so poisoning one here
+     * makes the next document treat the same script/style/image as broken - which
+     * is exactly how reloading a site a few times ends on its own "resources
+     * failed" fallback page (deepseek's _sriCk). Route it through the cancelled
+     * path, which removes the entry from the cache instead of marking it errored
+     * so the next load simply fetches it again. */
+    didFail(loader, error.isNull());
 }
 
 void Loader::didFail(SubresourceLoader* loader, bool cancelled)

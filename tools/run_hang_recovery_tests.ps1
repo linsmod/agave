@@ -114,6 +114,28 @@ if (Test-Path $hangOnce) {
           ("exit={0} {1}ms (7 = reloaded page never became ready)" -f $r.Code, $r.Ms)
 }
 
+
+# 6. Reload hammered over a progressive HTTP response: the old response delivers
+#    its tail after the new load started. FrameLoader must drop those bytes (they
+#    belong to a stopped loader) or the new document never finishes - the
+#    "reload until it goes white" report.
+$srvScript = Join-Path $root 'tools\hammer_reload_server.py'
+if ((Test-Path $srvScript) -and (Get-Command python -ErrorAction SilentlyContinue)) {
+    $srv = Start-Process -FilePath 'python' -ArgumentList @($srvScript, '8982') -PassThru -WindowStyle Hidden
+    try {
+        Start-Sleep -Milliseconds 800
+        $r = Invoke-Probe @('--probe', 'http://127.0.0.1:8982/slow.html',
+                            '--reload-every', '250', '--reload-count', '8',
+                            '--wait', '3000', '--settle', '600', '--timeout', '40000',
+                            '--eval', "probeExit(document.title === 'ready' && document.getElementById('a') && document.getElementById('a').textContent === 'done' ? 0 : 7)")
+    } finally {
+        Stop-Process -Id $srv.Id -Force -ErrorAction SilentlyContinue
+    }
+    $aborts = ([regex]::Matches($r.Text, 'aborting the page script')).Count
+    Check 'hammered reload over HTTP keeps the document' ($r.Code -eq 0 -and $aborts -eq 0) `
+          ("exit={0} aborts={1} {2}ms" -f $r.Code, $aborts, $r.Ms)
+}
+
 Write-Host ''
 if ($failures -eq 0) {
     Write-Host 'ALL HANG RECOVERY CHECKS PASSED' -ForegroundColor Green

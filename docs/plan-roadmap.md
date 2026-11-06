@@ -102,6 +102,59 @@
 测量方式：同一段 JS 在 Chrome（CDP）与 agave（`--eval-file`）各跑一次、固定 1100×800 且隐藏滚动条；
 脚本 `tools/cdp_eval.py`、对比用 `debug/vqq_chrome_eval.js` / `debug/vqq_probe3.js`。
 
+### P0-l 子 frame realm 没有定时器（2026-11-06 诊断，**待修**）
+
+- 现象：deepseek 登录页的微信二维码 iframe 里 `jquery.min.js` 抛
+  `ReferenceError: 'setTimeout' is not defined`，随即 `jQuery is not defined`，二维码交互链整条断掉
+  （`debug/ds_hangstack.log`、`debug/ds_profile_first.log`）。最小复现 `debug/iframe_timer_check.html` +
+  `--eval` 读子 frame 全局：`parent=function childTimer=undefined childInterval=undefined
+  childConsole=object childFetch=function childPromise=function`（`debug/iframe_timer_check2.log`）。
+- 根因：`antb_engine_create()` 只调一次 `ant_bootstrap_modules()`，`init_timer_module()` 把
+  `setTimeout/setInterval/clearTimeout/...` 装在**主 realm 的 global** 上；`ant_realm_create()` 走
+  `js_realm_init_intrinsics()`（core + realm intrinsics + console），**不装 timer 模块**。
+  `bindFrameRealm()` 只装 host API + prelude/polyfills，而 `prelude.js` 的定时器包装又是
+  `if (typeof g.setTimeout === 'function')` 保护着的，子 realm 里静默跳过 → 子 frame 永远没有定时器。
+  这是 P0-i S3「事件/定时器/模块按 realm」未做完的那一半。
+- 修复建议（ant 侧，改完走 `tools/build_antjsb.ps1`）：把 `timers_define_common()` 从
+  `init_timer_module()` 拆出可复用入口，在 `js_realm_init_intrinsics()`（或 `antb_realm_create()` 的
+  bridge 包装）里对每个新 realm 调一次；注意 timer 表 `js->timers` 是 isolate 级的，跨 realm 共用即可，
+  但要确认 `timer_callback` 进入前切回创建它的 realm（与 `slot`/`microtask_realm` 同一套机制）。
+- 验收：新增 `tools/pages/cap_frame_timers.html`（父/子各 `typeof setTimeout === 'function'` +
+  子 frame 里 `setTimeout(cb,10)` 真的回调），并入 `run_realm_tests.ps1`；deepseek 登录页
+  `[antjs]` 不再出现 `'setTimeout' is not defined` / `'jQuery' is not defined`，`run_realm_tests` /
+  nav/typing/worker/script-mode 全绿。
+
+### P1-h deepseek 首屏 4.3 s 的构成（2026-11-06 测量，**待优化**）
+
+- 测量：`AGB_NET_LOG=1 AGB_PERF_LOG=1 --probe https://chat.deepseek.com/`
+  （`debug/ds_perf_probe.log`），`AGB_PROFILE=1`（`debug/ds_profile_first.log`），
+  `AGB_HANG_WATCH=1 AGB_HANG_SECONDS=1`（`debug/ds_hangstack.log`）。多轮日志
+  `debug/ds_*.log` 的时间戳高度一致，**不是网络抖动**。
+- 时间线（`commit` → `load`）：
+  | 段 | 墙钟 | 性质 |
+  |---|---|---|
+  | 主文档 `chat.deepseek.com/` | 0→330 ms | 网络：`ttfb=185ms dur=215ms`，之后 `net.deliver lag=28ms` |
+  | `default-vendors.js`(1.0 MB)+`main.js`(1.6 MB)+`main.css`(0.3 MB) 命中 HTTP 缓存 | 341→350 ms | 缓存投递（timer 每 10 ms 一泵） |
+  | **静默 350→930 ms** | ~580 ms | **CPU：编译/求值 vendor bundle**。`[perf] net.pump 1123ms` + `[perf] update paint=2ms js=1225ms` 落在同一帧；`[hang]` 抓到 JS 栈是 React 提交阶段 `default-vendors…js:2:778162 / 778025 / 773134`（`sF=2`、`switch(a.tag)` 的 fiber 遍历），不是网络等待 |
+  | `katex.js` + `smcp.min.js` + `fp.min.js` + 4 个 `settings?scope=` | 930→1380 ms | 网络：`smcp` 299 ms、`fp.min.js` 391 ms、settings 163–253 ms；**但它们的 `net.deliver lag` 高达 120–200 ms** —— 完成事件排队等引擎线程空出来 |
+  | **静默 1380→3047 ms** | ~1.6 s | **CPU/等待**：`[con-debug] Error:` 后到 `deviceprofile/v4` 之间没有网络日志；指纹 SDK 在等自己的定时器/回调，而引擎线程被上一段 JS 占满 |
+  | `wxLogin.js`/`appleid.auth.js`/`qrconnect` iframe | 3047→3660 ms | 网络 + iframe 文档提交；`ERROR: called Frame::paint with nil renderer`（提交瞬间还没有 renderer） |
+  | iframe 内 `weui.css`/`qrcode`/`jquery` + 二维码解码 | 3660→4290 ms | `img data` 从 3745 ms 拖到 4290 ms（~540 ms），`qrcode` 的 `net.deliver lag=323ms` |
+  | `load` 事件（`listeners=310`，两条：iframe + 主文档） | 4290 ms | 首屏可交互 |
+- 关键结论：**首屏慢的主因不是网速**，而是「大 bundle 的同步编译/求值」与「网络完成事件必须等引擎线程」两段
+  互相放大：`ResourceHandleManager::downloadTimerCallback()` 在引擎线程上泵，`net.deliver lag` 就是
+  「网络已好、引擎没空」的直接证据；`WebEngine::macross_view_update()` 把 paint + `pumpAsyncRequests()`
+  + `antb_pump()` 串在同一帧，`js=1225ms` 里既跑页面脚本又投递全部 XHR/定时器回调。
+- 优化方向（按性价比，需先有判据再动）：①把 `net.pump` 的完成事件投递与 JS 求值错开
+  （完成事件先入队、下帧再回调，避免一帧内 1.1 s 的连锁回调）；②`default-vendors.js` 的编译缓存
+  （按 URL+内容缓存字节码，刷新/多标签复用，R18 已修过列号 O(n²) 但没做跨导航缓存）；
+  ③`AGB_SKIPRES` 跳过首屏用不到的 `katex`/`web-tts`/`opus-decoder` chunk（见 4290 ms 之后
+  6061/6087 ms 仍在下 TTS、6084 ms 还发了一条 `url=` 空请求）；④`load` 双发（iframe + 主文档
+  各一条 `listeners=310`）要确认不是 P0-c 的残留。
+- 验收：`--probe https://chat.deepseek.com/ --wait 5000` 的 `[evt] window event load` ≤ 2.5 s，
+  且 `AGB_PERF_LOG=1` 下单帧 `js=` 不超过 300 ms、`net.deliver lag` 中位数 < 50 ms；
+  `debug/ds_smoke.js` 的 `inp=2 all=…` 与 `rs=complete` 不退化。
+
 ## P1：机制收敛
 
 ### P1-a 模块调度状态收敛 per-realm
@@ -297,6 +350,14 @@
   GUI 刷新/导航的手感验证由人工完成。
 - 已知限制：中断后页面状态不可信，必须配重载/导航；`<script>` 里的死循环能中断，
   但引擎线程若卡在 **native 代码**（非 JS 循环）则没有 safepoint，仍需杀进程。
+- **2026-11-06 第二轮（“连刷到白屏”，R73）**：又发现三处，已修：
+  ①子资源被取消时被记成“该 URL 失败”并留在**进程级缓存**里（`Loader::didFail` 的 1 参版），
+  下一个文档直接复用错误条目 → 站点自己的资源兜底页（deepseek 的 `_sriCk`）= 白屏；
+  ②`FrameLoader::receivedData` 按 `activeDocumentLoader()` 而不是投递者路由，停掉的旧响应的在途字节
+  会灌进新文档；③`reload` 不做文档级拆除（`stopLoading(false)`，不 unload、不摘监听器）；
+  ④`committedLoad` 会接受陈旧 loader 的提交。
+  验收：`tools/run_hang_recovery_tests.ps1` **六条全绿**（新增“HTTP 渐进响应连刷 8 次文档完好”），
+  deepseek sign_in 1.2 s 间隔连刷 6 次 → exit 0、正文非空、无“页面资源加载异常”兜底页。
 - **2026-11-06 修正（白页回归）**：第一版用“引擎线程心跳”判卡死，但心跳在**加载中**和**空闲**时都会过期，
   于是每次刷新都被当成卡死 → 中断正在解析的脚本 → 文档半途而废 → **连刷几次就白页**。
   现在判据改成**队列是否排空**（命令在队头停留 >1.5 s 才算卡死，执行中的命令已出队所以长 eval 不受影响），

@@ -1969,6 +1969,9 @@ static int g_probeInterruptAfterMs;
 /* --nav-after <ms>: navigate while the page is still busy (choke-point test). */
 static int g_probeNavAfterMs;
 static char g_probeNavUrl[MAX_PATH_CHARS];
+/* --reload-every <ms> --reload-count <n>: hammer Reload regardless of load state. */
+static int g_probeReloadEveryMs;
+static int g_probeReloadCount;
 /* GUI runs only: tell the user where the crash dump landed. The file name is
  * relative to the process CWD, so show the absolute path - the shell may have
  * been started from anywhere. */
@@ -2206,6 +2209,7 @@ static void shellExitTrace(void)
 #define PROBE_TIMER_POLL    4   /* repeating: poll new document after reload */
 #define PROBE_TIMER_INTERRUPT 5 /* one-shot: --interrupt-after (hang recovery) */
 #define PROBE_TIMER_NAV     6   /* one-shot: --nav-after (navigation aborts a stuck page) */
+#define PROBE_TIMER_RELOAD  7   /* repeating: --reload-every (hammer Reload) */
 
 /* Engine-thread callbacks post this to the probe window (main thread) to arm
  * the eval timer: window timers must be installed by the owning thread. */
@@ -2820,6 +2824,8 @@ static int probeRun(const char* url)
         SetTimer(g_probeWnd, PROBE_TIMER_INTERRUPT, (UINT)g_probeInterruptAfterMs, NULL);
     if (g_probeNavAfterMs > 0)
         SetTimer(g_probeWnd, PROBE_TIMER_NAV, (UINT)g_probeNavAfterMs, NULL);
+    if (g_probeReloadEveryMs > 0)
+        SetTimer(g_probeWnd, PROBE_TIMER_RELOAD, (UINT)g_probeReloadEveryMs, NULL);
 
     /* Focus only makes sense for a visible window; a hidden control that grabs
      * focus activates a window nobody can see. */
@@ -2842,6 +2848,16 @@ static int probeRun(const char* url)
                 g_probeTimedOut = 1;
                 probePrint("[probe]", g_probeFinished ? "timeout, exiting" : "timeout, load never finished");
                 break;
+            }
+
+            if (msg.wParam == PROBE_TIMER_RELOAD) {
+                if (g_probeReloadCount-- <= 0) {
+                    KillTimer(g_probeWnd, PROBE_TIMER_RELOAD);
+                } else if (g_probeView) {
+                    probePrint("[probe]", "reload-every: posting reload");
+                    agave_webview_reload(g_probeView);
+                }
+                continue;
             }
 
             if (msg.wParam == PROBE_TIMER_NAV) {
@@ -3328,6 +3344,13 @@ static void parseShellArgv(void)
             g_probeSettleMs = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--timeout") && i + 1 < argc) {
             g_probeTimeoutMs = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "--reload-every") && i + 1 < argc) {
+            /* Hammer Reload like a user does: post it again every N ms even if
+             * the previous load is still in flight. */
+            g_probeReloadEveryMs = atoi(argv[++i]);
+            if (!g_probeReloadCount) g_probeReloadCount = 10;
+        } else if (!strcmp(argv[i], "--reload-count") && i + 1 < argc) {
+            g_probeReloadCount = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--nav-after") && i + 1 < argc) {
             /* Navigate N ms after the probe starts, while the page is still
              * busy: the control aborts the running script at agwPost(). */

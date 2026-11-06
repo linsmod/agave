@@ -2251,9 +2251,19 @@ const ResourceRequest& FrameLoader::initialRequest() const
     return activeDocumentLoader()->initialRequest();
 }
 
-void FrameLoader::receivedData(const char* data, int length)
+void FrameLoader::receivedData(ResourceLoader* loader, const char* data, int length)
 {
-    activeDocumentLoader()->receivedData(data, length);
+    DocumentLoader* dl = activeDocumentLoader();
+
+    /* Only the loader that owns the delivering request may append to it.
+     * Reload stops the previous load and installs a new one; the old response
+     * can still deliver an in-flight chunk afterwards, and feeding that to the
+     * new loader hands the parser bytes from the previous page - the document
+     * never finishes and the page stays blank. */
+    if (!dl || (loader && dl->mainResourceLoader() != loader))
+        return;
+
+    dl->receivedData(data, length);
 }
 
 bool FrameLoader::willUseArchive(ResourceLoader* loader, const ResourceRequest& request, const KURL& originalURL) const

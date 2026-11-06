@@ -155,6 +155,11 @@ namespace WebCore {
         void subresourceLoaderFinishedLoadingOnePart(ResourceLoader*);
         
         bool deferMainResourceDataLoad() const { return m_deferMainResourceDataLoad; }
+
+        /* Identity of the in-flight main resource request. FrameLoader uses it to
+         * drop bytes that arrive from a loader it has already stopped (reload
+         * while the previous response is still streaming). */
+        MainResourceLoader* mainResourceLoader() const { return m_mainResourceLoader.get(); }
     protected:
         bool m_deferMainResourceDataLoad;
 

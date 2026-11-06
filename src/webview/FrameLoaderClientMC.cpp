@@ -350,6 +350,12 @@ void FrameLoaderClientMC::committedLoad(DocumentLoader* loader, const char* data
 {
     FrameLoader *fl = loader->frameLoader();
 
+    /* A loader that has been replaced (reload, navigation) must not install its
+     * document any more: binding it would point the view at the wrong document
+     * and rebind the realm underneath the load that is actually running. */
+    if (fl && loader != fl->documentLoader() && loader != fl->provisionalDocumentLoader())
+        return;
+
 #if ENABLE(ANTJS)
     /* The new document is committed and about to be parsed: give it its own
      * realm NOW. The previous document's realm (its globals, its module

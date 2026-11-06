@@ -510,6 +510,13 @@ void WebView::stop(void)
 
 void WebView::reload(void)
 {
+    /* reload() alone only replaces the DocumentLoader: stopAllLoaders() runs
+     * inside continueLoadAfterNavigationPolicy with sendUnload=false, so the old
+     * document is never unloaded and keeps its listeners/scripts alive into the
+     * new load. With repeated reloads (or a reload while a script is running)
+     * that leaves the frame with a half-torn document - the page ends up blank.
+     * Tear it down explicitly first. */
+    d->m_frame->loader()->stopLoading(true);
     d->m_frame->loader()->reload();
 	garbageRelease();
 }
