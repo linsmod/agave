@@ -995,6 +995,10 @@ static void onDownload(AgaveWebView* view, const MC_DOWNLOAD_INFO* info, void* u
 /* Right click: the control reports the hit-test; the shell owns the menu. */
 static void navigateActive(const char* text, int newTab);
 static void addBookmarkCurrent(void);
+static void reloadActive(const char* source);
+static void backActive(const char* source);
+static void forwardActive(const char* source);
+static void stopActive(const char* source);
 
 /* ------------------------------------------------------------------------- */
 /* script injection (inspector.js / vConsole)                                */
@@ -1257,9 +1261,9 @@ static void onContextMenu(AgaveWebView* view, int x, int y,
            choice);
 
     switch (choice) {
-    case 1: if (tab->used) agave_webview_back(tab->view); break;
-    case 2: if (tab->used) agave_webview_forward(tab->view); break;
-    case 3: if (tab->used) agave_webview_reload(tab->view); break;
+    case 1: backActive("context menu"); break;
+    case 2: forwardActive("context menu"); break;
+    case 3: reloadActive("context menu"); break;
     case 4: if (linkUrl && linkUrl[0]) navigateActive(linkUrl, 0); break;
     case 5: if (linkUrl && linkUrl[0]) navigateActive(linkUrl, 1); break;
     case 6:
@@ -1749,6 +1753,58 @@ static void navigateActive(const char* text, int newTab)
     agave_webview_set_focus(g_tabs[g_activeTab].view);
 }
 
+/* Reload / back / forward / stop are each reachable from five places (toolbar,
+ * F5 or ctrl+r, alt+arrow, main menu, context menu). The engine line they
+ * produce ([nav] reload) only says *what* happened, never *what the user did* -
+ * and "which refresh" is the first question in every white-page report. */
+static void reloadActive(const char* source)
+{
+    Tab* tab = &g_tabs[g_activeTab];
+
+    if (!tab->used || !tab->view) {
+        agbLog(AGB_LOG_SHELL, "reload (%s) ignored: no tab", source);
+        return;
+    }
+
+    agbLog(AGB_LOG_SHELL, "reload (%s) url=%s", source, tab->url);
+    agave_webview_reload(tab->view);
+}
+
+static void backActive(const char* source)
+{
+    Tab* tab = &g_tabs[g_activeTab];
+
+    if (!tab->used || !tab->view)
+        return;
+
+    agbLog(AGB_LOG_SHELL, "back (%s) can=%d url=%s", source,
+           agave_webview_can_back(tab->view) ? 1 : 0, tab->url);
+    agave_webview_back(tab->view);
+}
+
+static void forwardActive(const char* source)
+{
+    Tab* tab = &g_tabs[g_activeTab];
+
+    if (!tab->used || !tab->view)
+        return;
+
+    agbLog(AGB_LOG_SHELL, "forward (%s) can=%d url=%s", source,
+           agave_webview_can_forward(tab->view) ? 1 : 0, tab->url);
+    agave_webview_forward(tab->view);
+}
+
+static void stopActive(const char* source)
+{
+    Tab* tab = &g_tabs[g_activeTab];
+
+    if (!tab->used || !tab->view)
+        return;
+
+    agbLog(AGB_LOG_SHELL, "stop (%s) url=%s", source, tab->url);
+    agave_webview_stop(tab->view);
+}
+
 static void addBookmarkCurrent(void)
 {
     Tab* tab = &g_tabs[g_activeTab];
@@ -1905,7 +1961,7 @@ static void showMainMenu(void)
     case 4: setZoom(100, "menu reset zoom"); break;
     case 5: navigateActive("about:blank", 1); break;
     case 6: toggleFind(); break;
-    case 7: if (g_tabs[g_activeTab].used) agave_webview_reload(g_tabs[g_activeTab].view); break;
+    case 7: reloadActive("menu"); break;
     case 8: injectVConsole(g_tabs[g_activeTab].view); break;
     case 9: injectInspector(g_tabs[g_activeTab].view); break;
     default: break;
@@ -2071,13 +2127,12 @@ static LRESULT CALLBACK shellProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM
 
     case WM_COMMAND: {
         int id = LOWORD(wParam);
-        Tab* tab = &g_tabs[g_activeTab];
 
         switch (id) {
-        case ID_BACK:    if (tab->used) agave_webview_back(tab->view); break;
-        case ID_FORWARD: if (tab->used) agave_webview_forward(tab->view); break;
-        case ID_RELOAD:  if (tab->used) agave_webview_reload(tab->view); break;
-        case ID_STOP:    if (tab->used) agave_webview_stop(tab->view); break;
+        case ID_BACK:    backActive("button"); break;
+        case ID_FORWARD: forwardActive("button"); break;
+        case ID_RELOAD:  reloadActive("button"); break;
+        case ID_STOP:    stopActive("button"); break;
 
         case ID_GO: {
             char text[MAX_PATH_CHARS];
@@ -3035,6 +3090,7 @@ static int probeRun(const char* url)
                     KillTimer(g_probeWnd, PROBE_TIMER_RELOAD);
                 } else if (g_probeView) {
                     probePrint("[probe]", "reload-every: posting reload");
+                    agbLog(AGB_LOG_PROBE, "reload (hammer) %d left", g_probeReloadCount);
                     agave_webview_reload(g_probeView);
                 }
                 continue;
@@ -3263,6 +3319,8 @@ static int probeRun(const char* url)
                     g_probePollCount = 0;
                     g_probeInjectDone = 0;
                     probePrint("[probe]", "reloading");
+                    agbLog(AGB_LOG_PROBE, "reload (--reload) round=%d of %d",
+                           g_probeRound, g_probeTotalRounds);
 
                     /* The reloaded document reports its own load through
                      * on_progress(finished), exactly like the first one: no
@@ -3779,7 +3837,7 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
                     continue;
                 }
                 if (msg.wParam == 'W' && !shift) { closeTab(g_activeTab); continue; }
-                if (msg.wParam == 'R' && !shift) { if (g_tabs[g_activeTab].used) agave_webview_reload(g_tabs[g_activeTab].view); continue; }
+                if (msg.wParam == 'R' && !shift) { reloadActive("ctrl+r"); continue; }
                 if (msg.wParam == VK_TAB) { switchTab(shift ? -1 : 1); continue; }
                 /* Ctrl+L selects the current URL: typing then replaces it, which
                  * is also what stops "http://" + a typed path from being glued
@@ -3804,14 +3862,14 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
             }
 
             if (msg.wParam == VK_F5 && g_tabs[g_activeTab].used) {
-                agave_webview_reload(g_tabs[g_activeTab].view);
+                reloadActive("F5");
                 continue;
             }
 
             /* alt+left / alt+right: back and forward. */
             if ((GetKeyState(VK_MENU) & 0x8000) && g_tabs[g_activeTab].used) {
-                if (msg.wParam == VK_LEFT) { agave_webview_back(g_tabs[g_activeTab].view); continue; }
-                if (msg.wParam == VK_RIGHT) { agave_webview_forward(g_tabs[g_activeTab].view); continue; }
+                if (msg.wParam == VK_LEFT) { backActive("alt+left"); continue; }
+                if (msg.wParam == VK_RIGHT) { forwardActive("alt+right"); continue; }
             }
         }
 

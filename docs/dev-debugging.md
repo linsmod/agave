@@ -125,7 +125,7 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
 | `[evt]` 生命周期 | commit → realm start/stop → bindDocument → pagehide/unload → DOMContentLoaded → load | `AGB_EVT_LOG=0` | `AGB_EVT_DEBUG=1`（evaluate 深度、listener 记账、JS `dispatchEvent`） |
 | `[nav]` 导航动作 | 宿主 `open`/`back`/`forward`/`reload`/`stop`；`request`（type=link/form/back-forward/reload/other + method + URL）；`submit`；`new-window`/`popup create`；`context menu at x,y link=…`（右键，控件侧，**引擎线程**）；`client-redirect`（meta refresh、JS 定时跳转）；`fail provisional`/`fail load`（主资源失败，带 `_mc_error` 码）/`fail resource`（子资源失败）/`cannot implement`（引擎拒绝显示）/`blocked` | `AGB_NAV_LOG=0` | 无（每条只有一行） |
 | `[ui]` 界面事件 | resize / focus / blur / mouse down/up / wheel / key down/up / char | `AGB_UI_LOG=0` | `AGB_UI_DEBUG=1` 连 `mouse move` 也打（默认不打，太吵） |
-| `[shell]` 宿主 | window ready / 进入与退出消息循环 / `CreateWindowEx` 失败 / `atexit` 模块基址；**用户操作**：`argv …`（启动参数汇总）、`tab create/activate/close/reopen/switch`（含无空槽、view 创建失败）、`find bar on/off`、`find text='…' forward=N`、`zoom 110% -> 135% (ctrl+plus)`、`alert/confirm/prompt`（含答复）、`bookmark add/duplicate`、`bookmarks loaded: N`、`history loaded: N`、`session restored/saved tabs=N`、`download dir=…`、`context menu … choice=N`（右键，**UI 线程**，菜单关掉后才打）、`clipboard copy link ok=0/1` | — | — |
+| `[shell]` 宿主 | window ready / 进入与退出消息循环 / `CreateWindowEx` 失败 / `atexit` 模块基址；**用户操作**：`argv …`（启动参数汇总）、`reload (button\|F5\|ctrl+r\|menu\|context menu)`、`back/forward (…) can=0/1`、`stop (…)`、`tab create/activate/close/reopen/switch`（含无空槽、view 创建失败）、`find bar on/off`、`find text='…' forward=N`、`zoom 110% -> 135% (ctrl+plus)`、`alert/confirm/prompt`（含答复）、`bookmark add/duplicate`、`bookmarks loaded: N`、`history loaded: N`、`session restored/saved tabs=N`、`download dir=…`、`context menu … choice=N`（右键，**UI 线程**，菜单关掉后才打）、`clipboard copy link ok=0/1` | — | — |
 | `[probe]` 探针 | userdata、headless 状态、加载错误、对话框、退出码 | — | — |
 | `[flag]` 引擎开关 | 桥接开关（`uncaught_nonfatal` 等），来自 antjsb.dll | — | — |
 | `[style]` 渲染树 | 指定元素的 attach / detach / recalcStyle（是否拿到 renderer、computed display）。**opt-in** | 默认关 | `AGB_STYLE_LOG=1` 打开，`AGB_STYLE_FILTER=<子串>` 按 tag/id/class 过滤 |
@@ -143,6 +143,11 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
 - 右键菜单是唯一**跨两个通道两行**的动作：`[nav] context menu`（引擎线程，紧跟 `[ui] mouse up right`）
   → 控制层把数据 `PostMessage` 到 UI 线程 → `[shell] context menu … choice=N`（菜单关闭后才打，
   `choice=0` = 菜单被取消或没打开）。两行都在、只有前一行 = 宿主没接住；两行都没有 = 浏览器没收到右键。
+- **刷新/前进后退/停止的触发源只在 `[shell]` 里**：`reload (F5)` / `reload (button)` / `reload (menu)` /
+  `reload (context menu)` / `reload (ctrl+r)` 是壳打的，紧跟其后的 `[nav] reload` 是引擎打的 ——
+  后者只说"发生了 reload"，前者才回答"用户按的哪一个"。探针的连刷是 `[probe] reload (--reload) round=k of n`
+  和 `[probe] reload (hammer) n left`。⚠ **键盘快捷键只能用真键盘触发**（消息循环读 `GetKeyState`，
+  `PostMessage` 伪造的按键没有 ctrl/alt 状态），自动化只能走按钮/菜单的 `WM_COMMAND`。
 - `[evt]` / `[nav]` 在 `--probe` 里照样有（与窗口无关）。
 - **探针的 stdout**（`[probe] running eval`、`[exit] ...`、`[probe] main url=`）也改用同一个时间格式
   （`[ 1234.5ms]`），但它走 stdout，和上面的 stderr 时间线分开重定向。
