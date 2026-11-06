@@ -290,7 +290,6 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
 | 开关 | 读处 | 作用 | 备注 |
 |---|---|---|---|
 | `AGB_JIT_DEBUG=1` | `bridge/AntBridge.c:187` | 打开 ant 的 JIT 诊断（`SV_DEBUG_JIT_WARN`：不合法操作、OSR 编译结果、bailout） | 建引擎时读 |
-| `AGB_EVAL_MODE=script` | `bridge/AntBridge.c:268` | 让 `antb_eval()` 用 **script** 语义（历史兼容开关） | 页面脚本的正规开关是 agave 的 `AGB_PAGE_EVAL`；新代码用 `antb_eval_script()` |
 | `AGB_JS_TRACE=1` | `bridge/AntBridge.c:2127` | 每次 JS→C 派发打印 `[call] <name> nargs=N` | 首次命中时读一次 |
 | `AGB_CALL_DEBUG=1` | `bridge/AntBridge.c:2333,2338` | `antb_call` 进出打印 `[call] enter/leave fn=…` | 每次调用都 `getenv`（热路径，只在调试时开） |
 | `AGB_ERR_SNIPPET=1` | `src/errors.c:394,430` | 内部错误附 `[snippet]` 源码片段 | 页面关掉 `stackTraceLimit` 时定位用 |
