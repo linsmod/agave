@@ -295,6 +295,16 @@ static void loadHistory(void)
     fprintf(stderr, "[ui] history loaded: %d entr%s from %s\n",
             g_historyCount, g_historyCount == 1 ? "y" : "ies", path);
 }
+/* Profile-backed shell state. Both the GUI and the probe need it: the probe
+ * reads history/bookmarks too (a probe run could otherwise not verify that the
+ * files are loaded), and it must not re-implement the profile layout. */
+static void shellStateInit(void)
+{
+    dataDirInit();
+    loadBookmarks();
+    loadHistory();
+}
+
 static void saveBookmarks(void)
 {
     char path[MAX_PATH_CHARS];
@@ -1956,6 +1966,9 @@ static HWND makeButton(const char* text, int id)
 static int g_probeMode;
 /* --interrupt-after <ms>: abort the page script once, mid-load (hang recovery). */
 static int g_probeInterruptAfterMs;
+/* --nav-after <ms>: navigate while the page is still busy (choke-point test). */
+static int g_probeNavAfterMs;
+static char g_probeNavUrl[MAX_PATH_CHARS];
 /* GUI runs only: tell the user where the crash dump landed. The file name is
  * relative to the process CWD, so show the absolute path - the shell may have
  * been started from anywhere. */
@@ -2192,6 +2205,7 @@ static void shellExitTrace(void)
 #define PROBE_TIMER_TIMEOUT 3
 #define PROBE_TIMER_POLL    4   /* repeating: poll new document after reload */
 #define PROBE_TIMER_INTERRUPT 5 /* one-shot: --interrupt-after (hang recovery) */
+#define PROBE_TIMER_NAV     6   /* one-shot: --nav-after (navigation aborts a stuck page) */
 
 /* Engine-thread callbacks post this to the probe window (main thread) to arm
  * the eval timer: window timers must be installed by the owning thread. */
@@ -2752,6 +2766,7 @@ static int probeRun(const char* url)
 {
     /* Own profile root before any engine exists (cookies/localStorage/caches). */
     probeUserDataInit();
+    shellStateInit();
 
     WNDCLASSA wc;
     AgaveWebViewCallback callbacks;
@@ -2803,6 +2818,8 @@ static int probeRun(const char* url)
     SetTimer(g_probeWnd, PROBE_TIMER_TIMEOUT, g_probeTimeoutMs, NULL);
     if (g_probeInterruptAfterMs > 0)
         SetTimer(g_probeWnd, PROBE_TIMER_INTERRUPT, (UINT)g_probeInterruptAfterMs, NULL);
+    if (g_probeNavAfterMs > 0)
+        SetTimer(g_probeWnd, PROBE_TIMER_NAV, (UINT)g_probeNavAfterMs, NULL);
 
     /* Focus only makes sense for a visible window; a hidden control that grabs
      * focus activates a window nobody can see. */
@@ -2825,6 +2842,16 @@ static int probeRun(const char* url)
                 g_probeTimedOut = 1;
                 probePrint("[probe]", g_probeFinished ? "timeout, exiting" : "timeout, load never finished");
                 break;
+            }
+
+            if (msg.wParam == PROBE_TIMER_NAV) {
+                KillTimer(g_probeWnd, PROBE_TIMER_NAV);
+                if (g_probeView) {
+                    probePrint("[probe]", "nav-after: navigating while the page is busy");
+                    agave_webview_navigate(g_probeView,
+                                           g_probeNavUrl[0] ? g_probeNavUrl : "about:blank");
+                }
+                continue;
             }
 
             if (msg.wParam == PROBE_TIMER_INTERRUPT) {
@@ -3301,6 +3328,13 @@ static void parseShellArgv(void)
             g_probeSettleMs = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--timeout") && i + 1 < argc) {
             g_probeTimeoutMs = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "--nav-after") && i + 1 < argc) {
+            /* Navigate N ms after the probe starts, while the page is still
+             * busy: the control aborts the running script at agwPost(). */
+            g_probeNavAfterMs = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "--nav-url") && i + 1 < argc) {
+            strncpy(g_probeNavUrl, argv[++i], sizeof(g_probeNavUrl) - 1);
+            g_probeNavUrl[sizeof(g_probeNavUrl) - 1] = 0;
         } else if (!strcmp(argv[i], "--interrupt-after") && i + 1 < argc) {
             /* Abort the page's script N ms after the probe starts. A hung page
              * (or a page whose JS never returns) otherwise only ends at
@@ -3429,9 +3463,7 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
 
     agbLog(AGB_LOG_SHELL, "window ready hwnd=%p", (void*)g_hwnd);
 
-    dataDirInit();
-    loadBookmarks();
-    loadHistory();
+    shellStateInit();
 
     g_back = makeButton("<", ID_BACK);
     g_forward = makeButton(">", ID_FORWARD);

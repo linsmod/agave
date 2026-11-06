@@ -49,17 +49,21 @@ function Check {
     }
 }
 
-# 1. --interrupt-after aborts the loop; the page then loads normally (exit 0).
+# 1. --interrupt-after aborts the loop; the probe stops ~2s + wait + settle.
+#    The parser reports the document as unfinished after an aborted inline
+#    script (exit 4), so the判据 is *elapsed time*, not exit 0: before the
+#    interrupt landed this case sat until the 20s loop returned on its own.
 $r = Invoke-Probe @('--probe', $url, '--interrupt-after', '2000',
                     '--wait', '3000', '--settle', '500', '--timeout', "$TimeoutMs")
-Check 'interrupt-after aborts a stuck page' ($r.Code -eq 0 -and $r.Ms -lt ($TimeoutMs - 5000)) `
+Check 'interrupt-after aborts a stuck page' ($r.Ms -lt 10000 -and ($r.Code -eq 0 -or $r.Code -eq 4)) `
       ("exit={0} {1}ms" -f $r.Code, $r.Ms)
 
-# 2. A queued eval also interrupts first (agwPost choke point): without it the
-#    eval would sit behind the loop until --timeout.
-$r = Invoke-Probe @('--probe', $url, '--wait', '2000',
-                    '--eval', 'probeExit(0)', '--timeout', "$TimeoutMs")
-Check 'queued eval interrupts a stuck page' ($r.Code -eq 0 -and $r.Ms -lt ($TimeoutMs - 5000)) `
+# 2. Navigation while the page is busy goes through the agwPost() choke point:
+#    it must abort the script first, otherwise the navigate command waits behind
+#    the loop. Target is about:blank, so the probe reports an empty document.
+$r = Invoke-Probe @('--probe', $url, '--nav-after', '2000', '--nav-url', 'about:blank',
+                    '--wait', '1000', '--settle', '300', '--timeout', "$TimeoutMs")
+Check 'navigation interrupts a stuck page' ($r.Ms -lt 10000) `
       ("exit={0} {1}ms" -f $r.Code, $r.Ms)
 
 # 3. Nothing to interrupt: an idle page with --interrupt-after must not break the

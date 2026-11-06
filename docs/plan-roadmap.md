@@ -278,9 +278,15 @@
   顶层 eval 入口清 `interrupt_pending`/`terminating`，避免误杀下一段脚本；②控件侧 `agwPost()` 收口：
   NAVIGATE/LOAD_HTML/BACK/FORWARD/RELOAD/STOP/EVAL 在引擎忙 >300 ms 时先中断再入队；
   busy 是**进程级**（一条引擎线程服务所有 view）；`agave_webview_interrupt/busy` 暴露给宿主；
-  ③shell 刷新（按钮/F5/Ctrl+R/右键菜单）与地址栏导航都走这条；④探针 `--interrupt-after <ms>` 可直接回归。
-- 验收：`--probe debug/hang_loop.html --interrupt-after 2000` 在 2 s 中止死循环、页面继续加载
-  （无此开关时只能等 `--timeout`）；`--probe <卡死页> --wait 2000 --eval "probeExit(0)"` 能跑出 exit 0
-  （eval 排在卡死脚本后面，收口处先中断）。GUI 刷新/导航的手感验证由人工完成。
+  ③shell 刷新（按钮/F5/Ctrl+R/右键菜单）与地址栏导航都走这条；④探针 `--interrupt-after <ms>` / `--nav-after <ms>` 可直接回归。
+- 验收（`tools/run_hang_recovery_tests.ps1`，三条全绿）：`debug/hang_loop.html`（20 s 死循环）
+  + `--interrupt-after 2000` → **5.6 s** 结束（此前要等 20 s 循环自己跑完，`[hang]` 之外毫无办法）；
+  + `--nav-after 2000` → 导航在中途生效、**3.1 s** 结束（此前 21 s）；空闲页 `--interrupt-after 300`
+  不影响文档、不写崩溃文件。GUI 刷新/导航的手感验证由人工完成。
 - 已知限制：中断后页面状态不可信，必须配重载/导航；`<script>` 里的死循环能中断，
   但引擎线程若卡在 **native 代码**（非 JS 循环）则没有 safepoint，仍需杀进程。
+- 两个实现要点（踩过才知道）：①**中断轮询必须在建引擎时就 arm**（`sv_jit_arm_interrupts`），
+  因为 `interrupts_armed` 是在 **JIT 编译期**决定要不要插 safepoint 的；中断时才 arm，已经编译好的
+  热循环没有轮询点，请求只能等脚本自己返回。②忙判定不能只看“命令在跑”：导航命令几毫秒就返回，
+  页面是卡在**解析/定时器回调**里，所以用**引擎线程心跳**（`g_enginePumpTick`，控件消息泵每 ~10 ms 更新）
+  —— 超过 500 ms 没泵消息即视为卡死，与命令无关。

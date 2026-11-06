@@ -286,8 +286,9 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
   所以窗口“活着但没反应”。现在链接/执行类命令在 `agwPost()` 收口处先发中断：引擎在下一个
   safepoint（解释器调用点 / JIT 循环回边）抛终止错误，脚本退出 → 队列继续 → reload 拿到新 realm。
   锚点：`agave_webview_interrupt()` / `agave_webview_busy()` / `antb_interrupt_all_engines()`。
-  验证手段：`--probe <卡死页> --interrupt-after 2000`（到点中断，页面继续加载）；或卡死时先
-  `tools/js_stack.ps1 -Pid <pid>` 留证据再点刷新。`AGB_CRASH_POPUP=0` 可关崩溃弹框
+  验证手段：`--probe <卡死页> --interrupt-after 2000`（到点中断，页面继续加载）或
+  `--nav-after 2000`（模拟“卡着时重新导航”）；回归 `pwsh -File tools/run_hang_recovery_tests.ps1`。
+  卡死时先 `tools/js_stack.ps1 -Pid <pid>` 留证据再点刷新。`AGB_CRASH_POPUP=0` 可关崩溃弹框
   （弹框会给出 `agb_crash.txt` 的绝对路径与符号化命令）。
 - **一条命令跑站点冒烟**：`pwsh -File tools/run_site_smoke.ps1`
   —— deepseek / baidu / v.qq 各跑一次探针，输出退出码、耗时、元素数与 title；退出码 0 且元素数
