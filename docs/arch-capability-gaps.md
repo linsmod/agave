@@ -82,6 +82,7 @@ qsChild=3 qsDesc=3 qsAdj=1 qsSib=2 qsNth=1 qsOdd=2 qsNot=2 qsFirst=1 qsList2=4 q
 | `document.fonts` | **桩（R34）**：`{status:'loaded', ready:已 resolve, add/delete/check/forEach}`。没有 web font 加载，`ready` 立即兑现 | 用 `await document.fonts.ready` 的页面不再挂住；但 `fonts.load()` 不会真的加载字体 | 桩 |
 | `window.open` 的引擎侧策略 | 可用，但**绕过** `FrameLoaderClientMC::dispatchCreatePage`，走控件 `agave_control_open_window` | 引擎级 new-window 策略/features 不生效；`[nav]` 里看到的是 `popup create`，不是 `popup open` | 管道差异，P2 |
 | `el.onload = fn` 等事件处理属性 | **已修（R27）**：`hits=11`（属性 + addEventListener 都触发）；此前只有 `addEventListener` 生效，`onload` 是静默 expando | —— | 已支持 |
+| HTML 属性事件 handler（`<body onresize="…">`、`onclick="…"`） | **会触发，但跑在遗留 KJS 世界**：handler 能读写 DOM（`document.documentElement.setAttribute(...)` 生效），但 `window.__x = 1` 页面脚本读不到（`undefined`）——两套全局。同一事件上 `addEventListener` 正常工作（R69 实测三种 resize 写法：前两条收到且能读页面全局，`<body onresize>` 也收到但看不到页面全局） | 依赖内联 handler 与页面 JS 交换状态的老站点 | **不推进**：现代站点用 `addEventListener`，`resize` 监听已支持。理由与将来的修法（`Document::createHTMLEventListener()` 改走 AntRuntime）见 [plan-roadmap.md](plan-roadmap.md)「P2 不推进」 |
 
 ### 1.1 连 shim 都没有（feature detect 会走 fallback）
 

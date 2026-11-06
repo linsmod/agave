@@ -213,3 +213,39 @@
 6. canvas `fillText`/`measureText` → 图表/文字库画不出字或排版错位。
 7. `WebSocket`/`EventSource` 存在但不可用 → 要么接通，要么显式 `undefined`。
 
+### P2 视口单位 × 页面 zoom（vw/vh 仍按设备像素）
+
+- **现状**：`Document::viewportCustomProperties()` 用 `FrameView::width()/height()`（设备像素）算 `Nvw`，
+  而 `window.innerWidth` / `__agbViewportWidth()` 已经按 `effectiveZoom` 折算成 CSS px。zoom=125% 时
+  `100vw` 会比 `innerWidth` 大 25%，Chrome 里两者都是 CSS px（R53 起就有这个偏差，R69 变量化后修起来更容易）。
+- **修法**：`viewportCustomProperties()` 里除以文档 `renderer()->style()->effectiveZoom()`
+  （与 `Element::clientWidth()` 的 `adjustForAbsoluteZoom` 同源），`Document::addViewportCalc()` 的模板代入同理。
+- **验收**：探针加 `--zoom <percent>`（`agave_webview_set_zoom`，与 `--resize` 同型）后跑
+  `tools/pages/resize/resize_probe.html`，期望 `innerWidth == 100vw`、`clientWidth == innerWidth - 滚动条`。
+
+### P2 resize 的 surface 生命周期（代码审查发现，未复现）
+
+- **并发窗口**：`agwEnsureSurface()`（引擎线程，`src/webview_control/AgaveWebView.c`）销毁/重建
+  `mirrorBitmap`/`mirrorDc` 时不持 `agwLock`，而 UI 线程 `agwPaint()` 是持锁 `BitBlt` 同一对句柄的。
+  拖窗口时每个 `WM_SIZE` 都会走一次重建，理论上存在"删 DC 与 BitBlt 并发"的窄窗口（画错或 `BitBlt` 失败），
+  目前只在代码审查里发现，探针没复现。
+- **修法**：surface 的销毁+重建放进 `agwLock()`/`agwUnlock()`（`CRITICAL_SECTION` 同线程可重入，
+  `agwOnOpenWindow` 那条调用路径不会死锁）；或改成双缓冲指针的原子交换，UI 只读旧指针。
+- **另一个代价**：每个 `WM_SIZE` 都重建一对 DIB（2×`CreateDIBSection` + 2×`CreateCompatibleDC`）。
+  可以让 `AGW_CMD_RESIZE` 只记 `wantWidth/wantHeight`，在 `agwDrainCommands()` 之后应用一次 ——
+  和布局的按帧合并对齐。
+- **验收**：拖窗口时用 `[ui] resize` + `AGB_LOOP_DEBUG` 统计重建次数；`--resize` 探针覆盖单次路径。
+
+### P2 不推进（已评估，保留理由）
+
+- **HTML 属性事件 handler（`<body onresize="…">`、`onclick="…"`）**：会触发、能读写 DOM，但跑在遗留
+  KJS 世界（`Document::createHTMLEventListener()` → `KJSProxy::createHTMLEventHandler()` →
+  `JSLazyEventListener`），看不到页面 JS 的全局（handler 里 `window.__x = 1`，页面读不到）。
+  现代站点用 `addEventListener`，`resize` 监听已可用（R69），**不再推进**。
+  **若将来要修**：`createHTMLEventListener()` 改走 AntRuntime —— 把属性代码编译成
+  `function(event){…}`（`antb_eval`），`this` 对 window handler 是全局、对元素 handler 是元素，
+  `return false` → `preventDefault()` + `stopPropagation()`，并用 `bindDocument()` 保证在正确的 realm 里跑。
+- **onresize 的验收方式**：不再单独为属性写法做回归；`tools/pages/resize/` 里 `<body onresize>` 只当
+  "属性路径仍然存在"的观察项（用 DOM 属性记录，因为它的全局与页面不通）。
+
+

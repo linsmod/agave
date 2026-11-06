@@ -64,6 +64,12 @@ MAKE HELPER SCRIPTS REUSABLE; WHEN A SCRIPT IS HIGH-FREQUENCY USED, PLACE IT IN 
 
 任务中经历的本该优化的阻塞点，可以临时用脚本方式绕过，但需要记录并提示延后处置。
 
+**发现缺口必须记录并推进**：凡是发现能力缺口、半成品路径、与现代浏览器不一致的行为（不只是这次修的那个 bug），
+都要当场写进 [docs/plan-roadmap.md](docs/plan-roadmap.md)（优先级 + 验收判据），修完把结论写回
+`docs/arch-*.md` / `docs/hist-lessons.md`；不允许只在对话里说一句"已知残留"就算完。
+评审后决定不做的项，写成**「不推进 + 理由/替代路径」**（放在 plan-roadmap 的「P2 不推进」），
+避免以后被当成待办重开。
+
 WHEN USER REPLY A DOT[.] ONLY, MEANS OK/DONE/DO_AS_YOU_SAY/YES/GO_ON/ACCEPT/...
 
 ## 七条铁律（违反会**静默**失败）
