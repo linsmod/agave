@@ -559,8 +559,12 @@ String CSSPrimitiveValue::cssText() const
             text += String::number(color.red()) + ", ";
             text += String::number(color.green()) + ", ";
             text += String::number(color.blue());
-            if (color.alpha() < 0xFF)
-                text += ", " + String::number(static_cast<float>(color.alpha()) / 0xFF);
+            if (color.alpha() < 0xFF) {
+                /* Chrome serializes alpha with two significant digits
+                 * (`0.5`, `0.25`, `0.8`) while the value is 8-bit here
+                 * (0x80/255 = 0.50196). */
+                text += String::format(", %.2g", color.alpha() / 255.0);
+            }
             text += ")";
             break;
         }

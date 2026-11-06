@@ -41,6 +41,7 @@ ant 的反直觉行为（字面量属性名、`typeof`、`delete` 等）见 [ref
   和 `window` 的 `resize` 事件都跟随窗口 resize（R69：vw/vh 是文档级变量，`FrameView::layout` 在尺寸变化时先重建
   selector 再重排）；含 `%` 的混合 `calc()` 已支持（R54，`Length::Calculated`），
   flex 简写/`flex-basis`/`align-content`/`scrollbar-width` 已支持（R54），
+  CSS Color 4 色彩函数（`hsl(200 60% 20%)`、`rgb(1 2 3 / 50%)`、百分比分量、`deg` hue）已支持（R83），
   `::-webkit-scrollbar{display:none}` 会在解析期改写成 `scrollbar-width:none`（R56）。
   完整实测值与复测命令见 [arch-capability-gaps.md](arch-capability-gaps.md) §2。
 - **wasm 是解释执行**：导出函数跨界约 3.9µs/次，适合"一次调用跑大循环"（R19）。

@@ -71,22 +71,32 @@ static double calcHue(double temp1, double temp2, double hueVal)
 // explanation available at http://en.wikipedia.org/wiki/HSL_color_space 
 
 // all values are in the range of 0 to 1.0
+/* hsl() -> rgb byte. Rounding, not truncation: `hsl(200 60% 20%)` is
+ * rgb(20, 61, 82) in Chrome (0.32 * 255 = 81.6); the old
+ * `static_cast<int>(v * nextafter(256, 0))` produced 81. */
+static int hslByte(double v)
+{
+    if (v < 0.0)
+        return 0;
+    if (v > 1.0)
+        return 255;
+    return static_cast<int>(v * 255.0 + 0.5);
+}
+
 RGBA32 makeRGBAFromHSLA(double hue, double saturation, double lightness, double alpha)
 {
-    const double scaleFactor = nextafter(256.0, 0.0);
-
     if (!saturation) {
-        int greyValue = static_cast<int>(lightness * scaleFactor);
-        return makeRGBA(greyValue, greyValue, greyValue, static_cast<int>(alpha * scaleFactor));
+        int greyValue = hslByte(lightness);
+        return makeRGBA(greyValue, greyValue, greyValue, hslByte(alpha));
     }
 
     double temp2 = lightness < 0.5 ? lightness * (1.0 + saturation) : lightness + saturation - lightness * saturation;
     double temp1 = 2.0 * lightness - temp2;
-    
-    return makeRGBA(static_cast<int>(calcHue(temp1, temp2, hue + 1.0 / 3.0) * scaleFactor), 
-                    static_cast<int>(calcHue(temp1, temp2, hue) * scaleFactor),
-                    static_cast<int>(calcHue(temp1, temp2, hue - 1.0 / 3.0) * scaleFactor),
-                    static_cast<int>(alpha * scaleFactor));
+
+    return makeRGBA(hslByte(calcHue(temp1, temp2, hue + 1.0 / 3.0)),
+                    hslByte(calcHue(temp1, temp2, hue)),
+                    hslByte(calcHue(temp1, temp2, hue - 1.0 / 3.0)),
+                    hslByte(alpha));
 }
 
 // originally moved here from the CSS parser

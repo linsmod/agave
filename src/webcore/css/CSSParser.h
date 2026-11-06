@@ -195,8 +195,11 @@ namespace WebCore {
         bool parseCounter(int propId, int defaultValue, bool important);
         PassRefPtr<CSSValue> parseCounterContent(ValueList* args, bool counters);
 
-        bool parseColorParameters(Value*, int* colorValues, bool parseAlpha);
-        bool parseHSLParameters(Value*, double* colorValues, bool parseAlpha);
+        /* Both accept the legacy comma form (`rgb(1, 2, 3)`) and CSS Color 4's
+         * space-separated form (`rgb(1 2 3 / 50%)`); the return value is the
+         * component count (3, or 4 when an alpha component was present). */
+        int parseColorParameters(Value*, int* colorValues);
+        int parseHSLParameters(Value*, double* colorValues);
         CSSPrimitiveValue* parseColor(Value* = 0);
         bool parseColorFromValue(Value*, RGBA32&, bool = false);
 

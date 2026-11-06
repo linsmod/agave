@@ -41,6 +41,10 @@
   全是 no-op，现在路由到 `FrameView`，`getBoundingClientRect()` 也改成视口坐标。
   验收：`tools/run_sticky_tests.ps1`（11 条几何 + 4 像素）绿；8 个 layout 差分页、`LAYOUT=PASS`、
   site smoke、nav/typing 全绿。未完成：`scrollIntoView()` 仍不滚动；sticky 的 layer 没有 z-index 细化。
+- **CSS Color 4 色彩函数语法**（R83，2026-11-06）：`hsl()`/`rgb()` 的空格形式、`/ alpha`、百分比分量、
+  `deg` hue 全部接受（以前只认逗号，整条声明静默被丢）；hsl→rgb 与百分比分量改成四舍五入（对齐 Chrome），
+  alpha 序列化按两位有效数字。验收：新增 `tools/pages/layout/color_syntax.html` 13 个 case 对拍 Chrome 全绿。
+  未完成：`turn` 单位（没有 `CSS_TURN`）；`getComputedStyle` 读自定义属性仍返回内部名 `-agb-…`。
 
 ## P0：先修正确性
 
