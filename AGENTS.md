@@ -63,19 +63,13 @@ FOR SOME BUGS OR REQUIREMENTS THAT REQUIRE INFRASTRUCTURE ADJUSTMENTS, MAKE A DE
 
 MAKE HELPER SCRIPTS REUSABLE; WHEN A SCRIPT IS HIGH-FREQUENCY USED, PLACE IT IN THE PROJECT.
 
-**谁改谁负责收尾和提交**：改动方自己跑完验证、补/改覆盖它的测试、同步受影响的文档，并在同一次工作里提交。
-两个仓库各提各的：ant 的改动提交在 `H:\ant-v16`，发布产物（`3rdparty/ant/{bin,lib,include}`）
-提交在本仓库；**本项目不保存 ant 的 patch**，版本契约只认 ant 仓库里的 commit。
-不要把未提交的改动留给下一个人——这里 `antjsb.dll` 是预编译发布的，未提交等于 dll 与源码静默分叉，
-下次同步基线/重建就丢了。
+`全部做好` MEANS PLAN IT FIRST, WRITE DOCS, THEN DO IT BY BATCH OR STEP, TEST, CLEAN AND COMMIT.
 
 任务中经历的本该优化的阻塞点，可以临时用脚本方式绕过，但需要记录并提示延后处置。
 
-**发现缺口必须记录并推进**：凡是发现能力缺口、半成品路径、与现代浏览器不一致的行为（不只是这次修的那个 bug），
-都要当场写进 [docs/plan-roadmap.md](docs/plan-roadmap.md)（优先级 + 验收判据），修完把结论写回
-`docs/arch-*.md` / `docs/hist-lessons.md`；不允许只在对话里说一句"已知残留"就算完。
-评审后决定不做的项，写成**「不推进 + 理由/替代路径」**（放在 plan-roadmap 的「P2 不推进」），
-避免以后被当成待办重开。
+**发现缺口必须记录并反馈**：凡是发现能力缺口、半成品路径、与现代浏览器不一致的行为（不只是这次修的那个 bug），
+在对话中反馈并提供修复建议。
+如果有修复，修完把结论写回`docs/arch-*.md` / `docs/hist-lessons.md`；
 
 WHEN USER REPLY A DOT[.] ONLY, MEANS OK/DONE/DO_AS_YOU_SAY/YES/GO_ON/ACCEPT/...
 
@@ -86,6 +80,7 @@ WHEN USER REPLY A DOT[.] ONLY, MEANS OK/DONE/DO_AS_YOU_SAY/YES/GO_ON/ACCEPT/...
    再 relink `libagave`。agave 里不再保留桥的副本。
 2. **改 ant 内核也走同一个脚本**：`pwsh -File tools/build_antjsb.ps1` 会先编 `libant.a`
    再链 `antjsb.dll`；只改本仓库 C++ 时才需要 `cmake --build build-zig-native`。
+   改Ant核心需要在ant repo中添加测试，改完后任务收尾时要提交。
 3. **重编前先停掉正在跑的 `agave_shell`**：旧进程占着 `antjsb.dll` 时链接静默失败，跑的还是旧 dll。
 4. `prelude.js` / `polyfills.js` 是**运行时**从 exe 旁加载的：拷到 `build-zig-native\` 即生效，**不用重链**。
 5. 探针默认**真无头**（不建浏览器窗口）；要像素用 `--shot <bmp>`（抓控件自己的 mirror 缓冲），`AGB_PROBE_SHOW=1` 只在调试「窗口可见时行为不同」的路径时才用。
