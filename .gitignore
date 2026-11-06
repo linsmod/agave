@@ -33,3 +33,6 @@ build-touch/
 
 # standalone Ant replay test (tools/build_ant_replay.ps1)
 build-ant-replay/
+
+# crash forensics written by agave_shell in its CWD
+agb_crash.txt

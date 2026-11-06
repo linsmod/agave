@@ -58,7 +58,7 @@ $root  = Split-Path -Parent $PSScriptRoot           # agave repo
 $build = if ([IO.Path]::IsPathRooted($BuildDir)) { $BuildDir } else { Join-Path $root $BuildDir }
 $log   = if ($Log) { $Log } else { Join-Path $root 'build-native.log' }
 
-$artifacts = @('libagave.dll', 'agave_shell.exe', 'agave_embed.exe',
+$artifacts = @('libagave.dll', 'antjsb.dll', 'agave_shell.exe', 'agave_embed.exe',
                'agave_view_host.exe', 'touchweb.exe', 'polyfills.js')
 
 function Fail([string]$message) {
@@ -209,6 +209,47 @@ if ($mustConfigure) {
     if ($LASTEXITCODE -ne 0) { Fail "cmake configure exited with $LASTEXITCODE" }
 } else {
     Write-Host "reusing $build (pass -Fresh to wipe it)"
+}
+
+# --------------------------------------------------------------- ant runtime --
+# antjsb.dll is only an import-library input of the libagave link: when ant is
+# rebuilt but its export list is unchanged, antjsb.dll.a does not change either,
+# so ninja does not relink libagave and the POST_BUILD copy in src/src.cmake
+# never runs. The build then reports success while build-zig-native\antjsb.dll
+# still holds the previous engine. Sync it on every build instead; a dll that is
+# already current (same size and no older timestamp) is left untouched.
+
+Section 'ant runtime'
+
+$antBin = Join-Path $root '3rdparty\ant\bin'
+foreach ($name in @('antjsb.dll', 'antjsb.pdb')) {
+    $srcFile = Join-Path $antBin $name
+    if (-not (Test-Path $srcFile)) { continue }   # ant copy not published / no pdb
+    $dstFile = Join-Path $build $name
+
+    if (Test-Path $dstFile) {
+        $s = Get-Item $srcFile
+        $d = Get-Item $dstFile
+        if ($s.Length -eq $d.Length -and $s.LastWriteTimeUtc -le $d.LastWriteTimeUtc) {
+            Write-Host ("up to date : {0} ({1:N0} bytes)" -f $name, $d.Length)
+            continue
+        }
+    }
+
+    try {
+        Copy-Item $srcFile $dstFile -Force -ErrorAction Stop
+        Write-Host ("copied     : {0} -> {1} ({2:N0} bytes)" -f $name, $build, (Get-Item $dstFile).Length)
+    } catch {
+        # Never let a build "succeed" while the runtime engine is the old one.
+        $locked = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
+            $_.Path -and $_.Path.StartsWith($build, [StringComparison]::OrdinalIgnoreCase)
+        })
+        $who = if ($locked.Count -gt 0) {
+            ($locked | ForEach-Object { "$($_.ProcessName) (pid $($_.Id))" }) -join ', '
+        } else { 'another program' }
+        Fail ("cannot replace {0}: {1}. In use by: {2} - close it and rerun." -f
+              $dstFile, $_.Exception.Message, $who)
+    }
 }
 
 # -------------------------------------------------------------------- build --
