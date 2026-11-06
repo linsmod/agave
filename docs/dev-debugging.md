@@ -282,6 +282,26 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
   `.call` 里带字符串字面量）。
   产物形如 `at j (https://vfiles.gtimg.cn/…/vendor-common-*.js:1:52943)` × N —— v.qq 的卡死能直接看到
   字节码 VM 的递归分发帧，比看门狗的单帧信息多。
+### 引擎/桥接侧的开关（在 ant 仓库里读，不是 agave 读）
+
+这些 `AGB_*` 由 `antjsb.dll`（bridge 或引擎）自己 `getenv`，agave 只负责透传环境变量。
+**读的时机不一样**：带「启动时」的只在建引擎/首次命中时读一次，改了必须重启进程。
+
+| 开关 | 读处 | 作用 | 备注 |
+|---|---|---|---|
+| `AGB_JIT_DEBUG=1` | `bridge/AntBridge.c:187` | 打开 ant 的 JIT 诊断（`SV_DEBUG_JIT_WARN`：不合法操作、OSR 编译结果、bailout） | 建引擎时读 |
+| `AGB_EVAL_MODE=script` | `bridge/AntBridge.c:268` | 让 `antb_eval()` 用 **script** 语义（历史兼容开关） | 页面脚本的正规开关是 agave 的 `AGB_PAGE_EVAL`；新代码用 `antb_eval_script()` |
+| `AGB_JS_TRACE=1` | `bridge/AntBridge.c:2127` | 每次 JS→C 派发打印 `[call] <name> nargs=N` | 首次命中时读一次 |
+| `AGB_CALL_DEBUG=1` | `bridge/AntBridge.c:2333,2338` | `antb_call` 进出打印 `[call] enter/leave fn=…` | 每次调用都 `getenv`（热路径，只在调试时开） |
+| `AGB_ERR_SNIPPET=1` | `src/errors.c:394,430` | 内部错误附 `[snippet]` 源码片段 | 页面关掉 `stackTraceLimit` 时定位用 |
+| `AGB_GC_DEBUG=1` | `src/gc/gc.c:379` | 退出时 dump GC 统计 | 启动时读 |
+| `AGB_GC_OFF=1` | `src/gc/gc.c:380` | **完全关闭 GC**（诊断） | "关掉就不崩" = 对象被提前回收的判据（R60/R63/R67） |
+| `AGB_PROXY_DEBUG=1` | `src/ant.c:19779,19792` | Proxy `get` 不变量失败时打印 `[proxy] key=… result=… target=…` | 命中即读 |
+| `ANT_GC_STRESS=1` | `src/verify.c` | 每次分配都触发 GC（测试用） | meson `put-elem-gc` 用它跑 |
+
+ant 自身 CLI / 基础设施的开关（`ANT_MANIFEST_URL`、`ANT_SANDBOX_*`、`ANT_NO_CRASH_HANDLER` 等）
+在 `H:\ant-v16` 里读，**和 agave 的运行无关**，排查浏览器问题时不用管。
+
 - **卡死的页面怎么恢复（不用杀进程）**：刷新/导航在控件里是排队命令，脚本不返回时队列永不 drain，
   所以窗口“活着但没反应”。现在链接/执行类命令在 `agwPost()` 收口处先发中断：引擎在下一个
   safepoint（解释器调用点 / JIT 循环回边）抛终止错误，脚本退出 → 队列继续 → reload 拿到新 realm。
