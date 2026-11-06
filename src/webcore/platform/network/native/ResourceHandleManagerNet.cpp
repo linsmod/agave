@@ -30,6 +30,97 @@ static bool netLogOn(void)
     return on;
 }
 
+/* --- data: support -------------------------------------------------------- */
+
+static int base64Value(char c)
+{
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+') return 62;
+    if (c == '/') return 63;
+    return -1;
+}
+
+static bool base64Decode(const std::string& in, std::string* out)
+{
+    out->clear();
+    out->reserve(in.size() / 4 * 3);
+
+    unsigned bits = 0;
+    int have = 0;
+
+    for (size_t i = 0; i < in.size(); ++i) {
+        char c = in[i];
+
+        if (c == '=' || c == '\n' || c == '\r' || c == ' ' || c == '\t')
+            continue;
+
+        int v = base64Value(c);
+        if (v < 0)
+            return false;
+
+        bits = (bits << 6) | (unsigned)v;
+        have += 6;
+
+        if (have >= 8) {
+            have -= 8;
+            out->push_back((char)((bits >> have) & 0xFF));
+        }
+    }
+
+    return true;
+}
+
+/* `data:[<mediatype>][;base64],<payload>`. Without a media type the default is
+ * `text/plain;charset=US-ASCII`; a non-base64 payload is percent decoded. */
+static bool decodeDataUrl(const std::string& url, std::string* mime, std::string* body)
+{
+    if (url.size() < 5 || strncasecmp(url.c_str(), "data:", 5) != 0)
+        return false;
+
+    std::string rest = url.substr(5);
+    size_t comma = rest.find(',');
+
+    if (comma == std::string::npos)
+        return false;
+
+    std::string header = rest.substr(0, comma);
+    std::string payload = rest.substr(comma + 1);
+
+    bool isBase64 = false;
+    size_t semi = header.rfind(';');
+
+    if (semi != std::string::npos && header.compare(semi, std::string::npos, ";base64") == 0) {
+        isBase64 = true;
+        header.erase(semi);
+    }
+
+    *mime = header.empty() ? std::string("text/plain;charset=US-ASCII") : header;
+
+    if (isBase64)
+        return base64Decode(payload, body);
+
+    /* Percent decoding is octet based; treat '+' as a literal plus (`data:` URLs
+     * are not form encoded). */
+    for (size_t i = 0; i < payload.size(); ++i) {
+        if (payload[i] == '%' && i + 2 < payload.size()) {
+            char hex[3] = { payload[i + 1], payload[i + 2], 0 };
+            char* end = 0;
+            long value = strtol(hex, &end, 16);
+
+            if (end == hex + 2) {
+                body->push_back((char)value);
+                i += 2;
+                continue;
+            }
+        }
+        body->push_back(payload[i]);
+    }
+
+    return true;
+}
+
 /* --- file:// support ------------------------------------------------------ */
 
 static void percentDecode(std::string* text)
@@ -211,6 +302,37 @@ void ResourceHandleManager::add(ResourceHandle* job)
                 fprintf(stderr, "[netmgr] skipped by list\n");
             job->ref();
             m_skipped.append(job);
+
+            ensureDownloadTimerArmed();
+            return;
+        }
+    }
+
+    /* data: URLs carry their body in the URL — decode locally and deliver it
+     * through the same asynchronous path as a cache hit. Before this they fell
+     * through to WinHTTP, which cannot handle the scheme, so `background:
+     * url(data:…)` and `<img src="data:…">` never painted (hist-lessons R85). */
+    {
+        DeprecatedString urlText = d->m_request.url().url();
+        std::string mime;
+        std::string body;
+
+        if (decodeDataUrl(std::string(urlText.ascii()), &mime, &body)) {
+            if (netLogOn())
+                fprintf(stderr, "[netmgr] data url mime=%s bytes=%u\n", mime.c_str(), (unsigned)body.size());
+
+            Net::HttpCache::Entry entry;
+            entry.response.status = 200;
+            entry.response.statusText = "OK";
+            entry.response.headers.push_back(std::make_pair(std::string("Content-Type"), mime));
+            entry.body.swap(body);
+
+            job->ref();
+
+            CachedDelivery delivery;
+            delivery.handle = job;
+            delivery.entry = entry;
+            m_cached.push_back(delivery);
 
             ensureDownloadTimerArmed();
             return;

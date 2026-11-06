@@ -5,11 +5,9 @@
 <title>background shorthand paint</title>
 <style>
   html, body { margin: 0; padding: 0; background: #ffffff; }
-  /* NOTE: the tint below is a literal colour on purpose. With `var(--tint)`
-     the rule still parses but the image never loads (a second CachedImage is
-     created for the same URL, see hist-lessons R84 / plan-roadmap P1), so
-     this page would fail with the variable spelling. */
   :root { --tint: hsl(200 60% 20%); }
+  /* 10x10 red PNG as a data URI, a stand-in for the noise.png texture these
+     shorthands usually carry. */
   #tile {
     width: 100px; height: 100px;
     background: url("noise10.png") #00ff00;
@@ -24,11 +22,31 @@
     width: 40px; height: 40px;
     background: url("noise10.png") 0 0 / 40px 40px no-repeat;
   }
+  /* The colour from a variable: the declaration is re-parsed after var()
+     expansion, and the relative url() has to keep resolving (R85). */
+  #varrel {
+    position: absolute; left: 0; top: 120px;
+    width: 100px; height: 100px;
+    background: url("noise10.png") var(--tint);
+  }
+  /* data: URL — no network involved, decoded locally (R85). */
+  #dataimg {
+    position: absolute; left: 240px; top: 120px;
+    width: 60px; height: 60px;
+  }
+  #data {
+    position: absolute; left: 120px; top: 120px;
+    width: 100px; height: 100px;
+    background: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAIAAAACUFjqAAAAEklEQVR4nGP8z4APMOGVHbHSAEEsAROxCnMTAAAAAElFTkSuQmCC") #00ff00;
+  }
 </style>
 </head>
 <body>
 <div id="tile"></div>
 <div id="cover"></div>
 <div id="scaled"></div>
+<div id="varrel"></div>
+<div id="data"></div>
+<img id="dataimg" alt="" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAIAAAACUFjqAAAAEklEQVR4nGP8z4APMOGVHbHSAEEsAROxCnMTAAAAAElFTkSuQmCC">
 </body>
 </html>

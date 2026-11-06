@@ -63,6 +63,10 @@ CachedImage* CSSImageValue::image(DocLoader* loader)
 
         if (m_image)
             m_image->ref(this);
+
+        if (getenv("AGB_BG_DEBUG"))
+            fprintf(stderr, "[cssimg] loader=%p url=[%s] -> cached=%p\n",
+                    (void*)loader, getStringValue().utf8().data(), (void*)m_image);
     }
     
     return m_image;

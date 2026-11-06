@@ -1880,6 +1880,10 @@ void CSSStyleSelector::applyExpandedProperty(int propId, const String& text)
         parsed = new CSSMutableStyleDeclaration(0);
         {
             CSSParser parser;
+            /* Relative URLs in the expanded text (background-image etc.) need
+             * the document base; without it they resolve to an empty URL and
+             * the image is never requested (hist-lessons R85). */
+            parser.setValueDocument(m_document);
             parser.parseValue(parsed.get(), propId, text, false);
         }
 

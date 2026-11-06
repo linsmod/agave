@@ -92,10 +92,13 @@ try {
     } else {
         # (5,5)/(95,95) prove the 10x10 texture repeats over the tint, (130,5)
         # and (175,55) that `center / cover` scaled it, (205,5)/(235,35) that
-        # `0 0 / 40px 40px` did, and the page below stays white.
+        # `0 0 / 40px 40px` did, (5,125)/(95,215) that a var() colour keeps the
+        # relative url() alive after expansion, (125,125)/(215,215) that a data:
+        # URI is decoded locally (background *and* <img>), and the page below is white.
         & python tools/pixel_check.py $bmp `
             5,5,ff0000 95,95,ff0000 130,5,ff0000 175,55,ff0000 `
-            205,5,ff0000 235,35,ff0000 50,200,ffffff
+            205,5,ff0000 235,35,ff0000 5,125,ff0000 95,215,ff0000 `
+            125,125,ff0000 215,215,ff0000 250,130,ff0000 50,300,ffffff
         if ($LASTEXITCODE -ne 0) { $failed++ }
     }
 

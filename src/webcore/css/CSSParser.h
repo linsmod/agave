@@ -133,6 +133,10 @@ namespace WebCore {
         static CSSParser* current() { return currentParser; }
 
         Document* document() const;
+        /* `var()` expanded declarations are re-parsed by a fresh parser that
+         * has no style element; without a document the relative URLs inside
+         * them (background-image etc.) resolve to nothing. */
+        void setValueDocument(Document* doc) { m_valueDocument = doc; }
 
         void addProperty(int propId, PassRefPtr<CSSValue>, bool important);
         /* Adds a declaration whose value must be resolved per element:
@@ -256,6 +260,7 @@ namespace WebCore {
         bool important;
         int id;
         StyleList* styleElement;
+    Document* m_valueDocument;
         RefPtr<CSSRule> rule;
         MediaQuery* mediaQuery;
         ValueList* valueList;

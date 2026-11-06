@@ -114,6 +114,7 @@ CSSParser::CSSParser(bool strictParsing)
     : m_floatingMediaQuery(0)
     , m_floatingMediaQueryExp(0)
     , m_floatingMediaQueryExpList(0)
+    , m_valueDocument(0)
 {
 #ifdef CSS_DEBUG
     kdDebug(6080) << "CSSParser::CSSParser this=" << this << endl;
@@ -2089,6 +2090,9 @@ void CSSParser::clearProperties()
 
 Document *CSSParser::document() const
 {
+    if (m_valueDocument)
+        return m_valueDocument;
+
     /* parseValue() also runs for var()-expanded declarations, where there is
      * no style element attached (crash: StyleBase::parent on null). */
     if (!styleElement)
@@ -4260,9 +4264,20 @@ bool CSSParser::parseBackgroundImage(CSSValue*& value)
 
     if (val->unit == CSSPrimitiveValue::CSS_URI) {
         String uri = parseURL(domString(val->string));
-        if (!uri.isEmpty())
-            value = new CSSImageValue(String(KURL(styleElement->baseURL().deprecatedString(), uri.deprecatedString()).url()), 
+        if (!uri.isEmpty()) {
+            /* A var()-expanded value is parsed by a parser without a style
+             * element; fall back to the document base so relative URLs still
+             * resolve (an empty base made the image URL empty and the image
+             * never loaded — see hist-lessons R85). */
+            String base;
+            if (styleElement)
+                base = styleElement->baseURL();
+            else if (Document* doc = document())
+                base = doc->baseURL();
+
+            value = new CSSImageValue(String(KURL(base.deprecatedString(), uri.deprecatedString()).url()),
                                      styleElement);
+        }
         return true;
     }
 
