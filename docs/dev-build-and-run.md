@@ -23,7 +23,7 @@ cmake --build e:\mybrowsers\agave\build-zig-native --parallel 16
 
 # C. 改了桥（ant 的 bridge/AntBridge.c）
 pwsh -File tools\build_antjsb.ps1 -Force
-cmake --build build-zig-native --parallel 16
+pwsh -File tools\build_project.ps1        # 必须用它：它会把新 dll 同步进构建目录
 
 # D. 改了 ant 引擎内核（H:\ant-v16）
 pwsh -File tools\build_antjsb.ps1        # 编 libant.a + 重链 antjsb.dll
@@ -39,7 +39,7 @@ pwsh -File tools\build_antjsb.ps1        # 编 libant.a + 重链 antjsb.dll
 | 产物 | 配置 | 说明 |
 |---|---|---|
 | `libant.a`（ant 引擎） | meson `buildtype=release` + `-Ddebug=true` → `-O3 -g` | 2026-11-04 起打开；`meson configure H:\ant-v16\build-zig -Ddebug=true`，改完 `ninja -C H:\ant-v16\build-zig libant.a` |
-| `antjsb.dll`（桥 + 引擎） | ant Meson `-O2 -g` | 产出 `antjsb.pdb`；`build_antjsb.ps1` 装到 `3rdparty/ant/bin`，`src/src.cmake` 再拷进构建目录 |
+| `antjsb.dll`（桥 + 引擎） | ant Meson `-O2 -g` | 产出 `antjsb.pdb`；`build_antjsb.ps1` 装到 `3rdparty/ant/bin`，`build_project.ps1` 每次构建同步进 `build-zig-native\` |
 | `agave_shell` / `libagave` | CMake `CMAKE_BUILD_TYPE=Debug`（`-O0 -g -D_DEBUG`） | 带完整 PDB（`libagave.pdb`），不是 release |
 
 ## 3. 改什么 → 重编什么（先估时间再动手）
@@ -71,6 +71,10 @@ pwsh -File tools\build_antjsb.ps1        # 编 libant.a + 重链 antjsb.dll
 | `%LOCALAPPDATA%\Agave\probe\` / `...\view-host\` | 无头工具自己的 profile（cookies/cache），由 `AGB_USERDATA` 决定，见 [dev-debugging.md](dev-debugging.md) |
 
 - `3rdparty/ant/bin/antjsb.dll` 是**预编译回落副本**（plain clone 也能构建/运行）；运行时仍读 `build-zig-native/` 里的那份。
+  两份由 `build_project.ps1` 的 `== ant runtime` 段同步（大小+时间戳相同就跳过）。
+  **裸 `cmake --build` 不同步**：`antjsb.dll` 只是 link 期的 import lib 输入，ant 重链但导出表没变时
+  `antjsb.dll.a` 不变 → libagave 不重链 → `src/src.cmake` 的 POST_BUILD 拷贝不触发，
+  构建会报成功而跑的还是旧引擎。改过 ant 一律走 `build_project.ps1`（或手动拷 dll+pdb）。
 - **picasso（图形后端）源码在 `3rdparty/picasso/`，由 `add_subdirectory` 直接编译**，
   产物是 `build-zig-native/picasso/libpicasso2_sw.a`（静态）。它以前是 `ExternalProject`：
   从 `packages/picasso-2.8.0.tar.gz` 解压到构建目录、再用 `packages/patchs/` 覆盖几个文件，

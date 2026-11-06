@@ -234,10 +234,11 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
 - **未处理 Promise 拒绝**：`window.onunhandledrejection` 的 polyfill 会打印
   stack → `name: message` → 对象前几个自有属性，不再是 `[object Object]`；
   CLI 侧 ant 的 `print_error_value` 对普通对象也走同一套渲染。
-- **卡死/假死**：设 `AGB_HANG_WATCH=1`（`AGB_HANG_SECONDS` 默认 5）——引擎线程连续 N 秒
-  满核就打印 `[hang]` + JS 栈（`file:line`）；窗口无响应但 CPU 不高则是 UI 线程/等待问题，
-  用 `tools/cdb_stack.ps1 -Attach <pid>` 看全线程。栈里 `intern_find/hash_key` 说明是
-  属性/数组访问热点（脚本 VM），不是死锁。
+- **卡死/假死**：先 `pwsh -File tools/js_stack.ps1 -Pid <pid>` —— 不 attach、不重启，直接抓当前 JS 栈
+  （见下面"卡住的窗口抓 JS 栈"）。要**从启动就开始看**：设 `AGB_HANG_WATCH=1`（`AGB_HANG_SECONDS` 默认 5），
+  引擎线程连续 N 秒满核就打印 `[hang]` + JS 栈（`file:line`）；窗口无响应但 CPU 不高则是 UI 线程/等待问题，
+  用 `tools/cdb_stack.ps1 -Attach <pid>` 看全线程。栈里 `intern_find/hash_key` / `j (vendor-common…js)`
+  说明是属性/数组访问热点（脚本 VM），不是死锁。
 - **`0xC0000005` 且只跟"时长"有关**（长循环、大 eval、注入脚本）：先排除**视图生命周期**，
   不要先怀疑 JIT/优化器。判据：①崩溃点是否固定在某个墙钟时间而不是迭代次数
   （把循环体加 `console.log`，看最后一条进度；R61 里 5M 和 1M 在同一个时间点崩）；
@@ -264,6 +265,23 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
   取到文件后：`pwsh -File tools/cdb_stack.ps1 -Symbolize build-zig-native/agb_crash.txt`。
   注意 ant 自己也装了 crash handler（`src/crash.c`），它只往 previous filter 链一次、且会用
   StackWalk64，二次异常时会静默吞掉整个进程 —— 这就是"cdb 一挂就不崩、不挂又没输出"的形状。
+- **`cdb -p <pid> -c "…"` 里任何一条命令解析失败 = 杀掉被调试进程**：cdb 把 `-c` 的命令表当脚本，
+  遇到错误就中断，后面的命令（**包括 `qd`**）都不执行，cdb 退出时按默认行为 `TerminateProcess`。
+  实测（2026-11-06）：对一个 `ping` 进程跑 `cdb -p <pid> -c "x nosuchmodule!sym; qd"` → ping 直接消失；
+  同一形态在真的浏览器窗口上踩过（想 `.call` 打 JS 栈，命令没解析成功，窗口没了）。
+  所以对**正在用的窗口**做 attach 实验时：①先用只读命令验证符号能解析（`x antjsb!antb_print_js_stack`）；
+  ②命令表最后必须是 `qd`，表达式不许打错。
+- **卡住的窗口抓 JS 栈：`tools/js_stack.ps1 -Pid <pid>`**（不 attach、不重启、进程继续跑）。
+  它在目标进程里 `CreateRemoteThread` 调 `antjsb!antb_dump_last_js_stack_to_file(path)`（arg 就是路径，
+  正好是该导出唯一的参数），引擎自己把栈写到文件。**不要用 cdb `.call` 走这条路**：ant 用
+  `__declspec(thread)`，`.call` 的调用上下文里 TLS 数组不是 antjsb 初始化过的那份，第一条
+  `_tls_index` 加载就 AV（实测 `Attempt to read from address 0x50`），而且上面那条"命令失败 → 杀进程"
+  会让窗口直接消失；`.call` 还必须补一个 `g` 才真正执行（`.call` 只做 "set up"，不打 `g` 就 detach
+  会把线程留在半搭好的调用帧上，进程同样会死）。另外 `js_print_stack_trace_vm()` 写 `stderr`，
+  调试器读不到，重定向（`freopen`/`_dup2`）本身又是一串容易打错字面量（cdb 的 MASM 解析器不允许
+  `.call` 里带字符串字面量）。
+  产物形如 `at j (https://vfiles.gtimg.cn/…/vendor-common-*.js:1:52943)` × N —— v.qq 的卡死能直接看到
+  字节码 VM 的递归分发帧，比看门狗的单帧信息多。
 - **一条命令跑站点冒烟**：`pwsh -File tools/run_site_smoke.ps1`
   —— deepseek / baidu / v.qq 各跑一次探针，输出退出码、耗时、元素数与 title；退出码 0 且元素数
   达到下限才算过。**需要网络**：exit 5/6 先确认站点可达再当引擎问题查。v.qq 目前带

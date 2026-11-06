@@ -144,6 +144,26 @@
 
 - 现状：QIMEI 的字节码 VM 每步 `G[T[++P]]` 都走通用属性路径，实测约 6M 次/秒；Chrome 里百毫秒级的
   计算在 ant 里要分钟级 → GUI 表现为假死（R60）。
+- 2026-11-06 复测（`AGB_HANG_WATCH=1` + `--probe https://v.qq.com/`，90 s 超时，日志 `debug/hang_probe_vqq.log`）：
+  仍在挂，15 次 `[hang]` 快照。持续的那段是 `vendor-common-D7eCwrIl.js:1:49505` 的 `j`
+  （源码就是 `for(;;) switch(T[++P]) { case …: G[T[++P]] = G[T[++P]] … }` 的字节码分发循环，
+  每步都走 `G[idx]`）；另外两段在 Vue 挂载（`vendor-vue…js:21` 的 `Wo/Oc/i`，栈里能看到
+  `mount → setup → index-*.js`）和 superplayer。→ 本项验收（v.qq 不再报 5 s `[hang]`）**仍未达成**。
+- 2026-11-06 定位到断崖（`tools/bench_vm.js`，引擎直跑）：稠密数组读/写 **2.5/4.0 ns**，
+  稀疏下标（元素落到 shape 的 interned 字符串键属性）**141.5/206.5 ns**，字符串键 115–196 ns，
+  `switch` 分发 104 ns/轮。→ 主修方向是**整数下标 → slot 的 shape 级表 + 站点 IC**，
+  方案、判据、风险见 [design-elem-fastpath.md](design-elem-fastpath.md)。
+- 2026-11-06 现场抓取（`tools/js_stack.ps1 -Pid <pid>`，不 attach）：卡死时 JS 栈是
+  **9 层嵌套的 `j`**（`vendor-common…js:1` 的 50257/50432/52943/53032/53844/55082 循环出现），
+  即字节码 VM 在 JS 层自我递归（`m(...)` 每调一次就压一层解释器帧）——除了 `G[idx]` 的属性路径，
+  每次 VM 内调用还带一整套帧建立/参数搬运，量级问题被放大。
+- **2026-11-06 第一轮已落地（ant 仓库）**：数组元素读/写的稀疏快路径 + 索引键 memo（`js_index_get_fast`、
+  `arr_get` / `setprop_index_impl` 的快路径、`idx_hash`）。`tools/bench_vm.js`：稀疏读 141.5→**41 ns**、
+  写 206.5→**28 ns**（稠密 2.5/4.0 ns 无回归）。测试 `tests/test_index_elem.c`（meson `index-elem`）+
+  `run_script_mode_tests.ps1` 全绿。**站点级验收仍未过**：v.qq 在 `AGB_HANG_WATCH=1` 下仍报 14 次 `[hang]`
+  （QIMEI `getWebInstance → new j`）。剩余：字符串键 115–196 ns、`switch` 分发 104 ns/轮、
+  数字键站点 IC（见 [design-elem-fastpath.md](design-elem-fastpath.md) §4.2/§4.3、§7）。
+  顺带发现：数组越界读不查原型链索引键（`Array.prototype[7]=777; [][7]` → `undefined`），已记录在 §8。
 - **已完成**：`obj[key]` 动态字符串键的属性 IC（R65，script 模式下 66→28ns / 63→25ns / 75→52ns）；
   长循环/销毁竞态（R61）不再干扰基准。
 - **已完成（R66 + R67，默认开启）**：script 模式的顶层 `var`/`function` 发布到 global
