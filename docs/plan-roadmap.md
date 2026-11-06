@@ -418,6 +418,11 @@
 8. `el.scrollIntoView()` / `scrollIntoViewIfNeeded()` 不滚动 → `Element::scrollIntoView()` →
    `RenderLayer::scrollRectToVisible()` 那条链没落到 `FrameView::setContentsPos`；文档滚动本身已在
    R82 接通，这里只是入口不对（实测：调用前后 `getBoundingClientRect().top` 不变）。
+9. 探针在大文档站点上偶发退出崩溃（css3test，改动前就有，**未修**）：payload 已打印、`[probe] main url=`
+   之后 `[crash] code=0xc0000005`，栈是同一组帧的深递归（`libagave+0x2da47e`/`0x2ea62e`/`0x2dbac1`），
+   同一次运行还可能打印 `LEAK: 4628 RenderObject` —— 像是 render 树 teardown 递归。判据：同一条命令重跑
+   几次，成功与崩溃都可能出现；`#hgroup` 之类的 payload 不受影响。要修先拿 `tools/js_stack.ps1`/`cdb_stack.ps1`
+   抓符号，别从 CSS 侧猜。
 
 ### P2 不推进（已评估，保留理由）
 
