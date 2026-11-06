@@ -12,6 +12,10 @@
     * pixels    - transform_repaint.html changes a transform from a page timer,
                   the probe screenshots the partial repaint, and pixel_check.py
                   asserts where the transformed boxes actually landed.
+    * resize    - resize_probe.html is resized from 1100x800 to 500x400 through
+                  the probe (real WM_SIZE path); the check asserts that vw/vh,
+                  calc(100vw ...), @media breakpoints and the resize event all
+                  follow the new viewport.
 
   Exit code is the verdict: 0 all green, 1 any failure.
 
@@ -71,6 +75,30 @@ try {
             }
         }
         if ($missing) { $failed++ } else { Write-Host 'scrollbar_hidden: ok' }
+    }
+
+    Write-Host '== window resize (viewport units, media queries, resize event)'
+    $url = 'file:///' + (Join-Path $root 'tools/pages/resize/resize_probe.html').Replace('\', '/')
+    $out = & (Join-Path $root 'build-zig-native\agave_shell.exe') --probe $url --resize 500x400 `
+        --eval-file (Join-Path $root 'tools/pages/resize/check_resize.js') `
+        --wait 1200 --settle 200 --timeout 30000 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host 'resize: probe failed'
+        $failed++
+    } else {
+        $text = $out -join "`n"
+        $missing = 0
+        foreach ($needle in @('viewport inner=500x400', 'vwBox=500x200',
+                              'calcBox=400x150', 'mediaCSS=rgb(200, 30, 40)',
+                              'mediaCSSwide=rgb(40, 30, 20)',
+                              'matchMedia(max-width:600px)=true',
+                              'resizeEvents addEventListener=500x400')) {
+            if ($text -notmatch [regex]::Escape($needle)) {
+                Write-Host ('resize: missing ' + $needle)
+                $missing++
+            }
+        }
+        if ($missing) { $failed++ } else { Write-Host 'resize: ok' }
     }
 
     if ($failed) {

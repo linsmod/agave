@@ -188,6 +188,7 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
 | 绘制诊断 | `AGB_PAINT_FULL=1` | 每帧整屏重绘（忽略脏矩形）；用来区分"失效/裁剪错"和"布局错"（见 §4） |
 | 页面 | `AGB_TITLE_DEBUG=1` / `AGB_SCRIPT_DEBUG=1` | `document.title` 轮询 / tokenizer 脚本加载 |
 | CSS/布局 | `AGB_CSS_DEBUG=1` / `AGB_LAYOUT_DEBUG=1` / `AGB_BG_DEBUG=1` | 未实现 CSS 属性日志 / 布局 / 背景层 |
+| CSS/视口 | `AGB_VIEWPORT_DEBUG=1` | 打印 vw/vh 变量注册（`-agb-vwunit-…`）与每个变量在当前视口下的 px 值，以及含 vw/vh 的 `calc` 模板代入结果（R69） |
 | 模块 | `AGB_MODULE_DEBUG=1` | 模块抓取/求值/预取（`[modfetch]`/`[modeval]`） |
 | 模块 | `AGB_MODULE_CACHE=0` / `AGB_MODULE_CACHE_TTL` / `AGB_MODULE_CONCURRENCY=n` | 关磁盘缓存 / TTL / 并发槽（默认 12） |
 | 模块 | `AGB_OFFLINE=1` | 只从缓存取（`--offline` 就是设它） |

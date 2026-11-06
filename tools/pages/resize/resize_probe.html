@@ -5,8 +5,8 @@
 <title>resize probe</title>
 <style>
   html, body { margin: 0; padding: 0; }
-  /* 100vw/50vh are rewritten to px at parse time (R53); this box shows whether
-   * a window resize recomputes them. */
+  /* Viewport units are document variables now (var(--agb-v...)), so these
+   * follow a window resize; they used to be px baked at parse time (R53). */
   #vw { width: 100vw; height: 50vh; background: rgb(0, 0, 200); }
   /* Percentages resolve during layout, so this one must follow a resize. */
   #pct { width: 50%; height: 10px; background: rgb(0, 200, 0); }
@@ -15,6 +15,10 @@
   @media (max-width: 600px) {
     #mq { background: rgb(200, 30, 40); }
   }
+  /* calc() with viewport units: the 2008 grammar cannot parse calc() with a
+   * var() inside, so this used to be dropped as soon as the units became
+   * symbolic. */
+  #calc { width: calc(100vw - 100px); height: calc(50vh - 50px); }
   /* The mirror case: matches at the initial 1100px viewport and must stop
    * matching after a shrink to 500px, if @media is live at all. */
   #mq-wide { width: 10px; height: 10px; background: rgb(40, 30, 20); }
@@ -23,10 +27,11 @@
   }
 </style>
 </head>
-<body onresize="window.__attrLog = (window.__attrLog || []); window.__attrLog.push(window.innerWidth);">
+<body onresize="document.documentElement.setAttribute('data-attr-resize', String(window.innerWidth) + 'x' + String(window.innerHeight));">
 <div id="vw"></div>
 <div id="pct"></div>
 <div id="mq"></div>
+<div id="calc"></div>
 <div id="mq-wide"></div>
 <script>
   window.__resizeLog = [];

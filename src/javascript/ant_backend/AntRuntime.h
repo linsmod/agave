@@ -124,6 +124,12 @@ void dispatchWindowEvent(const char* type);
  * binding. No-op for the main frame or when realms are disabled. */
 void dispatchFrameDocumentEvent(void* document, const char* type);
 
+/* A frame's viewport changed: fires `resize` at the page's own listeners.
+ * WebCore dispatches its window listeners (HTML attribute handlers) itself;
+ * addEventListener('resize') and window.onresize live in this runtime's
+ * listener table and are only reached from here. */
+void dispatchResizeEvent(void* document);
+
 /* The document is about to be replaced: fires the outgoing page's teardown
  * events (pagehide, unload) at its own listeners and stops its realm. Call it
  * while the old document is still the current one. */

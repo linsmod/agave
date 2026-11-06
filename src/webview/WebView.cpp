@@ -195,7 +195,10 @@ void WebView::resizeView(unsigned char* buffer, int width, int height, int pitch
 		d->m_txtanti = isTextAntialias();
 	}
     d->m_frameView->resize(width, height);
-    d->m_frame->sendResizeEvent();
+    /* The resize event is NOT sent here: this runs before the layout has picked
+     * up the new size, so the page would see the old viewport. FrameView::layout
+     * sends it after laying out, once per size change (and swallows a burst of
+     * WM_SIZEs into that one layout). */
 }
 
 void WebView::scrollRect(int sx, int sy, int x, int y, int width, int height)

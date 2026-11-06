@@ -42,6 +42,7 @@ namespace WebCore { bool prefersDarkColorScheme(); }
 #include "MouseEvent.h"
 #include "KeyboardEvent.h"
 #include "Frame.h"
+#include "FrameView.h"
 #include "FrameTree.h"
 #include "CharacterData.h"
 #include "NamedAttrMap.h"
@@ -575,6 +576,7 @@ int globalStorageKey(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void
 int globalStorageCount(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalComputedStyle(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalPrefersDark(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int globalViewportSize(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalInputValue(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalActivateSlot(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int imageConstructor(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
@@ -4870,10 +4872,25 @@ int windowGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValu
         v = wrapNode(engine, owner);
     } else if (!strcmp(name, "innerWidth") || !strcmp(name, "outerWidth")
             || !strcmp(name, "innerHeight") || !strcmp(name, "outerHeight")) {
-        /* Same rule the prelude uses: the frame's own viewport. */
-        WebCore::Element* de = d->documentElement();
-        int width = de ? de->clientWidth() : 0;
-        int height = de ? de->clientHeight() : 0;
+        /* window.innerWidth is the LAYOUT viewport: scrollbar included, which
+         * is what 100vw and the @media width queries use.
+         * documentElement.clientWidth (the old answer) is the content box and
+         * is 16px narrower once a scrollbar shows up - a resize handler that
+         * sized a full-width element from innerWidth came out short. */
+        WebCore::FrameView* view = d->view();
+        WebCore::RenderObject* renderer = d->renderer();
+        int width = 0;
+        int height = 0;
+
+        if (view) {
+            width = view->width();
+            height = view->height();
+
+            if (renderer) {
+                width = WebCore::adjustForAbsoluteZoom(width, renderer);
+                height = WebCore::adjustForAbsoluteZoom(height, renderer);
+            }
+        }
 
         v = antb_make_number(engine, (double)(strstr(name, "Width") ? width : height));
     } else if (isFrameIndex(name)) {
@@ -5025,6 +5042,8 @@ static void installGlobalApi(AntbEngine* engine, AntbValue* global)
         antb_define_method(g_engine, global, "__agbStorageCount", globalStorageCount, NULL);
         antb_define_method(g_engine, global, "__agbComputedStyle", globalComputedStyle, NULL);
         antb_define_method(g_engine, global, "__agbPrefersDark", globalPrefersDark, NULL);
+        antb_define_method(g_engine, global, "__agbViewportWidth", globalViewportSize, (void*)0);
+        antb_define_method(g_engine, global, "__agbViewportHeight", globalViewportSize, (void*)1);
         /* Direct value access for the prototype-level value accessor (React tracker). */
         antb_define_method(g_engine, global, "__agbInputValue", globalInputValue, NULL);
 
@@ -9087,6 +9106,40 @@ int globalPrefersDark(AntbEngine* engine, AntbValue*, AntbValue**, int, AntbValu
     return 1;
 }
 
+/* __agbViewportWidth() / __agbViewportHeight(): the layout viewport of the
+ * document passed in (the prelude passes the realm's own `document`, so
+ * `iframe.contentWindow.innerWidth` answers for the iframe even when the
+ * caller is the parent page), scrollbar included - window.innerWidth
+ * semantics, and the same number 100vw and the @media width queries use.
+ * `user` picks the axis. documentElement.clientWidth is 16px narrower once a
+ * scrollbar is present, so the prelude's innerWidth getter must not be built
+ * on it. */
+int globalViewportSize(AntbEngine* engine, AntbValue*, AntbValue** args, int argc, AntbValue* out, void* user)
+{
+    int wantWidth = (user == 0);
+    int value = 0;
+    WebCore::Document* d = g_document;
+
+    if (argc > 0 && args[0]) {
+        WebCore::Node* node = nodeOf(args[0]);
+
+        if (node && node->document())
+            d = node->document();
+    }
+
+    if (d && d->view()) {
+        WebCore::FrameView* view = d->view();
+
+        value = wantWidth ? view->width() : view->height();
+
+        if (WebCore::RenderObject* renderer = d->renderer())
+            value = WebCore::adjustForAbsoluteZoom(value, renderer);
+    }
+
+    antb_value_assign(out, antb_make_number(engine, (double)value));
+    return 1;
+}
+
 /* getComputedStyle(el).getPropertyValue(name) -> computed value as a string.
  * Goes through WebCore's CSSComputedStyleDeclaration, so every property the
  * layout engine knows about comes back with a real value. A third argument is
@@ -10121,6 +10174,33 @@ void dispatchFrameDocumentEvent(void* document, const char* type)
 
     if (doc->parentDocument())
         bindDocument(doc->parentDocument());
+}
+
+/* Frame::sendResizeEvent() runs while the frame that changed size is being
+ * laid out, which is not necessarily the document currently bound in the
+ * engine: a child frame laying out inside its parent's layout must fire at its
+ * own window, not the parent's. */
+void dispatchResizeEvent(void* document)
+{
+    WebCore::Document* doc = (WebCore::Document*)document;
+
+    if (!g_engine || !doc)
+        return;
+
+    if (doc == g_document) {
+        dispatchWindowEvent("resize");
+        return;
+    }
+
+    {
+        WebCore::Document* previous = g_document;
+
+        bindDocument(doc);
+        dispatchWindowEvent("resize");
+
+        if (previous)
+            bindDocument(previous);
+    }
 }
 
 /* Same, but the event object carries `state`: popstate hands back the value

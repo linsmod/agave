@@ -163,6 +163,7 @@ DOM attach（Element::attach / Text::attach）
 | JS 读几何 | `Element::offset*/client*/scroll*` → `document()->updateLayoutIgnorePendingStylesheets()` |
 | 定时器 | `FrameView::scheduleRelayout()` 的 one-shot timer（`Document::minimumLayoutDelay()`） |
 | 显式重排 | `WebView::reflow()`（min layout size / small view / `macross_view_reflow`）；zoom 走 `Frame::setPageZoomFactor()` / `setZoomFactor()` → `recalcStyle(Force)` + `view()->layout()` |
+| 窗口/iframe 尺寸变化 | `FrameView::layout()` 开头把 `styleViewportSize` 和当前尺寸比：变了先 `Document::viewportSizeChanged()` + `updateStyleIfNeeded()`（重建 selector → `@media` 重估、vw/vh 变量换值），再正常布局；布局末尾尺寸变化时派发 `resize` 事件（R69） |
 
 常见失败模式：
 

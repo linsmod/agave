@@ -1827,13 +1827,22 @@ static Length convertToLength(CSSPrimitiveValue *primitiveValue, RenderStyle *st
 void CSSStyleSelector::resolveCustomProperties(RenderStyle* parentStyle)
 {
     RefPtr<StyleCustomPropertyData> properties;
+    bool copied;
 
-    if (parentStyle && parentStyle->customProperties())
+    if (parentStyle && parentStyle->customProperties()) {
         properties = parentStyle->customProperties();
-    else
+        copied = false;
+    } else if (m_document) {
+        /* Nothing to inherit (the document's own style, or a subtree whose
+         * parent has no '--x'): start from the viewport-unit variables, so a
+         * stylesheet's `var(--agb-vw-100)` resolves. The document's map is
+         * shared, so the first '--x' of this element copies before writing. */
+        properties = m_document->viewportCustomProperties();
+        copied = false;
+    } else {
         properties = StyleCustomPropertyData::create();
-
-    bool copied = !parentStyle || !parentStyle->customProperties();
+        copied = true;
+    }
 
     for (int importantPass = 0; importantPass < 2; ++importantPass) {
         for (unsigned i = 0; i < m_matchedDecls.size(); ++i) {

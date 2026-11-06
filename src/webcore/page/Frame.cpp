@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Copyright (C) 1998, 1999 Torben Weis <weis@kde.org>
  *                     1999 Lars Knoll <knoll@kde.org>
  *                     1999 Antti Koivisto <koivisto@kde.org>
@@ -1534,8 +1534,16 @@ void Frame::forceLayoutWithPageWidthRange(float minPageWidth, float maxPageWidth
 
 void Frame::sendResizeEvent()
 {
-    if (Document* doc = document())
+    if (Document* doc = document()) {
+        /* WebCore's own window listeners (HTML attribute handlers) ... */
         doc->dispatchWindowEvent(EventNames::resizeEvent, false, false);
+#if ENABLE(ANTJS)
+        /* ... and the page's JS listeners, which live in the Ant runtime:
+         * without this, addEventListener('resize') / window.onresize never
+         * fire even though the layout did change size. */
+        AntRuntime::dispatchResizeEvent(doc);
+#endif
+    }
 }
 
 void Frame::sendScrollEvent()

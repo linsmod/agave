@@ -34,8 +34,10 @@
 #include "HTMLFormElement.h"
 #include "KURL.h"
 #include "StringHash.h"
+#include "StyleCustomPropertyData.h"
 #include "Timer.h"
 #include <wtf/HashCountedSet.h>
+#include <wtf/HashMap.h>
 #include <wtf/ListHashSet.h>
 
 namespace WebCore {
@@ -302,6 +304,29 @@ public:
     void updateStyleIfNeeded();
 
     void recalcStyleSelector();
+
+    /* The frame's viewport changed (window resize, iframe relayout). Two
+     * things were computed for the old size: the @media rules folded into the
+     * selector's rule sets while it was built, and the --agb-v* values that
+     * stand in for vw/vh. Both are refreshed here; the caller follows with
+     * updateStyleIfNeeded() so the new styles are actually applied. */
+    void viewportSizeChanged();
+
+    /* A stylesheet used Nvw/Nvh/Nvmin/Nvmax: the text now says
+     * var(--agb-v<unit>-<N>) and this table remembers what N is. */
+    void noteViewportUnit(int kind, double number, const String& variableName);
+
+    /* A calc(...) expression containing viewport units. The grammar cannot
+     * parse calc() at all (the 2008 productions have no '+'), let alone a
+     * calc() with a var() inside, so the whole expression becomes one
+     * variable whose value is the calc text with the units substituted at the
+     * current viewport - recomputed on resize like the plain units. Returns
+     * the custom property name the declaration has to carry. */
+    String addViewportCalc(const String& calcText);
+
+    /* The --agb-v* custom properties for the current viewport, cached until
+     * the next resize. Style resolution seeds the root element with them. */
+    PassRefPtr<StyleCustomPropertyData> viewportCustomProperties();
 
     bool usesDescendantRules() const { return m_usesDescendantRules; }
     void setUsesDescendantRules(bool b) { m_usesDescendantRules = b; }
@@ -697,6 +722,21 @@ private:
      * updateStyleIfNeeded() so a burst of inline <style> writes costs one
      * recalc instead of one full-document recalc + layout per write. */
     bool m_pendingStyleSelectorUpdate;
+
+    /* Viewport units (R53 rewrote them to px while parsing, so they were frozen
+     * at the load-time size). Now a stylesheet keeps `var(--agb-vw-100)` and
+     * this table says what the number is; the px value follows the viewport
+     * through viewportCustomProperties(), so a resize only restyles. */
+    struct ViewportUnit {
+        int kind;       /* 0 = vw, 1 = vh, 2 = vmin, 3 = vmax */
+        double number;  /* e.g. 100.0 for 100vw */
+    };
+    HashMap<String, ViewportUnit> m_viewportUnits;
+    /* calc(...) texts that contain viewport units, in registration order; the
+     * variable is -agb-vwunit-calc-<index+1> and its value is the text with
+     * the units substituted (see viewportCustomProperties). */
+    Vector<String> m_viewportCalcTemplates;
+    RefPtr<StyleCustomPropertyData> m_viewportProperties;
 
     Frame* m_frame;
     DocLoader* m_docLoader;

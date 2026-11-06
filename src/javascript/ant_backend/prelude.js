@@ -281,8 +281,14 @@
      * have - WeChat's login QR was sized for the parent page and then clipped
      * inside its 200x200 iframe. Getters keep them in step with whichever
      * document is bound. */
-    function innerW() { return (g.document && g.document.documentElement) ? g.document.documentElement.clientWidth : 0; }
-    function innerH() { return (g.document && g.document.documentElement) ? g.document.documentElement.clientHeight : 0; }
+    function innerW() {
+      if (typeof g.__agbViewportWidth === 'function') { try { return g.__agbViewportWidth(g.document); } catch (e) {} }
+      return (g.document && g.document.documentElement) ? g.document.documentElement.clientWidth : 0;
+    }
+    function innerH() {
+      if (typeof g.__agbViewportHeight === 'function') { try { return g.__agbViewportHeight(g.document); } catch (e) {} }
+      return (g.document && g.document.documentElement) ? g.document.documentElement.clientHeight : 0;
+    }
     function defineViewport(name, getter) {
       if (Object.defineProperty) {
         try { Object.defineProperty(g, name, { get: getter, configurable: true }); return; } catch (e) {}

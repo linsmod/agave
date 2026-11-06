@@ -11,6 +11,7 @@ var out = [];
 var vw = document.getElementById('vw');
 var pct = document.getElementById('pct');
 var mq = document.getElementById('mq');
+const calcBox = document.getElementById('calc');
 var mqWide = document.getElementById('mq-wide');
 var de = document.documentElement;
 
@@ -24,6 +25,8 @@ out.push("viewport inner=" + window.innerWidth + "x" + window.innerHeight +
 out.push("vwBox=" + vw.offsetWidth + "x" + vw.offsetHeight +
          " (100vw x 50vh)");
 out.push("pctBox=" + pct.offsetWidth + " (50%)");
+out.push("calcBox=" + calcBox.offsetWidth + "x" + calcBox.offsetHeight +
+         " (calc(100vw - 100px) x calc(50vh - 50px))");
 out.push("mediaCSS=" + getComputedStyle(mq).backgroundColor +
          " (rgb(10,20,30) = desktop, rgb(200,30,40) = mobile rule)");
 out.push("mediaCSSwide=" + getComputedStyle(mqWide).backgroundColor +
@@ -32,5 +35,5 @@ out.push("matchMedia(max-width:600px)=" +
          (window.matchMedia ? window.matchMedia('(max-width: 600px)').matches : 'n/a'));
 out.push("resizeEvents addEventListener=" + list(window.__resizeLog) +
          " onresize=" + list(window.__propLog) +
-         " bodyAttr=" + list(window.__attrLog));
+         " bodyAttr=" + (de.getAttribute('data-attr-resize') || '(none)'));
 probeExit(out.join("\n"));

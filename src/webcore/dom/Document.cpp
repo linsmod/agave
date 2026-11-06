@@ -25,6 +25,7 @@
 #include "config.h"
 #include "Document.h"
 
+#include <vector>
 #include "AXObjectCache.h"
 #include "CDATASection.h"
 #include "CSSHelper.h"
@@ -2048,6 +2049,224 @@ void Document::updateStyleIfNeeded()
 
     recalcStyleSelector();
     recalcStyle(Force);
+}
+
+/* The frame's viewport changed: the @media rules that made it into the current
+ * selector were filtered against the old size, and the --agb-v* values behind
+ * 100vw/50vh were computed from it. Mark both stale, rebuild the selector and
+ * restyle. FrameView::layout calls this before laying out, so the layout that
+ * follows already uses the new breakpoints. */
+void Document::viewportSizeChanged()
+{
+    m_viewportProperties = 0;
+    m_pendingStyleSelectorUpdate = true;
+
+    if (renderer())
+        renderer()->setNeedsLayoutAndPrefWidthsRecalc();
+}
+
+/* A stylesheet used Nvw/Nvh/Nvmin/Nvmax: the text keeps
+ * var(--agb-v<unit>-<N>) (see CSSParser::rewriteViewportUnits), so all this has
+ * to remember is N and the unit; the px value follows the viewport through
+ * viewportCustomProperties(). */
+void Document::noteViewportUnit(int kind, double number, const String& variableName)
+{
+    if (m_viewportUnits.contains(variableName))
+        return;
+
+    ViewportUnit unit;
+    unit.kind = kind;
+    unit.number = number;
+    m_viewportUnits.set(variableName, unit);
+    m_viewportProperties = 0;
+
+    if (getenv("AGB_VIEWPORT_DEBUG"))
+        fprintf(stderr, "[viewport] register %s kind=%d number=%.2f\n",
+                variableName.utf8().data(), kind, number);
+
+    /* The root element's custom properties were built while style was resolved;
+     * a name registered afterwards (a later <style>, an inline style) needs one
+     * more pass, otherwise the declaration using it expands to nothing. */
+    m_pendingStyleSelectorUpdate = true;
+
+    if (renderer())
+        renderer()->setNeedsLayoutAndPrefWidthsRecalc();
+}
+
+/* Registration order decides the variable name; the caller writes
+ * var(<name>) into the stylesheet. */
+String Document::addViewportCalc(const String& calcText)
+{
+    m_viewportCalcTemplates.append(calcText);
+    m_viewportProperties = 0;
+
+    if (getenv("AGB_VIEWPORT_DEBUG"))
+        fprintf(stderr, "[viewport] calc#%d = [%s]\n",
+                (int)m_viewportCalcTemplates.size(), calcText.utf8().data());
+
+    /* Same reasoning as noteViewportUnit(): a name registered after the root's
+     * style was built needs one more style pass. */
+    m_pendingStyleSelectorUpdate = true;
+
+    if (renderer())
+        renderer()->setNeedsLayoutAndPrefWidthsRecalc();
+
+    return String::format("--vwunit-calc-%d", (int)m_viewportCalcTemplates.size());
+}
+
+/* Rewrites Nvw/Nvh/Nvmin/Nvmax inside one calc() text to px for this viewport.
+ * Strings and comments are copied untouched; a number without a viewport unit
+ * is left alone. The result is still a calc() text: "% + px" settles at layout
+ * through the existing Length::Calculated path. */
+static String substituteViewportUnitsInText(const String& text, int vw, int vh)
+{
+    std::vector<UChar> out;
+    unsigned len = text.length();
+    unsigned i = 0;
+
+    out.reserve(len + 16);
+
+    while (i < len) {
+        UChar c = text[i];
+
+        if (c == '/' && i + 1 < len && text[i + 1] == '*') {
+            while (i < len) {
+                out.push_back(text[i]);
+                if (text[i] == '*' && i + 1 < len && text[i + 1] == '/') {
+                    out.push_back(text[i + 1]);
+                    i += 2;
+                    break;
+                }
+                ++i;
+            }
+            continue;
+        }
+
+        if (c == '"' || c == '\'') {
+            UChar quote = c;
+
+            out.push_back(c);
+            ++i;
+            while (i < len) {
+                UChar d = text[i];
+
+                out.push_back(d);
+                ++i;
+                if (d == (UChar)92 && i < len) {
+                    out.push_back(text[i]);
+                    ++i;
+                } else if (d == quote) {
+                    break;
+                }
+            }
+            continue;
+        }
+
+        if ((c >= '0' && c <= '9') || (c == '.' && i + 1 < len && text[i + 1] >= '0' && text[i + 1] <= '9')) {
+            unsigned start = i;
+
+            while (i < len && ((text[i] >= '0' && text[i] <= '9') || text[i] == '.'))
+                ++i;
+
+            if (i + 1 < len) {
+                UChar u0 = text[i];
+                UChar u1 = text[i + 1];
+                int unitLen = 0;
+                double base = 0;
+
+                if (u0 >= 'A' && u0 <= 'Z') u0 = (UChar)(u0 + 32);
+                if (u1 >= 'A' && u1 <= 'Z') u1 = (UChar)(u1 + 32);
+
+                if (u0 == 'v' && u1 == 'w') {
+                    unitLen = 2; base = vw;
+                } else if (u0 == 'v' && u1 == 'h') {
+                    unitLen = 2; base = vh;
+                } else if (u0 == 'v' && u1 == 'm' && i + 3 < len) {
+                    UChar u2 = text[i + 2];
+                    UChar u3 = text[i + 3];
+
+                    if (u2 >= 'A' && u2 <= 'Z') u2 = (UChar)(u2 + 32);
+                    if (u3 >= 'A' && u3 <= 'Z') u3 = (UChar)(u3 + 32);
+
+                    if ((u2 == 'i' || u2 == 'a') && u3 == 'n') {
+                        unitLen = 4;
+                        base = (u2 == 'i') ? (vw < vh ? vw : vh) : (vw > vh ? vw : vh);
+                    }
+                }
+
+                if (unitLen) {
+                    UChar after = (i + unitLen < len) ? text[i + unitLen] : 0;
+                    bool afterOk = !after
+                        || !((after >= 'a' && after <= 'z') || (after >= 'A' && after <= 'Z')
+                             || (after >= '0' && after <= '9') || after == '_' || after == '-');
+
+                    if (afterOk) {
+                        double number = text.substring(start, i - start).deprecatedString().toDouble();
+                        String px = String::format("%.2fpx", number * base / 100.0);
+
+                        for (unsigned k = 0; k < px.length(); ++k)
+                            out.push_back(px[k]);
+                        i += unitLen;
+                        continue;
+                    }
+                }
+            }
+
+            for (unsigned k = start; k < i; ++k)
+                out.push_back(text[k]);
+            continue;
+        }
+
+        out.push_back(c);
+        ++i;
+    }
+
+    return out.empty() ? text : String(&out[0], (unsigned)out.size());
+}
+
+PassRefPtr<StyleCustomPropertyData> Document::viewportCustomProperties()
+{
+    if (m_viewportProperties)
+        return m_viewportProperties;
+
+    RefPtr<StyleCustomPropertyData> properties = StyleCustomPropertyData::create();
+    FrameView* v = view();
+    int vw = v ? v->width() : 0;
+    int vh = v ? v->height() : 0;
+
+    HashMap<String, ViewportUnit>::iterator end = m_viewportUnits.end();
+    for (HashMap<String, ViewportUnit>::iterator it = m_viewportUnits.begin(); it != end; ++it) {
+        double base = 0;
+
+        switch (it->second.kind) {
+        case 1:  base = vh; break;
+        case 2:  base = vw < vh ? vw : vh; break;   /* vmin */
+        case 3:  base = vw > vh ? vw : vh; break;   /* vmax */
+        default: base = vw; break;                  /* vw   */
+        }
+
+        properties->setProperty(it->first, String::format("%.2fpx", it->second.number * base / 100.0));
+
+        if (getenv("AGB_VIEWPORT_DEBUG"))
+            fprintf(stderr, "[viewport] %s = %.2fpx (kind=%d number=%.2f base=%d)\n",
+                    it->first.utf8().data(), it->second.number * base / 100.0,
+                    it->second.kind, it->second.number, (int)base);
+    }
+
+    /* calc() expressions: substitute the units inside the stored template. The
+     * value stays a calc() text, so a "% + px" mix still resolves at layout. */
+    for (unsigned i = 0; i < m_viewportCalcTemplates.size(); ++i) {
+        String name = String::format("-agb-vwunit-calc-%d", (int)i + 1);
+        String value = substituteViewportUnitsInText(m_viewportCalcTemplates[i], vw, vh);
+
+        properties->setProperty(name, value);
+
+        if (getenv("AGB_VIEWPORT_DEBUG"))
+            fprintf(stderr, "[viewport] %s = [%s]\n", name.utf8().data(), value.utf8().data());
+    }
+
+    m_viewportProperties = properties;
+    return properties;
 }
 
 void Document::recalcStyleSelector()

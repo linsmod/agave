@@ -76,6 +76,8 @@ public:
         , m_viewportRenderer(0)
         , m_wasScrolledByUser(false)
         , m_inProgrammaticScroll(false)
+        , applyingViewportStyle(false)
+        , styleViewportSize()
     {
         isTransparent = false;
         baseBackgroundColor = Color::white;
@@ -144,6 +146,14 @@ public:
 
     bool m_wasScrolledByUser;
     bool m_inProgrammaticScroll; 
+
+    /* Viewport-dependent style: @media rules are folded into the style
+     * selector and vw/vh are document variables, so both have to be refreshed
+     * when the frame's size changes. styleViewportSize is the size styles were
+     * last resolved for; applyingViewportStyle suppresses the nested layout
+     * that Document::updateStyleIfNeeded() would trigger from inside layout(). */
+    bool applyingViewportStyle;
+    IntSize styleViewportSize;
 };
 
 FrameView::FrameView(Frame* frame)
@@ -319,6 +329,12 @@ void FrameView::layout(bool allowSubtree)
     if (d->midLayout)
         return;
 
+    /* Document::updateStyleIfNeeded() (run by the viewport-change hook below)
+     * may ask for a layout while this one is setting up. The outer call
+     * continues with the fresh styles, so swallow that request. */
+    if (d->applyingViewportStyle)
+        return;
+
     /* Layout accounting: a page that lays out thousands of times hides its real
      * cost behind "loading" (css3test built ~16k elements). */
     bool layoutDebug = getenv("AGB_LAYOUT_DEBUG") != NULL;
@@ -377,6 +393,25 @@ void FrameView::layout(bool allowSubtree)
         // FIXME: Should we set m_size.height here too?
         m_size.setWidth(visibleWidth());
         return;
+    }
+
+    /* The viewport changed since styles were last resolved (window resize, an
+     * iframe given a new size): the @media rules in the selector and the vw/vh
+     * variables are stale. Restyle once before laying out, so this layout
+     * already uses the new breakpoints and lengths. The first layout records
+     * the size without restyling - the sheets were parsed for exactly it. */
+    if (!d->layoutRoot) {
+        IntSize viewport(width(), height());
+
+        if (d->styleViewportSize.isEmpty())
+            d->styleViewportSize = viewport;
+        else if (viewport != d->styleViewportSize) {
+            d->styleViewportSize = viewport;
+            d->applyingViewportStyle = true;
+            document->viewportSizeChanged();
+            document->updateStyleIfNeeded();
+            d->applyingViewportStyle = false;
+        }
     }
 
     d->layoutSchedulingEnabled = false;

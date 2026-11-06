@@ -837,6 +837,47 @@ static String rewriteWebkitScrollbarRules(const String& css)
     return rewriteScrollbarBlock(css);
 }
 
+/* The name written into the stylesheet for 100vw. rewriteCustomPropertyNames()
+ * turns a token-initial `--x` into `-agb-x` (so a page's `--x` cannot clash
+ * with the user agent's), which means the declaration ends up carrying
+ * `-agb-` + this. The registration next to the rewrite uses that form. */
+static String viewportUnitVariableName(int kind, const String& numberText)
+{
+    static const char* const unitNames[] = { "vw", "vh", "vmin", "vmax" };
+    String name = String::format("--vwunit-%s-", unitNames[kind]);
+
+    for (unsigned i = 0; i < numberText.length(); ++i) {
+        UChar c = numberText[i];
+        bool identChar = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+
+        name += identChar ? String(&c, 1) : String("_");
+    }
+
+    return name;
+}
+
+/* Does this text mention a viewport unit? A false positive is harmless: the
+ * variable would just hold the expression unchanged. */
+static bool textHasViewportUnit(const String& text)
+{
+    for (unsigned i = 0; i + 1 < text.length(); ++i) {
+        if (toASCIILower(text[i]) != 'v')
+            continue;
+
+        UChar n = toASCIILower(text[i + 1]);
+
+        if (n == 'w' || n == 'h')
+            return true;
+
+        if (n == 'm' && i + 3 < text.length()
+            && (toASCIILower(text[i + 2]) == 'i' || toASCIILower(text[i + 2]) == 'a')
+            && toASCIILower(text[i + 3]) == 'n')
+            return true;
+    }
+
+    return false;
+}
+
 static String rewriteViewportUnits(const String& css, Document* doc)
 {
     if (!doc)
@@ -903,6 +944,60 @@ static String rewriteViewportUnits(const String& css, Document* doc)
             continue;
         }
 
+        /* calc(...) containing viewport units. The 2008 grammar has no '+'
+         * production, so a calc() never reaches the grammar as text (R54 folds
+         * constants into one dimension token); a calc() with a var() in it
+         * cannot be folded and would be dropped. Hand the whole expression to
+         * the document instead: it keeps the text and substitutes the units for
+         * the current viewport, and the declaration only carries a var(). */
+        if ((c == 'c' || c == 'C') && i + 4 < len
+            && toASCIILower(css[i + 1]) == 'a' && toASCIILower(css[i + 2]) == 'l'
+            && toASCIILower(css[i + 3]) == 'c' && css[i + 4] == '(') {
+            unsigned end = i + 5;
+            int parens = 1;
+
+            while (end < len && parens) {
+                UChar d = css[end];
+
+                if (d == '"' || d == '\'') {
+                    UChar quote = d;
+
+                    ++end;
+                    while (end < len) {
+                        if (css[end] == (UChar)92 && end + 1 < len)
+                            end += 2;
+                        else if (css[end++] == quote)
+                            break;
+                    }
+                    continue;
+                }
+                if (d == '(') ++parens;
+                else if (d == ')') --parens;
+                ++end;
+            }
+
+            if (!parens) {
+                String span = css.substring(i, end - i);
+
+                if (textHasViewportUnit(span)) {
+                    String name = doc->addViewportCalc(span);
+                    String text = "var(";
+                    text += name;
+                    text += ")";
+
+                    for (unsigned k = 0; k < text.length(); ++k)
+                        out.push_back(text[k]);
+                    i = end;
+                    continue;
+                }
+
+                /* No viewport unit inside: leave the expression untouched. */
+                while (i < end)
+                    out.push_back(css[i++]);
+                continue;
+            }
+        }
+
         if ((c >= '0' && c <= '9') || (c == '.' && i + 1 < len && css[i + 1] >= '0' && css[i + 1] <= '9')) {
             unsigned start = i;
             while (i < len && ((css[i] >= '0' && css[i] <= '9') || css[i] == '.'))
@@ -915,22 +1010,40 @@ static String rewriteViewportUnits(const String& css, Document* doc)
                 UChar u0 = (UChar)toASCIILower(css[i]);
                 UChar u1 = (UChar)toASCIILower(css[i + 1]);
                 int unitLen = 0;
-                double unitValue = 0;
+                int unitKind = -1;
 
                 if (u0 == 'v' && u1 == 'w') {
-                    unitLen = 2; unitValue = vw / 100.0;
+                    unitLen = 2; unitKind = 0;
                 } else if (u0 == 'v' && u1 == 'h') {
-                    unitLen = 2; unitValue = vh / 100.0;
+                    unitLen = 2; unitKind = 1;
                 } else if (u0 == 'v' && u1 == 'm' && i + 3 < len
                            && (toASCIILower(css[i + 2]) == 'i' || toASCIILower(css[i + 2]) == 'a')
                            && toASCIILower(css[i + 3]) == 'n') {
                     unitLen = 4;
-                    unitValue = (toASCIILower(css[i + 2]) == 'i' ? min(vw, vh) : max(vw, vh)) / 100.0;
+                    unitKind = (toASCIILower(css[i + 2]) == 'i') ? 2 : 3;
                 }
 
                 bool afterOk = (i + unitLen >= len) || !isUnitChar(css[i + unitLen]);
-                if (unitLen && afterOk) {
-                    String text = String::format("%.2fpx", number * unitValue);
+                if (unitKind >= 0 && afterOk) {
+                    /* Keep the unit symbolic instead of baking px: 100vw becomes
+                     * var(--agb-vw-100), and Document supplies that variable
+                     * from the *current* viewport size. A window resize then
+                     * only has to restyle; the stylesheet no longer freezes the
+                     * value it saw while parsing (R53 did, and a resized window
+                     * kept the old size). */
+                    String name = viewportUnitVariableName(unitKind, numText);
+
+                    /* Register the name the declaration will carry:
+                     * rewriteCustomPropertyNames() rewrites a token-initial
+                     * `--x` into `-agb-x` (one dash), and the expansion at
+                     * style-resolution time looks that exact string up. */
+                    String storedName = "-agb-";
+                    storedName += name.substring(2);
+                    doc->noteViewportUnit(unitKind, number, storedName);
+
+                    String text = "var(";
+                    text += name;
+                    text += ")";
                     for (unsigned k = 0; k < text.length(); ++k)
                         out.push_back(text[k]);
                     i += unitLen;
