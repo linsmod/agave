@@ -270,6 +270,7 @@ MediaPipeline* MediaPipeline::create(const String& url, Kind kind,
     pipeline->m_url = url;
     pipeline->m_kind = kind;
     pipeline->m_streaming = false;
+    pipeline->m_rate = 1.0;
     pipeline->m_width = videoWidth;
     pipeline->m_height = videoHeight;
     pipeline->m_muted = muted;
@@ -290,13 +291,13 @@ MediaPipeline* MediaPipeline::create(const String& url, Kind kind,
 
     {
         /* Duration comes from the same header parser the metadata path uses,
-         * so the clock and `duration` never disagree. */
+         * so the clock and `duration` never disagree. The file is read through
+         * its path (a file: URL has already been turned into one). */
         MediaInfo info;
         Vector<unsigned char> data;
 
         if (!pipeline->m_localPath.empty()
-                && MediaDecoder::readHeaderBytes(String::fromUTF8(pipeline->m_localPath.c_str()),
-                                                 1024 * 1024, data)
+                && MediaDecoder::readHeaderBytesFromFile(pipeline->m_localPath, 1024 * 1024, data)
                 && parseMediaHeader(data.data(), data.size(), info))
             pipeline->m_duration = info.duration;
     }
@@ -357,6 +358,16 @@ bool MediaPipeline::start()
                 if (seeking) { args.push_back("-ss"); args.push_back(seekArg); }
                 args.push_back("-i"); args.push_back(target);
                 args.push_back("-vn");
+
+                /* playbackRate: tempo is done inside ffmpeg so the device and
+                 * the video pacing stay in sync (0.5x..2x covers the spec's
+                 * common range; atempo itself is happy further out). */
+                if (m_rate != 1.0) {
+                    char tempo[32];
+
+                    snprintf(tempo, sizeof(tempo), "atempo=%.3f", m_rate);
+                    args.push_back("-af"); args.push_back(tempo);
+                }
                 args.push_back("-f"); args.push_back("s16le");
                 args.push_back("-acodec"); args.push_back("pcm_s16le");
                 args.push_back("-ar"); args.push_back(rate);
@@ -548,8 +559,9 @@ double MediaPipeline::currentTime() const
     if (m_impl->stalled)
         return m_impl->stalledAt;
 
-    /* Wall clock minus paused time: the lower bound, and the whole clock for
-       video-only pipelines. */
+    /* Wall clock minus paused time. Without audio this *is* the clock, and it
+       runs faster or slower with playbackRate (video-only pipelines have no
+       device to scale for them). */
     QueryPerformanceCounter(&now);
     elapsed = (double)(now.QuadPart - m_impl->startedAt.QuadPart) / (double)m_impl->freq.QuadPart;
     elapsed -= m_impl->pausedAccum;
@@ -560,11 +572,15 @@ double MediaPipeline::currentTime() const
     if (elapsed < 0)
         elapsed = 0;
 
+    if (elapsed > 0 && !hasAudio())
+        elapsed *= m_rate;
+
     elapsed += m_impl->seekBase;
 
     /* When audio is actually reaching the device, its own position is what the
-       user hears, so it wins whenever it is ahead. It is *not* ahead while no
-       buffer has been queued yet, which is why this is a max() and not a swap. */
+       user hears: it already includes atempo, so it is the authority (and the
+       only clock that stays correct for a rate other than 1x). Before the
+       first buffer drains it reads 0, which is when the wall clock stands in. */
     if (m_impl->waveOut) {
         MMTIME time;
         double device = 0;
@@ -580,10 +596,10 @@ double MediaPipeline::currentTime() const
             else
                 device = (double)time.u.ms / 1000.0;
 
-            device += m_impl->seekBase;
-
-            if (device > elapsed)
-                elapsed = device;
+            /* The device position counts *output* PCM; atempo makes one second
+             * of output carry `rate` seconds of media, so scale it back. */
+            if (device > 0.02)
+                elapsed = m_impl->seekBase + device * m_rate;
         }
     }
 
@@ -716,6 +732,56 @@ bool MediaPipeline::copyFrame(Vector<unsigned char>& out, double position, doubl
 #endif
 
     return copied;
+}
+
+/* ------------------------------------------------------------------------- */
+/* buffering / rate                                                          */
+/* ------------------------------------------------------------------------- */
+
+double MediaPipeline::bufferedSeconds() const
+{
+    if (!m_streaming)
+        return m_duration;
+
+    {
+        std::string url = m_url.utf8().data();
+        unsigned long long have = MediaDownloader::bytes(url);
+        unsigned long long total = MediaDownloader::total(url);
+
+        /* The byte frontier maps to media time through the file's overall
+         * bitrate (size / duration), which is accurate enough for a progress
+         * bar and needs no per-packet index. */
+        if (m_duration > 0 && total > 0)
+            return m_duration * (double)have / (double)total;
+    }
+
+    return currentTime();
+}
+
+bool MediaPipeline::isStalled() const
+{
+    return m_impl && m_impl->stalled != 0;
+}
+
+void MediaPipeline::setRate(double rate)
+{
+    if (rate <= 0)
+        rate = 1.0;
+
+    if (rate < 0.25)
+        rate = 0.25;
+    if (rate > 4.0)
+        rate = 4.0;
+
+    if (rate == m_rate)
+        return;
+
+    m_rate = rate;
+
+    /* ffmpeg's atempo is fixed per process, so a rate change is a re-spawn at
+     * the current position (the audio device is restarted too). */
+    if (m_impl && !m_impl->stopRequested && (m_impl->audioThread || m_impl->videoThread))
+        seek(currentTime());
 }
 
 /* ------------------------------------------------------------------------- */

@@ -105,6 +105,9 @@ bool localCopyComplete(const std::string& url);
 /* Reads at most `maxBytes` from the start of `url` (local files only). */
 bool readHeaderBytes(const String& url, size_t maxBytes, Vector<unsigned char>& out);
 
+/* Same, for a plain file system path (what localPathForURL hands back). */
+bool readHeaderBytesFromFile(const std::string& path, size_t maxBytes, Vector<unsigned char>& out);
+
 } // namespace MediaDecoder
 
 } // namespace WebCore

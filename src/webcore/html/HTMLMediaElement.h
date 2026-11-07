@@ -106,6 +106,13 @@ public:
     bool paused() const { return m_paused; }
     bool ended() const { return m_ended; }
     bool seeking() const { return m_seeking; }
+
+    /* Seconds of media already available locally: the whole resource once it
+     * is loaded, the download frontier while it streams in (`buffered`). */
+    double bufferedEnd() const;
+
+    /* True while the decoder has no bytes and the download has not finished. */
+    bool stalled() const;
     double playbackRate() const { return m_playbackRate; }
     void setPlaybackRate(double);
     double defaultPlaybackRate() const { return m_defaultPlaybackRate; }
@@ -210,6 +217,11 @@ private:
     bool m_controls;
     bool m_defaultMuted;
     bool m_probePending;
+
+    /* Streaming bookkeeping: last reported `buffered` end and whether the
+     * last tick saw a stall (so `waiting`/`playing` fire on transitions). */
+    double m_lastBufferedEnd;
+    bool m_stalled;
 
     int m_errorCode;
 

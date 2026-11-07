@@ -534,6 +534,18 @@ bool readHeaderBytes(const String& url, size_t maxBytes, Vector<unsigned char>& 
     return readMediaHeader(url, false, out, maxBytes);
 }
 
+bool readHeaderBytesFromFile(const std::string& path, size_t maxBytes, Vector<unsigned char>& out)
+{
+#if PLATFORM(WIN32)
+    return readLocalFile(path, maxBytes, out);
+#else
+    (void)path;
+    (void)maxBytes;
+    (void)out;
+    return false;
+#endif
+}
+
 std::string cachePathForURL(const std::string& url)
 {
 #if PLATFORM(WIN32)

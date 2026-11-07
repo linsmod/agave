@@ -180,6 +180,28 @@ if ($SkipRemote) {
     } 'first frame 640x360'
 }
 
+# --- 2b. playback semantics ------------------------------------------------
+Write-Host '== playback semantics: TimeRanges / progress / playbackRate'
+
+$sem = Probe -Query "$pages\cap_media_real.html?src=../../debug/media/clip640x360.mp4" `
+             -Wait 1200 -Settle 6000 `
+             -Eval "var v=document.getElementById('v'); var ev=[]; v.addEventListener('progress',function(){ev.push('progress');}); v.addEventListener('playing',function(){ev.push('playing');}); v.play(); setTimeout(function(){ var b=v.buffered; probeExit('trEnd='+(typeof b.end)+' trStart='+(typeof b.start)+' len='+b.length+' end='+(b.length?b.end(0).toFixed(2):'-')+' ct='+v.currentTime.toFixed(2)+' ev='+ev.join('/')); }, 1500)"
+
+Check 'TimeRanges has start/end'      $sem.Exit { param($t) $t -match 'trEnd=function' -and $t -match 'trStart=function' } 'trEnd/trStart = function'
+Check 'buffered covers a local file'  $sem.Exit { param($t) $t -match 'len=1 end=5\.00' } 'len=1 end=5.00'
+Check 'progress fired'                $sem.Exit { param($t) $t -match 'progress' } 'progress in events'
+
+$rate = Probe -Query "$pages\cap_media_real.html?src=../../debug/media/clip640x360.mp4" `
+              -Wait 1200 -Settle 6000 `
+              -Eval "var v=document.getElementById('v'); v.playbackRate=2.0; v.play(); var t0=(new Date()).getTime(); setTimeout(function(){ probeExit('ct='+v.currentTime.toFixed(2)+' wall='+(((new Date()).getTime()-t0)/1000).toFixed(2)+' rate='+v.playbackRate); }, 1500)"
+
+Check 'playbackRate 2x advances 2x' $rate.Exit {
+    param($t)
+    $ct = Number $t 'ct=([\d.]+)'
+    $wall = Number $t 'wall=([\d.]+)'
+    ($ct -gt 0) -and ($wall -gt 0) -and (($ct / $wall) -gt 1.6)
+} 'ct/wall > 1.6'
+
 # --- 3. local audio --------------------------------------------------------
 if (-not (Test-Path -LiteralPath $mp3)) {
     Skip 'local mp3' 'file not present'

@@ -11660,8 +11660,19 @@ bool mediaElementProperty(AntbEngine* engine, WebCore::HTMLMediaElement* media,
     }
 
     if (!strcmp(name, "buffered") || !strcmp(name, "played") || !strcmp(name, "seekable")) {
-        AntbValue* ranges = makeTimeRanges(engine,
-            !strcmp(name, "seekable") ? media->duration() : media->currentTime());
+        /* buffered = how far the bytes reach (the download frontier while a
+         * resource streams in), played = the clock, seekable = the whole
+         * resource (progressive download; no ranges yet). */
+        double end;
+
+        if (!strcmp(name, "buffered"))
+            end = media->bufferedEnd();
+        else if (!strcmp(name, "seekable"))
+            end = media->duration();
+        else
+            end = media->currentTime();
+
+        AntbValue* ranges = makeTimeRanges(engine, end);
 
         if (!ranges)
             return true;

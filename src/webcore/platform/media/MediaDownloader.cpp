@@ -76,8 +76,7 @@ static Entry* findEntry(const std::string& url)
 }
 
 /* "https://host:port/path?query" -> the pieces WinHTTP wants. */
-struct UrlParts {
-    bool secure;
+struct UrlParts {    bool secure;
     std::wstring host;
     INTERNET_PORT port;
     std::wstring target;
@@ -290,6 +289,114 @@ static DWORD WINAPI downloadThread(void* param)
 
 } // namespace
 
+/* Cache budget. Downloads are kept for reuse (a reload of the same page costs
+ * no traffic); the directory is capped and the oldest completed copies are
+ * evicted when it grows past the limit. AGB_MEDIA_CACHE_MAX is in megabytes. */
+static unsigned long long cacheBudgetBytes()
+{
+    const char* env = getenv("AGB_MEDIA_CACHE_MAX");
+    unsigned long long megabytes = 512;
+
+    if (env && *env) {
+        long long value = atoll(env);
+
+        if (value > 0)
+            megabytes = (unsigned long long)value;
+    }
+
+    return megabytes * 1024ULL * 1024ULL;
+}
+
+static void pruneCache(const std::string& path)
+{
+    std::string dir = path;
+    size_t slash = dir.find_last_of("\\/");
+    struct Item {
+        std::string data;
+        FILETIME when;
+        unsigned long long size;
+    };
+    std::vector<Item> items;
+    unsigned long long total = 0;
+
+    if (slash == std::string::npos)
+        return;
+
+    dir.resize(slash);
+
+    {
+        WIN32_FIND_DATAA found;
+        std::string pattern = dir + "\\*.complete";
+        HANDLE handle = FindFirstFileA(pattern.c_str(), &found);
+
+        if (handle == INVALID_HANDLE_VALUE)
+            return;
+
+        do {
+            std::string data = dir + "\\" + found.cFileName;
+            WIN32_FILE_ATTRIBUTE_DATA info;
+
+            /* "<name>.complete" -> "<name>" */
+            data.resize(data.size() - 9);
+
+            if (!GetFileAttributesExA(data.c_str(), GetFileExInfoStandard, &info))
+                continue;
+
+            {
+                Item item;
+
+                item.data = data;
+                item.when = info.ftLastWriteTime;
+                item.size = ((unsigned long long)info.nFileSizeHigh << 32) | info.nFileSizeLow;
+                total += item.size;
+                items.push_back(item);
+            }
+        } while (FindNextFileA(handle, &found));
+
+        FindClose(handle);
+    }
+
+    {
+        unsigned long long budget = cacheBudgetBytes();
+        unsigned long long target = budget / 2;
+
+        if (total <= budget)
+            return;
+
+        /* Oldest first (tiny list, a selection sort is fine). */
+        for (size_t i = 0; i < items.size(); ++i) {
+            for (size_t j = i + 1; j < items.size(); ++j) {
+                if (CompareFileTime(&items[j].when, &items[i].when) < 0) {
+                    Item swap = items[i];
+                    items[i] = items[j];
+                    items[j] = swap;
+                }
+            }
+        }
+
+        for (size_t i = 0; i < items.size() && total > target; ++i) {
+            /* Never evict a resource that is being downloaded right now. */
+            bool active = false;
+
+            for (size_t k = 0; g_entries && k < g_entries->size(); ++k) {
+                if ((*g_entries)[k]->path == items[i].data)
+                    active = true;
+            }
+
+            if (active)
+                continue;
+
+            DeleteFileA(items[i].data.c_str());
+            DeleteFileA((items[i].data + ".complete").c_str());
+            total -= items[i].size;
+
+            if (getenv("AGB_MEDIA_DEBUG"))
+                fprintf(stderr, "[media] cache evict: %s (%llu bytes)\n",
+                        items[i].data.c_str(), items[i].size);
+        }
+    }
+}
+
 bool ensure(const std::string& url, const std::string& path)
 {
     Entry* entry = findEntry(url);
@@ -299,6 +406,8 @@ bool ensure(const std::string& url, const std::string& path)
 
     {
         Entry* created = new Entry();
+
+        pruneCache(path);
 
         created->url = url;
         created->path = path;

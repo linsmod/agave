@@ -73,6 +73,20 @@ public:
     bool needsRestart() const;
     void clearRestart();
 
+    /* --- buffering ------------------------------------------------------ */
+    /* Seconds of media already on disk (the whole file for a complete copy).
+     * This is what `buffered` reports while a resource streams in. */
+    double bufferedSeconds() const;
+
+    /* True while the decoder has no bytes and the download has not finished:
+     * the element turns that into `waiting` + readyState HAVE_CURRENT_DATA. */
+    bool isStalled() const;
+
+    /* Playback speed. Changing it re-spawns the decoders (the audio side needs
+     * ffmpeg's atempo filter), so the caller keeps the clock position. */
+    void setRate(double rate);
+    double rate() const { return m_rate; }
+
     /* --- video ---------------------------------------------------------- */
     /* Copies the newest decoded frame as BGRA into `out` (resized to the
      * pipeline's video size). Returns false when no frame has arrived yet or
@@ -109,6 +123,7 @@ private:
      * For a resource that is still downloading this is the .part file. */
     std::string m_localPath;
     bool m_streaming;
+    double m_rate;
     Kind m_kind;
     int m_width;
     int m_height;

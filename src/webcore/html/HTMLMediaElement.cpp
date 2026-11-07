@@ -96,6 +96,8 @@ HTMLMediaElement::HTMLMediaElement(const QualifiedName& tagName, Document* doc)
     , m_controls(false)
     , m_defaultMuted(false)
     , m_probePending(false)
+    , m_lastBufferedEnd(0)
+    , m_stalled(false)
     , m_errorCode(MEDIA_ERR_NONE)
     , m_loadTimer(this, &HTMLMediaElement::loadTimerFired)
     , m_probeTimer(this, &HTMLMediaElement::probeTimerFired)
@@ -534,6 +536,11 @@ bool HTMLMediaElement::startPipeline()
         return false;
     }
 
+    /* The element may already carry a rate (pages set playbackRate before
+     * play()); the pipeline bakes it into the decoder process, so it has to be
+     * set before start(). */
+    m_pipeline->setRate(m_playbackRate);
+
     if (!m_pipeline->start()) {
         delete m_pipeline;
         m_pipeline = 0;
@@ -651,6 +658,38 @@ void HTMLMediaElement::tick()
             m_pipeline->seek(m_currentTime);
         }
 
+        /* Buffering: `waiting` while the decoder waits for bytes, `playing`
+         * once it has them again, and readyState drops like Chrome's does. */
+        {
+            bool stalledNow = m_pipeline->isStalled();
+
+            if (stalledNow != m_stalled) {
+                m_stalled = stalledNow;
+
+                if (stalledNow) {
+                    if (m_readyState > HAVE_CURRENT_DATA)
+                        m_readyState = HAVE_CURRENT_DATA;
+                    DISPATCH_MEDIA_EVENT("waiting");
+                } else {
+                    if (m_readyState < HAVE_FUTURE_DATA)
+                        m_readyState = HAVE_FUTURE_DATA;
+                    DISPATCH_MEDIA_EVENT("playing");
+                }
+            }
+        }
+
+        /* `progress`: the downloaded frontier moved. Chrome paces this event,
+         * a growth of 250 ms or half a percent is plenty for a progress bar. */
+        {
+            double bufferedEnd = m_pipeline->bufferedSeconds();
+
+            if (bufferedEnd > m_lastBufferedEnd + 0.25
+                    && bufferedEnd <= m_duration + 0.001) {
+                m_lastBufferedEnd = bufferedEnd;
+                DISPATCH_MEDIA_EVENT("progress");
+            }
+        }
+
         if (getenv("AGB_MEDIA_DEBUG"))
             m_pipeline->debugState("tick");
     } else {
@@ -719,8 +758,25 @@ void HTMLMediaElement::setCurrentTime(double time)
         renderer()->repaint();
 }
 
-bool HTMLMediaElement::copyVideoFrame(Vector<unsigned char>& out, int& width, int& height) const
+double HTMLMediaElement::bufferedEnd() const
 {
+    if (m_pipeline)
+        return m_pipeline->bufferedSeconds();
+
+    /* Simulated ticker (no decoder): the whole local resource is available as
+     * soon as the metadata is. */
+    if (m_readyState >= HAVE_METADATA)
+        return m_duration;
+
+    return 0;
+}
+
+bool HTMLMediaElement::stalled() const
+{
+    return m_pipeline && m_pipeline->isStalled();
+}
+
+bool HTMLMediaElement::copyVideoFrame(Vector<unsigned char>& out, int& width, int& height) const{
     if (!m_pipeline || !m_pipeline->hasVideo())
         return false;
 
@@ -741,6 +797,13 @@ void HTMLMediaElement::setPlaybackRate(double rate)
 
     m_playbackRate = rate;
     m_lastTickTime = WebCore::currentTime();
+
+    /* A real decoder needs the rate too: audio through ffmpeg's atempo, video
+     * through the frame pacing (both inside the pipeline, and changing it
+     * re-spawns the decoders at the current position). */
+    if (m_pipeline)
+        m_pipeline->setRate(rate);
+
     DISPATCH_MEDIA_EVENT("ratechange");
 }
 

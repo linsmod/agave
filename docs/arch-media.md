@@ -114,9 +114,14 @@ paused:       true --play()--> false --pause()--> true
 - `src` 设定（含 `<source>` 回退、`<source>` 插入时）触发 `load()`：`networkState=LOADING`，
   派发 `loadstart`；元数据到手后 `duration`/`videoWidth`/`videoHeight` 有效，
   `readyState=HAVE_METADATA`，派发 `loadedmetadata` → `loadeddata` → `canplay`。
-- `play()` 返回 Promise（立刻 resolve），`paused=false`；装了解码器时启动
-  `MediaPipeline`（§4.1），`currentTime` 由**播放时钟**通过 50ms 的 `Timer` 报告；
-  派发 `play` → `playing` → 周期性 `timeupdate`。
+- `play()` 返回 Promise（立刻 resolve），`paused=false`；元数据还没到就先记下，
+  `metadataReady()` 再启动 `MediaPipeline`（管线种类取决于有没有视频轨）。
+  `currentTime` 由**播放时钟**通过 50ms 的 `Timer` 报告；派发 `play` → `playing` → 周期性 `timeupdate`。
+- 缓冲（§7.3）：解码器没字节可读时 `waiting`，`readyState` 降到 `HAVE_CURRENT_DATA`，
+  恢复后 `playing`、`readyState` 回 `HAVE_FUTURE_DATA`；下载前沿每前进 250ms 发一次 `progress`。
+- `buffered` 是**已下载到的秒数**（`MediaPipeline::bufferedSeconds()`：文件整体码率 × 下载比例），
+  不是"播放到哪"；`played` 才是时钟位置，`seekable` 是整个资源。
+  `TimeRanges` 由 prelude 的 `__agbTimeRangesFactory` 提供 `start()/end()`（只有一段 `[0, end]`）。
 - `pause()`：`paused=true`，冻结时钟（`waveOutPause`），派发 `pause`。管线**保留**
   （热恢复：不重开进程、不重开设备），`play()` 只是 `setPaused(false)`。
 - `currentTime` 赋值：夹到 `[0, duration]`，重开解码器到新位置（`-ss`），派发 `seeking` + `seeked`。
@@ -139,12 +144,15 @@ paused:       true --play()--> false --pause()--> true
         → 视频线程按**帧时间戳**等时钟到点后才发布最新帧（只保留最新一帧）
 ```
 
-- **时钟**：`currentTime()` = `max(墙钟 - 暂停时长 + seekBase, waveOut 设备位置 + seekBase)`。
-  设备位置就是"用户实际听到的位置"，所以它领先时以它为准；视频线程按同一个时钟节流，
-  于是音画大致同步，且**不会**出现"ffmpeg 全速解码到 EOF、元素从第一秒就显示最后一帧"。
+- **时钟**：有音频时以 **waveOut 设备位置 × rate + seekBase** 为准（设备位置是"用户听到的位置"，
+  但它是输出 PCM 的长度，变速时要乘回去）；没有音频（或设备还没开始出声）时用
+  `墙钟 × rate + seekBase`。视频线程按同一个时钟节流，于是音画大致同步，且**不会**出现
+  "ffmpeg 全速解码到 EOF、元素从第一秒就显示最后一帧"。
 - `-ss` 必须传给 ffmpeg（在 `-i` 之前）：seek 就是重开两个解码器，`seekBase` 只用来对齐时间戳。
 - `pause` 用 `waveOutPause`/`waveOutRestart`，并在墙钟里累计暂停时长；视频线程的等待
   看到时钟不动就不发布新帧，所以暂停立即生效。
+- `playbackRate`（0.25–4）：音频走 ffmpeg 的 `-af atempo=<rate>`，视频靠同一时钟自动加快/放慢；
+  改速率会按当前位置重开解码器（atempo 是进程级参数），并发 `ratechange`。
 - `volume`/`muted` 走 `waveOutSetVolume`（0..1 → 16bit 双声道）。
 - 线程契约：WebCore 对象只在引擎线程；解码线程只碰 `Impl`；最新帧用临界区保护。
   `RenderMedia` 每次 paint 拷一份当前帧（复用成员缓冲，避免 30Hz 反复分配）。
@@ -256,18 +264,19 @@ FNV-1a 哈希 + 原扩展名，完成后旁边多一个 `<名>.complete` 标记�
   `Range: bytes=` 只取那一段；媒体文档更是整段由文档加载一次、元素再拉一次。
 - **流式重启要等 512 KB**：网络慢时每轮等于一次缓冲（时钟停住），这是"缓冲"而非"跳帧"；
   想要真正的实时感需要在 ffmpeg 前加喂数据的管道（让它阻塞而不是 EOF 退出）。
-- **`seek` 到未下载区域没有进度事件**：没有 `waiting`/`canplaythrough`，页面自绘播放器
-  只能看 `currentTime` 不走。
+- **`seek` 到未下载区域没有 `seeking` 之外的反馈**：会 `waiting`，但没有 `canplaythrough`，
+  也没法区分"seek 中"和"缓冲中"。
 - **媒体文档会把资源下载两遍**（文档主资源 + 元素自己的加载）。正确做法是把主资源的
   字节交给元素（`setLoadManually` 式的通道），或者让文档加载本身喂给元素。
-- **缓存不清理**：`AGB_MEDIA_CACHE`/用户目录下的副本按 URL 哈希永久留存（含 `.complete`）。
+- **缓存有上限但没有会话清理策略**：`AGB_MEDIA_CACHE_MAX`（默认 512 MB）超了会从最旧的
+  `.complete` 开始淘汰，但**没有按站点/时间**的策略，也不会在退出时清理。
 - **没有音画严格同步**：视频按共享时钟节流，长时间抖动会累积（设备时钟领先时以它为准，
   但视频帧不按 PTS 精确对齐）。
 - **解码全在 CPU**：每路播放一个 ffmpeg 进程 + 每帧一次缩放拷贝，4K 会很吃力；
   没有硬解、没有零拷贝。
-- `playbackRate` 只影响视频节流与模拟推进；音频解码仍是原速（变速会音画不同步）。
-- `object-fit` / `object-position` 不参与绘制与布局（只记录 computed）。站点用
-  `object-fit: cover` 时画面会被拉伸而不是裁剪。
+- `playbackRate` 0.25–4 生效（音频 atempo + 时钟缩放），但变速会重开解码器，
+  换速瞬间有一次很短的停顿；`defaultPlaybackRate` 只存值不参与播放。
+- `object-fit` / `object-position` 不在 CSS 属性表里（连属性名都没有），画面按内容盒拉伸。
 - 没有原生控件皮肤：`controls` 只影响 `audio` 的 UA 尺寸与 `audio:not([controls])` 的可见性。
   `<video controls>` 不画播放条（页面自绘的播放器不受影响）。
 - Chrome 的 `<audio controls>` 计算值是 `display: inline` 但仍有 300x54 的盒子；
@@ -279,7 +288,8 @@ FNV-1a 哈希 + 原扩展名，完成后旁边多一个 `<名>.complete` 标记�
 - 字幕不绘制，只有 API 与 cue 事件（`cues`/`activeCues` 是快照数组）。
 - `requestVideoFrameCallback` 不存在。
 - `currentTime` 的精度受 50ms 定时器限制；`seeked` 同步派发（Chrome 是异步任务）。
-- `buffered`/`played`/`seekable` 是快照（`[0, currentTime]` 或 `[0, duration]`），不是 live 对象。
+- `buffered`/`played`/`seekable` 只有**一段** `[0, end]`（没有多段/空洞，也没有 `add()`），
+  但 `start()`/`end()`/`length` 齐全，播放器按 `buffered.length` 判断即可。
 - `ended` 之后管线被销毁（`real` 变 0），`currentTime` 停在 `duration`；再次 `play()` 从头开始。
 
 ## 9. 复测
@@ -321,9 +331,9 @@ build-zig-native\agave_shell.exe --probe "$page`?src=https%3A%2F%2Fartplayer.org
 # 期望：[media] probe copy: ... done=0 ... complete=1（下载还没完就拿到元数据）
 ```
 
-诊断开关：`AGB_MEDIA_DEBUG=1`（管线启动、时钟/设备位置、首帧、ffprobe 输出）、
+诊断开关：`AGB_MEDIA_DEBUG=1`（管线启动、时钟/设备位置、首帧、ffprobe 输出、下载进度）、
 `AGB_MEDIA_PROBE=ffprobe`（强制外部探测）、`AGB_MEDIA_FRAMES=1`（一次性静帧）、
-`AGB_MEDIA_CACHE=<dir>`（下载副本目录）。
+`AGB_MEDIA_CACHE=<dir>`（下载副本目录）、`AGB_MEDIA_CACHE_MAX=<MB>`（缓存上限，默认 512）。
 对拍 Chrome 的 UA/尺寸用 `tools/ua_style_dump.py`（需要先起一个
 `--remote-debugging-port=9333` 的 headless Chrome，见脚本头注释）。
 

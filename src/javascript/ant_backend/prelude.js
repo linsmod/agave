@@ -19,6 +19,21 @@
       return String(e);
     } catch (_) { return 'unknown error'; }
   };
+  /* TimeRanges for media.buffered / played / seekable. The engine hands over
+   * one range [0, end]; players call `ranges.end(ranges.length - 1)` (and some
+   * `range.end(0)` behind a length check), so both methods have to exist or
+   * they die with "undefined is not a function". */
+  g.__agbTimeRangesFactory = function (end) {
+    var e = (typeof end === 'number' && end > 0) ? end : 0;
+    return {
+      start: function () { return 0; },
+      end: function (index) {
+        if (index !== 0 || e <= 0)
+          throw new RangeError('index out of range');
+        return e;
+      }
+    };
+  };
   if (g.navigator) {
     if (!g.navigator.platform) g.navigator.platform = 'Win32';
     if (!g.navigator.language) g.navigator.language = 'zh-CN';
