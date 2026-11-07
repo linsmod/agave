@@ -37,8 +37,8 @@
   var info = ins.elementInfo() || '';
   push('infoKind', info.indexOf('"kind":"agave-element"') >= 0 ? 1 : 0);
   push('infoSelector', info.indexOf('"selector":"div#target"') >= 0 ? 1 : 0);
-  push('infoRect', info.indexOf('"viewportRect":{"left":100,"top":120,"width":240,"height":80}') >= 0 ? 1 : 0);
-  push('infoDocRect', info.indexOf('"documentRect":{"left":100,"top":120') >= 0 ? 1 : 0);
+  push('infoRect', info.indexOf('"getBoundingClientRect":{"left":100,"top":120,"width":240,"height":80}') >= 0 ? 1 : 0);
+  push('infoDocRect', info.indexOf('"getBoundingClientRectInPage":{"left":100,"top":120') >= 0 ? 1 : 0);
   push('infoViewport', info.indexOf('"inViewport":true') >= 0 ? 1 : 0);
 
   /* Select parent walks up one element and closes the menu. */

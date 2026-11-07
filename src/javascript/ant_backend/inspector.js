@@ -514,10 +514,11 @@
   /* ------------------------------------------------- element info (JSON) -- */
   /* "Copy element info" produces one line of JSON: enough for another tool (or
    * an agent) to know WHICH element this is and WHERE it sits, without seeing
-   * the page. Both coordinate spaces are included because they answer
-   * different questions: `viewportRect` is what getBoundingClientRect returns
-   * (what a screenshot shows), `documentRect` is page space (stable while
-   * scrolling, i.e. `viewportRect + scroll`). */
+   * the page. The rects are named after the call that produces them:
+   * `getBoundingClientRect` is exactly what that method returned (viewport
+   * space, what a screenshot shows), `getBoundingClientRectInPage` is the same
+   * rect plus `page.scroll` (page space, what layout/CSS uses, stable while
+   * scrolling). */
 
   function hex4(n) {
     var digits = '0123456789abcdef';
@@ -614,9 +615,12 @@
         ',"text":' + jsonString(text) +
         ',"outerHTML":' + jsonString(html) +
         ',"inViewport":' + (inViewport ? 'true' : 'false') +
-        ',"viewportRect":{"left":' + intText(left) + ',"top":' + intText(top) +
+        /* Named after the call that produces it, so the reader does not have
+         * to guess the coordinate space; the second one is the same rect
+         * expressed in page space (add the scroll below). */
+        ',"getBoundingClientRect":{"left":' + intText(left) + ',"top":' + intText(top) +
           ',"width":' + intText(width) + ',"height":' + intText(height) + '}' +
-        ',"documentRect":{"left":' + intText(left + sx) + ',"top":' + intText(top + sy) +
+        ',"getBoundingClientRectInPage":{"left":' + intText(left + sx) + ',"top":' + intText(top + sy) +
           ',"width":' + intText(width) + ',"height":' + intText(height) + '}' +
         ',"style":' + styleJson(el) +
       '}' +

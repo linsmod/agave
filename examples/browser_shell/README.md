@@ -102,13 +102,14 @@ UI 线程只负责窗口/消息循环；引擎线程、命令队列和回调线�
            "viewport":{"width":1100,"height":800},"scroll":{"x":0,"y":100}},
    "element":{"tag":"div","id":"target","class":"","selector":"div#target",
               "text":"target","outerHTML":"<div …>target</div>","inViewport":true,
-              "viewportRect":{"left":100,"top":20,"width":240,"height":80},
-              "documentRect":{"left":100,"top":120,"width":240,"height":80},
+              "getBoundingClientRect":{"left":100,"top":20,"width":240,"height":80},
+              "getBoundingClientRectInPage":{"left":100,"top":120,"width":240,"height":80},
               "style":{"display":"block","position":"absolute","font-size":"14px",…}}}
   ```
 
-  `viewportRect` 就是 `getBoundingClientRect()`（R82 起是**视口**坐标，截图对得上），
-  `documentRect` 是页面坐标（滚动时不变，布局对得上）；`selector` 是短 CSS 路径。
+  字段名就是取它的函数：`getBoundingClientRect` 是 `getBoundingClientRect()` 的原样返回
+  （R82 起是**视口**坐标，截图对得上），`getBoundingClientRectInPage` 是同一个矩形加上
+  `page.scroll`（页面坐标，滚动时不变，布局/CSS 对得上）；`selector` 是短 CSS 路径。
 - 复制走 `navigator.clipboard.writeText`（prelude polyfill）→ 宿主全局
   `__agbClipboardSetText` → 控件的 `cb_clipboard_set_data`（`CF_UNICODETEXT`，和
   Ctrl+C 同一条路）。本引擎没有 `document.execCommand('copy')`。
