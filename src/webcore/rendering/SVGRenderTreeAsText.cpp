@@ -31,6 +31,7 @@
 #include "SVGRenderTreeAsText.h"
 
 #include "GraphicsTypes.h"
+#include "DashArray.h"
 #include "InlineTextBox.h"
 #include "HTMLNames.h"
 #include "RenderSVGContainer.h"
@@ -43,12 +44,37 @@
 #include "SVGPaintServerGradient.h"
 #include "SVGPaintServerPattern.h"
 #include "SVGPaintServerSolid.h"
+#include "SVGResource.h"
 #include "SVGResourceClipper.h"
 #include "SVGRootInlineBox.h"
 #include "SVGStyledElement.h"
 #include <math.h>
 
 namespace WebCore {
+
+// FIXME: dash arrays are neither parsed nor rendered yet; the render tree dump
+// just needs a valid (empty) array.
+static DashArray dashArrayFromRenderingStyle(const RenderStyle*)
+{
+    return DashArray();
+}
+
+static TextStream& operator<<(TextStream& ts, const SVGPaintServer& paintServer)
+{
+    switch (paintServer.type()) {
+    case SolidColorPaintServer: ts << "solid"; break;
+    case LinearGradientPaintServer: ts << "linearGradient"; break;
+    case RadialGradientPaintServer: ts << "radialGradient"; break;
+    case PatternPaintServer: ts << "pattern"; break;
+    }
+    return ts;
+}
+
+static TextStream& operator<<(TextStream& ts, const SVGResource&)
+{
+    ts << "resource";
+    return ts;
+}
 
 /** class + iomanip to help streaming list separators, i.e. ", " in string "a, b, c, d"
  * Can be used in cases where you don't know which item in the list is the first
@@ -234,7 +260,7 @@ static void writeStyle(TextStream& ts, const RenderObject& object)
     if (!object.localTransform().isIdentity())
         ts << " [transform=" << object.localTransform() << "]";
     if (svgStyle->imageRendering() != SVGRenderStyle::initialImageRendering())
-        ts << " [image rendering=" << svgStyle->imageRendering() << "]";
+        ts << " [image rendering=" << (int)svgStyle->imageRendering() << "]";
     if (style->opacity() != RenderStyle::initialOpacity())
         ts << " [opacity=" << style->opacity() << "]";
     if (object.isRenderPath()) {
@@ -276,7 +302,7 @@ static void writeStyle(TextStream& ts, const RenderObject& object)
             if (style->svgStyle()->fillOpacity() != 1.0f)
                 ts << s << "[opacity=" << style->svgStyle()->fillOpacity() << "]";
             if (style->svgStyle()->fillRule() != RULE_NONZERO)
-                ts << s << "[fill rule=" << style->svgStyle()->fillRule() << "]";
+                ts << s << "[fill rule=" << (int)style->svgStyle()->fillRule() << "]";
             ts << "}]";
         }
     }
@@ -329,7 +355,7 @@ static TextStream& operator<<(TextStream& ts, const RenderSVGText& text)
         return ts;
 
     Vector<SVGTextChunk>& chunks = const_cast<Vector<SVGTextChunk>& >(box->svgTextChunks());
-    ts << " at (" << text.xPos() << "," << text.yPos() << ") size " << box->width() << "x" << box->height() << " contains " << chunks.size() << " chunk(s)";
+    ts << " at (" << text.xPos() << "," << text.yPos() << ") size " << box->width() << "x" << box->height() << " contains " << (unsigned)chunks.size() << " chunk(s)";
 
     if (text.parent() && (text.parent()->style()->color() != text.style()->color()))
         ts << " [color=" << text.style()->color().name() << "]";

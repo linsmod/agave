@@ -253,6 +253,32 @@
 
 ## P1：机制收敛
 
+### P1-y SVG 渲染：复活 ksvg2（2026-11-07 起）
+
+- 路线：启用仓库自带的 2008 版 ksvg2（`ENABLE_SVG`），不移植 Blink/miniblink 的 SVG，也不先用第三方
+  光栅器顶 SVG-as-image。设计、缺口盘点与踩坑见 [design-ksvg2-revival.md](design-ksvg2-revival.md)。
+- 已完成 A1/A2：`OPT_SVG`（默认 ON）→ `ENABLE_SVG`；`tools/gen_svg_names.ps1` 重生成真实的
+  `SVGNames`/`XLinkNames`/`SVGElementFactory`（原为禁用分支的空桩）与带 SVG 属性的 CSS 表；
+  补齐 `SVGResource`/`SVGPaintServer`(+solid/gradient/pattern)/`SVGResourceClipper|Masker|Marker`/
+  `PathTraversalState`/`ImageBuffer` 等缺失实现。**SVG 文档**能渲染 rect/circle/path 的 fill/stroke：
+  `debug/svg_shapes.svg` 探针像素验收 红 4800（80×60）/绿 2804（≈π·30²）/蓝 1200（40×30/2）/黑 420；
+  HTML 回归 `imgbox_160` 深色占比 37.8%（R29 基线 37.7%）。
+- 待办（按顺序）：
+  1. 阶段 B：HTMLParser 外来内容（HTML 里的 `<svg>`）。验收：`debug/svg_inline.html` 渲染出红矩形
+     （当前 0 像素，解析器把它当普通未知元素）。
+  2. 阶段 C：`SVGImage`（`<img src=*.svg>`、CSS `url(*.svg)` 背景）。验收：`debug/svg_img.html`
+     （当前 0 像素）。可复用新增的 picasso `ImageBuffer`。
+  3. 渐变真渲染：`SVGPaintServerGradient::draw` 接 `ps_gradient_create_linear/radial`（含
+     objectBoundingBox 变换），替换现在的“首停靠色”降级。
+  4. marker / clipPath / mask / pattern / filter：marker 不画、mask 不应用、clipPath 只逐子路径
+     `clip()`、pattern 的 `setup()` 返回 false。
+  5. SVG 文本渲染验收（`RenderSVGText` 路径，本次未覆盖）。
+  6. CSS SVG 属性（`fill`/`stroke`/`stop-color`…）在 selector 的应用/继承验证（解析侧的属性表已重生成）。
+  7. JS SVG DOM：`SVGAnimatedPoints::ref/deref` 目前是 no-op（JSSVGAnimatedPoints 用 `RefPtr` 但对象归元素所有），
+     需在阶段 D 换成正确的绑定语义。
+- 复测：`agave_shell.exe --probe file:///E:/mybrowsers/agave/debug/svg_shapes.svg --shot build-zig-native\svg.bmp`
+  （`--shot` 路径要落在 build 目录；本代理环境给子进程的写权限只覆盖那里）。
+
 ### P1-a 模块调度状态收敛 per-realm
 
 - 现状：`g_moduleCache`（保留全局，内容寻址没问题）/ `g_moduleSession` / `g_modulePending` / `g_deferredModules`

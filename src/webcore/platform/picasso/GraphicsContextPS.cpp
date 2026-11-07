@@ -50,10 +50,16 @@ public:
     AffineTransform matrix;
     ps_context* context;
     Vector<float> alphaStack;
+
+    /* The path accumulated by beginPath()/addPath() and filled by the SVG paint
+     * servers through fillPath()/strokePath().  Kept separate from picasso's
+     * context because ps_set_path() only takes an explicit path pointer. */
+    ps_path* currentPath;
 };
 
 GraphicsContextPlatformPrivate::GraphicsContextPlatformPrivate()
     :  context(0)
+    ,  currentPath(0)
 {
     clip.valid = false;
     clip.rect = IntRect();
@@ -63,6 +69,8 @@ GraphicsContextPlatformPrivate::GraphicsContextPlatformPrivate()
 
 GraphicsContextPlatformPrivate::~GraphicsContextPlatformPrivate()
 {
+    if (currentPath)
+        ps_path_unref(currentPath);
     if (clip.path)
         ps_path_unref(clip.path);
     for (unsigned i = 0; i < clipStack.size(); ++i) {
@@ -806,6 +814,17 @@ void GraphicsContext::rotate(float angle)
     m_data->matrix.rotate (angle);
 }
 
+/* Concatenates an arbitrary transform (SVG viewBox/transform lists go through
+ * here).  Other concat operations above rebuild the matrix with the simple
+ * helpers; this one has to use the full matrix. */
+void GraphicsContext::concatCTM(const AffineTransform& transform)
+{
+    if (paintingDisabled())
+        return;
+    ps_transform(m_data->context, transform.platformTransform());
+    m_data->matrix *= transform;
+}
+
 void GraphicsContext::setMiterLimit(float m) 
 {
     if (paintingDisabled())
@@ -841,6 +860,45 @@ void GraphicsContext::fillPath (const Path& path)
         return;
 	ps_set_path(m_data->context, path.platformPath());
 	ps_fill(m_data->context);
+}
+
+/* beginPath()/addPath() build the path the SVG paint servers fill/stroke.
+ * This is the only way a paint server can draw "whatever the caller added",
+ * matching the 2008 GraphicsContext contract. */
+void GraphicsContext::beginPath()
+{
+    if (paintingDisabled())
+        return;
+    if (m_data->currentPath) {
+        ps_path_unref(m_data->currentPath);
+        m_data->currentPath = 0;
+    }
+    m_data->currentPath = ps_path_create();
+}
+
+void GraphicsContext::addPath(const Path& path)
+{
+    if (paintingDisabled())
+        return;
+    if (!m_data->currentPath)
+        m_data->currentPath = ps_path_create();
+    ps_path_add_sub_path(m_data->currentPath, path.platformPath());
+}
+
+void GraphicsContext::fillPath()
+{
+    if (paintingDisabled() || !m_data->currentPath || ps_path_is_empty(m_data->currentPath))
+        return;
+    ps_set_path(m_data->context, m_data->currentPath);
+    ps_fill(m_data->context);
+}
+
+void GraphicsContext::strokePath()
+{
+    if (paintingDisabled() || !m_data->currentPath || ps_path_is_empty(m_data->currentPath))
+        return;
+    ps_set_path(m_data->context, m_data->currentPath);
+    ps_stroke(m_data->context);
 }
 
 void GraphicsContext::setPlatformFont(const Font& font)

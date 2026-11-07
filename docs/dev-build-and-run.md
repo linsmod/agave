@@ -56,6 +56,22 @@ pwsh -File tools\build_antjsb.ps1        # 编 libant.a + 重链 antjsb.dll
 | 改 `OPT_JS_ANT` / `OPT_USE_KJS` | 重新 configure + 全量重编（开关改变整个源列表） | 全量 |
 | 加/删源文件、改 CMakeLists | `src/` 下的源文件由 `file(GLOB_RECURSE ... CONFIGURE_DEPENDS)` 收集，ninja 会自己重跑 configure；改 `CMakeLists.txt` 仍要手动 configure | 秒级 ~ 数分钟 |
 
+### 生成物：SVG 名字表/工厂（ksvg2）
+
+- `ENABLE_SVG` 由 `OPT_SVG` 控制（默认 ON）。不开时 ksvg2 的源码仍参与编译，但全部被
+  `#if ENABLE(SVG)` 编译成空。
+- `src/webcore/buildKJS/{SVGNames,XLinkNames,SVGElementFactory}.{h,cpp}` 与
+  `CSSPropertyNames.*`/`CSSValueKeywords.*` 是**签入的生成物**（历史上 SVG 那几份是禁用分支的空桩）。
+  改了 `ksvg2/svg/svgtags.in`、`svgattrs.in`、`xlinkattrs.in`、`ksvg2/css/SVGCSS*.in` 之后重跑：
+
+  ```powershell
+  pwsh -File tools\gen_svg_names.ps1              # SVG/XLink 名字 + 工厂
+  pwsh -File tools\gen_svg_names.ps1 -WithCSS     # 连 CSS 属性/关键字表一起（需要 gperf）
+  ```
+
+  脚本会自己找 perl（Git/msys）和 gperf（vcpkg），并统一去掉 `.in` 的 CRLF（`gcc -E` 管道会把 CR
+  带进生成物，曾生成出 `a<CR>Tag` 这种断行）。
+
 ### 生成物：CSS 语法（`CSSGrammar.cpp`）与属性/关键字表
 
 `src/webcore/buildKJS/CSSGrammar.cpp`/`.h`、`CSSPropertyNames.*`、`CSSValueKeywords.h` 都是**签入的生成物**，

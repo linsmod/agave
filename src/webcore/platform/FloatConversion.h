@@ -42,6 +42,12 @@ namespace WebCore {
         return static_cast<float>(number);
     }
 
+    template<>
+    inline float narrowPrecisionToFloat(float number)
+    {
+        return number;
+    }
+
 } // namespace WebCore
 
 #endif // FloatConversion_h

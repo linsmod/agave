@@ -31,9 +31,12 @@
 #include "SVGTests.h"
 #include "SVGURIReference.h"
 
+#include <memory>
+
 namespace WebCore
 {
     class Attribute;
+    class ImageBuffer;
     class SVGLength;
     class SVGMaskElement : public SVGStyledLocatableElement,
                            public SVGURIReference,

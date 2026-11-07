@@ -127,8 +127,8 @@ RenderObject* RenderSVGContainer::removeChildNode(RenderObject* oldChild, bool f
     oldChild->setNextSibling(0);
     oldChild->setParent(0);
 
-    if (AXObjectCache::accessibilityEnabled())
-        document()->axObjectCache()->childrenChanged(this);
+    // FIXME: this engine has no Document::axObjectCache() (accessibility is not
+    // built); SVG accessibility notifications are dropped for now.
 
     return oldChild;
 }
@@ -153,8 +153,8 @@ void RenderSVGContainer::appendChildNode(RenderObject* newChild, bool)
     if (!normalChildNeedsLayout())
         setChildNeedsLayout(true); // We may supply the static position for an absolute positioned child.
 
-    if (AXObjectCache::accessibilityEnabled())
-        document()->axObjectCache()->childrenChanged(this);
+    // FIXME: this engine has no Document::axObjectCache() (accessibility is not
+    // built); SVG accessibility notifications are dropped for now.
 }
 
 void RenderSVGContainer::insertChildNode(RenderObject* child, RenderObject* beforeChild, bool)
@@ -184,8 +184,8 @@ void RenderSVGContainer::insertChildNode(RenderObject* child, RenderObject* befo
     if (!normalChildNeedsLayout())
         setChildNeedsLayout(true); // We may supply the static position for an absolute positioned child.
 
-    if (AXObjectCache::accessibilityEnabled())
-        document()->axObjectCache()->childrenChanged(this);
+    // FIXME: this engine has no Document::axObjectCache() (accessibility is not
+    // built); SVG accessibility notifications are dropped for now.
 }
 
 bool RenderSVGContainer::drawsContents() const

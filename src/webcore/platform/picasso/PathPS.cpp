@@ -9,6 +9,7 @@
 #include "Path.h"
 #include "FloatRect.h"
 #include "AffineTransform.h"
+#include "PlatformString.h"
 
 namespace WebCore {
 
@@ -160,9 +161,96 @@ void Path::transform(const AffineTransform& matrix)
 	ps_matrix_transform_path(matrix.platformTransform(), m_path);
 }
 
+/* Walks picasso's vertex list and feeds the 2008 PathElement callbacks.
+ * picasso stores one vertex per point: CURVE3 = (ctrl, end), CURVE4 =
+ * (ctrl1, ctrl2, end), END_POLY closes the current subpath. */
+void Path::apply(void* info, PathApplierFunction function) const
+{
+    if (!function || ps_path_is_empty(m_path))
+        return;
+
+    unsigned count = ps_path_get_vertex_count(m_path);
+    unsigned i = 0;
+    while (i < count) {
+        ps_point p = {0, 0};
+        ps_path_cmd cmd = ps_path_get_vertex(m_path, i, &p);
+        switch (cmd) {
+        case PATH_CMD_MOVE_TO: {
+            PathElement e;
+            e.type = PathElementMoveToPoint;
+            e.points[0] = FloatPoint(p.x, p.y);
+            function(info, &e);
+            ++i;
+            break;
+        }
+        case PATH_CMD_LINE_TO: {
+            PathElement e;
+            e.type = PathElementAddLineToPoint;
+            e.points[0] = FloatPoint(p.x, p.y);
+            function(info, &e);
+            ++i;
+            break;
+        }
+        case PATH_CMD_CURVE3: {
+            if (i + 1 >= count) {
+                ++i;
+                break;
+            }
+            ps_point p2 = {0, 0};
+            ps_path_get_vertex(m_path, i + 1, &p2);
+            PathElement e;
+            e.type = PathElementAddQuadCurveToPoint;
+            e.points[0] = FloatPoint(p.x, p.y);
+            e.points[1] = FloatPoint(p2.x, p2.y);
+            function(info, &e);
+            i += 2;
+            break;
+        }
+        case PATH_CMD_CURVE4: {
+            if (i + 2 >= count) {
+                ++i;
+                break;
+            }
+            ps_point p2 = {0, 0};
+            ps_point p3 = {0, 0};
+            ps_path_get_vertex(m_path, i + 1, &p2);
+            ps_path_get_vertex(m_path, i + 2, &p3);
+            PathElement e;
+            e.type = PathElementAddCurveToPoint;
+            e.points[0] = FloatPoint(p.x, p.y);
+            e.points[1] = FloatPoint(p2.x, p2.y);
+            e.points[2] = FloatPoint(p3.x, p3.y);
+            function(info, &e);
+            i += 3;
+            break;
+        }
+        case PATH_CMD_END_POLY: {
+            PathElement e;
+            e.type = PathElementCloseSubpath;
+            function(info, &e);
+            ++i;
+            break;
+        }
+        default:
+            ++i;
+            break;
+        }
+    }
+}
+
 float Path::length()
 {
 	return (float)ps_path_get_length(m_path);
+}
+
+/* Debug dumps only (RenderTreeAsText / SVGRenderTreeAsText).  picasso has no
+ * path-to-string helper, so report the vertex count instead of the geometry. */
+String Path::debugString() const
+{
+    unsigned count = ps_path_get_vertex_count(m_path);
+    char buffer[64];
+    sprintf(buffer, "path(%u)", count);
+    return String(buffer);
 }
 
 static inline double calc_distance(double x1, double y1, double x2, double y2)

@@ -49,6 +49,7 @@ public:
 
     void map(int x, int y, int *x2, int *y2) const;
     void map(float x, float y, float *x2, float *y2) const;
+    void map(double x, double y, double *x2, double *y2) const;
     IntRect mapRect(const IntRect&) const;
     FloatRect mapRect(const FloatRect&) const;
     IntPoint mapPoint(const IntPoint&) const;

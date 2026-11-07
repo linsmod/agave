@@ -166,6 +166,11 @@ set(HEADERS ${PROJ_ROOT}/include
             ${PROJ_ROOT}/src/webcore/platform/image-decoders/bmp
             ${PROJ_ROOT}/src/webcore/platform/image-decoders/ico
             ${PROJ_ROOT}/src/webcore/xml
+            ${PROJ_ROOT}/src/webcore/ksvg2
+            ${PROJ_ROOT}/src/webcore/ksvg2/svg
+            ${PROJ_ROOT}/src/webcore/ksvg2/css
+            ${PROJ_ROOT}/src/webcore/ksvg2/misc
+            ${PROJ_ROOT}/src/webcore/ksvg2/events
             ${PROJ_ROOT}/src/webview
             ${PROJ_OUT}/include
             ${PROJ_OUT}/

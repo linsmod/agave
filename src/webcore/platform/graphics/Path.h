@@ -29,12 +29,13 @@
 
 #include <picasso/picasso.h>
 
+#include "FloatPoint.h"
+
 namespace WebCore {
 
 	typedef ps_path* PlatformPath;
 
     class AffineTransform;
-    class FloatPoint;
     class FloatSize;
     class FloatRect;
     class String;
@@ -43,6 +44,21 @@ namespace WebCore {
         RULE_NONZERO = 0,
         RULE_EVENODD = 1
     };
+
+    enum PathElementType {
+        PathElementMoveToPoint,
+        PathElementAddLineToPoint,
+        PathElementAddQuadCurveToPoint,
+        PathElementAddCurveToPoint,
+        PathElementCloseSubpath
+    };
+
+    struct PathElement {
+        PathElementType type;
+        FloatPoint points[3];
+    };
+
+    typedef void (*PathApplierFunction)(void* info, const PathElement*);
 
     class Path {
     public:
@@ -91,6 +107,9 @@ namespace WebCore {
         static Path createLine(const FloatPoint&, const FloatPoint&);
 
         void transform(const AffineTransform&);
+
+        // Walks the path elements (used by SVG markers/text-on-path).
+        void apply(void* info, PathApplierFunction) const;
 
     private:
         PlatformPath m_path;

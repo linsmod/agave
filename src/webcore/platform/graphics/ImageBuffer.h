@@ -21,42 +21,47 @@
  * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
  * OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #ifndef ImageBuffer_h
 #define ImageBuffer_h
 
 #include "IntSize.h"
-#include <wtf/OwnPtr.h>
-#include <memory>
 
-typedef struct _MYBITMAP MYBITMAP;
+#include <picasso/picasso.h>
+#include <wtf/Noncopyable.h>
+#include <wtf/OwnPtr.h>
+
+#include <memory>
 
 namespace WebCore {
 
-    class GraphicsContext;
-    class RenderObject;
+class GraphicsContext;
 
-    class ImageBuffer : Noncopyable {
-    public:
-        static std::auto_ptr<ImageBuffer> create(const IntSize&, bool grayScale);
-        ~ImageBuffer();
+// Offscreen raster target (SVG patterns/masks).  Backed by a picasso image +
+// canvas: the canvas paints straight into the image's pixels.
+class ImageBuffer : Noncopyable {
+public:
+    static std::auto_ptr<ImageBuffer> create(const IntSize&, bool grayScale);
+    ~ImageBuffer();
 
-        IntSize size() const { return m_size; }
-        GraphicsContext* context() const{return m_context.get();}
+    IntSize size() const { return m_size; }
+    GraphicsContext* context() const { return m_context.get(); }
 
-        MYBITMAP * ImageRef() const;
+    // The rasterized pixels (valid after painting through context()).
+    ps_image* image() const { return m_image; }
 
-    private:
-        void* m_data;
-        IntSize m_size;
+private:
+    ImageBuffer(ps_canvas*, ps_image*, const IntSize&);
 
-        OwnPtr<GraphicsContext> m_context;
+    ps_canvas* m_canvas;
+    ps_image* m_image;
+    IntSize m_size;
 
-        ImageBuffer(MYBITMAP * mybitmap);
-        mutable MYBITMAP *m_mybitmap;
-    };
+    OwnPtr<GraphicsContext> m_context;
+};
+
 }
 
-#endif
+#endif // ImageBuffer_h

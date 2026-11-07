@@ -3752,6 +3752,15 @@ bool CSSParser::parseValue(int propId, bool important)
     case CSS_PROP_OPACITY:
         valid_primitive = validUnit(value, FNumber, strict);
         break;
+    case CSS_PROP_ZOOM:
+        // Non-standard (IE) property: normal | <number> | <percentage>.
+        // Without this case it falls into the SVG parser's default branch and
+        // trips its "unimplemented propertyID" assert (style.zoom from script).
+        if (id == CSS_VAL_NORMAL)
+            valid_primitive = true;
+        else
+            valid_primitive = validUnit(value, FNumber | FPercent, false);
+        break;
     case CSS_PROP__WEBKIT_BOX_ALIGN:
         if (id == CSS_VAL_STRETCH || id == CSS_VAL_START || id == CSS_VAL_END ||
             id == CSS_VAL_CENTER || id == CSS_VAL_BASELINE)

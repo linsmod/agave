@@ -61,6 +61,16 @@ void AffineTransform::map(float x, float y, float* x2, float* y2) const
 	*y2 = p.y;
 }
 
+/* 2008 WebCore callers (SVGSVGElement::viewport & friends) use doubles;
+ * picasso's matrix API is float, so narrow here. */
+void AffineTransform::map(double x, double y, double* x2, double* y2) const
+{
+	ps_point p = {(float)x, (float)y};
+	ps_matrix_transform_point(m, &p);
+	*x2 = p.x;
+	*y2 = p.y;
+}
+
 IntPoint AffineTransform::mapPoint(const IntPoint& point) const
 {
 	float x, y;

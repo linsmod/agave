@@ -184,6 +184,12 @@ namespace WebCore {
         void strokePath (const Path&);
         void fillPath (const Path&);
 
+        // Fills/strokes the path most recently built with beginPath()/addPath().
+        // SVG paint servers need this: they are handed a context with the path
+        // already added, not a Path object.
+        void strokePath();
+        void fillPath();
+
         void scale(const FloatSize&);
         void rotate(float angleInRadians);
         void translate(int x, int y);

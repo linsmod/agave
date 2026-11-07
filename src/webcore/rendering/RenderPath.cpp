@@ -83,6 +83,30 @@ bool RenderPath::fillContains(const FloatPoint& point, bool requiresFill) const
     return m_path.contains(point, style()->svgStyle()->fillRule());
 }
 
+bool RenderPath::strokeContains(const FloatPoint& point, bool requiresStroke) const
+{
+    if (m_path.isEmpty())
+        return false;
+
+    if (requiresStroke && !SVGPaintServer::strokePaintServer(style(), this))
+        return false;
+
+    // FIXME: hit testing an actual stroked outline needs the stroke geometry;
+    // the inflated bounding box is good enough until dashes/markers land.
+    return strokeBBox().contains(point);
+}
+
+FloatRect RenderPath::strokeBBox() const
+{
+    if (m_path.isEmpty())
+        return FloatRect();
+
+    FloatRect bounds = m_path.boundingRect();
+    float width = SVGRenderStyle::cssPrimitiveToLength(this, style()->svgStyle()->strokeWidth(), 1.0f);
+    bounds.inflate(width / 2.0f);
+    return bounds;
+}
+
 FloatRect RenderPath::relativeBBox(bool includeStroke) const
 {
     if (m_path.isEmpty())
@@ -324,7 +348,7 @@ static void drawMarkerWithData(GraphicsContext* context, MarkerData &data)
 
 static inline void updateMarkerDataForElement(MarkerData& previousMarkerData, const PathElement* element)
 {
-    FloatPoint* points = element->points;
+    const FloatPoint* points = element->points;
     
     switch (element->type) {
     case PathElementAddQuadCurveToPoint:
@@ -358,7 +382,7 @@ static void drawStartAndMidMarkers(void* info, const PathElement* element)
     int elementIndex = data.elementIndex;
     MarkerData& previousMarkerData = data.previousMarkerData;
 
-    FloatPoint* points = element->points;
+    const FloatPoint* points = element->points;
 
     // First update the outslope for the previous element
     previousMarkerData.outslopePoints[0] = previousMarkerData.origin;

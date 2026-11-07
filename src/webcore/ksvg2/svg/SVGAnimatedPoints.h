@@ -35,6 +35,12 @@ namespace WebCore
         SVGAnimatedPoints();
         virtual ~SVGAnimatedPoints();
 
+        // The KJS wrapper (JSSVGAnimatedPoints) holds a RefPtr to this interface,
+        // but the object is owned by its SVG element: reference counting here
+        // must not delete it.  See the design doc (JS bindings milestone).
+        void ref() { }
+        void deref() { }
+
         // 'SVGAnimatedPoints' functions
         virtual SVGPointList* points() const = 0;
         virtual SVGPointList* animatedPoints() const = 0;
