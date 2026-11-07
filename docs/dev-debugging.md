@@ -322,6 +322,7 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
 | `AGB_NATIVE_STALL_MS=<ms>` | 同上 | 没有 JS、命令却多久不 drain 算"引擎在 JS 之外卡住"，默认 10000；这一档**不中断**，只记日志 | — |
 | `AGB_WD_DEBUG=1` | 同上 | 每个 tick 打印 `wd js=… jsbusy=… busy=… queue=… head=…` | 调阈值、判断"真卡/慢"的第一手数据 |
 | `AGB_PARSE_LOG=1` | `src/webcore/html/HTMLTokenizer.cpp` / `HTMLScriptElement.cpp` / `AntRuntime.cpp` | HTML 解析轨迹（默认关）：`tag` 行=解析器在每个 `<script>`/`<style>`/`<link>` 起标签被 tokenize 处打一行（**全部属性**按作者写法原样打印，空值属性只打名字，超长值截断 `(N bytes)`；`src=`/`href=` 后跟 `url=<解析后的绝对地址>`，和作者写的不同才打）；执行行=脚本真正的时刻与形态（inline/external、classic/module、flush 封口**前后**分别打 `queued for parse end` / `running now (parse already finished)`）。排查"脚本为什么在这个时机跑"从这里开始 | 见下例 |
+| `AGB_CSS_PROFILE=1` | `src/webcore/css/CSSParser.cpp`（`parseSheet`） | 每张样式表解析前打印 8 个改写 pass（`hoistPageRules`/`rewriteViewportUnits`/`foldCalc*`…）与 `cssyyparse` 的耗时（默认关）。大样式表排版卡顿时先看这里：先确认哪个 pass 慢，再怀疑语法解析 | 页面带大 `<style>`：用 `debug/stall_baidu_css.html`（百度全部内联 CSS 的本地复现页，~316KB） |
 | `AGB_HANG_POPUP=0` | `examples/browser_shell/main.c`（`onUnresponsive`） | 关掉"页面无响应"提示框（无人值守/自动化时用） | — |
 
 ant 自身 CLI / 基础设施的开关（`ANT_MANIFEST_URL`、`ANT_SANDBOX_*`、`ANT_NO_CRASH_HANDLER` 等）

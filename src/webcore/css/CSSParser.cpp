@@ -29,6 +29,7 @@
 #include "CSSCharsetRule.h"
 #include "CSSCursorImageValue.h"
 #include "CSSHelper.h"
+#include "SystemTime.h"
 #include "CSSImageValue.h"
 #include "CSSGradientValue.h"
 #include <stdio.h>
@@ -1254,12 +1255,44 @@ void CSSParser::parseSheet(CSSStyleSheet* sheet, const String& string)
      * next one) from inheriting a previous sheet's values. */
     clearCustomProperties();
 
-    setupParser("", rewriteWebkitScrollbarRules(foldCalcConstants(rewriteIsWhereSelectors(rewriteBareMediaQueries(
-                     rewriteCustomPropertyNames(foldCalcIteratively(rewriteViewportUnits(rewriteHexAlphaColors(hoistPageRules(string), false), document()))))))), "");
+    /* AGB_CSS_PROFILE=1: the rewrite chain runs several full passes over the
+     * sheet before the yacc grammar starts; when a big inline sheet stalls the
+     * parse, this says which pass is slow. Same passes as the previous
+     * one-liner, now sequential. */
+    const char* profile = getenv("AGB_CSS_PROFILE");
+    double passStart = profile ? currentTime() : 0.0;
+#define AGA_CSS_TIME(name, s) \
+    if (profile) { fprintf(stderr, "[css] %-26s %8.1fms len=%u\n", name, \
+        (currentTime() - passStart) * 1000.0, (unsigned)(s).length()); \
+        passStart = currentTime(); }
+
+    String s1 = hoistPageRules(string);
+    AGA_CSS_TIME("hoistPageRules", s1);
+    String s2 = rewriteHexAlphaColors(s1, false);
+    AGA_CSS_TIME("rewriteHexAlphaColors", s2);
+    String s3 = rewriteViewportUnits(s2, document());
+    AGA_CSS_TIME("rewriteViewportUnits", s3);
+    String s4 = foldCalcIteratively(s3);
+    AGA_CSS_TIME("foldCalcIteratively", s4);
+    String s5 = rewriteCustomPropertyNames(s4);
+    AGA_CSS_TIME("rewriteCustomPropertyNames", s5);
+    String s6 = rewriteBareMediaQueries(s5);
+    AGA_CSS_TIME("rewriteBareMediaQueries", s6);
+    String s7 = rewriteIsWhereSelectors(s6);
+    AGA_CSS_TIME("rewriteIsWhereSelectors", s7);
+    String s8 = foldCalcConstants(s7);
+    AGA_CSS_TIME("foldCalcConstants", s8);
+
+    setupParser("", rewriteWebkitScrollbarRules(s8), "");
 
     CSSParser* old = currentParser;
     currentParser = this;
+    double parseStart = profile ? currentTime() : 0.0;
     cssyyparse(this);
+    if (profile)
+        fprintf(stderr, "[css] %-26s %8.1fms rules=%u\n", "cssyyparse",
+                (currentTime() - parseStart) * 1000.0,
+                (unsigned)styleElement->length());
     currentParser = old;
 
     /* The agb-page-<n> placeholder rules are @page rules: put the real rule
@@ -1338,7 +1371,15 @@ String CSSParser::hoistPageRules(const String& css)
 {
     unsigned len = css.length();
     unsigned i = 0;
-    String out;
+
+    /* Built into a growing vector, not a String: String::append copies the
+     * whole buffer on every append (StringImpl has no capacity), so a
+     * per-character accumulation here made big sheets quadratic - a 159 KB
+     * sheet spent ~1.1 s in this pass alone while the other passes and the
+     * gay grammar together take ~100 ms. Same pattern as the other rewrite
+     * passes below. */
+    std::vector<UChar> out;
+    out.reserve(len + 64);
 
     m_pageRuleSelectors.clear();
 
@@ -1351,7 +1392,7 @@ String CSSParser::hoistPageRules(const String& css)
             while (end + 1 < len && !(css[end] == '*' && css[end + 1] == '/'))
                 ++end;
             end = (end + 1 < len) ? end + 2 : len;
-            out += css.substring(i, end - i);
+            out.insert(out.end(), css.characters() + i, css.characters() + end);
             i = end;
             continue;
         }
@@ -1366,7 +1407,7 @@ String CSSParser::hoistPageRules(const String& css)
             }
             if (end < len)
                 ++end;
-            out += css.substring(i, end - i);
+            out.insert(out.end(), css.characters() + i, css.characters() + end);
             i = end;
             continue;
         }
@@ -1393,25 +1434,39 @@ String CSSParser::hoistPageRules(const String& css)
                 if (end > brace + 1 && css[end - 1] == '}') {
                     String selectorText = css.substring(i + 5, brace - (i + 5)).stripWhiteSpace();
                     String body = css.substring(brace + 1, end - 1 - (brace + 1));
-                    String placeholder = "agb-page-";
-                    placeholder += String::number((int)m_pageRuleSelectors.size());
 
+                    /* The ordinal is the number of page rules seen BEFORE this
+                     * one (restorePageRules() indexes m_pageRuleSelectors by
+                     * it); append before building the placeholder and the
+                     * first rule would come out "agb-page-1" and be skipped. */
+                    CString ordinal(String::number((int)m_pageRuleSelectors.size()).utf8().data());
                     m_pageRuleSelectors.append(selectorText);
-                    out += placeholder;
-                    out += " {";
-                    out += body;
-                    out += "} ";
+
+                    out.push_back('a'); out.push_back('g'); out.push_back('b');
+                    out.push_back('-'); out.push_back('p'); out.push_back('a');
+                    out.push_back('g'); out.push_back('e'); out.push_back('-');
+                    /* the ordinal digits of the placeholder selector */
+                    for (const char* p = ordinal.data(); *p; ++p)
+                        out.push_back((UChar)*p);
+                    out.push_back(' ');
+                    out.push_back('{');
+                    out.insert(out.end(), body.characters(), body.characters() + body.length());
+                    out.push_back('}');
+                    out.push_back(' ');
                     i = end;
                     continue;
                 }
             }
         }
 
-        out.append(c);
+        out.push_back(c);
         ++i;
     }
 
-    return out;
+    if (out.empty())
+        return css;
+
+    return String(&out[0], (unsigned)out.size());
 }
 
 void CSSParser::restorePageRules()

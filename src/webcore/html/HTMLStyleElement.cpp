@@ -72,7 +72,12 @@ void HTMLStyleElement::removedFromDocument()
 
 void HTMLStyleElement::childrenChanged()
 {
-    StyleElement::process(this);
+    /* A parser-created <style> is processed once at finishedParsing();
+     * childrenChanged fires mid-parse with the full text already collected and
+     * would parse the complete sheet a second time (159 KB of Baidu inline
+     * CSS: two full parses). Dynamic insertion keeps its own path. */
+    if (!m_createdByParser)
+        StyleElement::process(this);
 }
 
 StyleSheet* HTMLStyleElement::sheet()
