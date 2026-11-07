@@ -129,6 +129,15 @@ bool MIMETypeRegistry::isSupportedNonImageMIMEType(const String& mimeType)
     return !mimeType.isEmpty() && supportedNonImageMIMETypes->contains(mimeType);
 }
 
+bool MIMETypeRegistry::isSupportedMediaMIMEType(const String& mimeType)
+{
+    /* Media documents are keyed on the type family, not on a table: a page
+     * that serves audio/video from a top-level navigation must play it, and
+     * the <video>/<audio> element decides later whether it can decode it. */
+    return mimeType.startsWith("audio/", false) || mimeType.startsWith("video/", false)
+        || mimeType == "application/ogg" || mimeType == "application/vnd.apple.mpegurl";
+}
+
 bool MIMETypeRegistry::isJavaAppletMIMEType(const String& mimeType)
 {
     // Since this set is very limited and is likely to remain so we won't bother with the overhead

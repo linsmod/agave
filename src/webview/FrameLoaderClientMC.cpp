@@ -343,6 +343,11 @@ bool FrameLoaderClientMC::canShowMIMEType(const String& MIMEType) const
     if (MIMETypeRegistry::isSupportedNonImageMIMEType(MIMEType))
         return true;
 
+    /* audio/video are rendered, not downloaded: the document is the built-in
+     * player (MediaDocument), the same way Chrome shows a bare .mp4. */
+    if (MIMETypeRegistry::isSupportedMediaMIMEType(MIMEType))
+        return true;
+
     return false;
 }
 

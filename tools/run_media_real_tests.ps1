@@ -186,7 +186,35 @@ if (-not (Test-Path -LiteralPath $mp3)) {
     } 'device position within 0.4 s of wall clock'
 }
 
-# --- 4. pixels -------------------------------------------------------------
+# --- 4. direct navigation ---------------------------------------------------
+# A bare media URL must open the built-in player (a media document), not a
+# download - that is what Chrome does for a top-level .mp4 / .mp3.
+Write-Host '== direct navigation: media document'
+$clipUrl = 'file:///' + ($clip -replace '\\', '/')
+
+$direct = Probe -Query $clipUrl -Wait 1500 -Settle 5000 -Eval `
+    "var v=document.querySelector('video'); probeExit('title='+document.title+' tag='+(v?v.tagName:'-')+' real='+(v?v._agbRealPlayback:'-')+' ct='+(v?v.currentTime.toFixed(2):'-')+' dur='+(v?v.duration:-1))"
+
+Check 'video document, not a download' $direct.Exit {
+    param($t) $t -match 'title=clip640x360\.mp4' -and $t -match 'tag=VIDEO' -and $t -match 'real=1'
+} 'title=clip640x360.mp4 tag=VIDEO real=1'
+Check 'video document plays on its own' $direct.Exit { param($t) $t -match 'ct=1\.' } 'ct=1.x after 1.5 s'
+Check 'no download for media MIME' $direct.Text { param($t) $t -notmatch 'download mime' } 'no "[nav] download" line'
+
+if (Test-Path -LiteralPath $mp3) {
+    $mp3Url = 'file:///' + ($mp3 -replace '\\', '/')
+    $directAudio = Probe -Query $mp3Url -Wait 1500 -Settle 5000 -Eval `
+        "var a=document.querySelector('audio'); probeExit('title='+document.title+' tag='+(a?a.tagName:'-')+' real='+(a?a._agbRealPlayback:'-')+' ct='+(a?a.currentTime.toFixed(2):'-')+' box='+(a?a.offsetWidth:'-'))"
+
+    Check 'audio document' $directAudio.Exit {
+        param($t) $t -match 'tag=AUDIO' -and $t -match 'real=1' -and $t -match 'ct=1\.'
+    } 'tag=AUDIO real=1 ct=1.x'
+    Check 'audio document spans the window' $directAudio.Exit { param($t) $t -match 'box=1100' } 'box=1100'
+} else {
+    Skip 'audio document' 'mp3 not present'
+}
+
+# --- 5. pixels -------------------------------------------------------------
 if ($SkipPixels) {
     Skip 'pixels' 'SkipPixels'
 } else {

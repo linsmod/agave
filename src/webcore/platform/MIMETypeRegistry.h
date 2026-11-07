@@ -51,6 +51,10 @@ public:
     // Check to see if a non-image mime type is suitable for being loaded as a
     // document in a frame.
     static bool isSupportedNonImageMIMEType(const String& mimeType);
+
+    // Check to see if the type is audio/video, i.e. a top-level navigation to
+    // it should show the built-in media document instead of downloading.
+    static bool isSupportedMediaMIMEType(const String& mimeType);
     
     // Check to see if a mime type is a valid Java applet mime type
     static bool isJavaAppletMIMEType(const String& mimeType);

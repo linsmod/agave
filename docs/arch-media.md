@@ -23,7 +23,10 @@
 5. 元数据（`duration`/`videoWidth`/`videoHeight`）来自**内置解析器**（MP4/WebM/MKV/Ogg 头），
    解析不了再交给 `ffprobe`（可选外部进程，见 §6）。
 6. 画面：`<video>` 有解码帧画解码帧，没有帧时画 `poster`，两者都没有画黑底（Chrome 同样）。
-7. `<track>` + WebVTT：`textTracks`、`addTextTrack`、cue 解析与 `cuechange`；字幕**不**绘制
+7. **顶层导航到媒体 URL**（直接打开 `.mp4` / `.mp3` / `Content-Type: video|audio`）不下载，
+   而是渲染内置播放器文档（§7.2）：黑底、单个 `<video controls autoplay>` / `<audio controls autoplay>`，
+   标题是文件名 —— 与 Chrome 打开裸媒体链接的行为一致。
+8. `<track>` + WebVTT：`textTracks`、`addTextTrack`、cue 解析与 `cuechange`；字幕**不**绘制
    （没有字幕渲染器，页面自己用 `cue` 画）。
 
 明确不做：MSE（`MediaSource`）、EME、WebAudio、`requestVideoFrameCallback`、captureStream、
@@ -203,8 +206,30 @@ ffmpeg/ffprobe 是本引擎 fork 出来的子进程。**在本进程树里它们
 代价（写进 §8）：远程媒体要**整段下载完**才开始播，没有渐进式流；远程 body 还会
 在内存里过一遍（同步 API 的限制）。探测是同步的，大文件会卡住引擎线程。
 
+## 7.2 顶层导航到媒体 URL：媒体文档（`MediaDocument`）
+
+`src/webcore/loader/MediaDocument.cpp`（与 `ImageDocument` / `PluginDocument` 同一套路）：
+
+- 判定在 `FrameLoaderClientMC::canShowMIMEType()`：`MIMETypeRegistry::isSupportedMediaMIMEType()`
+  对 `audio/*`、`video/*`（加 `application/ogg`、HLS 的 `application/vnd.apple.mpegurl`）返回真，
+  于是策略是 `PolicyUse` 而不是 `PolicyDownload`（`Content-Disposition: attachment` 仍然优先）。
+- `DOMImplementation::createDocument()` 遇到媒体类型返回 `MediaDocument`；它的 tokenizer
+  `wantsRawData()`，把字节全部丢弃（不解析二进制），第一个字节到达时建结构：
+  ```
+  <html><head><title>文件名</title><style>…黑底、居中、max-width/height 100%…</style></head>
+        <body><video|audio controls autoplay src="文档 URL"></body></html>
+  ```
+- `autoplay` 让元素在元数据到手后自己 `play()`，解码走 §4.1 的管线；音频文档的元素宽度 100%。
+- 元素是**自己再拉一次**资源的（文档那份字节被丢掉），所以远程直开会下载两遍；
+  `file:` 直开没有代价。见 §8。
+
 ## 8. 已知缺口（记录，不在本次修）
 
+- **媒体文档不居中（垂直方向）**：`body { display: flex; align-items: center }` 在本引擎里
+  只居中了水平方向（`justify-content` 生效，`align-items` 没有作用到 replaced 元素），
+  所以视频贴顶；Chrome 是水平+垂直居中。
+- **媒体文档会把资源下载两遍**（文档主资源 + 元素自己的加载）。远程直开时是双倍流量；
+  正确做法是把主资源的字节交给元素（`setLoadManually` 式的通道），或者边下边解。
 - **没有渐进式/流式播放**：http(s) 媒体先整段下载（§7.1），大文件既卡加载又占内存；
   需要 Range 请求 + 边下边解（或 `MediaSource`）。
 - **没有音画严格同步**：视频按共享时钟节流，长时间抖动会累积（设备时钟领先时以它为准，
@@ -256,6 +281,9 @@ build-zig-native\agave_shell.exe --probe "$page`?kind=audio&src=file%3A%2F%2F%2F
   --eval-file tools\pages\cap_media_real_state.js --wait 1500 --settle 7000
 # 画面：?t=<秒>&hold=1 让页面自己停在那个位置，--shot 再抓图
 build-zig-native\agave_shell.exe --probe "$page`?src=../../debug/media/clip640x360.mp4&t=0&hold=1" --eval 0 --wait 3000 --shot build-zig-native\frame.bmp
+# 直接打开媒体链接/文件：应该是内置播放器而不是下载
+build-zig-native\agave_shell.exe --probe "https://artplayer.org/assets/sample/video.mp4" --wait 4000 `
+  --eval "var v=document.querySelector('video'); probeExit(document.title+' '+v.tagName+' ct='+v.currentTime.toFixed(2)+' real='+v._agbRealPlayback)"
 ```
 
 诊断开关：`AGB_MEDIA_DEBUG=1`（管线启动、时钟/设备位置、首帧、ffprobe 输出）、

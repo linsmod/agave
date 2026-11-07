@@ -36,7 +36,9 @@
 #include "HTMLViewSourceDocument.h"
 #include "Image.h"
 #include "ImageDocument.h"
+#include "MediaDocument.h"
 #include "MediaList.h"
+#include "MIMETypeRegistry.h"
 #include "Page.h"
 #include "PluginDocument.h"
 #include "PlugInInfoStore.h"
@@ -386,6 +388,11 @@ PassRefPtr<Document> DOMImplementation::createDocument(const String& type, Frame
         return new PluginDocument(this, frame);
     if (Image::supportsType(type))
         return new ImageDocument(this, frame);
+
+    /* A bare .mp4/.mp3 opened as a top-level document: show the built-in
+     * player instead of downloading (what Chrome does). */
+    if (MIMETypeRegistry::isSupportedMediaMIMEType(type))
+        return new MediaDocument(this, frame);
     // Everything else except text/plain can be overridden by plugins. In particular, Adobe SVG Viewer should be used for SVG, if installed.
     // Disallowing plug-ins to use text/plain prevents plug-ins from hijacking a fundamental type that the browser is expected to handle,
     // and also serves as an optimization to prevent loading the plug-in database in the common case.

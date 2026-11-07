@@ -101,8 +101,8 @@
   ffmpeg 解 PCM 走 waveOut 出声、解 BGRA 帧按时间戳节流后由 `RenderMedia` 绘制；
   `currentTime` 由设备位置/墙钟驱动，`pause` 冻结、seek 重开解码器、`ended` 由媒体时钟触发。
   远程 http(s) 媒体由引擎自己下载成本地副本再交给工具（子进程在本进程树里做不了 TLS）。
-  验收：`tools/run_media_real_tests.ps1`（本地视频 / 远程视频 / 本地 MP3，含画面与 ffmpeg
-  参考帧对拍），实现边界见 [arch-media.md](arch-media.md)。
+  验收：`tools/run_media_real_tests.ps1`（本地视频 / 远程视频 / 本地 MP3 / 直接打开媒体 URL，
+  含画面与 ffmpeg 参考帧对拍），实现边界见 [arch-media.md](arch-media.md)。
 
 ## P0：先修正确性
 
