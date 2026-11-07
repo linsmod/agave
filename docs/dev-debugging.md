@@ -321,7 +321,7 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
 | `AGB_UNRESPONSIVE_MS=<ms>` | 同上 | JS 连续在跑多久算"页面无响应"，默认 12000（`AGB_STUCK_EXEC_MS` 是它的旧名，仍然认） | 调小可复现：`AGB_UNRESPONSIVE_MS=2000` + 20 s 死循环 → `[evt] watchdog: aborting an unresponsive page script` |
 | `AGB_NATIVE_STALL_MS=<ms>` | 同上 | 没有 JS、命令却多久不 drain 算"引擎在 JS 之外卡住"，默认 10000；这一档**不中断**，只记日志 | — |
 | `AGB_WD_DEBUG=1` | 同上 | 每个 tick 打印 `wd js=… jsbusy=… busy=… queue=… head=…` | 调阈值、判断"真卡/慢"的第一手数据 |
-| `AGB_PARSE_LOG=1` | `src/webcore/html/HTMLTokenizer.cpp` / `HTMLScriptElement.cpp` | HTML 解析轨迹（默认关）：每个 `<script>`/`<style>`/`<link>` 起标签的属性（`src`/`href`/`rel`/`type`/`media`/`charset`/`defer`/`async`/`nomodule`），以及脚本真正执行的时刻与形态（inline/external、classic/module、`defer` 排队到解析后、`async` 立即跑）。排查"脚本为什么在这个时机跑"从这里开始 | 见下例 |
+| `AGB_PARSE_LOG=1` | `src/webcore/html/HTMLTokenizer.cpp` / `HTMLScriptElement.cpp` / `AntRuntime.cpp` | HTML 解析轨迹（默认关）：`tag` 行=解析器在每个 `<script>`/`<style>`/`<link>` 起标签被 tokenize 处打一行（**全部属性**按作者写法原样打印，空值属性只打名字，超长值截断 `(N bytes)`；`src=`/`href=` 后跟 `url=<解析后的绝对地址>`，和作者写的不同才打）；执行行=脚本真正的时刻与形态（inline/external、classic/module、flush 封口**前后**分别打 `queued for parse end` / `running now (parse already finished)`）。排查"脚本为什么在这个时机跑"从这里开始 | 见下例 |
 | `AGB_HANG_POPUP=0` | `examples/browser_shell/main.c`（`onUnresponsive`） | 关掉"页面无响应"提示框（无人值守/自动化时用） | — |
 
 ant 自身 CLI / 基础设施的开关（`ANT_MANIFEST_URL`、`ANT_SANDBOX_*`、`ANT_NO_CRASH_HANDLER` 等）
@@ -331,21 +331,29 @@ ant 自身 CLI / 基础设施的开关（`ANT_MANIFEST_URL`、`ANT_SANDBOX_*`、
   经典/模块/defer/async 各一条）：
 
   ```
-  [parse] link href=... rel=stylesheet media=screen
-  [parse] style
-  [parse] script
+  [parse] tag link rel=stylesheet href=data:text/css,a%7Bcolor:red%7D media=screen
+  [parse] tag style (no attributes)
+  [parse] tag script (no attributes)
   [parse] run classic script url=(inline) len=25
-  [parse] script type=module
-  [parse] run module (deferred to parse end) url=... len=24
-  [parse] script src=... defer
-  [parse] script src=... async
+  [parse] tag script type=module
+  [parse] script (module) queued for parse end url=... len=24
+  [parse] tag script defer src=data:text/javascript,window.deferred=1
+  [parse] tag script async src=data:text/javascript,window.asyncOne=1
   [parse] script (defer) queued for parse end url=... len=17
-  [parse] script (async/dynamic) running url=... len=17
+  [parse] script (async/dynamic) evaluating url=... len=17
+  [parse] deferred module running url=... len=24
   [parse] deferred classic script running url=... len=17
   ```
 
-  标签行走 `HTMLTokenizer::processToken`（属性按作者写法原样打印），执行行走
-  `HTMLTokenizer::scriptExecution` / `HTMLScriptElement::evaluateScript` / 解析后 flush。
+  语义约定：`tag` 行 = 分词器看到这个标签的时刻（元素尚未建好/入树）；`run ...` / `script (...)`
+  = 执行点的**决策结果**（queued / running now / evaluating），日志都打在做出决策的地方，
+  所以"只见 queued 不见 running"不会出现——flush 封口后才到的 defer/module 打
+  `running now (parse already finished)`。动态脚本先进引擎的那一步打
+  `evaluating`（`AntRuntime::evaluate()` 可能仍把 module 形态的 body 改道进队列，改道后由队列打真实结果）。
+  标签行走 `HTMLTokenizer::processToken` 前（属性全量、按作者写法），执行行走
+  `HTMLTokenizer::scriptExecution` / `HTMLScriptElement::evaluateScript` /
+  `AntRuntime::queueDeferredScript` / `queueModule`（tokenizer 对 module 只在
+  `queueDeferredModule` 处报）/ 解析后 flush。
 
 - **卡死的页面怎么恢复（不用杀进程）**：刷新/导航在控件里是排队命令，脚本不返回时队列永不 drain，
   所以窗口“活着但没反应”。中断机制：引擎在下一个 safepoint（解释器调用点 / JIT 循环回边）抛终止错误，

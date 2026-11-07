@@ -14,8 +14,9 @@
 
 ```powershell
 # A. 常规增量（首次 configure 慢，之后通常几秒到 1 分钟）
-pwsh -File tools\build_project.ps1 *> build-native.log; $LASTEXITCODE
-# 输出几千行，先落盘再 grep，别直接灌进上下文
+pwsh -File tools\build_project.ps1 *> build.log; $LASTEXITCODE
+# 脚本只往流里写，由调用者重定向落盘（脚本自身不再写 build-native.log，
+# 避免和调用者的重定向抢同一个文件）；输出几千行，先落盘再 grep，别直接灌进上下文
 
 # B. 快速重链（只改了 1-2 个 .cpp/.c，跳过脚本的 toolchain/configure 检查）
 $env:PATH = "C:\msys64\mingw64\bin;" + $env:PATH
@@ -128,4 +129,4 @@ H:\ant-v16\build-zig\ant.exe                # REPL
   （`build-zig-native\`）保证可写；写别处 `probeCapture` 打一行 `shot failed` 就继续，
   依赖像素的回归组会报 "probe failed"。所有截图/scratch 都放构建目录
   （`run_media_tests.ps1` / `run_layout_tests.ps1` 已按此约定）。
-- **构建日志别直接进上下文**（几千行）：`*> build-native.log` 然后 `grep`。
+- **构建日志别直接进上下文**（几千行）：`*> build.log` 然后 `grep`（脚本自身不落盘，落盘靠调用者重定向）。

@@ -36,8 +36,9 @@
 #   libagave.dll        12476416 bytes  2026-11-03 01:04:06
 #   ...
 #
-# The full compiler log is written to <repo>\build-native.log (git-ignored) and
-# the tail is printed when the build fails.
+# The script streams output; the caller redirects it to a file if wanted
+# (e.g. `*> build.log`) - there is no built-in log file. On failure the last
+# 40 lines and the error count are printed.
 
 param(
     [string]$BuildDir = 'build-zig-native',
@@ -47,16 +48,18 @@ param(
     [string]$ZigPath = '',          # zig.exe; default: $env:AGB_ZIG, winget, PATH
     [string]$MinGWRoot = '',        # default: C:\msys64\mingw64
     [string]$Deploy = '',           # copy libagave*.dll / agave_*.exe here afterwards
-    [switch]$StopLockingProcesses,  # -Fresh: stop processes running from the build dir if they block the delete
-    [string]$Log = '',              # default: <repo>\build-native.log
-    [switch]$NoLog                  # do not write a log file, just stream
+    [switch]$StopLockingProcesses   # -Fresh: stop processes running from the build dir if they block the delete
 )
+# No built-in log file: the script streams output and the caller redirects it.
+# A Tee-Object default (build-native.log) collided with callers that redirect
+# the whole run to the same path (PowerShell keeps two handles open and the
+# write dies with "file in use"). Capture output in $lines for error/warning
+# reporting and leave persistence to whoever runs the build.
 
 $ErrorActionPreference = 'Stop'
 
 $root  = Split-Path -Parent $PSScriptRoot           # agave repo
 $build = if ([IO.Path]::IsPathRooted($BuildDir)) { $BuildDir } else { Join-Path $root $BuildDir }
-$log   = if ($Log) { $Log } else { Join-Path $root 'build-native.log' }
 
 $artifacts = @('libagave.dll', 'antjsb.dll', 'agave_shell.exe', 'agave_embed.exe',
                'agave_view_host.exe', 'touchweb.exe', 'polyfills.js')
@@ -278,20 +281,12 @@ $sw = [Diagnostics.Stopwatch]::StartNew()
 $lines = @()
 Push-Location $root
 try {
-    if ($NoLog) {
-        & (Join-Path $mingwBin 'cmake.exe') @buildArgs 2>&1 | ForEach-Object { $lines += "$_"; $_ }
-    } else {
-        & (Join-Path $mingwBin 'cmake.exe') @buildArgs 2>&1 |
-            Tee-Object -FilePath $log |
-            ForEach-Object { $lines += "$_" }
-    }
+    & (Join-Path $mingwBin 'cmake.exe') @buildArgs 2>&1 | ForEach-Object { $lines += "$_"; $_ }
     $code = $LASTEXITCODE
 } finally {
     Pop-Location
 }
 $sw.Stop()
-
-if ($NoLog) { $null = $lines } else { Write-Host "log      : $log" }
 
 if ($code -ne 0) {
     Write-Host ''

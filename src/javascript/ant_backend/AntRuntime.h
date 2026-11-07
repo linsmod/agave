@@ -61,8 +61,10 @@ int evaluate(const char* src, size_t len, char** out, char** err);
 int evaluateModule(const char* src, size_t len, const char* filename, char** out, char** err);
 
 /* Module scripts are deferred until the document has been parsed. The script
- * element queues them; the frame loader flushes the queue once parsing ends. */
-void queueModule(const char* url, const char* source);
+ * element queues them; the frame loader flushes the queue once parsing ends.
+ * `document` is the owning document: if the post-parse flush already ran for
+ * it, the module evaluates immediately instead of queueing. */
+void queueModule(const char* url, const char* source, void* document = 0);
 void prefetchModuleGraph(const char* url, const char* source);
 
 /* `document` is the WebCore::Document that finished parsing (the queue is

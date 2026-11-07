@@ -117,6 +117,9 @@ qsChild=3 qsDesc=3 qsAdj=1 qsSib=2 qsNth=1 qsOdd=2 qsNot=2 qsFirst=1 qsList2=4 q
 
 - 集合 / 表单 / 图片 / 文本 / 反射属性 / 元素树 / `activeElement`：R34，`AntRuntime.cpp` 的
   `titleGetter` / `nodeGetter` / `g_nodeClass` / `documentObjectFor`。
+- 动态建脚本/link 的 IDL 反射（R108）：`s.type/.rel/.media/.charset/.as` 字符串落属性、
+  `s.async/.defer` 真布尔（falsy 移除属性、`=== true` 可判）；`AntRuntime.cpp` 的
+  `nodeGetter` / `nodeSetter`，桥侧布尔判定/构造 `antb_is_boolean` / `antb_make_boolean`。
 - History state：R36，`AntRuntime.cpp` 的 `sessionHistory` / `historyPushState` / `historyBack/Forward`。
 - 选择器：R35，`src/javascript/ant_backend/AgbSelector.h`。
 - frame window / `contentWindow`：R31/R34，`windowObjectFor` / `documentObjectFor` /

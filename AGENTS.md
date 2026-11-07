@@ -93,8 +93,8 @@ WHEN USER REPLY A QUESTION MARK[?] ONLY, MAY BE RETRY CONNECTION. IF MUTI QUESTI
 ## 三个最常用命令
 
 ```powershell
-# 增量构建（输出落盘再 grep，别直接灌上下文）
-pwsh -File tools\build_project.ps1 *> build-native.log; $LASTEXITCODE
+# 增量构建（输出落盘再 grep，别直接灌上下文；脚本自身不写日志文件）
+pwsh -File tools\build_project.ps1 *> build.log; $LASTEXITCODE
 
 # 无头探针：退出码是权威判据（0 OK / 1 usage / 2..4 超时或无 exit / 5 加载错误 / 6 空文档）
 agave_shell.exe --probe <url> --eval "probeExit(...)" --wait 3000 --settle 1000 --timeout 60000

@@ -44,6 +44,7 @@
 #include "HTMLViewSourceDocument.h"
 #include "Settings.h"
 #include "SystemTime.h"
+#include <cstdio>
 #include <wtf/ASCIICType.h>
 
 /* The one diagnostics sink (src/webview/AgbLog.h, header-only). */
@@ -95,52 +96,94 @@ static void moduleEntryNotifyTrampoline(const char* url, const char* source, int
 }
 #endif
 
-/* AGB_PARSE_LOG=1: what the parser sees for the tags that pull in code or
- * style. The attributes are logged as written - `type=module`, `defer`,
- * `async`, `nomodule` decide whether a script runs inline, after the parse, or
- * as a module, so "why did this script run at the wrong time" is answered by
- * this line ("tag ...") plus the "run ..." lines scriptExecution emits. */
-static void agbParseAttr(std::string& line, const char* name, const String& value)
+/* AGB_PARSE_LOG=1, "tag" lines: one per <script>/<style>/<link> start tag,
+ * printed where the tokenizer meets it - it means "the parser saw this tag",
+ * not "this tag ran"; what runs (and when) is what the "run ..."/"script (...)"
+ * lines log at their execution points.
+ *
+ * Attributes are printed all and in author order with their values as written;
+ * empty-valued HTML attributes (valueless `defer`, or `type=""`) print the
+ * name alone. Values longer than the cutoff are elided but keep their byte
+ * length (data: URLs, inline handlers), so the line stays one line. After
+ * src=/href= an additional `url=<absolute>` is printed whenever the document
+ * resolves the URL differently from the authored attribute - that is the URL
+ * the resource is actually fetched under, so tag lines join up with the
+ * "run ..."/"queued ..." lines (which log absolute URLs) and with [cache].
+ * If the token carries no attribute at all, "(no attributes)" is printed so
+ * a bare tag line is never ambiguous. */
+static const unsigned kAgbParseAttrValueLimit = 96;
+
+/* compares an attribute name ("src") with a canonical name byte by byte; both
+ * are NUL terminated. */
+static bool agbSameName(const char* a, const char* b)
 {
-    if (value.isEmpty())
-        return;
+    while (*b)
+        if (*a++ != *b++)
+            return false;
+    return *a == 0;
+}
+
+static void agbParseAttr(std::string& line, const char* name, const String& value, Document* doc)
+{
+    CString utf8 = value.utf8();
 
     line += " ";
     line += name;
+
+    if (!utf8.length())
+        return; /* valueless or empty-valued attribute: name alone */
+
     line += "=";
-    line += value.utf8().data();
+    if (utf8.length() > kAgbParseAttrValueLimit) {
+        char head[80];
+        snprintf(head, sizeof(head), "%.*s...(%u bytes)",
+                 (int)kAgbParseAttrValueLimit, utf8.data(), utf8.length());
+        line += head;
+    } else
+        line.append(utf8.data(), utf8.length());
+
+    /* `src=`/`href=` of an HTML element resolve against the base URL (parseURL
+     * strips quotes/whitespace first). Print the resolved URL when it differs
+     * from what the author wrote, so protocol-relative (`//host/x`) and root
+     * relative (`/x`) values are traceable to their fetch. */
+    if (doc && (agbSameName(name, "src") || agbSameName(name, "href"))) {
+        CString abs = doc->completeURL(parseURL(value)).utf8();
+        if (abs.length() && (abs.length() != utf8.length() ||
+                             memcmp(abs.data(), utf8.data(), utf8.length()))) {
+            line += " url=";
+            if (abs.length() > kAgbParseAttrValueLimit) {
+                char head[128];
+                snprintf(head, sizeof(head), "%.*s...(%u bytes)",
+                         (int)kAgbParseAttrValueLimit, abs.data(), abs.length());
+                line += head;
+            } else
+                line.append(abs.data(), abs.length());
+        }
+    }
 }
 
-static void agbLogParseTag(const AtomicString& tagName, NamedMappedAttrMap* attrs)
+static void agbLogParseTag(const AtomicString& tagName, NamedMappedAttrMap* attrs, Document* doc)
 {
     std::string line;
-    MappedAttribute* a;
 
     if (!agbLogEnabled(AGB_LOG_PARSE))
         return;
 
-    if (attrs) {
-        if ((a = attrs->getAttributeItem(srcAttr)))
-            agbParseAttr(line, "src", a->value().domString());
-        if ((a = attrs->getAttributeItem(hrefAttr)))
-            agbParseAttr(line, "href", a->value().domString());
-        if ((a = attrs->getAttributeItem(relAttr)))
-            agbParseAttr(line, "rel", a->value().domString());
-        if ((a = attrs->getAttributeItem(typeAttr)))
-            agbParseAttr(line, "type", a->value().domString());
-        if ((a = attrs->getAttributeItem(mediaAttr)))
-            agbParseAttr(line, "media", a->value().domString());
-        if ((a = attrs->getAttributeItem(charsetAttr)))
-            agbParseAttr(line, "charset", a->value().domString());
-        if (attrs->getAttributeItem(deferAttr))
-            line += " defer";
-        if (attrs->getAttributeItem(String("async")))
-            line += " async";
-        if (attrs->getAttributeItem(String("nomodule")))
-            line += " nomodule";
-    }
+    line = "tag ";
+    line += tagName.domString().utf8().data();
 
-    agbLog(AGB_LOG_PARSE, "%s%s", tagName.domString().utf8().data(), line.c_str());
+    if (attrs && attrs->length()) {
+        for (unsigned i = 0; i < attrs->length(); ++i) {
+            MappedAttribute* a = attrs->attributeItem(i);
+            if (!a)
+                continue;
+            agbParseAttr(line, a->localName().domString().utf8().data(),
+                         a->value().domString(), doc);
+        }
+    } else
+        line += " (no attributes)";
+
+    agbLog(AGB_LOG_PARSE, "%s", line.c_str());
 }
 
 #if MOBILE
@@ -704,13 +747,14 @@ HTMLTokenizer::State HTMLTokenizer::scriptExecution(const DeprecatedString& str,
          * was still unparsed, so the app never mounted and the header slice was
          * never fetched. */
         if (m_doc->parsing() && !m_parserStopped) {
+            /* "run module" wording lives in AntRuntime::queueDeferredModule:
+             * it decides between "queued for parse end" and "run now (parse
+             * already finished)", so it owns the log. */
             AntRuntime::queueDeferredModule(m_doc, url.utf8().data(), str.utf8().data());
-            agbLog(AGB_LOG_PARSE, "run module (deferred to parse end) url=%s len=%u",
-                   url.utf8().data(), (unsigned)str.length());
         } else {
-            m_doc->frame()->loader()->executeModule(url, str);
             agbLog(AGB_LOG_PARSE, "run module (evaluated now) url=%s len=%u",
                    url.utf8().data(), (unsigned)str.length());
+            m_doc->frame()->loader()->executeModule(url, str);
         }
         /* A module never sets document.currentScript (HTML spec). */
     } else
@@ -1427,7 +1471,7 @@ HTMLTokenizer::State HTMLTokenizer::parseTag(SegmentedString &src, State state)
              * attributes included (defer/async/type=module/rel/media/...). */
             if (currToken.beginTag &&
                 (tagName == scriptTag || tagName == styleTag || tagName == linkTag))
-                agbLogParseTag(tagName, currToken.attrs.get());
+                agbLogParseTag(tagName, currToken.attrs.get(), m_doc);
 
             RefPtr<Node> n = processToken();
             m_cBufferPos = cBufferPos;

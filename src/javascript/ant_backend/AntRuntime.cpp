@@ -4159,9 +4159,6 @@ static bool looksLikeModule(const char* src, size_t len)
     return false;
 }
 
-/* Set once the document has been parsed: ES modules run only after that. */
-static bool g_documentParsed = false;
-
 /* Nesting depth of script evaluation: if it is > 1 while the load event is
  * dispatched, the VM is re-entering and that is worth knowing. */
 static int g_evalDepth = 0;
@@ -4252,16 +4249,16 @@ int evaluate(const char* src, size_t len, char** out, char** err)
 
     /* ES module syntax cannot be evaluated as a classic script, and modules are
      * deferred by spec: running one while the parser is still building the
-     * document makes it look for nodes that do not exist yet. */
+     * document makes it look for nodes that do not exist yet. The queue owns
+     * the decision (and the log): queueModule waits for the post-parse flush
+     * while this document parses, evaluates now once it ended - before the
+     * flush there was no third option, a lookalike queued after the flush sat
+     * in the queue forever. */
     if (looksLikeModule(src, len)) {
-        if (!g_documentParsed) {
-            std::string body(src, len);
+        std::string body(src, len);
 
-            queueModule(g_currentFilename.c_str(), body.c_str());
-            return 1;
-        }
-
-        return evaluateModule(src, len, g_currentFilename.c_str(), out, err);
+        queueModule(g_currentFilename.c_str(), body.c_str(), g_document);
+        return 1;
     }
 
     collectXhrJobs();
@@ -4486,19 +4483,42 @@ void prefetchModuleGraph(const char* url, const char* source)
     modulePrefetchImports(std::string(url), std::string(source));
 }
 
-void queueModule(const char* url, const char* source)
+void queueModule(const char* url, const char* source, void* document)
 {
     if (!g_deferredModules)
         g_deferredModules = new std::vector<DeferredModule>();
+
+    /* A module script the element path queues after the post-parse flush has
+     * run would sit in this queue forever: flushDeferredModules is not called
+     * again. Run it now, the way a late <script defer> is handled (the defer
+     * path takes the same shortcut). Dynamic module scripts are async by
+     * default in the HTML spec, so immediate evaluation matches. */
+    if (g_lastFlushDocument && g_lastFlushDocument == document) {
+        char* err = NULL;
+
+        agbLog(AGB_LOG_PARSE, "script (module) running now (parse already finished) url=%s len=%u",
+               url ? url : "", source ? (unsigned)strlen(source) : 0u);
+        setFilename(url ? url : "");
+        evaluateModule(source ? source : "", source ? strlen(source) : 0,
+                       url ? url : "", NULL, &err);
+        if (err) {
+            fprintf(stderr, "[antjs] %s: %s\n", url ? url : "", err);
+            free(err);
+        }
+        return;
+    }
 
     DeferredModule module;
 
     module.url = url ? url : "";
     module.source = source ? source : "";
     module.generation = currentGeneration();
-    module.document = g_document;
+    module.document = document ? document : g_document;
     module.isClassic = false;
     g_deferredModules->push_back(module);
+
+    agbLog(AGB_LOG_PARSE, "script (module) queued for parse end url=%s len=%u",
+           url ? url : "", source ? (unsigned)strlen(source) : 0u);
 
     /* Start downloading the import graph now, while the rest of the page is still
      * loading, instead of waiting for the deferred flush; Chrome starts as soon
@@ -4576,13 +4596,16 @@ void flushDeferredModules(void* document)
 void queueDeferredModule(void* document, const char* url, const char* source)
 {
     /* The post-parse flush already ran for this document: execute now, like a
-     * defer script that arrives late. */
+     * defer script that arrives late. The log marks which of the two happened
+     * - marking "queued" before the decision is made lies on the timeline. */
     if (g_lastFlushDocument && g_lastFlushDocument == document) {
         char* err = NULL;
 
         if (document && document != g_document)
             bindDocument(document);
 
+        agbLog(AGB_LOG_PARSE, "script (module) running now (parse already finished) url=%s len=%u",
+               url ? url : "", source ? (unsigned)strlen(source) : 0u);
         setFilename(url ? url : "");
         evaluateModule(source ? source : "", source ? strlen(source) : 0,
                        url ? url : "", NULL, &err);
@@ -4605,6 +4628,9 @@ void queueDeferredModule(void* document, const char* url, const char* source)
     module.isClassic = false;
     g_deferredModules->push_back(module);
 
+    agbLog(AGB_LOG_PARSE, "script (module) queued for parse end url=%s len=%u",
+           url ? url : "", source ? (unsigned)strlen(source) : 0u);
+
     modulePrefetchImports(module.url, module.source);
 }
 
@@ -4614,7 +4640,9 @@ void queueDeferredScript(void* document, const char* url, const char* source, vo
 
     /* The post-parse flush already ran for this document: nothing will consume
      * the queue anymore, so run the script right away (slow network, dynamic
-     * insertion). */
+     * insertion). Log at the decision point: at the caller the two outcomes
+     * are not yet known, so a "queued for parse end" emitted there lies when
+     * this branch takes over. */
     if (g_lastFlushDocument && g_lastFlushDocument == document) {
         char* out = NULL;
         char* err = NULL;
@@ -4622,6 +4650,8 @@ void queueDeferredScript(void* document, const char* url, const char* source, vo
         if (document && document != g_document)
             bindDocument(document);
 
+        agbLog(AGB_LOG_PARSE, "script (defer) running now (parse already finished) url=%s len=%u",
+               url ? url : "", source ? (unsigned)strlen(source) : 0u);
         setFilename(url ? url : "");
         {
             WebCore::CurrentScriptScope currentScript((WebCore::Document*)document, element);
@@ -4648,6 +4678,9 @@ void queueDeferredScript(void* document, const char* url, const char* source, vo
     script.scriptElement = element;
     script.isClassic = true;
     g_deferredModules->push_back(script);
+
+    agbLog(AGB_LOG_PARSE, "script (defer) queued for parse end url=%s len=%u",
+           url ? url : "", source ? (unsigned)strlen(source) : 0u);
 }
 
 /* Drops the queued modules of a realm that is going away. */
@@ -8407,10 +8440,27 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
             s += "//" + hostWithPort;
         }
         v = antb_make_string(engine, s.c_str());
+    } else if (n->isElementNode()
+               && (!strcmp(name, "async") || !strcmp(name, "defer"))) {
+        /* Boolean IDL reflection (script.async / script.defer): scripts are
+         * created as plain DOM nodes via createElement and configured with
+         * `s.async = true` / `s.defer = true` - without reflection the write
+         * landed on the wrapper only and the engine's script classification
+         * (defer order, async) never saw it. Real booleans, not 1/0, so the
+         * `=== true` style checks third-party loaders use also hold. */
+        WebCore::Element* el = static_cast<WebCore::Element*>(n);
+        bool present = !strcmp(name, "async") ? el->hasAttribute(WebCore::AtomicString("async"))
+                                              : el->hasAttribute(WebCore::HTMLNames::deferAttr);
+        AntbValue* b = antb_make_boolean(engine, present ? 1 : 0);
+        if (!b)
+            return 0;
+        v = b;
     } else if (!strcmp(name, "id") || !strcmp(name, "className") || !strcmp(name, "href")
                || !strcmp(name, "src") || !strcmp(name, "srcset") || !strcmp(name, "alt")
                || !strcmp(name, "placeholder") || !strcmp(name, "poster")
-               || !strcmp(name, "title") || !strcmp(name, "name") || !strcmp(name, "type")) {
+               || !strcmp(name, "title") || !strcmp(name, "name") || !strcmp(name, "type")
+               || !strcmp(name, "rel") || !strcmp(name, "media")
+               || !strcmp(name, "charset") || !strcmp(name, "as")) {
         if (!n->isElementNode())
             return 0;
         {
@@ -8666,6 +8716,19 @@ int nodeSetter(AntbEngine* engine, AntbValue* self, const char* name, const Antb
         antb_free(text);
         return 1;
     }
+    /* Boolean IDL reflection: `s.async = false` REMOVES the attribute, any
+     * truthy assignment adds it (WebIDL converts the value; "" -> false). */
+    if (n->isElementNode()
+        && (!strcmp(name, "async") || !strcmp(name, "defer"))) {
+        WebCore::ExceptionCode ec = 0;
+
+        if (antb_to_boolean(value))
+            static_cast<WebCore::Element*>(n)->setAttribute(WebCore::String(name),
+                                                            WebCore::String(""), ec);
+        else
+            static_cast<WebCore::Element*>(n)->removeAttribute(WebCore::String(name), ec);
+        return 1;
+    }
     /* Attribute reflection for the common reflected properties: `img.src = ...`
      * and friends are plain attribute writes in the DOM. Kept to a whitelist so
      * that arbitrary JS fields (handlers, expando data) never become attributes. */
@@ -8673,10 +8736,13 @@ int nodeSetter(AntbEngine* engine, AntbValue* self, const char* name, const Antb
         /* Deliberately narrow: only properties that JS builds at runtime and that
          * the shim has no dedicated setter for. Everything else (id, class, href,
          * value, onclick, expando data...) must stay a plain JS property, or
-         * libraries like jQuery break en masse. */
+         * libraries like jQuery break en masse. type/rel/media/charset/as close
+         * the script/link creation path (createElement + .type/.rel, no
+         * setAttribute), e.g. `s.type = 'module'` before appendChild. */
         static const char* reflected[] = {
             "src", "srcset", "alt", "placeholder", "poster", "width", "height",
-            "loading", "decoding", "crossorigin"
+            "loading", "decoding", "crossorigin", "as",
+            "type", "rel", "media", "charset"
         };
         bool allow = false;
 

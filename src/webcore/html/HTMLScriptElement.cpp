@@ -292,10 +292,10 @@ void HTMLScriptElement::evaluateScript(const String& URL, const String& script)
      * it must not hold the tokenizer: blocking the parse made it run before
      * <body> existed (deepseek's main.js read document.body.classList and
      * died). The element path is only reached for non-blocking scripts
-     * (async / defer / dynamic), so queue it for the post-parse flush. */
+     * (async / defer / dynamic), so queue it for the post-parse flush. The
+     * "queued" vs "running now" log lives in AntRuntime::queueDeferredScript,
+     * at the point where that decision is made. */
     if (defer() && !hasAttribute(AtomicString("async"))) {
-        agbLog(AGB_LOG_PARSE, "script (defer) queued for parse end url=%s len=%u",
-               URL.utf8().data(), (unsigned)script.length());
         AntRuntime::queueDeferredScript(document(), URL.utf8().data(), script.utf8().data(), this);
         m_evaluated = true;
         return;
@@ -317,13 +317,18 @@ void HTMLScriptElement::evaluateScript(const String& URL, const String& script)
             if (isModuleScript()) {
                 /* Modules run after parsing, like defer; evaluating here would
                  * run them against a half built document. They also never set
-                 * document.currentScript (HTML spec). */
-                agbLog(AGB_LOG_PARSE, "script (module, src) queued for parse end url=%s len=%u",
-                       URL.utf8().data(), (unsigned)script.length());
-                AntRuntime::queueModule(URL.utf8().data(), script.utf8().data());
+                 * document.currentScript (HTML spec). The queued/running-now
+                 * log lives in AntRuntime::queueModule, at the decision point. */
+                AntRuntime::queueModule(URL.utf8().data(), script.utf8().data(),
+                                        document());
             } else {
-                agbLog(AGB_LOG_PARSE, "script (async/dynamic) running url=%s len=%u",
-                       URL.utf8().data(), (unsigned)script.length());
+                /* "evaluating", not "running": the body is about to enter the
+                 * engine, which may still reroute it - module-lookalike
+                 * sources are re-queued by AntRuntime::evaluate(), and the
+                 * queue/running lines there carry the actual outcome. */
+                agbLog(AGB_LOG_PARSE, "script (async/dynamic) evaluating url=%s len=%u",
+                       URL.isEmpty() ? "(inline)" : URL.utf8().data(),
+                       (unsigned)script.length());
                 CurrentScriptScope currentScript(document(), this);
                 proxy->evaluate(URL, 0, script);
             }
