@@ -142,6 +142,46 @@ gfx_font_adapter::gfx_font_adapter(const char* name, int charset, scalar height,
     m_impl->leading = INT_TO_SCALAR(mt.tmExternalLeading);
     m_impl->units_per_em = omt.otmEMSquare;
 
+    /* Prefer the font file's own hhea metrics, like direct TTF readers
+     * (Chrome) do. GDI's TextMetrics are hinted cell heights: an icon web
+     * font with a 1.0em line (hhea asc 896 + desc 128 of 1024) reported a
+     * 16px box at 14px while the file itself says 14 - every inline-box
+     * height built on top of it inherits the skew. Falls back to the text
+     * metrics when hhea data is unavailable. */
+    DWORD hhea_tags[2] = { 0x68686561, 0x61656868 }; /* 'hhea', first byte highest; and swapped */
+    for (unsigned ti = 0; ti < sizeof(hhea_tags) / sizeof(hhea_tags[0]); ++ti) {
+        /* hhea: version(4), ascender(2), descender(2), lineGap(2) */
+        BYTE raw[6];
+        DWORD got = 0;
+
+        if (::GetFontData(dc, hhea_tags[ti], 4, (LPVOID)raw, sizeof(raw)) == sizeof(raw) ||
+            (::GetLastError() == ERROR_MORE_DATA)) {
+            SHORT hAsc = (SHORT)((raw[0] << 8) | raw[1]);
+            SHORT hDesc = (SHORT)((raw[2] << 8) | raw[3]);
+            SHORT hGap = (SHORT)((raw[4] << 8) | raw[5]);
+
+            if (omt.otmEMSquare > 0) {
+                scalar scale = height / INT_TO_SCALAR(omt.otmEMSquare);
+
+                /* Round the sum once and let descent carry the remainder:
+                 * rounding asc and desc separately turned a 1.0em font box
+                 * (asc 12.25 + desc 1.75 at 14px) into 12+1=13 against the
+                 * file's own 14 - the splits get truncated separately again
+                 * downstream (baseline int arithmetic). */
+                scalar scaledAsc = INT_TO_SCALAR(hAsc) * scale;
+                scalar scaledBox = INT_TO_SCALAR(hAsc - hDesc) * scale;
+                int box = iround(scaledBox);
+                int asc = iround(scaledAsc);
+
+                m_impl->ascent = INT_TO_SCALAR(asc);
+                m_impl->descent = INT_TO_SCALAR(box - asc);
+                m_impl->leading = INT_TO_SCALAR(iround(INT_TO_SCALAR(hGap) * scale));
+                m_impl->height = INT_TO_SCALAR(box);
+            }
+            break;
+        }
+    }
+
     ::SelectObject(dc, old_font);
     ::ReleaseDC(0, dc);
 }

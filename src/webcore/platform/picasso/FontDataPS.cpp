@@ -48,7 +48,12 @@ void FontData::platformInit()
 
     m_lineGap = info.leading;
     m_unitsPerEm = info.unitsEM;
-    m_lineSpacing = info.ascent+info.descent+m_lineGap;
+    /* "normal" line height is the font box (ascender+descender), the way
+     * direct TTF readers (Chrome) compute it: adding the line gap inflated
+     * every font-normal inline box (an icon web font with hhea asc+desc
+     * = 1.0em measured 15px at font-size 14 against the file's own 14). The
+     * gap stays in m_lineGap for anything that needs the full spacing. */
+    m_lineSpacing = m_ascent + m_descent;
 	ps_set_font(getGlobalContext(), f);
 }
 
@@ -88,7 +93,7 @@ float FontData::platformWidthForGlyph(Glyph glyph) const
 	ps_font* f = ps_set_font(getGlobalContext(), m_font.hfont());
 	if (!ps_get_glyph(getGlobalContext(), (int)glyph, &g)){
 		ps_set_font(getGlobalContext(), f);
-		return 0;	
+		return 0;
 	}
     ps_size size = {0, 0};
 	ps_glyph_get_extent(&g, &size);
