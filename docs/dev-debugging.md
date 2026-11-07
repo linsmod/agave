@@ -466,7 +466,8 @@ ant 自身 CLI / 基础设施的开关（`ANT_MANIFEST_URL`、`ANT_SANDBOX_*`、
 ## 7. 验证闭环：回归清单 + A/B
 
 - 一条命令级回归：`tools/run_worker_tests.ps1`（Worker 九项）；`tools/run_xhr_tests.ps1`
-  （XHR 两项：投递重入 R94 + `responseText` 的 UTF-8 解码 R96）；`tools/run_nav_tests.ps1`
+  （XHR 五项：投递重入 R94 + `responseText` UTF-8 解码 R96 + 响应头/`statusText`/
+  `readyState`/`overrideMimeType` 与 Chrome 对拍 R97）；`tools/run_nav_tests.ps1`
   （`[nav]` 八项：链接/脚本跳转/历史后退/meta refresh/window.open/表单提交/302 重定向/关日志）；
   `tools/run_typing_tests.ps1`（键盘/IME 八项）；`tools/run_jit_loop_tests.ps1`（长循环 +
   引擎线程运行期间销毁视图）；`debug/csscheck.html`（CSS 能力矩阵）；`debug/life.html`（生命周期）；

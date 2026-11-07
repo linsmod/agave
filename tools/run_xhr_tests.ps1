@@ -107,6 +107,54 @@ try {
         }
         if ($missing) { $failed++ } else { Write-Host 'PASS  cap_xhr_text.html (responseText is decoded UTF-8)' }
     }
+
+    # ---- response header API ------------------------------------------------
+    # Every needle below is what Chrome's --headless=new --dump-dom prints for
+    # the same page; see the comment in cap_xhr_headers.html.
+    $cases = @(
+        @{ Page = 'cap_xhr_headers.html'
+           Check = 'check_xhr_headers.js'
+           What  = 'getResponseHeader/getAllResponseHeaders match Chrome'
+           Needles = @('states=1,2,3,4', 'statusText="OK"', 'preHeader=null', 'preAll=""',
+                       'all-endCRLF=yes', 'allHasSetCookie=no', 'getJson="application/json"',
+                       'getLower="application/json"', 'getMissing=null', 'getSetCookie=null',
+                       'jsonRT=THREW InvalidStateError', 'jsonResp=true') }
+        @{ Page = 'cap_xhr_mime.html'
+           Check = 'check_xhr_mime.js'
+           What  = 'overrideMimeType charset wins over Content-Type'
+           Needles = @('plain="预 caf', 'override="é¢„ café"', 'overrideCT="text/plain"',
+                       'plainStatus=200') }
+        @{ Page = 'cap_xhr_accessors.html'
+           Check = 'check_xhr_accessors.js'
+           What  = 'accessor edge cases (reset, missing, sorted, text type)'
+           Needles = @('earlyHeader=null', 'earlyAll=""', 'afterOpenStatus=0', 'afterOpenAll=""',
+                       'missing=null', 'allSorted=yes', 'reopenStatus=0', 'reopenAll=""',
+                       'reopenRT=""', 'textTypeRT=string', 'textTypeHas=yes', 'textTypeResp=same') }
+    )
+
+    foreach ($case in $cases) {
+        $out = & $exe --probe "http://127.0.0.1:$Port/$($case.Page)" `
+            --eval-file (Join-Path $pageDir $case.Check) `
+            --wait 3000 --settle 500 --timeout 30000 2>&1
+        $code = $LASTEXITCODE
+        $text = $out -join "`n"
+        $missing = 0
+
+        if ($code -ne 0) {
+            Write-Host "FAIL  $($case.Page): probe exit $code"
+            $failed++
+            continue
+        }
+
+        foreach ($needle in $case.Needles) {
+            if ($text -notmatch [regex]::Escape($needle)) {
+                Write-Host "FAIL  $($case.Page): missing '$needle'"
+                $missing++
+            }
+        }
+
+        if ($missing) { $failed++ } else { Write-Host "PASS  $($case.Page) ($($case.What))" }
+    }
 } finally {
     Stop-Server
 }

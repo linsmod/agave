@@ -753,6 +753,21 @@ struct XhrJob : public WebCore::ResourceHandleClient {
     virtual void didReceiveResponse(WebCore::ResourceHandle*, const WebCore::ResourceResponse& response)
     {
         m_status = response.httpStatusCode();
+        m_statusText = response.httpStatusText().utf8().data();
+
+        /* XHR exposes the response headers to page code (getResponseHeader /
+         * getAllResponseHeaders), and the page's overrideMimeType() can only
+         * win over the header charset if the header is known here. Keep the
+         * whole map, not just Set-Cookie. */
+        {
+            const WebCore::HTTPHeaderMap& fields = response.httpHeaderFields();
+            WebCore::HTTPHeaderMap::const_iterator end = fields.end();
+
+            for (WebCore::HTTPHeaderMap::const_iterator it = fields.begin(); it != end; ++it)
+                m_responseHeaders.push_back(std::make_pair(
+                    std::string(it->first.utf8().data()),
+                    std::string(it->second.utf8().data())));
+        }
 
         {
             WebCore::String setCookie = response.httpHeaderField("Set-Cookie");
@@ -818,20 +833,32 @@ struct XhrJob : public WebCore::ResourceHandleClient {
             {
                 AntbValue* textValue = antb_make_string(m_engine, payloadText.c_str());
                 AntbValue* statusValue = antb_make_number(m_engine, m_failed ? 0.0 : (double)m_status);
+                /* Third argument: the response metadata the shim needs to answer
+                 * statusText / getResponseHeader / getAllResponseHeaders without
+                 * a second round trip. A plain object with "statusText" and
+                 * "headers" (an array of name/value pairs, arrival order kept). */
+                AntbValue* metaValue = m_failed ? NULL : makeResponseMeta(m_engine);
 
                 if (textValue && statusValue) {
-                    AntbValue* argArray[2];
+                    AntbValue* argArray[3];
                     AntbValue* result;
+                    int argc = 2;
 
                     argArray[0] = statusValue;
                     argArray[1] = textValue;
-                    result = antb_call(m_engine, callback, NULL, argArray, 2, NULL);
+                    if (metaValue) {
+                        argArray[2] = metaValue;
+                        argc = 3;
+                    }
+
+                    result = antb_call(m_engine, callback, NULL, argArray, argc, NULL);
                     if (result)
                         antb_value_release(result);
                 }
 
                 if (textValue) antb_value_release(textValue);
                 if (statusValue) antb_value_release(statusValue);
+                if (metaValue) antb_value_release(metaValue);
             }
         }
 
@@ -844,11 +871,64 @@ struct XhrJob : public WebCore::ResourceHandleClient {
 
     bool done() const { return m_done; }
 
+    /* {statusText: "OK", headers: [["name","value"], ...]} - the pair shape
+     * keeps header-name case and duplicates (Set-Cookie) intact; the shim does
+     * the spec's lowercase + sort + CRLF join, because that is presentation. */
+    AntbValue* makeResponseMeta(AntbEngine* engine)
+    {
+        AntbValue* meta = antb_make_object(engine);
+
+        if (!meta)
+            return NULL;
+
+        AntbValue* text = antb_make_string(engine, m_statusText.c_str());
+
+        if (text) {
+            antb_set_prop(engine, meta, "statusText", text);
+            antb_value_release(text);
+        }
+
+        {
+            AntbValue* list = antb_make_array(engine);
+
+            if (list) {
+                for (size_t i = 0; i < m_responseHeaders.size(); ++i) {
+                    AntbValue* pair = antb_make_array(engine);
+                    AntbValue* name = antb_make_string(engine, m_responseHeaders[i].first.c_str());
+                    AntbValue* value = antb_make_string(engine, m_responseHeaders[i].second.c_str());
+
+                    if (!pair || !name || !value) {
+                        if (pair) antb_value_release(pair);
+                        if (name) antb_value_release(name);
+                        if (value) antb_value_release(value);
+                        continue;
+                    }
+
+                    antb_array_push(engine, pair, name);
+                    antb_array_push(engine, pair, value);
+                    antb_array_push(engine, list, pair);
+                    antb_value_release(pair);
+                    antb_value_release(name);
+                    antb_value_release(value);
+                }
+
+                antb_set_prop(engine, meta, "headers", list);
+                antb_value_release(list);
+            }
+        }
+
+        return meta;
+    }
+
     AntbEngine*                     m_engine;
     AntbValue*                      m_callback;
     RefPtr<WebCore::ResourceHandle> m_handle;
     Vector<char>                    m_body;
     int                             m_status;
+    std::string                     m_statusText;
+    /* Response header list, in arrival order. Duplicates (Set-Cookie) are
+     * kept: XMLHttpRequest's getAllResponseHeaders() joins them. */
+    std::vector<std::pair<std::string, std::string> > m_responseHeaders;
     int                             m_slot;
     double                          m_startMs;
     double                          m_doneMs;
@@ -1034,6 +1114,7 @@ int globalHttpRequestEx(AntbEngine* engine, AntbValue*, AntbValue** args, int ar
 }
 
 int globalHttpGet(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int globalHttpGetEx(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalHttpGetBin(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalClassOp(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalHttpRequest(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
@@ -5227,6 +5308,7 @@ static void installGlobalApi(AntbEngine* engine, AntbValue* global)
         /* Binary variants: base64 payloads for XHR responseType=arraybuffer and
          * fetch().arrayBuffer() (wasm, zip, images). */
         antb_define_method(g_engine, global, "__agbHttpGetBin", globalHttpGetBin, NULL);
+        antb_define_method(g_engine, global, "__agbHttpGetEx", globalHttpGetEx, NULL);
         antb_define_method(g_engine, global, "__agbHttpRequestBin", globalHttpRequestBin, NULL);
         /* (url, method, contentType, body, cb) - POST/PUT with a text body. */
         antb_define_method(g_engine, global, "__agbHttpRequestEx", globalHttpRequestEx, NULL);
@@ -9192,6 +9274,92 @@ int imageConstructor(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
         }
     }
     (void)args; (void)argc;
+    return 1;
+}
+
+/* Synchronous GET with the response metadata: (url) -> {status, statusText,
+ * headers, body} or undefined on network failure. Used by the shim's sync
+ * branch, which needs the same header view the async path gets.
+ *
+ * Kept separate from globalHttpGet so the older one-value contract stays:
+ * a shim paired with an older engine must keep working. */
+int globalHttpGetEx(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
+                    AntbValue* out, void*)
+{
+    char* urlText;
+
+    if (argc < 1)
+        return 1;
+
+    urlText = antb_to_utf8(args[0]);
+    if (!urlText)
+        return 1;
+
+    {
+        WebCore::KURL url((const char*)urlText);
+        WebCore::ResourceRequest request(url);
+        WebCore::ResourceError error;
+        WebCore::ResourceResponse response;
+        Vector<char> data;
+
+        antb_free(urlText);
+
+        WebCore::ResourceHandle::loadResourceSynchronously(request, error, response, data);
+        if (!error.isNull())
+            return 1;   /* undefined → the shim reports status 0 */
+
+        {
+            AntbValue* result = antb_make_object(engine);
+
+            if (!result)
+                return 1;
+
+            {
+                AntbValue* status = antb_make_number(engine, (double)response.httpStatusCode());
+                AntbValue* text = antb_make_string(engine, response.httpStatusText().utf8().data());
+                AntbValue* body = antb_make_string(
+                    engine, WebCore::String::fromUTF8(data.data(), data.size()).utf8().data());
+
+                if (status) { antb_set_prop(engine, result, "status", status); antb_value_release(status); }
+                if (text)   { antb_set_prop(engine, result, "statusText", text); antb_value_release(text); }
+                if (body)   { antb_set_prop(engine, result, "body", body); antb_value_release(body); }
+            }
+
+            {
+                const WebCore::HTTPHeaderMap& fields = response.httpHeaderFields();
+                WebCore::HTTPHeaderMap::const_iterator end = fields.end();
+                AntbValue* list = antb_make_array(engine);
+
+                if (list) {
+                    for (WebCore::HTTPHeaderMap::const_iterator it = fields.begin(); it != end; ++it) {
+                        AntbValue* pair = antb_make_array(engine);
+                        AntbValue* name = antb_make_string(engine, it->first.utf8().data());
+                        AntbValue* value = antb_make_string(engine, it->second.utf8().data());
+
+                        if (!pair || !name || !value) {
+                            if (pair) antb_value_release(pair);
+                            if (name) antb_value_release(name);
+                            if (value) antb_value_release(value);
+                            continue;
+                        }
+
+                        antb_array_push(engine, pair, name);
+                        antb_array_push(engine, pair, value);
+                        antb_array_push(engine, list, pair);
+                        antb_value_release(pair);
+                        antb_value_release(name);
+                        antb_value_release(value);
+                    }
+
+                    antb_set_prop(engine, result, "headers", list);
+                    antb_value_release(list);
+                }
+            }
+
+            antb_value_assign(out, result);
+            antb_value_release(result);
+        }
+    }
     return 1;
 }
 

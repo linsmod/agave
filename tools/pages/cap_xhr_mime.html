@@ -1,0 +1,41 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>xhr override</title></head>
+<body><div id="out">pending</div>
+<script>
+/* overrideMimeType(): the charset wins over Content-Type when decoding the
+ * body, but getResponseHeader('Content-Type') keeps reporting the header
+ * (Chrome: ovrCT="text/plain" while ovrText="é¢„ café").
+ * latin1.txt holds E9 A2 84 20 63 61 66 E9 - valid latin1, invalid UTF-8. */
+var out = [];
+var pending = 2;
+function add(k, v) { out.push(k + '=' + v); }
+function finish() {
+  if (--pending > 0) return;
+  out.sort();
+  document.getElementById('out').textContent = out.join(' ');
+}
+
+var a = new XMLHttpRequest();
+a.open('GET', 'latin1.txt', true);
+a.onload = function () {
+  /* No charset in the header: the spec's final fallback is UTF-8, so the
+   * invalid bytes become replacement characters. */
+  add('plain', JSON.stringify(a.responseText));
+  add('plainStatus', a.status);
+  finish();
+};
+a.onerror = function () { add('plain', 'onerror'); finish(); };
+a.send();
+
+var b = new XMLHttpRequest();
+b.open('GET', 'latin1.txt', true);
+b.overrideMimeType('text/plain; charset=iso-8859-1');
+b.onload = function () {
+  add('override', JSON.stringify(b.responseText));
+  add('overrideCT', JSON.stringify(b.getResponseHeader('Content-Type')));
+  finish();
+};
+b.onerror = function () { add('override', 'onerror'); finish(); };
+b.send();
+</script>
+</body></html>

@@ -1,0 +1,61 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>xhr accessors</title></head>
+<body><div id="out">pending</div>
+<script>
+/* Accessor edge cases Chrome is known to enforce:
+ *   - getResponseHeader before headers arrive -> null (readyState < 2)
+ *   - getAllResponseHeaders before headers    -> ""
+ *   - open() again resets status/headers      -> 0 / ""
+ *   - a name that was never sent              -> null
+ *   - responseType 'text' keeps responseText readable
+ */
+var out = [];
+var pending = 2;
+function add(k, v) { out.push(k + '=' + v); }
+function finish() {
+  if (--pending > 0) return;
+  out.sort();
+  document.getElementById('out').textContent = out.join(' ');
+}
+
+var x = new XMLHttpRequest();
+add('earlyHeader', String(x.getResponseHeader('Content-Type')));
+add('earlyAll', JSON.stringify(x.getAllResponseHeaders()));
+
+x.open('GET', 'cap_xhr_text.json', true);
+add('afterOpenStatus', x.status);
+add('afterOpenAll', JSON.stringify(x.getAllResponseHeaders()));
+
+x.onload = function () {
+  add('textTypeRT', typeof x.responseText);
+  add('textTypeHas', x.responseText.indexOf('"ok"') >= 0 ? 'yes' : 'no');
+  add('textTypeResp', x.response === x.responseText ? 'same' : 'diff');
+
+  /* Re-open resets the response. */
+  x.open('GET', 'cap_xhr_text.json', true);
+  add('reopenStatus', x.status);
+  add('reopenAll', JSON.stringify(x.getAllResponseHeaders()));
+  add('reopenRT', JSON.stringify(x.responseText));
+  finish();
+};
+x.onerror = function () { add('textTypeRT', 'onerror'); finish(); };
+x.responseType = 'text';
+x.send();
+
+var y = new XMLHttpRequest();
+y.open('GET', 'cap_xhr_text.json', true);
+y.onload = function () {
+  add('missing', String(y.getResponseHeader('X-Not-Sent')));
+  add('contentLength', /^\d+$/.test(String(y.getResponseHeader('Content-Length'))) ? 'numeric' : 'other');
+  add('allSorted', (function () {
+    var rows = y.getAllResponseHeaders().split('\r\n').filter(function (s) { return s; });
+    var names = rows.map(function (r) { return r.split(':')[0]; });
+    var sorted = names.slice().sort();
+    return names.join(',') === sorted.join(',') ? 'yes' : ('no:' + names.join(','));
+  })());
+  finish();
+};
+y.onerror = function () { add('missing', 'onerror'); finish(); };
+y.send();
+</script>
+</body></html>

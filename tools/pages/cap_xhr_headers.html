@@ -1,0 +1,59 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>xhr headers</title></head>
+<body><div id="out">pending</div>
+<script>
+/* Compares against Chrome's answers (verified with --headless=new --dump-dom
+ * on this same page):
+ *   preHeader=null preAll="" states=1,2,3,4 statusText="OK"
+ *   all: lowercase names, "name: value\r\n" rows, sorted, trailing CRLF
+ *   getResponseHeader is case-insensitive, null when absent
+ *   Set-Cookie is filtered from both accessors
+ *   responseText throws InvalidStateError when responseType is 'json' */
+var out = [];
+var pending = 2;
+function add(k, v) { out.push(k + '=' + v); }
+function finish() {
+  if (--pending > 0) return;
+  out.sort();
+  document.getElementById('out').textContent = out.join(' ');
+}
+
+var x = new XMLHttpRequest();
+var states = [];
+x.onreadystatechange = function () { states.push(x.readyState); };
+x.open('GET', 'cap_xhr_text.json', true);
+add('preHeader', String(x.getResponseHeader('Content-Type')));
+add('preAll', JSON.stringify(x.getAllResponseHeaders()));
+x.onload = function () {
+  add('states', states.join(','));
+  add('status', x.status);
+  add('statusText', JSON.stringify(x.statusText));
+  var all = x.getAllResponseHeaders();
+  add('all-hasJson', /content-type:\s*application\/json/i.test(all) ? 'yes' : 'no');
+  add('all-endCRLF', /\r\n$/.test(all) ? 'yes' : 'no');
+  add('all-lowerNames', /[A-Z]/.test(all.replace(/[^:\r\n]*:/g, function (m) { return m; }) ) ? 'mixed' : 'lower');
+  add('all-rows', all.split('\r\n').filter(function (s) { return s; }).join(','));
+  add('getJson', JSON.stringify(x.getResponseHeader('Content-Type')));
+  add('getLower', JSON.stringify(x.getResponseHeader('content-type')));
+  add('getMissing', String(x.getResponseHeader('X-Nope')));
+  add('getSetCookie', String(x.getResponseHeader('Set-Cookie')));
+  add('allHasSetCookie', /set-cookie/i.test(all) ? 'yes' : 'no');
+  finish();
+};
+x.onerror = function () { add('origText', 'onerror'); finish(); };
+x.send();
+
+/* responseType='json': responseText must throw, response carries the value. */
+var j = new XMLHttpRequest();
+j.open('GET', 'cap_xhr_text.json', true);
+j.responseType = 'json';
+j.onload = function () {
+  try { add('jsonRT', JSON.stringify(j.responseText)); }
+  catch (e) { add('jsonRT', 'THREW ' + (e.name || 'Error')); }
+  add('jsonResp', String(j.response && j.response.ok));
+  finish();
+};
+j.onerror = function () { add('jsonRT', 'onerror'); finish(); };
+j.send();
+</script>
+</body></html>

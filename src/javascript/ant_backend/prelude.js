@@ -573,33 +573,161 @@
     };
   }
   if (typeof g.XMLHttpRequest === 'undefined') {
+    /* Field state mirrors the XMLHttpRequest spec where pages can observe it:
+     * open() resets the response (status 0, empty header list), getResponseHeader
+     * is case-insensitive and returns null when absent, getAllResponseHeaders is
+     * lowercase + sorted + CRLF-joined, and Set-Cookie is filtered from both, as
+     * Chrome does. responseText throws InvalidStateError once responseType is
+     * neither '' nor 'text'. */
     var XHR = function XMLHttpRequest() {
-      this.readyState = 0; this.status = 0; this.statusText = ''; this.responseText = ''; this.response = '';
+      this.readyState = 0; this.status = 0; this.statusText = '';
       this.responseType = ''; this.responseURL = ''; this.timeout = 0;
       this.onreadystatechange = null; this.onload = null; this.onerror = null; this.onloadend = null; this.onabort = null; this.onprogress = null;
-      this._url = null; this._method = 'GET'; this._async = true; this._headers = {}; this._buffer = null;
+      this._url = null; this._method = 'GET'; this._async = true; this._headers = {};
+      this._buffer = null;
+      this._text = '';                 /* decoded body, backing responseText */
+      this._resp = '';                 /* backing response when not text/binary */
+      this._headerPairs = [];          /* [[name, value], ...] as received */
+      this._mimeOverride = null;       /* charset from overrideMimeType() */
+      this._reachedHeaders = false;    /* readyState 2 already delivered */
+      this._reachedLoading = false;    /* readyState 3 already delivered */
+    };
+    /* responseText per spec: valid for '' and 'text'; throws an
+     * InvalidStateError DOMException otherwise (pages branch on name). */
+    Object.defineProperty(XHR.prototype, 'responseText', {
+      configurable: true, enumerable: true,
+      get: function () {
+        var t = this.responseType;
+        if (t !== '' && t !== 'text') {
+          var msg = "Failed to read the 'responseText' property from 'XMLHttpRequest':"
+                    + " The value is only accessible if the object's 'responseType'"
+                    + " is '' or 'text' (was '" + t + "').";
+          try { throw new DOMException(msg, 'InvalidStateError'); }
+          catch (e) {
+            if (e && e.name === 'InvalidStateError') throw e;
+            var err = new Error(msg);
+            err.name = 'InvalidStateError';
+            throw err;
+          }
+        }
+        return this._text;
+      },
+      set: function (v) { this._text = v; }
+    });
+    /* response: the whole body in the shape responseType asks for. */
+    Object.defineProperty(XHR.prototype, 'response', {
+      configurable: true, enumerable: true,
+      get: function () {
+        var t = this.responseType;
+        if (this.readyState !== 4) return (t === '' || t === 'text') ? '' : null;
+        if (t === '' || t === 'text') return this._text;
+        return this._resp;
+      },
+      set: function (v) { this._resp = v; }
+    });
+    /* Header lookup is case-insensitive; Set-Cookie is never exposed (the spec
+     * filters it for both accessors, Chrome agrees). */
+    XHR.prototype._headerValue = function (name) {
+      var want = String(name).toLowerCase();
+      if (want === 'set-cookie' || want === 'set-cookie2') return null;
+      var pairs = this._headerPairs;
+      if (!pairs) return null;
+      for (var i = 0; i < pairs.length; i++) {
+        if (String(pairs[i][0]).toLowerCase() === want) return pairs[i][1];
+      }
+      return null;
     };
     XHR.prototype.open = function (method, url, async) {
       this._method = method || 'GET'; this._url = url; this._async = (async !== false);
-      this.readyState = 1; this._fire();
+      /* open() resets the response state. */
+      this.status = 0; this.statusText = '';
+      this._headerPairs = []; this._buffer = null; this._text = ''; this._resp = '';
+      this._mimeOverride = null;
+      this._reachedHeaders = false;
+      this._reachedLoading = false;
+      this.readyState = 1; this._fireState();
     };
     XHR.prototype.setRequestHeader = function (k, v) { this._headers[k] = v; };
-    XHR.prototype.getAllResponseHeaders = function () { return ''; };
-    XHR.prototype.getResponseHeader = function () { return null; };
+    XHR.prototype.getAllResponseHeaders = function () {
+      var pairs = this._headerPairs;
+      if (!pairs || !pairs.length) return '';
+      var rows = [];
+      for (var i = 0; i < pairs.length; i++) {
+        var name = String(pairs[i][0]).toLowerCase();
+        if (name === 'set-cookie' || name === 'set-cookie2') continue;
+        rows.push(name + ': ' + pairs[i][1]);
+      }
+      /* The spec sorts by byte order of the lowered name. */
+      rows.sort();
+      return rows.length ? rows.join('\r\n') + '\r\n' : '';
+    };
+    XHR.prototype.getResponseHeader = function (name) {
+      if (this.readyState < 2) return null;
+      return this._headerValue(name);
+    };
     XHR.prototype.abort = function () { this.readyState = 0; if (this.onabort) this.onabort.call(this, this); };
-    XHR.prototype.overrideMimeType = function () {};
+    /* overrideMimeType(): only the charset part is used here - it overrides the
+     * one from Content-Type when decoding the body. Legal after open() and
+     * before send(); discarded by the next open(). */
+    XHR.prototype.overrideMimeType = function (mime) {
+      if (this.readyState === 4) return;
+      var m = String(mime == null ? '' : mime);
+      var cs = /;\s*charset\s*=\s*"?([^";\s]+)"?/i.exec(m);
+      this._mimeOverride = cs ? cs[1] : null;
+    };
     XHR.prototype.addEventListener = function (type, fn) { this['_ev_' + type] = fn; };
     XHR.prototype.removeEventListener = function (type) { this['_ev_' + type] = null; };
-    XHR.prototype._fire = function (type) {
+    /* onreadystatechange belongs to readyState transitions only; load/error/
+     * loadend are separate events. Firing it from every _fire(type) made page
+     * code observe readyState 4 twice (Chrome: 1,2,3,4). */
+    XHR.prototype._fireState = function () {
       if (this.onreadystatechange) this.onreadystatechange.call(this, this);
+    };
+    XHR.prototype._fire = function (type) {
       if (type) {
         var h = this['on' + type] || this['_ev_' + type];
         if (h) h.call(this, this);
       }
     };
-    XHR.prototype._finish = function (status, payload, binary) {
-      this.status = status;
-      this.statusText = status ? 'OK' : '';
+    /* Decodes the body bytes: an override charset wins over the header's, and a
+     * header with no charset is UTF-8 (XMLHttpRequest's final fallback is UTF-8,
+     * not windows-1252 - verified against Chrome). */
+    XHR.prototype._decode = function (bytes) {
+      var label = this._mimeOverride;
+      if (!label) {
+        var ct = this._headerValue('content-type');
+        if (ct) {
+          var m = /;\s*charset\s*=\s*"?([^";\s]+)"?/i.exec(String(ct));
+          if (m) label = m[1];
+        }
+      }
+      if (!label || /^utf-?8$/i.test(label)) return g.__agbDecodeUtf8(bytes);
+      try {
+        return new TextDecoder(label).decode(new Uint8Array(bytes));
+      } catch (e) {
+        /* Ant has no legacy CJK codecs; a page asking for gbk gets replacement
+         * characters from the UTF-8 pass rather than a silent empty body. */
+        return g.__agbDecodeUtf8(bytes);
+      }
+    };
+    XHR.prototype._finish = function (status, payload, binary, meta) {
+      this.status = status || 0;
+      this.statusText = (meta && meta.statusText) ? String(meta.statusText) : '';
+      if (meta && meta.headers) this._headerPairs = meta.headers;
+
+      var type = this.responseType;
+      var asText = (type === '' || type === undefined || type === null || type === 'text');
+
+      /* The transport hands the whole response over at once, so the headers and
+       * body become available in the same turn. Page code still expects the
+       * spec's state machine, so walk 2 and 3 before 4 - the observable
+       * sequence Chrome produces for a normal request is 1,2,3,4. The guard is
+       * a local flag, not readyState: a handler may have written readyState. */
+      if (status) {
+        if (!this._reachedHeaders) { this._reachedHeaders = true; this.readyState = 2; this._fireState(); }
+        if (!this._reachedLoading) { this._reachedLoading = true; this.readyState = 3; this._fireState(); }
+      }
+
       if (binary) {
         /* The async path always delivers bytes (base64), because a text-only
          * channel cannot carry non-UTF-8 or NUL bodies. responseText is still
@@ -608,35 +736,34 @@
          * JSON.parse() fail on the caller's side. Decode the bytes once and
          * answer both views from them. */
         this._buffer = g.__agbB64ToBuffer(payload);
-        var type = this.responseType;
-        var asText = (type === '' || type === undefined || type === null || type === 'text');
         if (asText || type === 'json') {
-          try { this.responseText = g.__agbDecodeUtf8(this._buffer); }
-          catch (e) { this.responseText = ''; }
+          try { this._text = this._decode(this._buffer); } catch (e) { this._text = ''; }
         } else {
-          this.responseText = '';
+          this._text = '';
         }
         if (type === 'json') {
-          try { this.response = JSON.parse(this.responseText); } catch (e) { this.response = null; }
+          try { this._resp = JSON.parse(this._text); } catch (e) { this._resp = null; }
         } else if (type === 'blob') {
-          try { this.response = new Blob([this._buffer]); } catch (e) { this.response = this._buffer; }
+          try { this._resp = new Blob([this._buffer]); } catch (e) { this._resp = this._buffer; }
         } else if (asText) {
-          this.response = this.responseText;
+          this._resp = this._text;
         } else {
-          this.response = this._buffer;
+          this._resp = this._buffer;
         }
       } else {
-        this.responseText = (payload === undefined || payload === null) ? '' : String(payload);
-        if (this.responseType === 'json') {
-          try { this.response = JSON.parse(this.responseText); } catch (e) { this.response = null; }
-        } else if (this.responseType === 'blob') {
-          try { this.response = new Blob([this.responseText]); } catch (e) { this.response = this.responseText; }
+        this._text = (payload === undefined || payload === null) ? '' : String(payload);
+        if (type === 'json') {
+          try { this._resp = JSON.parse(this._text); } catch (e) { this._resp = null; }
+        } else if (type === 'blob') {
+          try { this._resp = new Blob([this._text]); } catch (e) { this._resp = this._text; }
         } else {
-          this.response = this.responseText;
+          this._resp = this._text;
         }
       }
+      /* Responses reaching readyState 4 with a status are always 2xx here:
+       * the transport reports failures as status 0. */
       this.readyState = 4;
-      this._fire();
+      this._fireState();
       if (!status) this._fire('error');
       else this._fire('load');
       this._fire('loadend');
@@ -651,6 +778,27 @@
       var method = String(this._method || 'GET').toUpperCase();
       var wantBinary = this.responseType === 'arraybuffer' || this.responseType === 'blob';
       if (!this._async) {
+        if (wantBinary || typeof __agbHttpGetEx === 'function') {
+          /* One entry point carries body + status + headers; the older
+           * single-value __agbHttpGet stays as the fallback for engine/JS skew. */
+          var res = null;
+          try { res = __agbHttpGetEx(target); } catch (e) { res = null; }
+          if (res === undefined || res === null) {
+            this._finish(0, null, false, null);
+            return;
+          }
+          if (typeof res === 'string') {
+            this._finish(200, res, false, null);   /* old engine */
+            return;
+          }
+          if (wantBinary) {
+            /* No binary sync entry for a full request; re-encode the text. */
+            this._finish(res.status, g.__agbB64EncodeUtf8(res.body || ''), true, res);
+          } else {
+            this._finish(res.status, res.body || '', false, res);
+          }
+          return;
+        }
         if (wantBinary) {
           var b64 = null;
           try { b64 = __agbHttpGetBin(target); } catch (e) { b64 = null; }
@@ -667,8 +815,8 @@
       /* Everything goes through the full request entry: pages POST JSON to
          auth/RPC/fingerprint endpoints, and a GET without body made those
          fail and retry in a loop. */
-      __agbHttpRequestEx(target, method, ctype, payload, function (status, b64) {
-        self._finish(status, b64, true);
+      __agbHttpRequestEx(target, method, ctype, payload, function (status, b64, meta) {
+        self._finish(status, b64, true, meta);
       });
     };
     g.XMLHttpRequest = XHR;
