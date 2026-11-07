@@ -770,9 +770,15 @@ void CSSStyleSelector::applySVGProperty(int id, CSSValue* value)
             // support for above properties has not been implemented in the engine yet
             break;
         default:
-            // If you crash here, it's because you added a css property and are not handling it
-            // in either this switch statement or the one in CSSStyleSelector::applyProperty
-            ASSERT_WITH_MESSAGE(0, "unimplemented propertyID: %d", id);
+            /* This switch is the catch-all of CSSStyleSelector::applyProperty(),
+             * so it is reachable from author CSS for every property the port
+             * parses but does not map yet (color-rendering, enable-background,
+             * color-profile, the `marker` shorthand with inherit/initial, ...).
+             * A shipped browser ignores declarations it does not implement; it
+             * must not take the renderer down for them. The developer hint stays
+             * behind AGB_CSS_DEBUG, like the computed-style twin. */
+            if (getenv("AGB_CSS_DEBUG"))
+                LOG_ERROR("unimplemented SVG propertyID: %d", id);
             return;
     }
 }

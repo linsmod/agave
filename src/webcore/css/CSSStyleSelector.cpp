@@ -4213,6 +4213,30 @@ void CSSStyleSelector::applyProperty(int id, CSSValue *value)
             return; // Error case.
         style->setBoxOrdinalGroup((unsigned int)(primitiveValue->getDoubleValue()));
         return;
+    /* Shorthands of the properties below. Only `inherit`/`initial` arrive here
+     * (the parser expands a concrete value into the longhands); without these
+     * cases the declaration would fall into the catch-all default branch and
+     * be handed to applySVGProperty(). */
+    case CSS_PROP_GAP:
+        if (isInherit) {
+            style->setFlexRowGap(parentStyle->flexRowGap());
+            style->setFlexColumnGap(parentStyle->flexColumnGap());
+        } else if (isInitial) {
+            style->setFlexRowGap(RenderStyle::initialFlexRowGap());
+            style->setFlexColumnGap(RenderStyle::initialFlexColumnGap());
+        }
+        return;
+    case CSS_PROP_FLEX:
+        if (isInherit) {
+            style->setBoxFlex(parentStyle->boxFlex());
+            style->setFlexShrink(parentStyle->flexShrink());
+            style->setFlexBasis(parentStyle->flexBasis());
+        } else if (isInitial) {
+            style->setBoxFlex(RenderStyle::initialBoxFlex());
+            style->setFlexShrink(RenderStyle::initialFlexShrink());
+            style->setFlexBasis(RenderStyle::initialFlexBasis());
+        }
+        return;
     case CSS_PROP_ROW_GAP:
         HANDLE_INHERIT_AND_INITIAL(flexRowGap, FlexRowGap)
         if (!primitiveValue)
@@ -4883,6 +4907,13 @@ void CSSStyleSelector::applyProperty(int id, CSSValue *value)
     case CSS_PROP__WEBKIT_PADDING_START:
     case CSS_PROP__WEBKIT_TEXT_DECORATIONS_IN_EFFECT:
     case CSS_PROP__WEBKIT_TEXT_STROKE:
+        /* Parsed (so CSSOM keeps them) but deliberately not mapped onto
+         * RenderStyle. This must return: while ENABLE_SVG was off the labels
+         * above simply fell out of the switch, but with SVG on they fall into
+         * the default branch and run through applySVGProperty(), whose
+         * catch-all assert turned `quotes: '"' '"'` (css3test's CSS 2.1 probe)
+         * into a crash. */
+        return;
 #if ENABLE(SVG)
     default:
         // Try the SVG properties
