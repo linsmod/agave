@@ -27,6 +27,7 @@
 #define MediaDecoder_h
 
 #include "MediaMetadata.h"
+#include <string>
 #include <wtf/Vector.h>
 
 namespace WebCore {
@@ -78,6 +79,23 @@ void pump();
  * is a supported configuration. */
 bool ffprobeAvailable();
 bool ffmpegAvailable();
+
+/* Absolute path of the tool, or false when it is not installed. */
+bool ffprobeExecutable(std::string& out);
+bool ffmpegExecutable(std::string& out);
+
+/* A URL turned into what ffmpeg/ffprobe accept on Windows: "file:///E:/x"
+ * becomes "E:/x" (they do not understand the scheme), http(s) is passed
+ * through untouched. */
+std::string toolPathForURL(const std::string& url);
+
+/* A local file for `url`: the path itself for file:, the downloaded copy for
+ * http(s) (the engine fetches it; the tools cannot do TLS in this process
+ * tree). False when there is no copy yet. */
+bool localPathForURL(const std::string& url, std::string& out);
+
+/* Reads at most `maxBytes` from the start of `url` (local files only). */
+bool readHeaderBytes(const String& url, size_t maxBytes, Vector<unsigned char>& out);
 
 } // namespace MediaDecoder
 

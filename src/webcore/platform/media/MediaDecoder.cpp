@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <string>
 #include <vector>
 
@@ -137,6 +138,18 @@ bool ffmpegAvailable()
     return findTool("AGB_FFMPEG", "ffmpeg.exe", path);
 }
 
+bool ffprobeExecutable(std::string& out)
+{
+    return findTool("AGB_FFPROBE", "ffprobe.exe", out);
+}
+
+bool ffmpegExecutable(std::string& out)
+{
+    return findTool("AGB_FFMPEG", "ffmpeg.exe", out);
+}
+
+std::string toolPathForURL(const std::string& url);
+
 /* ------------------------------------------------------------------------- */
 /* local reads                                                               */
 /* ------------------------------------------------------------------------- */
@@ -156,6 +169,14 @@ static bool localPathForFileUrl(const char* url, std::string* out)
     rest += 2;
 
     std::string path(rest);
+
+    /* "file:///E:/x" keeps one slash after the authority ("file://" + "/E:/x");
+     * Windows paths never start with a slash, so drop it when a drive letter
+     * follows. Without this, fopen("/E:/x") fails and the URL looks like an
+     * unsupported resource. */
+    if (path.size() > 2 && path[0] == '/' && path[2] == ':'
+            && ((path[1] >= 'A' && path[1] <= 'Z') || (path[1] >= 'a' && path[1] <= 'z')))
+        path.erase(0, 1);
     size_t cut = path.find_first_of("?#");
 
     if (cut != std::string::npos)
@@ -224,6 +245,10 @@ static bool readLocalFile(const std::string& path, size_t maxBytes, Vector<unsig
 /* The header slice, used by both the in-process parser and (as a fallback
  * source of truth) by the ffprobe path. `allowNetwork` is false for the
  * synchronous case so a page can never make load() download a whole video. */
+#if PLATFORM(WIN32)
+static void writeCachedBody(const std::string& url, const std::vector<char>& body);
+#endif
+
 static bool readMediaHeader(const String& url, bool allowNetwork, Vector<unsigned char>& out, size_t maxBytes)
 {
     std::string urlText = url.utf8().data();
@@ -253,6 +278,16 @@ static bool readMediaHeader(const String& url, bool allowNetwork, Vector<unsigne
         if (!error.isNull() || data.isEmpty())
             return false;
 
+        /* The body is already in memory: keep a local copy so the decoders
+         * (which cannot do TLS from this process) can read it. */
+#if PLATFORM(WIN32)
+        {
+            std::vector<char> body(data.data(), data.data() + data.size());
+
+            writeCachedBody(urlText, body);
+        }
+#endif
+
         {
             size_t take = data.size() < maxBytes ? data.size() : maxBytes;
 
@@ -261,6 +296,255 @@ static bool readMediaHeader(const String& url, bool allowNetwork, Vector<unsigne
             return take > 0;
         }
     }
+}
+
+std::string toolPathForURL(const std::string& url)
+{
+    std::string path;
+
+    if (localPathForFileUrl(url.c_str(), &path))
+        return path;
+    return url;
+}
+
+/* ------------------------------------------------------------------------- */
+/* downloaded media cache                                                    */
+/* ------------------------------------------------------------------------- */
+
+/* ffmpeg/ffprobe are spawned inside the engine's own sandbox and cannot
+ * complete a TLS handshake there ("Peer certificate failed verification"),
+ * while the engine's network stack reaches the same URL fine. So an http(s)
+ * resource is fetched once by the engine and decoded from a local copy: the
+ * tools only ever see files, and a seek is instant. The copy is named by a
+ * hash of the URL and lives under %LOCALAPPDATA%\Agave\cache\media.
+ *
+ * Consequence (documented in docs/arch-media.md section 7): a remote video is
+ * downloaded in full before it plays - there is no progressive streaming. */
+#if PLATFORM(WIN32)
+/* A directory we can actually write to, creating it if needed. The engine may
+ * run inside a sandbox whose write access is limited to a few roots, so each
+ * candidate is verified with a real file instead of trusting CreateDirectory's
+ * return value. */
+static bool writableDirectory(const std::string& dir)
+{
+    {
+        std::string probe = dir + "\\.write-test";
+        FILE* f = fopen(probe.c_str(), "wb");
+
+        if (!f)
+            return false;
+
+        fclose(f);
+        DeleteFileA(probe.c_str());
+    }
+
+    return true;
+}
+
+static std::string cacheDirectory()
+{
+    static std::string dir;
+    static bool resolved = false;
+
+    if (resolved)
+        return dir;
+
+    resolved = true;
+
+    /* Explicit override first: AGB_MEDIA_CACHE=<dir> (the probe harness uses
+     * it when the process may only write inside its workspace). */
+    {
+        const char* override = getenv("AGB_MEDIA_CACHE");
+
+        if (override && *override) {
+            std::string candidate = override;
+
+            CreateDirectoryA(candidate.c_str(), NULL);
+
+            if (writableDirectory(candidate))
+                dir = candidate;
+        }
+    }
+
+    if (dir.empty()) {
+        char base[MAX_PATH] = {0};
+        DWORD n = GetEnvironmentVariableA("LOCALAPPDATA", base, sizeof(base));
+
+        if (n > 0 && n < sizeof(base)) {
+            std::string root = std::string(base) + "\\Agave";
+            std::string candidate = root + "\\cache\\media";
+
+            CreateDirectoryA((root + "\\cache").c_str(), NULL);
+            CreateDirectoryA(candidate.c_str(), NULL);
+
+            if (writableDirectory(candidate))
+                dir = candidate;
+        }
+    }
+
+    if (dir.empty()) {
+        char tmp[MAX_PATH] = {0};
+
+        if (GetTempPathA(sizeof(tmp), tmp)) {
+            std::string candidate = std::string(tmp) + "agave-media-cache";
+
+            CreateDirectoryA(candidate.c_str(), NULL);
+
+            if (writableDirectory(candidate))
+                dir = candidate;
+        }
+    }
+
+    if (dir.empty()) {
+        char base[MAX_PATH] = {0};
+        DWORD n = GetEnvironmentVariableA("LOCALAPPDATA", base, sizeof(base));
+
+        if (n > 0 && n < sizeof(base)) {
+            std::string candidate = std::string(base) + "\\Agave\\probe\\media-cache";
+
+            CreateDirectoryA(candidate.c_str(), NULL);
+
+            if (writableDirectory(candidate))
+                dir = candidate;
+        }
+    }
+
+    /* Last resort: next to the executable (a read-only install gets none, and
+     * remote media then falls back to the URL, which the tools may reject). */
+    if (dir.empty()) {
+        char exe[MAX_PATH] = {0};
+
+        if (GetModuleFileNameA(NULL, exe, sizeof(exe))) {
+            std::string candidate(exe);
+            size_t slash = candidate.find_last_of("\\/");
+
+            if (slash != std::string::npos) {
+                candidate.resize(slash);
+                candidate += "\\media-cache";
+                CreateDirectoryA(candidate.c_str(), NULL);
+
+                if (writableDirectory(candidate))
+                    dir = candidate;
+            }
+        }
+    }
+
+    if (getenv("AGB_MEDIA_DEBUG"))
+        fprintf(stderr, "[media] media cache: %s\n", dir.empty() ? "(none)" : dir.c_str());
+
+    return dir;
+}
+
+static std::string cacheFileNameForURL(const std::string& url)
+{
+    std::string out = cacheDirectory();
+    unsigned long long hash = 1469598103934665603ULL;
+
+    if (out.empty())
+        return out;
+
+    out += "\\";
+
+    {
+        size_t i;
+
+        for (i = 0; i < url.size(); ++i) {
+            hash ^= (unsigned char)url[i];
+            hash *= 1099511628211ULL;
+        }
+    }
+
+    {
+        char name[32];
+
+        snprintf(name, sizeof(name), "%016llx", hash);
+        out += name;
+    }
+
+    /* Keep the extension: ffmpeg guesses the container from it, and the
+     * header parser does not have to sniff every byte. */
+    {
+        size_t dot = url.rfind('.');
+        size_t slash = url.find_last_of("/?");
+        bool usable = dot != std::string::npos && dot + 1 < url.size()
+                   && url.size() - dot <= 6
+                   && (slash == std::string::npos || dot > slash);
+
+        if (usable) {
+            size_t i;
+
+            for (i = dot + 1; i < url.size(); ++i) {
+                if (!isalnum((unsigned char)url[i])) {
+                    usable = false;
+                    break;
+                }
+            }
+        }
+
+        out += usable ? url.substr(dot) : ".bin";
+    }
+
+    return out;
+}
+
+static void writeCachedBody(const std::string& url, const std::vector<char>& body)
+{
+    if (body.empty())
+        return;
+
+    {
+        std::string path = cacheFileNameForURL(url);
+        FILE* f = path.empty() ? 0 : fopen(path.c_str(), "wb");
+
+        if (!f)
+            return;
+
+        fwrite(body.data(), 1, body.size(), f);
+        fclose(f);
+    }
+}
+
+bool localPathForURL(const std::string& url, std::string& out)
+{
+    {
+        std::string path;
+
+        if (localPathForFileUrl(url.c_str(), &path)) {
+            out = path;
+            return true;
+        }
+    }
+
+    if (strncasecmp(url.c_str(), "http:", 5) != 0
+            && strncasecmp(url.c_str(), "https:", 5) != 0)
+        return false;
+
+    {
+        std::string path = cacheFileNameForURL(url);
+
+        if (GetFileAttributesA(path.c_str()) == INVALID_FILE_ATTRIBUTES)
+            return false;
+
+        out = path;
+        return true;
+    }
+}
+#else
+bool localPathForURL(const std::string& url, std::string& out)
+{
+    std::string path;
+
+    if (localPathForFileUrl(url.c_str(), &path)) {
+        out = path;
+        return true;
+    }
+    return false;
+}
+#endif
+
+bool readHeaderBytes(const String& url, size_t maxBytes, Vector<unsigned char>& out)
+{
+    return readMediaHeader(url, false, out, maxBytes);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -462,7 +746,12 @@ static void runProbe(Job* job)
         args.push_back("json");
         args.push_back(toolArgumentForURL(job->url));
 
+        if (getenv("AGB_MEDIA_DEBUG"))
+            fprintf(stderr, "[media] ffprobe %s [%s]\n", exe.c_str(), args.back().c_str());
+
         if (!runTool(exe, args, output)) {
+            if (getenv("AGB_MEDIA_DEBUG"))
+                fprintf(stderr, "[media] ffprobe failed, bytes=%d\n", (int)output.size());
             if (getenv("AGB_MEDIA_DEBUG"))
                 fprintf(stderr, "[media] ffprobe produced no output for %s\n", job->url.c_str());
             return;
@@ -488,6 +777,9 @@ static void runProbe(Job* job)
             info.ok = info.duration > 0 || info.width > 0 || info.hasVideo || info.hasAudio;
             info.mimeType = mediaMimeTypeForURL(String::fromUTF8(job->url.c_str()));
 
+            if (!info.ok && getenv("AGB_MEDIA_DEBUG"))
+                fprintf(stderr, "[media] ffprobe unusable output (%d bytes): %.300s\n",
+                        (int)text.size(), text.c_str());
 
             job->info = info;
             job->ok = info.ok;
@@ -620,20 +912,20 @@ void pump()
 
 ProbeStatus probe(const void* element, const String& url, MediaInfo& out)
 {
-    /* Header parse first: local files and small HTTP resources are answered
-     * without a thread. 1 MiB is enough for every container we parse.
+    /* Header parse first: local files and http(s) resources are answered
+     * without a thread. 1 MiB of header is enough for every container we
+     * parse; an http(s) body is additionally kept as a local copy for the
+     * decoders (they cannot do TLS here - see the cache comment above).
      * AGB_MEDIA_PROBE=ffprobe forces the external path, which is how the
      * fallback itself is tested (tools/run_media_tests.ps1). */
     {
         const size_t kHeaderBytes = 1024 * 1024;
         Vector<unsigned char> data;
-        std::string urlText = url.utf8().data();
-        bool local = !strncasecmp(urlText.c_str(), "file:", 5);
         bool forceExternal = getenv("AGB_MEDIA_PROBE")
             && !strcmp(getenv("AGB_MEDIA_PROBE"), "ffprobe");
 
         if (!forceExternal
-                && readMediaHeader(url, local, data, kHeaderBytes)
+                && readMediaHeader(url, true, data, kHeaderBytes)
                 && data.size() > 0
                 && parseMediaHeader(data.data(), data.size(), out))
             return ProbeReady;

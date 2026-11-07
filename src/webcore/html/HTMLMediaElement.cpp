@@ -36,6 +36,7 @@
 #include "BitmapImage.h"
 #include "CachedImage.h"
 #include "MediaDecoder.h"
+#include "MediaPipeline.h"
 #include "RenderMedia.h"
 #include "SystemTime.h"
 #include "TextTrack.h"
@@ -100,6 +101,7 @@ HTMLMediaElement::HTMLMediaElement(const QualifiedName& tagName, Document* doc)
     , m_probeTimer(this, &HTMLMediaElement::probeTimerFired)
     , m_tickTimer(this, &HTMLMediaElement::tickTimerFired)
     , m_frameTimer(this, &HTMLMediaElement::frameTimerFired)
+    , m_pipeline(0)
     , m_poster(0)
     , m_frame(0)
 {
@@ -108,6 +110,7 @@ HTMLMediaElement::HTMLMediaElement(const QualifiedName& tagName, Document* doc)
 HTMLMediaElement::~HTMLMediaElement()
 {
     stopTimers();
+    stopPipeline();
 
     if (m_poster)
         m_poster->deref(this);
@@ -243,6 +246,7 @@ void HTMLMediaElement::stopTimers()
 void HTMLMediaElement::load()
 {
     stopTimers();
+    stopPipeline();
 
     m_ended = false;
     m_currentTime = 0;
@@ -449,30 +453,42 @@ void HTMLMediaElement::metadataReady(const MediaInfo& info)
 
 void HTMLMediaElement::frameTimerFired(Timer<HTMLMediaElement>*)
 {
-    Vector<unsigned char> png;
-
-    if (!MediaDecoder::pollFrame(this, png) || png.isEmpty())
+    /* Live pipeline: the renderer reads the newest frame straight from the
+     * pipeline (copyVideoFrame), so a tick only has to ask for a repaint when
+     * a picture arrived since the last one. */
+    if (m_pipeline && m_pipeline->hasVideo()) {
+        if (m_pipeline->hasFrame() && renderer())
+            renderer()->repaint();
         return;
+    }
 
-    /* The bytes are a PNG; BitmapImage decodes them through the normal image
-     * pipeline, so the still is painted by the same code as a poster.
-     * BitmapImage is not refcounted in this engine: the CachedImage takes
-     * ownership (its destructor deletes it). */
+    /* Otherwise: the optional one-shot still (AGB_MEDIA_FRAMES). */
     {
-        RefPtr<SharedBuffer> buffer = new SharedBuffer((const char*)png.data(), (int)png.size());
-        BitmapImage* image = new BitmapImage();
+        Vector<unsigned char> png;
 
-        if (!buffer || !image) {
-            delete image;
+        if (!MediaDecoder::pollFrame(this, png) || png.isEmpty())
             return;
+
+        /* The bytes are a PNG; BitmapImage decodes them through the normal
+         * image pipeline, so the still is painted by the same code as a
+         * poster. BitmapImage is not refcounted in this engine: the
+         * CachedImage takes ownership (its destructor deletes it). */
+        {
+            RefPtr<SharedBuffer> buffer = new SharedBuffer((const char*)png.data(), (int)png.size());
+            BitmapImage* image = new BitmapImage();
+
+            if (!buffer || !image) {
+                delete image;
+                return;
+            }
+
+            image->setData(buffer, true);
+
+            /* setFrameImage() refs the CachedImage for the element, which
+             * derefs it in its own destructor - exactly one owner (a second
+             * deref here frees the image while m_frame still points at it). */
+            setFrameImage(new CachedImage(image));
         }
-
-        image->setData(buffer, true);
-
-        /* setFrameImage() refs the CachedImage for the element, which derefs
-         * it in its own destructor - exactly one owner, no extra deref here
-         * (a second one frees the image while m_frame still points at it). */
-        setFrameImage(new CachedImage(image));
     }
 }
 
@@ -489,6 +505,60 @@ void HTMLMediaElement::loadFailed(MediaErrorCode code)
 /* transport                                                                 */
 /* ------------------------------------------------------------------------- */
 
+bool HTMLMediaElement::startPipeline()
+{
+    /* A decoder needs a real resource; without one the simulated ticker is
+     * the only thing play() can do. */
+    if (m_pipeline || m_currentSrc.isEmpty())
+        return m_pipeline != 0;
+
+    {
+        MediaPipeline::Kind kind = MediaPipeline::AudioOnly;
+
+        if (hasVideo() && m_mediaInfo.hasVideo && m_mediaInfo.width > 0 && m_mediaInfo.height > 0)
+            kind = m_mediaInfo.hasAudio ? MediaPipeline::AudioVideo : MediaPipeline::VideoOnly;
+        else if (hasVideo() && m_mediaInfo.width > 0)
+            kind = m_mediaInfo.hasAudio ? MediaPipeline::AudioVideo : MediaPipeline::VideoOnly;
+
+        m_pipeline = MediaPipeline::create(m_currentSrc, kind,
+                                           m_mediaInfo.width, m_mediaInfo.height,
+                                           m_muted, m_volume);
+    }
+
+    if (!m_pipeline) {
+        return false;
+    }
+
+    if (!m_pipeline->start()) {
+        delete m_pipeline;
+        m_pipeline = 0;
+        return false;
+    }
+
+    /* Resume at the position the page last asked for (play() after a seek, or
+     * after `currentTime` was set while paused). */
+    if (m_currentTime > 0.05)
+        m_pipeline->seek(m_currentTime);
+
+    m_pipeline->setPaused(false);
+
+    /* Video needs the frame loop to notice new pictures. */
+    if (m_pipeline->hasVideo())
+        m_frameTimer.startRepeating(1.0 / 30.0);
+
+    return true;
+}
+
+void HTMLMediaElement::stopPipeline()
+{
+    if (!m_pipeline)
+        return;
+
+    m_pipeline->stop();
+    delete m_pipeline;
+    m_pipeline = 0;
+}
+
 void HTMLMediaElement::play()
 {
     if (!m_paused)
@@ -497,18 +567,30 @@ void HTMLMediaElement::play()
     m_paused = false;
     m_ended = false;
 
-    /* readyState never reaches HAVE_ENOUGH_DATA here: there is no buffer to
-     * fill. HAVE_FUTURE_DATA is what players test for. */
     if (m_readyState >= HAVE_METADATA && m_readyState < HAVE_FUTURE_DATA)
         m_readyState = HAVE_FUTURE_DATA;
+
+    /* Real playback first: waveOut for audio, decoded frames for video. When
+     * neither is available the ticker below simulates the clock, which is the
+     * documented fallback (no ffmpeg installed). An element whose resource
+     * failed to load must not start a decoder: sites rely on `error` to pick
+     * another source. A pipeline that already exists is resumed in place (a
+     * paused element keeps its decoder, so buffers and the device stay warm). */
+    if (m_pipeline) {
+        m_pipeline->setPaused(false);
+
+        if (m_pipeline->hasVideo())
+            m_frameTimer.startRepeating(1.0 / 30.0);
+    } else if (m_networkState != NETWORK_NO_SOURCE) {
+        startPipeline();
+    }
 
     DISPATCH_MEDIA_EVENT("play");
     DISPATCH_MEDIA_EVENT("playing");
 
-    m_lastTickTime = currentTime();
+    m_lastTickTime = WebCore::currentTime();
 
-    /* timeupdate cadence: 50 ms, like Chrome. Elapsed time is measured from
-     * m_lastTickTime so a late frame catches up instead of drifting. */
+    /* timeupdate cadence: 50 ms, like Chrome. */
     m_tickTimer.startRepeating(0.05);
 }
 
@@ -519,6 +601,11 @@ void HTMLMediaElement::pause()
 
     m_paused = true;
     m_tickTimer.stop();
+    m_frameTimer.stop();
+
+    if (m_pipeline)
+        m_pipeline->setPaused(true);
+
     DISPATCH_MEDIA_EVENT("pause");
 }
 
@@ -530,26 +617,37 @@ void HTMLMediaElement::tickTimerFired(Timer<HTMLMediaElement>*)
 void HTMLMediaElement::tick()
 {
     double now = WebCore::currentTime();
-    double delta = now - m_lastTickTime;
 
     if (m_paused)
         return;
 
-    m_lastTickTime = now;
+    if (m_pipeline) {
+        /* The decoder's own clock (device position for audio) is authoritative;
+         * the ticker only reports it. */
+        m_currentTime = m_pipeline->currentTime();
+        if (getenv("AGB_MEDIA_DEBUG"))
+            m_pipeline->debugState("tick");
+    } else {
+        double delta = now - m_lastTickTime;
 
-    if (delta <= 0 || delta > 1.0)
-        delta = 0.05;
+        m_lastTickTime = now;
 
-    m_currentTime += delta * m_playbackRate;
+        if (delta <= 0 || delta > 1.0)
+            delta = 0.05;
+
+        m_currentTime += delta * m_playbackRate;
+    }
 
     if (m_duration > 0 && m_currentTime >= m_duration) {
         if (m_loop) {
-            m_currentTime = 0;
+            setCurrentTime(0);
         } else {
             m_currentTime = m_duration;
             m_paused = true;
             m_ended = true;
             m_tickTimer.stop();
+            m_frameTimer.stop();
+            stopPipeline();
             updateActiveCues();
             DISPATCH_MEDIA_EVENT("timeupdate");
             DISPATCH_MEDIA_EVENT("ended");
@@ -570,13 +668,21 @@ void HTMLMediaElement::setCurrentTime(double time)
 
     m_ended = false;
 
-    /* The seek is synchronous here (one decode-free seek has nothing to
-     * wait for); Chrome dispatches both events from a task. */
     m_seeking = true;
     DISPATCH_MEDIA_EVENT("seeking");
 
     m_currentTime = time;
     m_lastTickTime = WebCore::currentTime();
+
+    if (m_pipeline) {
+        /* Restarts the decoder at the new position; the clock follows the
+         * device again from there. */
+        m_pipeline->seek(time);
+
+        if (m_paused)
+            m_pipeline->setPaused(true);
+    }
+
     m_seeking = false;
 
     updateActiveCues();
@@ -585,6 +691,21 @@ void HTMLMediaElement::setCurrentTime(double time)
 
     if (renderer())
         renderer()->repaint();
+}
+
+bool HTMLMediaElement::copyVideoFrame(Vector<unsigned char>& out, int& width, int& height) const
+{
+    if (!m_pipeline || !m_pipeline->hasVideo())
+        return false;
+
+    /* Any decoded frame the pipeline has is the current picture: the decoder
+     * drops older ones itself, so there is nothing to filter here. */
+    if (!m_pipeline->copyFrame(out, m_currentTime, 1000.0))
+        return false;
+
+    width = m_pipeline->videoWidth();
+    height = m_pipeline->videoHeight();
+    return width > 0 && height > 0;
 }
 
 void HTMLMediaElement::setPlaybackRate(double rate)
@@ -611,6 +732,8 @@ void HTMLMediaElement::setVolume(double volume)
         volume = 1;
 
     m_volume = volume;
+    if (m_pipeline)
+        m_pipeline->setVolume(m_muted ? 0.0 : volume);
     DISPATCH_MEDIA_EVENT("volumechange");
 }
 
@@ -620,6 +743,8 @@ void HTMLMediaElement::setMuted(bool muted)
         return;
 
     m_muted = muted;
+    if (m_pipeline)
+        m_pipeline->setMuted(muted);
     DISPATCH_MEDIA_EVENT("volumechange");
 }
 

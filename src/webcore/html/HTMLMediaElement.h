@@ -36,6 +36,7 @@ namespace WebCore {
 class CachedImage;
 class HTMLSourceElement;
 class HTMLTrackElement;
+class MediaPipeline;
 class TextTrack;
 class TextTrackList;
 
@@ -125,6 +126,15 @@ public:
     void play();
     void pause();
 
+    /* True when a real decoder is driving this element (audio through waveOut
+     * and/or decoded video frames). Falls back to the simulated ticker when
+     * no decoder is available, so pages never see a dead element. */
+    bool isRealPlayback() const { return m_pipeline != 0; }
+
+    /* The renderer asks for the newest decoded frame; `out` receives BGRA of
+     * the pipeline's video size. */
+    bool copyVideoFrame(Vector<unsigned char>& out, int& width, int& height) const;
+
     /* --- capability / metadata ----------------------------------------- */
     String canPlayType(const String& type) const;
 
@@ -163,6 +173,9 @@ private:
     void frameTimerFired(Timer<HTMLMediaElement>*);
     bool hasSourceChildren() const;
 
+    bool startPipeline();
+    void stopPipeline();
+
     void startLoad();
     void tryNextSource();
     void stopTimers();
@@ -200,6 +213,10 @@ private:
     Timer<HTMLMediaElement> m_probeTimer;
     Timer<HTMLMediaElement> m_tickTimer;
     Timer<HTMLMediaElement> m_frameTimer;
+
+    /* Real playback (audio/video decode). Null means the simulated ticker is
+     * running instead. */
+    MediaPipeline* m_pipeline;
 
     CachedImage* m_poster;
     CachedImage* m_frame;

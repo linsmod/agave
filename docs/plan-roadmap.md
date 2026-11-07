@@ -97,6 +97,13 @@
   `@page` 在 yacc 前改写成 `agb-page-<n>` 占位规则、解析完原地换成 `CSSPageRule`（顺序、`type=6`、`style`、
   `selectorText` 都对）；`parseQuotes()` 新增，`content` 接受 `normal`/`none` 与四个 quote 关键字，`blink` 保留。
   验收：css3test `?filter=css2.2` 525/525、122 features（与 Chrome 一致）；`check_cssom.js` 新增 14 条断言。
+- **媒体真实播放**（R99 + R100，2026-11-07）：`<video>`/`<audio>` 不再只是模拟时钟——
+  ffmpeg 解 PCM 走 waveOut 出声、解 BGRA 帧按时间戳节流后由 `RenderMedia` 绘制；
+  `currentTime` 由设备位置/墙钟驱动，`pause` 冻结、seek 重开解码器、`ended` 由媒体时钟触发。
+  远程 http(s) 媒体由引擎自己下载成本地副本再交给工具（子进程在本进程树里做不了 TLS）。
+  验收：`tools/run_media_real_tests.ps1`（本地视频 / 远程视频 / 本地 MP3，含画面与 ffmpeg
+  参考帧对拍），实现边界见 [arch-media.md](arch-media.md)。
+
 ## P0：先修正确性
 
 ### P0-b 图就绪与执行解耦
@@ -363,6 +370,20 @@
   nav/typing/worker/layout/jit/script-mode 全绿。
 
 ## P2：增强
+
+### P2 媒体：渐进式流 + `object-fit` + 音画严格同步
+
+现在的真实播放是"整段吃进本地副本再解"，三条明确的下一步（细节见
+[arch-media.md](arch-media.md) §8）：
+
+1. **渐进式**：http(s) 媒体改 Range 请求 + 边下边解，别等整段下载完；同步探测
+   （`ResourceHandle::loadResourceSynchronously`）也要从引擎线程挪走，否则大文件会卡 UI。
+2. **`object-fit` / `object-position`**：绘制时按 `cover`/`contain` 裁剪或留边，而不是拉伸。
+3. **音画对齐**：视频帧按解码 PTS 而不是"帧序号 / 25"，并给音频漂移做补偿；`playbackRate`
+   变速时同时改音频解码速率（`atempo`）或至少让视频跟随。
+
+验收：`run_media_real_tests.ps1` 增加一条"边下边播"用例（首帧在下载完成前出现）、
+一条 `object-fit: cover` 的 16:9→4:3 裁剪像素对拍、一条 60 s 播放后 |audio-video| < 50 ms。
 
 ### P2 prefetch 换真解析
 

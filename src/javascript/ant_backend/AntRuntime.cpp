@@ -11636,6 +11636,12 @@ bool mediaElementProperty(AntbEngine* engine, WebCore::HTMLMediaElement* media,
         { AntbValue* v = antb_make_string(engine, media->src().utf8().data()); if (!v) return true; antb_value_assign(out, v); antb_value_release(v); return true; }
     if (!strcmp(name, "currentSrc"))
         { AntbValue* v = antb_make_string(engine, media->currentSrc().utf8().data()); if (!v) return true; antb_value_assign(out, v); antb_value_release(v); return true; }
+
+    /* Diagnostic (not a spec property): 1 when a real decoder drives this
+     * element, 0 when the simulated ticker is the fallback (no ffmpeg).
+     * tools/run_media_tests.ps1 uses it to tell the two apart. */
+    if (!strcmp(name, "_agbRealPlayback"))
+        { AntbValue* v = antb_make_number(engine, media->isRealPlayback() ? 1 : 0); if (!v) return true; antb_value_assign(out, v); antb_value_release(v); return true; }
     if (!strcmp(name, "poster"))
         { AntbValue* v = antb_make_string(engine, media->poster().utf8().data()); if (!v) return true; antb_value_assign(out, v); antb_value_release(v); return true; }
     if (!strcmp(name, "preload"))

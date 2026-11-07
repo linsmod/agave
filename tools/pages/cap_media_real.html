@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>real playback</title>
+<style>body { margin: 0; background: #222 }</style>
+</head>
+<body>
+<!-- Driven by the query string so one page tests any media file:
+       ?src=<url>&kind=video|audio -->
+<video id="v" style="width:320px;height:180px"></video>
+<audio id="a"></audio>
+<script>
+var log = [];
+var kind = 'video';
+var el = document.getElementById('v');
+
+(function () {
+  var query = location.search.replace(/^\?/, '');
+  var src = '';
+  var parts = query.split('&');
+
+  for (var i = 0; i < parts.length; ++i) {
+    var pair = parts[i].split('=');
+    var key = decodeURIComponent(pair[0]);
+    var value = decodeURIComponent(pair.slice(1).join('='));
+
+    if (key === 'src') src = value;
+    if (key === 'kind' && value === 'audio') {
+      kind = 'audio';
+      el = document.getElementById('a');
+    }
+  }
+
+  el.muted = (query.indexOf('mute=1') >= 0);
+
+  ['loadstart','loadedmetadata','loadeddata','canplay','play','playing','pause',
+   'timeupdate','seeking','seeked','ended','error','volumechange'].forEach(function (t) {
+    el.addEventListener(t, function () { if (log.length < 200) log.push(t); });
+  });
+
+  if (src) el.src = src;
+
+  /* ?t=<seconds>: start playback at that position as soon as metadata is in.
+   * A --shot run then has the whole --wait window to paint the frame, instead
+   * of racing the 300 ms the probe allows after --eval.
+   * &hold=1 additionally pauses again after 700 ms, so a screenshot is of a
+   * known position rather than of wherever the clock happened to be. */
+  (function () {
+    var wanted = -1;
+    var hold = query.indexOf('hold=1') >= 0;
+
+    for (var i = 0; i < parts.length; ++i) {
+      var pair = parts[i].split('=');
+
+      if (decodeURIComponent(pair[0]) === 't')
+        wanted = Number(decodeURIComponent(pair.slice(1).join('=')));
+    }
+
+    if (!(wanted >= 0))
+      return;
+
+    el.addEventListener('loadedmetadata', function () {
+      el.currentTime = wanted;
+      el.play();
+
+      if (hold) {
+        setTimeout(function () {
+          el.pause();
+          log.push('held');
+        }, 700);
+      }
+    });
+  })();
+})();
+
+window.report = function (extra) {
+  return 'kind=' + kind
+    + ' real=' + el._agbRealPlayback
+    + ' dur=' + el.duration.toFixed(3)
+    + ' dim=' + el.videoWidth + 'x' + el.videoHeight
+    + ' ct=' + el.currentTime.toFixed(3)
+    + ' paused=' + el.paused
+    + ' rs=' + el.readyState
+    + ' ns=' + el.networkState
+    + ' err=' + (el.error ? el.error.code : 'null')
+    + (extra ? ' | ' + extra : '')
+    + ' | events=' + log.join(',');
+};
+</script>
+</body>
+</html>
+

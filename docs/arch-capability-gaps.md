@@ -96,11 +96,14 @@ qsChild=3 qsDesc=3 qsAdj=1 qsSib=2 qsNth=1 qsOdd=2 qsNot=2 qsFirst=1 qsList2=4 q
 `geolocation`、`FileReader`、`customElements`、`ShadowRoot`/`attachShadow`、`OffscreenCanvas`、
 `AudioContext`/`speechSynthesis`、`devicePixelRatio`、`print`、`Temporal`、`WebGL`。
 
-**媒体元素（`<video>`/`<audio>`/`<source>`/`<track>`）已有实现**：元素类、常用 API、模拟播放状态机、
-容器头元数据（MP4/WebM/MKV）、`textTracks` + WebVTT cue，尺寸与 Chrome 对齐；可选 ffmpeg 抽首帧。
-**仍未实现**：真实音视频输出、`MediaSource`(MSE)、EME、WebAudio、原生控件皮肤、字幕绘制、
-`requestVideoFrameCallback`。详见 [arch-media.md](arch-media.md)，复测
-`pwsh -File tools/run_media_tests.ps1`。
+**媒体元素（`<video>`/`<audio>`/`<source>`/`<track>`）已有实现**：元素类、常用 API、
+容器头元数据（MP4/WebM/MKV）、`textTracks` + WebVTT cue，尺寸与 Chrome 对齐；
+**真实播放**用 ffmpeg + waveOut（音频出声、视频逐帧绘制、时钟/暂停/seek/ended 都由媒体时钟驱动，
+没装 ffmpeg 时退回内部定时器模拟）。
+**仍未实现**：渐进式/流式播放（远程媒体先整段下载）、`object-fit` 裁剪、音画严格同步、
+`MediaSource`(MSE)、EME、WebAudio、原生控件皮肤、字幕绘制、`requestVideoFrameCallback`。
+详见 [arch-media.md](arch-media.md)，复测 `pwsh -File tools/run_media_tests.ps1`（API/几何）
+与 `pwsh -File tools/run_media_real_tests.ps1`（真实播放）。
 
 `Audio` 全局构造器在 `prelude.js` 里：`new Audio(src)` 返回真正的 `<audio>` 元素
 （此前是 `undefined`，Howler/video.js 这类库会在碰 DOM 前就抛错）。

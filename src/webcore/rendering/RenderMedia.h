@@ -27,6 +27,7 @@
 #define RenderMedia_h
 
 #include "RenderReplaced.h"
+#include <wtf/Vector.h>
 
 namespace WebCore {
 
@@ -60,6 +61,16 @@ public:
 private:
     HTMLMediaElement* mediaElement() const;
     IntSize mediaIntrinsicSize() const;
+
+    /* Draws one decoded BGRA frame into the content box. */
+    void paintDecodedFrame(GraphicsContext*, const IntRect& destRect,
+                           const Vector<unsigned char>& frame,
+                           int frameWidth, int frameHeight);
+
+    /* Last decoded frame, kept between paints (the frame loop runs at 30 Hz
+     * and a frame is a few hundred KB). */
+    Vector<unsigned char> m_frame;
+    bool m_loggedFrame;
 };
 
 } // namespace WebCore

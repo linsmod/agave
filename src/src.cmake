@@ -134,6 +134,12 @@ if (OPT_NET_BACKEND STREQUAL "native")
     target_link_libraries(${LIB_NAME} PRIVATE winhttp)
 endif()
 
+# Real media playback: waveOut for audio output (MediaPipeline.cpp). winmm is
+# part of Windows, so this is unconditional on WIN32.
+if (WIN32)
+    target_link_libraries(${LIB_NAME} PRIVATE winmm)
+endif()
+
 set(HEADERS ${PROJ_ROOT}/include
             ${PROJ_ROOT}/src
             ${PROJ_ROOT}/src/webcore

@@ -1,0 +1,13 @@
+<html><body style="margin:0;background:#ffffff">
+<video id="v" src="../../debug/media/artplayer_video.mp4" muted style="display:block"></video>
+<div style="width:400px;height:80px;background:#ff0000"></div>
+<script>
+setTimeout(function(){
+  var v=document.getElementById('v');
+  v.play();
+  setTimeout(function(){
+    probeExit('frame='+v._agbRealPlayback+' ct='+v.currentTime.toFixed(2)
+              +' size='+v.videoWidth+'x'+v.videoHeight);
+  }, 1500);
+},300);
+</script></body></html>

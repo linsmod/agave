@@ -1,7 +1,12 @@
 # tools/run_media_tests.ps1
 #
 # Media element regression: DOM/API surface, geometry against Chrome's UA
-# layout, and the simulated transport (play -> timeupdate -> ended).
+# layout, and the transport (play -> timeupdate -> ended).
+#
+# The transport assertions hold for both paths: with ffmpeg installed the
+# element is driven by the real decoder (see run_media_real_tests.ps1), and
+# only when it is missing does the internal ticker simulate the clock. The
+# assertions therefore never depend on which one ran.
 #
 # The reference values are Chrome's, taken with tools/ua_style_dump.py
 # (see docs/arch-media.md section 3): <video> defaults to 300x150,
@@ -90,7 +95,7 @@ Assert-Contains 'skips unsupported type' $result 'picked=clip640x360.mp4'
 Assert-Contains 'new Audio()'            $result 'newAudio=AUDIO/1'
 
 if (-not $SkipState) {
-    Write-Host '== simulated transport (play -> timeupdate -> ended)'
+    Write-Host '== transport (play -> timeupdate -> ended)'
     $state = Invoke-Probe -Url (Join-Path $pages 'cap_media_state.html') `
                           -Script (Join-Path $pages 'cap_media_state.js')
 
