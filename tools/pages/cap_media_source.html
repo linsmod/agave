@@ -1,0 +1,16 @@
+<html><head><meta charset="utf-8"><title>media source</title></head><body>
+<video id="v">
+  <source src="../../debug/media/clip320x240.webm" type="video/bogus">
+  <source src="../../debug/media/clip640x360.mp4" type="video/mp4">
+</video>
+<script>
+window.reportSource = function () {
+  var v = document.getElementById('v');
+  var a = new Audio('a.mp3');
+  return 'sources=' + v.childNodes.length
+    + ' picked=' + (v.currentSrc ? v.currentSrc.split('/').pop() : '(none)')
+    + ' dur=' + v.duration + ' dim=' + v.videoWidth + 'x' + v.videoHeight
+    + ' | newAudio=' + (a ? a.tagName + '/' + a.paused : 'null');
+};
+</script>
+</body></html>

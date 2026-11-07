@@ -26,6 +26,7 @@
 #include "HTMLAnchorElement.h"
 #include "HTMLAppletElement.h"
 #include "HTMLAreaElement.h"
+#include "HTMLAudioElement.h"
 #include "HTMLBaseFontElement.h"
 #include "HTMLBaseElement.h"
 #include "HTMLBlockquoteElement.h"
@@ -70,6 +71,7 @@
 #include "HTMLPreElement.h"
 #include "HTMLScriptElement.h"
 #include "HTMLSelectElement.h"
+#include "HTMLSourceElement.h"
 #include "HTMLStyleElement.h"
 #include "HTMLTextAreaElement.h"
 #include "HTMLTableElement.h"
@@ -79,7 +81,9 @@
 #include "HTMLTableRowElement.h"
 #include "HTMLTableSectionElement.h"
 #include "HTMLTitleElement.h"
+#include "HTMLTrackElement.h"
 #include "HTMLUListElement.h"
+#include "HTMLVideoElement.h"
 #include "HTMLQuoteElement.h"
 
 namespace WebCore {
@@ -307,6 +311,26 @@ static PassRefPtr<HTMLElement> canvasConstructor(const AtomicString&, Document* 
     return new HTMLCanvasElement(doc);
 }
 
+static PassRefPtr<HTMLElement> audioConstructor(const AtomicString&, Document* doc, HTMLFormElement*, bool)
+{
+    return new HTMLAudioElement(doc);
+}
+
+static PassRefPtr<HTMLElement> videoConstructor(const AtomicString&, Document* doc, HTMLFormElement*, bool)
+{
+    return new HTMLVideoElement(doc);
+}
+
+static PassRefPtr<HTMLElement> sourceConstructor(const AtomicString&, Document* doc, HTMLFormElement*, bool)
+{
+    return new HTMLSourceElement(doc);
+}
+
+static PassRefPtr<HTMLElement> trackConstructor(const AtomicString&, Document* doc, HTMLFormElement*, bool)
+{
+    return new HTMLTrackElement(doc);
+}
+
 static PassRefPtr<HTMLElement> appletConstructor(const AtomicString&, Document* doc, HTMLFormElement*, bool)
 {
     return new HTMLAppletElement(doc);
@@ -395,6 +419,7 @@ static void createFunctionMap()
     addTag(aTag, anchorConstructor);
     addTag(appletTag, appletConstructor);
     addTag(areaTag, areaConstructor);
+    addTag(audioTag, audioConstructor);
     addTag(baseTag, baseConstructor);
     addTag(basefontTag, basefontConstructor);
     addTag(blockquoteTag, blockquoteConstructor);
@@ -450,6 +475,7 @@ static void createFunctionMap()
     addTag(qTag, quoteConstructor);
     addTag(scriptTag, scriptConstructor);
     addTag(selectTag, selectConstructor);
+    addTag(sourceTag, sourceConstructor);
     addTag(styleTag, styleConstructor);
     addTag(tableTag, tableConstructor);
     addTag(tbodyTag, tableSectionConstructor);
@@ -460,7 +486,9 @@ static void createFunctionMap()
     addTag(theadTag, tableSectionConstructor);
     addTag(titleTag, titleConstructor);
     addTag(trTag, tableRowConstructor);
+    addTag(trackTag, trackConstructor);
     addTag(ulTag, ulConstructor);
+    addTag(videoTag, videoConstructor);
     addTag(xmpTag, preConstructor);
 }
 

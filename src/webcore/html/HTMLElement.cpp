@@ -788,6 +788,13 @@ HashSet<AtomicStringImpl*>* inlineTagList()
         tagList->add(abbrTag.localName().impl());
         tagList->add(acronymTag.localName().impl());
         tagList->add(aTag.localName().impl());
+        tagList->add(audioTag.localName().impl());
+        tagList->add(videoTag.localName().impl());
+        /* <source>/<track> are void children of audio/video. They are real
+         * HTML tag names (HTMLTagNames.in), so checkDTD's "unknown tag"
+         * escape hatch does not apply and they were silently dropped. */
+        tagList->add(sourceTag.localName().impl());
+        tagList->add(trackTag.localName().impl());
         tagList->add(canvasTag.localName().impl());
         tagList->add(imgTag.localName().impl());
         tagList->add(appletTag.localName().impl());

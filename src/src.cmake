@@ -16,6 +16,7 @@ file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS
                           ${PROJ_ROOT}/src/webcore/loader/*.cpp
                           ${PROJ_ROOT}/src/webcore/page/*.cpp
                           ${PROJ_ROOT}/src/webcore/platform/*.cpp
+                          ${PROJ_ROOT}/src/webcore/platform/media/*.cpp
                           ${PROJ_ROOT}/src/webcore/rendering/*.cpp
                           ${PROJ_ROOT}/src/webcore/xml/*.cpp
                           ${PROJ_ROOT}/src/webview/*.cpp
@@ -148,6 +149,7 @@ set(HEADERS ${PROJ_ROOT}/include
             ${PROJ_ROOT}/src/webcore/platform
             ${PROJ_ROOT}/src/webcore/platform/graphics
             ${PROJ_ROOT}/src/webcore/platform/picasso
+            ${PROJ_ROOT}/src/webcore/platform/media
             ${PROJ_ROOT}/src/webcore/platform/unicode
             ${PROJ_ROOT}/src/webcore/platform/network
             ${PROJ_ROOT}/src/webcore/platform/network/curl

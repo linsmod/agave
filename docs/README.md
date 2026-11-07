@@ -25,6 +25,7 @@
 | [arch-downloads.md](arch-downloads.md) | 下载子系统：决策点、所有权、状态机、三层 API、线程模型、面板 | 改下载 / 加下载 UI |
 | [arch-embedding.md](arch-embedding.md) | 宿主接入契约：控件 API、线程模型、多控件 | 集成 agave / 写宿主 |
 | [arch-capability-gaps.md](arch-capability-gaps.md) | JS/DOM/CSS 不支持/半实现清单：实测值、影响、复测命令 | 页面用了某 API 行为不对 / 评估工作量 |
+| [arch-media.md](arch-media.md) | **媒体元素**：`<video>`/`<audio>`/`<track>` 的类、UA 版式与尺寸、播放状态机、元数据解析、可选 ffmpeg 抽帧 | 改媒体元素 / 页面视频音频行为不对 |
 | [arch-web-font.md](arch-web-font.md) | `@font-face` 链路与坑 | 字体问题 |
 | [design-per-view-js-context.md](design-per-view-js-context.md) | 每 view 独立 JS 上下文（设计记录，已实现） | 改 realm / 多 view / iframe |
 | [design-frame-window.md](design-frame-window.md) | iframe 与 window 对象（设计记录）：规范差距、方案对比、实施 | 改 frame / window 身份 / 跨 frame 通信 |

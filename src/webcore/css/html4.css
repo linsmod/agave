@@ -486,6 +486,36 @@ option {
     font-weight: normal;
 }
 
+/* media elements: Chrome's UA rules (verified with tools/ua_style_dump.py);
+ * <video>'s 300x150 default is the replaced element's intrinsic size, not a
+ * CSS rule - see docs/arch-media.md section 3. */
+audio:not([controls]) {
+    display: none !important
+}
+
+/* Chrome reports `display: inline` for <audio controls> but still gives it a
+ * 300x54 box (it is a media control box, not ordinary inline content). This
+ * engine has no such box, so inline-block is what reproduces the geometry -
+ * width/height are ignored on a plain inline element. */
+audio {
+    display: inline-block;
+    width: 300px;
+    height: 54px
+}
+
+video {
+    object-fit: contain
+}
+
+video, canvas, img {
+    overflow-x: hidden;
+    overflow-y: hidden
+}
+
+source, track {
+    display: none
+}
+
 /* inline elements */
 
 u, ins {

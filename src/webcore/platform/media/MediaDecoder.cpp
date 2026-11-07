@@ -1,0 +1,770 @@
+/*
+ * Copyright (C) 2024 Zhang Ji Peng (onecoolx@gmail.com)
+ *
+ * Media probing / frame grabbing behind HTMLMediaElement. See MediaDecoder.h
+ * and docs/arch-media.md.
+ *
+ * Threading contract: the engine thread calls probe/pollProbe/cancel; worker
+ * threads only ever touch their own Job and the shared job list, which is
+ * guarded by a critical section. No WebCore object is touched off-thread.
+ */
+
+#include "config.h"
+
+#include "MediaDecoder.h"
+
+#include "ResourceError.h"
+#include "ResourceHandle.h"
+#include "ResourceRequest.h"
+#include "ResourceResponse.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <string>
+#include <vector>
+
+#if PLATFORM(WIN32)
+#include <windows.h>
+#endif
+
+namespace WebCore {
+
+namespace MediaDecoder {
+
+/* ------------------------------------------------------------------------- */
+/* tool discovery                                                            */
+/* ------------------------------------------------------------------------- */
+
+#if PLATFORM(WIN32)
+static bool fileIsExecutable(const std::string& path)
+{
+    DWORD attrs = GetFileAttributesA(path.c_str());
+    return attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY);
+}
+#else
+static bool fileIsExecutable(const std::string& path)
+{
+    FILE* f = fopen(path.c_str(), "rb");
+
+    if (!f)
+        return false;
+    fclose(f);
+    return true;
+}
+#endif
+
+static bool findTool(const char* envName, const char* exeName, std::string& out)
+{
+    const char* explicitPath = getenv(envName);
+
+    if (explicitPath && *explicitPath) {
+        if (fileIsExecutable(explicitPath)) {
+            out = explicitPath;
+            return true;
+        }
+    }
+
+    /* Install locations this machine actually has (chocolatey ships ffmpeg
+     * there); keep the list short - PATH lookup is the general answer. */
+    static const char* const dirs[] = {
+        "C:\\ProgramData\\chocolatey\\bin\\",
+        "C:\\Program Files\\ffmpeg\\bin\\",
+        "C:\\ffmpeg\\bin\\"
+    };
+
+    for (size_t i = 0; i < sizeof(dirs) / sizeof(dirs[0]); ++i) {
+        std::string path = std::string(dirs[i]) + exeName;
+
+        if (fileIsExecutable(path)) {
+            out = path;
+            return true;
+        }
+    }
+
+    /* Bare name: CreateProcess still resolves it through PATH, but only claim
+     * availability when it is really there - callers use this to decide
+     * whether to start a worker at all. */
+    {
+        std::string path = std::string(exeName);
+        const char* pathEnv = getenv("PATH");
+
+        if (!pathEnv)
+            return false;
+
+        std::string search(pathEnv);
+        size_t start = 0;
+
+        while (start <= search.size()) {
+            size_t end = search.find(';', start);
+
+            if (end == std::string::npos)
+                end = search.size();
+
+            if (end > start) {
+                std::string dir = search.substr(start, end - start);
+                std::string candidate = dir + "\\" + exeName;
+
+                if (fileIsExecutable(candidate)) {
+                    out = candidate;
+                    return true;
+                }
+            }
+
+            if (end == search.size())
+                break;
+            start = end + 1;
+        }
+    }
+
+    return false;
+}
+
+bool ffprobeAvailable()
+{
+    std::string path;
+    bool found = findTool("AGB_FFPROBE", "ffprobe.exe", path);
+
+    if (getenv("AGB_MEDIA_DEBUG"))
+        fprintf(stderr, "[media] ffprobe %s path=%s\n", found ? "found" : "missing",
+                found ? path.c_str() : "-");
+    return found;
+}
+
+bool ffmpegAvailable()
+{
+    std::string path;
+    return findTool("AGB_FFMPEG", "ffmpeg.exe", path);
+}
+
+/* ------------------------------------------------------------------------- */
+/* local reads                                                               */
+/* ------------------------------------------------------------------------- */
+
+/* "file:///E:/x/y.mp4" -> "E:/x/y.mp4" (percent decoded, query stripped).
+ * Mirrors the network backend's helper so the media layer does not depend on
+ * backend internals. */
+static bool localPathForFileUrl(const char* url, std::string* out)
+{
+    if (!url || !out || strncasecmp(url, "file:", 5) != 0)
+        return false;
+
+    const char* rest = url + 5;
+
+    if (strncmp(rest, "//", 2) != 0)
+        return false;
+    rest += 2;
+
+    std::string path(rest);
+    size_t cut = path.find_first_of("?#");
+
+    if (cut != std::string::npos)
+        path.resize(cut);
+
+    {
+        std::string decoded;
+        decoded.reserve(path.size());
+
+        for (size_t i = 0; i < path.size(); ++i) {
+            if (path[i] == '%' && i + 2 < path.size()) {
+                int hi = path[i + 1];
+                int lo = path[i + 2];
+
+                if (hi >= '0' && hi <= '9') hi -= '0';
+                else if (hi >= 'a' && hi <= 'f') hi = hi - 'a' + 10;
+                else if (hi >= 'A' && hi <= 'F') hi = hi - 'A' + 10;
+                else { decoded += path[i]; continue; }
+
+                if (lo >= '0' && lo <= '9') lo -= '0';
+                else if (lo >= 'a' && lo <= 'f') lo = lo - 'a' + 10;
+                else if (lo >= 'A' && lo <= 'F') lo = lo - 'A' + 10;
+                else { decoded += path[i]; continue; }
+
+                decoded += (char)((hi << 4) | lo);
+                i += 2;
+            } else {
+                decoded += path[i];
+            }
+        }
+        *out = decoded;
+    }
+
+    return true;
+}
+
+static bool readLocalFile(const std::string& path, size_t maxBytes, Vector<unsigned char>& out)
+{
+    FILE* f = fopen(path.c_str(), "rb");
+    unsigned char buffer[65536];
+    size_t total = 0;
+
+    if (!f)
+        return false;
+
+    while (total < maxBytes) {
+        size_t want = sizeof(buffer);
+        size_t got;
+
+        if (maxBytes - total < want)
+            want = maxBytes - total;
+
+        got = fread(buffer, 1, want, f);
+        if (!got)
+            break;
+
+        for (size_t i = 0; i < got; ++i)
+            out.append(buffer[i]);
+        total += got;
+    }
+
+    fclose(f);
+    return total > 0;
+}
+
+/* The header slice, used by both the in-process parser and (as a fallback
+ * source of truth) by the ffprobe path. `allowNetwork` is false for the
+ * synchronous case so a page can never make load() download a whole video. */
+static bool readMediaHeader(const String& url, bool allowNetwork, Vector<unsigned char>& out, size_t maxBytes)
+{
+    std::string urlText = url.utf8().data();
+    std::string path;
+
+    out.clear();
+
+    if (localPathForFileUrl(urlText.c_str(), &path))
+        return readLocalFile(path, maxBytes, out);
+
+    if (!allowNetwork)
+        return false;
+
+    if (strncasecmp(urlText.c_str(), "http:", 5) != 0
+            && strncasecmp(urlText.c_str(), "https:", 5) != 0)
+        return false;
+
+    {
+        KURL kurl(urlText.c_str());
+        ResourceRequest request(kurl);
+        ResourceError error;
+        ResourceResponse response;
+        Vector<char> data;
+
+        ResourceHandle::loadResourceSynchronously(request, error, response, data);
+
+        if (!error.isNull() || data.isEmpty())
+            return false;
+
+        {
+            size_t take = data.size() < maxBytes ? data.size() : maxBytes;
+
+            for (size_t i = 0; i < take; ++i)
+                out.append((unsigned char)data[i]);
+            return take > 0;
+        }
+    }
+}
+
+/* ------------------------------------------------------------------------- */
+/* worker jobs                                                               */
+/* ------------------------------------------------------------------------- */
+
+struct Job {
+    bool probe;                 /* true: ffprobe metadata, false: ffmpeg frame */
+    const void* element;
+    std::string url;
+    double time;
+    volatile LONG done;
+    bool ok;
+    MediaInfo info;
+    std::vector<unsigned char> bytes;
+#if PLATFORM(WIN32)
+    HANDLE thread;
+#endif
+};
+
+static std::vector<Job*>* g_jobs = 0;
+
+/* Finished jobs waiting to be picked up by their owner. Both tables are only
+ * touched on the engine thread (pump / probe / poll / cancel); worker threads
+ * see `Job::done` and never these vectors. */
+static std::vector<Job*> g_results;
+
+#if PLATFORM(WIN32)
+static CRITICAL_SECTION* g_jobsLock = 0;
+
+static void lockJobs()
+{
+    if (!g_jobsLock) {
+        g_jobsLock = (CRITICAL_SECTION*)malloc(sizeof(CRITICAL_SECTION));
+        InitializeCriticalSection(g_jobsLock);
+    }
+    EnterCriticalSection(g_jobsLock);
+}
+
+static void unlockJobs()
+{
+    LeaveCriticalSection(g_jobsLock);
+}
+#else
+static void lockJobs() { }
+static void unlockJobs() { }
+#endif
+
+/* Runs `exe` with argv (no shell involved: every argument is quoted here),
+ * collecting stdout bytes. */
+static bool runTool(const std::string& exe, const std::vector<std::string>& args,
+                    std::vector<unsigned char>& out)
+{
+#if PLATFORM(WIN32)
+    SECURITY_ATTRIBUTES sa;
+    HANDLE readPipe = NULL;
+    HANDLE writePipe = NULL;
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    std::string commandLine;
+    bool ok = false;
+
+    memset(&sa, 0, sizeof(sa));
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+
+    if (!CreatePipe(&readPipe, &writePipe, &sa, 0))
+        return false;
+
+    SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0);
+
+    commandLine = "\"" + exe + "\"";
+    for (size_t i = 0; i < args.size(); ++i)
+        commandLine += " \"" + args[i] + "\"";
+
+    memset(&si, 0, sizeof(si));
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdOutput = writePipe;
+    si.hStdError = writePipe;       /* ffprobe writes diagnostics to stderr */
+    si.hStdInput = NULL;
+
+    memset(&pi, 0, sizeof(pi));
+
+    {
+        std::vector<char> mutableCommand(commandLine.begin(), commandLine.end());
+        mutableCommand.push_back('\0');
+
+        if (CreateProcessA(NULL, &mutableCommand[0], NULL, NULL, TRUE,
+                           CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+            unsigned char buffer[8192];
+            DWORD avail = 0;
+            DWORD got = 0;
+
+            CloseHandle(writePipe);
+            writePipe = NULL;
+
+            for (;;) {
+                if (PeekNamedPipe(readPipe, NULL, 0, NULL, &avail, NULL) && avail > 0) {
+                    if (ReadFile(readPipe, buffer, sizeof(buffer), &got, NULL) && got) {
+                        out.insert(out.end(), buffer, buffer + got);
+                        continue;
+                    }
+                }
+
+                if (WaitForSingleObject(pi.hProcess, 0) == WAIT_OBJECT_0)
+                    break;
+
+                Sleep(2);
+            }
+
+            while (PeekNamedPipe(readPipe, NULL, 0, NULL, &avail, NULL) && avail > 0) {
+                if (ReadFile(readPipe, buffer, sizeof(buffer), &got, NULL) && got)
+                    out.insert(out.end(), buffer, buffer + got);
+            }
+
+            WaitForSingleObject(pi.hProcess, 2000);
+            CloseHandle(pi.hProcess);
+            CloseHandle(pi.hThread);
+
+            ok = !out.empty();
+        }
+    }
+
+    if (writePipe)
+        CloseHandle(writePipe);
+    CloseHandle(readPipe);
+    return ok;
+#else
+    (void)exe;
+    (void)args;
+    (void)out;
+    return false;
+#endif
+}
+
+/* ffprobe -of json output is machine generated; scrape the two fields we
+ * need. The key match is anchored on the quoted name so a nested "duration"
+ * in another block cannot be picked up by accident. */
+static bool jsonNumberAfter(const std::string& text, const char* key, double* out)
+{
+    std::string needle = std::string("\"") + key + "\"";
+    size_t pos = text.find(needle);
+    char* end = 0;
+    double value;
+
+    if (pos == std::string::npos)
+        return false;
+
+    pos = text.find(':', pos + needle.size());
+    if (pos == std::string::npos)
+        return false;
+
+    ++pos;
+    while (pos < text.size() && (text[pos] == ' ' || text[pos] == '\t'))
+        ++pos;
+
+    if (pos >= text.size())
+        return false;
+
+    if (text[pos] == '"')
+        ++pos;
+
+    value = strtod(text.c_str() + pos, &end);
+    if (end == text.c_str() + pos)
+        return false;
+
+    *out = value;
+    return true;
+}
+
+/* Tools take a path, not a URL: ffprobe/ffmpeg on Windows do not understand
+ * "file:" at all ("No such file or directory"). */
+static std::string toolArgumentForURL(const std::string& url)
+{
+    std::string path;
+
+    if (localPathForFileUrl(url.c_str(), &path))
+        return path;
+    return url;
+}
+
+static void runProbe(Job* job)
+{
+    std::string exe;
+
+    if (!findTool("AGB_FFPROBE", "ffprobe.exe", exe))
+        return;
+
+    {
+        std::vector<std::string> args;
+        std::vector<unsigned char> output;
+
+        args.push_back("-v");
+        args.push_back("error");
+        args.push_back("-show_entries");
+        args.push_back("format=duration:stream=width,height,codec_type");
+        args.push_back("-of");
+        args.push_back("json");
+        args.push_back(toolArgumentForURL(job->url));
+
+        if (!runTool(exe, args, output)) {
+            if (getenv("AGB_MEDIA_DEBUG"))
+                fprintf(stderr, "[media] ffprobe produced no output for %s\n", job->url.c_str());
+            return;
+        }
+
+        {
+            std::string text(output.begin(), output.end());
+            MediaInfo info;
+            double value = 0;
+
+            if (jsonNumberAfter(text, "duration", &value))
+                info.duration = value;
+            if (jsonNumberAfter(text, "width", &value))
+                info.width = (int)value;
+            if (jsonNumberAfter(text, "height", &value))
+                info.height = (int)value;
+
+            info.hasVideo = text.find("\"codec_type\": \"video\"") != std::string::npos
+                         || text.find("\"codec_type\":\"video\"") != std::string::npos;
+            info.hasAudio = text.find("\"codec_type\": \"audio\"") != std::string::npos
+                         || text.find("\"codec_type\":\"audio\"") != std::string::npos;
+
+            info.ok = info.duration > 0 || info.width > 0 || info.hasVideo || info.hasAudio;
+            info.mimeType = mediaMimeTypeForURL(String::fromUTF8(job->url.c_str()));
+
+
+            job->info = info;
+            job->ok = info.ok;
+        }
+    }
+}
+
+static void runFrame(Job* job)
+{
+    std::string exe;
+
+    if (!findTool("AGB_FFMPEG", "ffmpeg.exe", exe))
+        return;
+
+    {
+        std::vector<std::string> args;
+        std::vector<unsigned char> png;
+        char timeText[64];
+
+        snprintf(timeText, sizeof(timeText), "%.3f", job->time);
+
+        args.push_back("-v");
+        args.push_back("error");
+        args.push_back("-ss");
+        args.push_back(timeText);
+        args.push_back("-i");
+        args.push_back(toolArgumentForURL(job->url));
+        args.push_back("-frames:v");
+        args.push_back("1");
+        args.push_back("-f");
+        args.push_back("image2pipe");
+        args.push_back("-vcodec");
+        args.push_back("png");
+        args.push_back("-");
+
+        if (runTool(exe, args, png)) {
+            job->bytes = png;
+            job->ok = true;
+        }
+    }
+}
+
+#if PLATFORM(WIN32)
+static DWORD WINAPI jobThread(void* param)
+{
+    Job* job = (Job*)param;
+
+    if (job->probe)
+        runProbe(job);
+    else
+        runFrame(job);
+
+    InterlockedExchange(&job->done, 1);
+    return 0;
+}
+#endif
+
+static void startJob(Job* job)
+{
+    if (!g_jobs)
+        g_jobs = new std::vector<Job*>();
+
+    lockJobs();
+    g_jobs->push_back(job);
+    unlockJobs();
+
+#if PLATFORM(WIN32)
+    job->thread = CreateThread(NULL, 0, jobThread, job, 0, NULL);
+
+    if (!job->thread) {
+        job->ok = false;
+        InterlockedExchange(&job->done, 1);
+    }
+#endif
+}
+
+/* ------------------------------------------------------------------------- */
+/* public API                                                                */
+/* ------------------------------------------------------------------------- */
+
+void pump()
+{
+    if (!g_jobs)
+        return;
+
+    std::vector<Job*> finished;
+
+    lockJobs();
+
+    for (size_t i = 0; i < g_jobs->size(); ) {
+        Job* job = (*g_jobs)[i];
+
+        if (job->done) {
+            finished.push_back(job);
+            (*g_jobs)[i] = (*g_jobs)[g_jobs->size() - 1];
+            g_jobs->pop_back();
+        } else {
+            ++i;
+        }
+    }
+
+    unlockJobs();
+
+    /* Finished jobs move to the result table; the owning element picks them
+     * up from pollProbe()/pollFrame() on its own timer. */
+    for (size_t i = 0; i < finished.size(); ++i) {
+        Job* job = finished[i];
+        bool replaced = false;
+
+        /* A newer job for the same element and kind supersedes an older
+         * unread result (a page that seeks repeatedly must not build a
+         * backlog of frames). */
+        for (size_t k = 0; k < g_results.size(); ++k) {
+            if (g_results[k]->element == job->element && g_results[k]->probe == job->probe) {
+#if PLATFORM(WIN32)
+                if (g_results[k]->thread)
+                    CloseHandle(g_results[k]->thread);
+#endif
+                delete g_results[k];
+                g_results[k] = job;
+                replaced = true;
+                break;
+            }
+        }
+
+        if (!replaced)
+            g_results.push_back(job);
+    }
+}
+
+ProbeStatus probe(const void* element, const String& url, MediaInfo& out)
+{
+    /* Header parse first: local files and small HTTP resources are answered
+     * without a thread. 1 MiB is enough for every container we parse.
+     * AGB_MEDIA_PROBE=ffprobe forces the external path, which is how the
+     * fallback itself is tested (tools/run_media_tests.ps1). */
+    {
+        const size_t kHeaderBytes = 1024 * 1024;
+        Vector<unsigned char> data;
+        std::string urlText = url.utf8().data();
+        bool local = !strncasecmp(urlText.c_str(), "file:", 5);
+        bool forceExternal = getenv("AGB_MEDIA_PROBE")
+            && !strcmp(getenv("AGB_MEDIA_PROBE"), "ffprobe");
+
+        if (!forceExternal
+                && readMediaHeader(url, local, data, kHeaderBytes)
+                && data.size() > 0
+                && parseMediaHeader(data.data(), data.size(), out))
+            return ProbeReady;
+    }
+
+    if (!ffprobeAvailable())
+        return ProbeFailed;
+
+    {
+        Job* job = new Job();
+
+        job->probe = true;
+        job->element = element;
+        job->url = url.utf8().data();
+        job->time = 0;
+        job->done = 0;
+        job->ok = false;
+#if PLATFORM(WIN32)
+        job->thread = NULL;
+#endif
+
+        startJob(job);
+        return ProbePending;
+    }
+}
+
+ProbeStatus pollProbe(const void* element, MediaInfo& out)
+{
+    for (size_t i = 0; i < g_results.size(); ++i) {
+        Job* job = g_results[i];
+        ProbeStatus status;
+
+        if (!job->probe || job->element != element)
+            continue;
+
+        g_results.erase(g_results.begin() + i);
+
+        status = job->ok ? ProbeReady : ProbeFailed;
+
+        if (job->ok)
+            out = job->info;
+
+#if PLATFORM(WIN32)
+        if (job->thread)
+            CloseHandle(job->thread);
+#endif
+        delete job;
+        return status;
+    }
+
+    return ProbePending;
+}
+
+void cancel(const void* element)
+{
+    /* Running jobs are not killed: `element` is cleared so their result is
+     * ignored when it arrives (the Job itself must outlive the thread). */
+    if (g_jobs) {
+        lockJobs();
+        for (size_t i = 0; i < g_jobs->size(); ++i) {
+            if ((*g_jobs)[i]->element == element)
+                (*g_jobs)[i]->element = 0;
+        }
+        unlockJobs();
+    }
+
+    for (size_t i = 0; i < g_results.size(); ) {
+        Job* job = g_results[i];
+
+        if (job->element == element) {
+            g_results.erase(g_results.begin() + i);
+#if PLATFORM(WIN32)
+            if (job->thread)
+                CloseHandle(job->thread);
+#endif
+            delete job;
+        } else {
+            ++i;
+        }
+    }
+}
+
+void requestFrame(const void* element, const String& url, double time)
+{
+    Job* job;
+
+    if (!ffmpegAvailable())
+        return;
+
+    job = new Job();
+    job->probe = false;
+    job->element = element;
+    job->url = url.utf8().data();
+    job->time = time;
+    job->done = 0;
+    job->ok = false;
+#if PLATFORM(WIN32)
+    job->thread = NULL;
+#endif
+
+    startJob(job);
+}
+
+bool pollFrame(const void* element, Vector<unsigned char>& out)
+{
+    for (size_t i = 0; i < g_results.size(); ++i) {
+        Job* job = g_results[i];
+        bool ok;
+
+        if (job->probe || job->element != element)
+            continue;
+
+        g_results.erase(g_results.begin() + i);
+        ok = job->ok && !job->bytes.empty();
+
+        if (ok) {
+            for (size_t k = 0; k < job->bytes.size(); ++k)
+                out.append(job->bytes[k]);
+        }
+
+#if PLATFORM(WIN32)
+        if (job->thread)
+            CloseHandle(job->thread);
+#endif
+        delete job;
+        return ok;
+    }
+
+    return false;
+}
+
+} // namespace MediaDecoder
+
+} // namespace WebCore

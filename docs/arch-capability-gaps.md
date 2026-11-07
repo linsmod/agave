@@ -94,7 +94,16 @@ qsChild=3 qsDesc=3 qsAdj=1 qsSib=2 qsNth=1 qsOdd=2 qsNot=2 qsFirst=1 qsList2=4 q
 
 `ResizeObserver`、`IntersectionObserver`、`PerformanceObserver`、`indexedDB`、`caches`、`Notification`、
 `geolocation`、`FileReader`、`customElements`、`ShadowRoot`/`attachShadow`、`OffscreenCanvas`、
-`Audio`/`AudioContext`/`speechSynthesis`、`devicePixelRatio`、`print`、`Temporal`、`WebGL`。
+`AudioContext`/`speechSynthesis`、`devicePixelRatio`、`print`、`Temporal`、`WebGL`。
+
+**媒体元素（`<video>`/`<audio>`/`<source>`/`<track>`）已有实现**：元素类、常用 API、模拟播放状态机、
+容器头元数据（MP4/WebM/MKV）、`textTracks` + WebVTT cue，尺寸与 Chrome 对齐；可选 ffmpeg 抽首帧。
+**仍未实现**：真实音视频输出、`MediaSource`(MSE)、EME、WebAudio、原生控件皮肤、字幕绘制、
+`requestVideoFrameCallback`。详见 [arch-media.md](arch-media.md)，复测
+`pwsh -File tools/run_media_tests.ps1`。
+
+`Audio` 全局构造器在 `prelude.js` 里：`new Audio(src)` 返回真正的 `<audio>` 元素
+（此前是 `undefined`，Howler/video.js 这类库会在碰 DOM 前就抛错）。
 
 `WebSocket`/`EventSource`/`BroadcastChannel` 存在（ant 原生，走 libuv），但浏览器里没有对应的 socket
 事件泵；构造不抛错、连接行为未验证，属于"探测通过但连不上"的静默失败。

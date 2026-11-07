@@ -2,6 +2,16 @@
   if (typeof g.Image === 'undefined' && g.document) {
     g.Image = function Image() { return g.document.createElement('img'); };
   }
+  /* new Audio([src]) is how most players build their element (Howler,
+   * video.js, every "play a sound on click" snippet). Without it the global
+   * is undefined and those paths throw before touching the DOM. */
+  if (typeof g.Audio === 'undefined' && g.document) {
+    g.Audio = function Audio(src) {
+      var el = g.document.createElement('audio');
+      if (src !== undefined && src !== null) el.src = String(src);
+      return el;
+    };
+  }
   g.__agbDescribe = function (e) {
     try {
       if (e && e.stack) return String(e.stack);

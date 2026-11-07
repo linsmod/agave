@@ -7,6 +7,7 @@ align
 alink
 alt
 archive
+autoplay
 autocomplete
 autosave
 axis
@@ -37,10 +38,12 @@ colspan
 compact
 composite
 content
+controls
 contenteditable
 coords
 data
 datetime
+default
 declare
 defer
 dir
@@ -61,6 +64,7 @@ http_equiv
 id
 incremental
 ismap
+kind
 keytype
 label
 lang
@@ -79,6 +83,7 @@ mayscript
 media
 method
 min
+muted
 multiple
 name
 nohref
@@ -130,6 +135,9 @@ onunload
 pagex
 pagey
 placeholder
+playsinline
+poster
+preload
 plain
 pluginpage
 pluginspage
@@ -152,6 +160,7 @@ scrolling
 selected
 shape
 size
+srclang
 span
 src
 standby

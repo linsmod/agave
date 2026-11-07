@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>media state</title>
+<style>body { margin: 0 }</style>
+</head>
+<body>
+<div id="host"></div>
+<video id="v" src="../../debug/media/clip640x360.mp4"></video>
+<script>
+/* Transport checks run in two steps because the probe gives exactly one
+ * --eval: the first script starts playback and returns, the shell's settle
+ * window then lets frames turn, and the second call reads the result. Both
+ * are exported so the test script can drive them from ordinary page code. */
+var log = [];
+var v = document.getElementById('v');
+
+['loadstart','loadedmetadata','loadeddata','canplay','play','playing','pause',
+ 'timeupdate','seeking','seeked','ended','error','volumechange'].forEach(function (t) {
+  v.addEventListener(t, function () { log.push(t); });
+});
+
+window.reportLoaded = function () {
+  return 'meta: dur=' + v.duration.toFixed(2)
+    + ' dim=' + v.videoWidth + 'x' + v.videoHeight
+    + ' rs=' + v.readyState + ' ns=' + v.networkState
+    + ' paused=' + v.paused
+    + ' events=' + log.join(',');
+};
+
+window.startPlayback = function () {
+  var rate = v.playbackRate;
+  v.play();
+  return 'afterPlayCall: paused=' + v.paused + ' rs=' + v.readyState
+    + ' ct=' + v.currentTime.toFixed(3) + ' rate=' + rate;
+};
+
+window.readPlayback = function () {
+  return 'later: paused=' + v.paused + ' ct=' + v.currentTime.toFixed(3)
+    + ' dur=' + v.duration.toFixed(2) + ' ended=' + v.ended
+    + ' events=' + log.join(',');
+};
+
+window.finishPlayback = function () {
+  /* Seek near the end so the `ended` transition happens within one frame. */
+  v.currentTime = v.duration - 0.02;
+  return 'seek: ct=' + v.currentTime.toFixed(3) + ' duration=' + v.duration.toFixed(2);
+};
+
+window.readEnded = function () {
+  return 'ended: paused=' + v.paused + ' ended=' + v.ended
+    + ' ct=' + v.currentTime.toFixed(3) + ' events=' + log.join(',');
+};
+
+window.pauseAndRead = function () {
+  v.pause();
+  return 'paused=' + v.paused + ' events=' + log.join(',');
+};
+</script>
+</body>
+</html>

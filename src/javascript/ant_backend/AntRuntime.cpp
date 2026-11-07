@@ -93,6 +93,13 @@ namespace WebCore { bool prefersDarkColorScheme(); }
 #include "ResourceRequest.h"
 #include "ResourceResponse.h"
 #include "HTMLTextAreaElement.h"
+#include "HTMLAudioElement.h"
+#include "HTMLMediaElement.h"
+#include "HTMLSourceElement.h"
+#include "HTMLTrackElement.h"
+#include "HTMLVideoElement.h"
+#include "TextTrack.h"
+#include "MediaDecoder.h"
 
 #include <stdio.h>
 #include <string>
@@ -568,6 +575,21 @@ int nodeDocumentHasFocus(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, 
 template <typename Collection> AntbValue* wrapNodeList(AntbEngine*, Collection*);
 int nodeGetContext(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeToDataURL(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+
+/* Media elements: one native callback per method, all on the shared Node
+ * class (there are no per-tag JS classes), each checking the tag first - the
+ * same scheme canvas uses. */
+int nodeMediaPlay(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeMediaPause(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeMediaLoad(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeMediaCanPlayType(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeMediaAddTextTrack(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+AntbValue* wrapTextTrack(AntbEngine*, WebCore::TextTrack*);
+AntbValue* wrapTextTrackList(AntbEngine*, WebCore::TextTrackList*);
+AntbValue* wrapTextTrackCue(AntbEngine*, WebCore::TextTrackCue*);
+void installTextTrackClasses(AntbEngine*);
+bool mediaElementProperty(AntbEngine*, WebCore::HTMLMediaElement*, const char*, AntbValue* out);
+bool mediaElementSetProperty(WebCore::HTMLMediaElement*, const char*, const AntbValue*);
 
 /* CanvasRenderingContext2D methods, dispatched through one shared callback:
  * `user` carries the operation. */
@@ -4252,6 +4274,11 @@ void pumpAsyncRequests(void)
     collectXhrJobs();
     if (breakdown) QueryPerformanceCounter(&bdT1);
 
+    /* External media decoders (ffprobe / ffmpeg) finish on their own threads;
+     * this only moves their results into the table the media elements poll
+     * from their WebCore timers, so no WebCore object is touched off-thread. */
+    WebCore::MediaDecoder::pump();
+
     /* The module session has no driver of its own: prefetches and routed
      * entry scripts only complete when someone pumps. The frame loop is the
      * natural place (moduleFetch's wait loop covers the evaluation path). */
@@ -5742,6 +5769,12 @@ void bindDocument(void* document)
                  * canvas APIs live here and check the tag themselves. */
                 antb_class_add_method(g_engine, g_nodeClass, "getContext", nodeGetContext, NULL);
                 antb_class_add_method(g_engine, g_nodeClass, "toDataURL", nodeToDataURL, NULL);
+                /* Media element methods, same scheme (tag checked inside). */
+                antb_class_add_method(g_engine, g_nodeClass, "play", nodeMediaPlay, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "pause", nodeMediaPause, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "load", nodeMediaLoad, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "canPlayType", nodeMediaCanPlayType, NULL);
+                antb_class_add_method(g_engine, g_nodeClass, "addTextTrack", nodeMediaAddTextTrack, NULL);
 
                 /* Catch-all property: the class dispatching getter only serves
                  * names present in this table and returns undefined for
@@ -5754,6 +5787,7 @@ void bindDocument(void* document)
             }
         }
 
+        installTextTrackClasses(g_engine);
         installGlobalApi(g_engine, global);
 
         /* A new main frame document is a new session history entry. */
@@ -7833,6 +7867,13 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
         }
         return 1;
     } else if (n->isElementNode()
+            && (static_cast<WebCore::Element*>(n)->hasTagName(WebCore::HTMLNames::videoTag)
+                || static_cast<WebCore::Element*>(n)->hasTagName(WebCore::HTMLNames::audioTag))
+            && mediaElementProperty(engine, static_cast<WebCore::HTMLMediaElement*>(
+                   static_cast<WebCore::Element*>(n)), name, out)) {
+        /* handled by the media element's property table (see below) */
+        return 1;
+    } else if (n->isElementNode()
             && static_cast<WebCore::Element*>(n)->hasTagName(WebCore::HTMLNames::formTag)
             && (!strcmp(name, "action") || !strcmp(name, "elements"))) {
         WebCore::HTMLFormElement* form = static_cast<WebCore::HTMLFormElement*>(n);
@@ -8383,6 +8424,15 @@ int nodeSetter(AntbEngine* engine, AntbValue* self, const char* name, const Antb
      * so `el.onclick = null` clears the handler. */
     if (n && name && !strncmp(name, "on", 2) && name[2])
         return setNodeEventHandler(n, name + 2, value);
+
+    /* Media element properties (currentTime/volume/muted/src/...): the reads
+     * are served by the media branch of nodeGetter, the writes land here. */
+    if (n && n->isElementNode() && value
+            && (static_cast<WebCore::Element*>(n)->hasTagName(WebCore::HTMLNames::videoTag)
+                || static_cast<WebCore::Element*>(n)->hasTagName(WebCore::HTMLNames::audioTag))
+            && mediaElementSetProperty(static_cast<WebCore::HTMLMediaElement*>(
+                   static_cast<WebCore::Element*>(n)), name, value))
+        return 1;
 
     /* Reflected attributes: `el.hidden = true`, `el.tabIndex = 3`,
      * `el.dir = 'rtl'` are attribute writes, and reading them back must agree
@@ -9518,6 +9568,15 @@ int nodeGetBoundingClientRect(AntbEngine* engine, AntbValue* self, AntbValue**, 
      * `el.getBoundingClientRect().height` threw a TypeError (vConsole measures
      * its own hidden panel that way while booting). */
     if (n && n->renderer()) {
+        /* A node appended since the last layout still carries its stale box
+         * (0x0); Chrome's getBoundingClientRect() forces layout first, and a
+         * freshly mounted <video> measured 0x0 here while its computed style
+         * already reported 320px. */
+        if (WebCore::Document* doc = n->document()) {
+            if (doc->renderer() && doc->renderer()->needsLayout())
+                doc->updateLayout();
+        }
+
         rect = n->renderer()->absoluteBoundingBoxRect();
         /* absoluteBoundingBoxRect() is in document coordinates; the DOM API is
          * viewport-relative (Chrome: a scrolled document reports a negative
@@ -11121,6 +11180,717 @@ int nodeToDataURL(AntbEngine* engine, AntbValue* self, AntbValue** args, int arg
     (void)self; (void)args; (void)argc;
 
     return canvasReturnString(engine, out, "data:,");
+}
+
+/* ------------------------------------------------------------------------- */
+/* Media elements                                                            */
+/*                                                                            */
+/* Same shape as the canvas block above: there is one Node class, so the      */
+/* methods live on it and each one checks the tag before doing anything.      */
+/* The DOM side owns all state (HTMLMediaElement); this file only marshals.  */
+/* ------------------------------------------------------------------------- */
+
+#define AGB_TAG_TEXTTRACK 0x54545231u   /* 'TTR1' */
+#define AGB_TAG_TRACKLIST 0x54524C31u   /* 'TRL1' */
+#define AGB_TAG_CUE       0x43554531u   /* 'CUE1' */
+
+static AntbClass* g_textTrackClass = NULL;
+static AntbClass* g_textTrackListClass = NULL;
+static AntbClass* g_textTrackCueClass = NULL;
+
+/* The media element property table: one function serves every name so the
+ * Node class stays the only class (see the canvas block above for the same
+ * reasoning). Definitions live in the media section below the canvas one. */
+bool mediaElementProperty(AntbEngine*, WebCore::HTMLMediaElement*, const char*, AntbValue* out);
+bool mediaElementSetProperty(WebCore::HTMLMediaElement*, const char*, const AntbValue*);
+
+/* Declared here because the wrapper helpers below install them. */
+int textTrackGetter(AntbEngine*, AntbValue*, const char*, AntbValue*, void*);
+int textTrackListGetter(AntbEngine*, AntbValue*, const char*, AntbValue*, void*);
+int textTrackCueGetter(AntbEngine*, AntbValue*, const char*, AntbValue*, void*);
+void installTextTrackClasses(AntbEngine*);
+
+static WebCore::HTMLMediaElement* mediaElementOf(AntbValue* self)
+{
+    WebCore::Node* n = self ? nodeOf(self) : 0;
+
+    if (!n || !n->isElementNode())
+        return 0;
+
+    {
+        WebCore::Element* el = static_cast<WebCore::Element*>(n);
+
+        if (!el->hasTagName(WebCore::HTMLNames::videoTag)
+                && !el->hasTagName(WebCore::HTMLNames::audioTag))
+            return 0;
+
+        return static_cast<WebCore::HTMLMediaElement*>(el);
+    }
+}
+
+static int mediaReturnBool(AntbEngine* engine, AntbValue* out, bool value)
+{
+    AntbValue* v = antb_make_number(engine, value ? 1 : 0);
+
+    if (!v)
+        return 1;
+    antb_value_assign(out, v);
+    antb_value_release(v);
+    return 1;
+}
+
+int nodeMediaPlay(AntbEngine* engine, AntbValue* self, AntbValue**, int, AntbValue* out, void*)
+{
+    WebCore::HTMLMediaElement* media = mediaElementOf(self);
+
+    if (!media)
+        return 1;
+
+    media->play();
+
+    /* The spec returns a Promise; players do `.catch(...)` on it and a
+     * non-Promise makes `play().catch` throw inside their code. The transport
+     * starts synchronously here, so an already-resolved Promise is accurate. */
+    {
+        AntbValue* global = antb_global(engine);
+        AntbValue* promise = NULL;
+
+        if (global) {
+            AntbValue* ctor = antb_get_prop(engine, global, "Promise");
+            AntbValue* resolved = NULL;
+
+            if (ctor) {
+                AntbValue* resolveFn = antb_get_prop(engine, ctor, "resolve");
+
+                if (resolveFn) {
+                    resolved = antb_call(engine, resolveFn, ctor, NULL, 0, NULL);
+                    antb_value_release(resolveFn);
+                }
+                antb_value_release(ctor);
+            }
+            antb_value_release(global);
+
+            promise = resolved;
+        }
+
+        if (promise) {
+            antb_value_assign(out, promise);
+            antb_value_release(promise);
+        }
+    }
+
+    return 1;
+}
+
+int nodeMediaPause(AntbEngine*, AntbValue* self, AntbValue**, int, AntbValue*, void*)
+{
+    WebCore::HTMLMediaElement* media = mediaElementOf(self);
+
+    if (media)
+        media->pause();
+    return 1;
+}
+
+int nodeMediaLoad(AntbEngine*, AntbValue* self, AntbValue**, int, AntbValue*, void*)
+{
+    WebCore::HTMLMediaElement* media = mediaElementOf(self);
+
+    if (media)
+        media->load();
+    return 1;
+}
+
+int nodeMediaCanPlayType(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                         AntbValue* out, void*)
+{
+    WebCore::HTMLMediaElement* media = mediaElementOf(self);
+    std::string type;
+
+    if (!media)
+        return 1;
+
+    if (argc > 0 && args[0]) {
+        char* text = antb_to_utf8(args[0]);
+
+        if (text) {
+            type = text;
+            antb_free(text);
+        }
+    }
+
+    return canvasReturnString(engine, out, media->canPlayType(WebCore::String::fromUTF8(type.c_str())).utf8().data());
+}
+
+int nodeMediaAddTextTrack(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                          AntbValue* out, void*)
+{
+    WebCore::HTMLMediaElement* media = mediaElementOf(self);
+    std::string kind, label, language;
+
+    if (!media)
+        return 1;
+
+    if (argc > 0 && args[0]) { char* t = antb_to_utf8(args[0]); if (t) { kind = t; antb_free(t); } }
+    if (argc > 1 && args[1]) { char* t = antb_to_utf8(args[1]); if (t) { label = t; antb_free(t); } }
+    if (argc > 2 && args[2]) { char* t = antb_to_utf8(args[2]); if (t) { language = t; antb_free(t); } }
+
+    {
+        RefPtr<WebCore::TextTrack> track = new WebCore::TextTrack(
+            WebCore::String::fromUTF8(kind.c_str()),
+            WebCore::String::fromUTF8(label.c_str()),
+            WebCore::String::fromUTF8(language.c_str()));
+
+        /* addTextTrack() per spec creates a track that already shows cues. */
+        track->setMode("hidden");
+        media->addTextTrack(track.get());
+
+        {
+            AntbValue* v = wrapTextTrack(engine, track.get());
+
+            if (v) {
+                antb_value_assign(out, v);
+                antb_value_release(v);
+            }
+        }
+    }
+
+    return 1;
+}
+
+/* textTracks is a live view: the list object asks its own getter, so
+ * `el.textTracks.length` is always current. */
+int mediaTextTracksGetter(AntbEngine* engine, AntbValue* self, const char* name,
+                          AntbValue* out, void*)
+{
+    WebCore::HTMLMediaElement* media = mediaElementOf(self);
+
+    if (!media || !name)
+        return 0;
+
+    if (!strcmp(name, "textTracks")) {
+        AntbValue* list = wrapTextTrackList(engine, media->textTracks());
+
+        if (!list)
+            return 0;
+
+        antb_value_assign(out, list);
+        antb_value_release(list);
+        return 1;
+    }
+
+    return 0;
+}
+
+/* The list needs item()/getTrackById() as real methods. They are installed on
+ * the class prototype per engine; this is the shared callback. `user` is the
+ * operation id so one callback can serve both. */
+enum TextTrackListOp {
+    TRACKLIST_OP_ITEM = 1,
+    TRACKLIST_OP_BY_ID = 2
+};
+
+int textTrackListMethod(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                        AntbValue* out, void* user)
+{
+    WebCore::TextTrackList* list = self
+        ? (WebCore::TextTrackList*)antb_get_native(self, AGB_TAG_TRACKLIST) : 0;
+    intptr_t op = (intptr_t)user;
+    WebCore::TextTrack* track = 0;
+
+    if (!list)
+        return 1;
+
+    if (op == TRACKLIST_OP_ITEM) {
+        unsigned index = (argc > 0 && args[0]) ? (unsigned)antb_to_number(args[0]) : 0;
+
+        track = list->item(index);
+    } else {
+        std::string id;
+
+        if (argc > 0 && args[0]) {
+            char* text = antb_to_utf8(args[0]);
+            if (text) { id = text; antb_free(text); }
+        }
+        track = list->getTrackById(WebCore::String::fromUTF8(id.c_str()));
+    }
+
+    if (!track)
+        return 1;
+
+    {
+        AntbValue* v = wrapTextTrack(engine, track);
+
+        if (v) {
+            antb_value_assign(out, v);
+            antb_value_release(v);
+        }
+    }
+
+    return 1;
+}
+
+int textTrackListMethod(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                        AntbValue* out, void* user);
+
+/* --- text track wrappers ------------------------------------------------- */
+
+static AntbValue* mediaWrapObject(AntbEngine* engine, AntbClass* klass, void* ptr, unsigned tag)
+{
+    AntbValue* v;
+
+    if (!engine || !ptr || !klass)
+        return NULL;
+
+    v = antb_wrap_native_as_owner(engine, klass, ptr, tag, g_document);
+    if (!v)
+        return NULL;
+
+    /* Wrappers are released with the document (antb_release_owner); the C++
+     * objects themselves are owned by the media element. */
+    return v;
+}
+
+/* One class per media wrapper type. There is no per-tag class scheme here
+ * (every element shares the Node class), so these are created lazily on the
+ * first document bind - they cost three slots in the bridge's class table. */
+void installTextTrackClasses(AntbEngine* engine)
+{
+    if (!engine || g_textTrackClass)
+        return;
+
+    g_textTrackClass = antb_class_create(engine, "TextTrack");
+    g_textTrackListClass = antb_class_create(engine, "TextTrackList");
+    g_textTrackCueClass = antb_class_create(engine, "TextTrackCue");
+
+    if (g_textTrackClass)
+        antb_class_set_property(engine, g_textTrackClass, "", textTrackGetter, NULL);
+    if (g_textTrackListClass) {
+        antb_class_add_method(engine, g_textTrackListClass, "item", textTrackListMethod,
+                              (void*)TRACKLIST_OP_ITEM);
+        antb_class_add_method(engine, g_textTrackListClass, "getTrackById", textTrackListMethod,
+                              (void*)TRACKLIST_OP_BY_ID);
+        antb_class_set_property(engine, g_textTrackListClass, "", textTrackListGetter, NULL);
+    }
+    if (g_textTrackCueClass)
+        antb_class_set_property(engine, g_textTrackCueClass, "", textTrackCueGetter, NULL);
+}
+
+AntbValue* wrapTextTrack(AntbEngine* engine, WebCore::TextTrack* track)
+{
+    if (!engine || !track)
+        return NULL;
+
+    {
+        AntbValue* v = mediaWrapObject(engine, g_textTrackClass, track, AGB_TAG_TEXTTRACK);
+
+        if (v)
+            antb_define_property(engine, v, "", textTrackGetter, NULL);
+        return v;
+    }
+}
+
+AntbValue* wrapTextTrackList(AntbEngine* engine, WebCore::TextTrackList* list)
+{
+    if (!engine || !list)
+        return NULL;
+
+    {
+        AntbValue* v = mediaWrapObject(engine, g_textTrackListClass, list, AGB_TAG_TRACKLIST);
+
+        if (v) {
+            /* The list is a live view: `length` and index reads go through
+             * one getter that asks TextTrackList every time. */
+            antb_define_property(engine, v, "", textTrackListGetter, NULL);
+        }
+        return v;
+    }
+}
+
+AntbValue* wrapTextTrackCue(AntbEngine* engine, WebCore::TextTrackCue* cue)
+{
+    if (!engine || !cue)
+        return NULL;
+
+    {
+        AntbValue* v = mediaWrapObject(engine, g_textTrackCueClass, cue, AGB_TAG_CUE);
+
+        if (v)
+            antb_define_property(engine, v, "", textTrackCueGetter, NULL);
+        return v;
+    }
+}
+
+/* --- property table ------------------------------------------------------ *
+ * Every media property read funnels through this one function (registered on
+ * the Node class as the catch-all getter's media branch). Besides the obvious
+ * state reads it synthesizes the two object-valued properties:
+ *
+ *   textTracks -> a live TextTrackList wrapper
+ *   buffered/played/seekable -> TimeRanges-shaped objects
+ *   error      -> MediaError-shaped object (null when there is no error)
+ */
+static AntbValue* makeTimeRanges(AntbEngine* engine, double end)
+{
+    AntbValue* ranges = antb_make_object(engine);
+
+    if (!ranges)
+        return NULL;
+
+    /* One range [0, end] while playing/loaded, none before. These objects are
+     * snapshots: TimeRanges is live in Chrome, but every consumer we have
+     * seen reads it right after the event that made it interesting. */
+    {
+        AntbValue* length = antb_make_number(engine, end > 0 ? 1 : 0);
+        AntbValue* method = NULL;
+
+        if (length) {
+            antb_set_prop(engine, ranges, "length", length);
+            antb_value_release(length);
+        }
+
+        /* start/end as functions on the object. */
+        {
+            AntbValue* global = antb_global(engine);
+
+            if (global) {
+                AntbValue* marker = antb_get_prop(engine, global, "__agbTimeRangesFactory");
+
+                if (marker) {
+                    AntbValue* args[1];
+
+                    args[0] = antb_make_number(engine, end);
+                    method = antb_call(engine, marker, global, args, 1, NULL);
+                    if (args[0])
+                        antb_value_release(args[0]);
+                    antb_value_release(marker);
+                }
+                antb_value_release(global);
+            }
+        }
+
+        if (method) {
+            AntbValue* startFn = antb_get_prop(engine, method, "start");
+            AntbValue* endFn = antb_get_prop(engine, method, "end");
+
+            if (startFn) {
+                antb_set_prop(engine, ranges, "start", startFn);
+                antb_value_release(startFn);
+            }
+            if (endFn) {
+                antb_set_prop(engine, ranges, "end", endFn);
+                antb_value_release(endFn);
+            }
+            antb_value_release(method);
+        }
+    }
+
+    return ranges;
+}
+
+bool mediaElementProperty(AntbEngine* engine, WebCore::HTMLMediaElement* media,
+                          const char* name, AntbValue* out)
+{
+    if (!media || !name)
+        return false;
+
+    /* --- plain numbers --- */
+    if (!strcmp(name, "currentTime"))
+        { AntbValue* v = antb_make_number(engine, media->currentTime()); if (!v) return true; antb_value_assign(out, v); antb_value_release(v); return true; }
+    if (!strcmp(name, "duration"))
+        { AntbValue* v = antb_make_number(engine, media->duration()); if (!v) return true; antb_value_assign(out, v); antb_value_release(v); return true; }
+    if (!strcmp(name, "volume"))
+        { AntbValue* v = antb_make_number(engine, media->volume()); if (!v) return true; antb_value_assign(out, v); antb_value_release(v); return true; }
+    if (!strcmp(name, "playbackRate"))
+        { AntbValue* v = antb_make_number(engine, media->playbackRate()); if (!v) return true; antb_value_assign(out, v); antb_value_release(v); return true; }
+    if (!strcmp(name, "defaultPlaybackRate"))
+        { AntbValue* v = antb_make_number(engine, media->defaultPlaybackRate()); if (!v) return true; antb_value_assign(out, v); antb_value_release(v); return true; }
+    if (!strcmp(name, "readyState"))
+        { AntbValue* v = antb_make_number(engine, (double)media->readyState()); if (!v) return true; antb_value_assign(out, v); antb_value_release(v); return true; }
+    if (!strcmp(name, "networkState"))
+        { AntbValue* v = antb_make_number(engine, (double)media->networkState()); if (!v) return true; antb_value_assign(out, v); antb_value_release(v); return true; }
+    if (!strcmp(name, "videoWidth"))
+        { AntbValue* v = antb_make_number(engine, media->videoWidth()); if (!v) return true; antb_value_assign(out, v); antb_value_release(v); return true; }
+    if (!strcmp(name, "videoHeight"))
+        { AntbValue* v = antb_make_number(engine, media->videoHeight()); if (!v) return true; antb_value_assign(out, v); antb_value_release(v); return true; }
+
+    /* --- booleans --- */
+    if (!strcmp(name, "paused"))
+        { AntbValue* v = antb_make_number(engine, media->paused() ? 1 : 0); if (!v) return true; antb_value_assign(out, v); antb_value_release(v); return true; }
+    if (!strcmp(name, "ended"))
+        { AntbValue* v = antb_make_number(engine, media->ended() ? 1 : 0); if (!v) return true; antb_value_assign(out, v); antb_value_release(v); return true; }
+    if (!strcmp(name, "seeking"))
+        { AntbValue* v = antb_make_number(engine, media->seeking() ? 1 : 0); if (!v) return true; antb_value_assign(out, v); antb_value_release(v); return true; }
+    if (!strcmp(name, "muted"))
+        { AntbValue* v = antb_make_number(engine, media->muted() ? 1 : 0); if (!v) return true; antb_value_assign(out, v); antb_value_release(v); return true; }
+    if (!strcmp(name, "loop"))
+        { AntbValue* v = antb_make_number(engine, media->loop() ? 1 : 0); if (!v) return true; antb_value_assign(out, v); antb_value_release(v); return true; }
+    if (!strcmp(name, "autoplay"))
+        { AntbValue* v = antb_make_number(engine, media->autoplay() ? 1 : 0); if (!v) return true; antb_value_assign(out, v); antb_value_release(v); return true; }
+    if (!strcmp(name, "controls"))
+        { AntbValue* v = antb_make_number(engine, media->controls() ? 1 : 0); if (!v) return true; antb_value_assign(out, v); antb_value_release(v); return true; }
+    if (!strcmp(name, "defaultMuted"))
+        { AntbValue* v = antb_make_number(engine, media->defaultMuted() ? 1 : 0); if (!v) return true; antb_value_assign(out, v); antb_value_release(v); return true; }
+
+    /* --- strings --- */
+    if (!strcmp(name, "src"))
+        { AntbValue* v = antb_make_string(engine, media->src().utf8().data()); if (!v) return true; antb_value_assign(out, v); antb_value_release(v); return true; }
+    if (!strcmp(name, "currentSrc"))
+        { AntbValue* v = antb_make_string(engine, media->currentSrc().utf8().data()); if (!v) return true; antb_value_assign(out, v); antb_value_release(v); return true; }
+    if (!strcmp(name, "poster"))
+        { AntbValue* v = antb_make_string(engine, media->poster().utf8().data()); if (!v) return true; antb_value_assign(out, v); antb_value_release(v); return true; }
+    if (!strcmp(name, "preload"))
+        { AntbValue* v = antb_make_string(engine, media->preload().utf8().data()); if (!v) return true; antb_value_assign(out, v); antb_value_release(v); return true; }
+
+    /* @@toStringTag-ish marker so library feature detection can tell the
+     * constructor name (constructor itself is answered by nodeGetter). */
+    if (!strcmp(name, "textTracks")) {
+        AntbValue* list = wrapTextTrackList(engine, media->textTracks());
+
+        if (!list)
+            return true;
+        antb_value_assign(out, list);
+        antb_value_release(list);
+        return true;
+    }
+
+    if (!strcmp(name, "buffered") || !strcmp(name, "played") || !strcmp(name, "seekable")) {
+        AntbValue* ranges = makeTimeRanges(engine,
+            !strcmp(name, "seekable") ? media->duration() : media->currentTime());
+
+        if (!ranges)
+            return true;
+        antb_value_assign(out, ranges);
+        antb_value_release(ranges);
+        return true;
+    }
+
+    if (!strcmp(name, "error")) {
+        if (!media->hasError())
+            return true;   /* null */
+
+        {
+            AntbValue* err = antb_make_object(engine);
+
+            if (!err)
+                return true;
+
+            {
+                AntbValue* code = antb_make_number(engine, media->errorCode());
+                AntbValue* message = antb_make_string(engine, "MEDIA_ERR");
+
+                if (code) { antb_set_prop(engine, err, "code", code); antb_value_release(code); }
+                if (message) { antb_set_prop(engine, err, "message", message); antb_value_release(message); }
+            }
+
+            antb_value_assign(out, err);
+            antb_value_release(err);
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool mediaElementSetProperty(WebCore::HTMLMediaElement* media, const char* name,
+                             const AntbValue* value)
+{
+    if (!media || !name || !value)
+        return false;
+
+    if (!strcmp(name, "currentTime")) {
+        media->setCurrentTime(antb_to_number(value));
+        return true;
+    }
+    if (!strcmp(name, "volume")) {
+        media->setVolume(antb_to_number(value));
+        return true;
+    }
+    if (!strcmp(name, "playbackRate")) {
+        media->setPlaybackRate(antb_to_number(value));
+        return true;
+    }
+    if (!strcmp(name, "defaultPlaybackRate")) {
+        media->setDefaultPlaybackRate(antb_to_number(value));
+        return true;
+    }
+    if (!strcmp(name, "muted")) {
+        media->setMuted(antb_to_boolean(value) != 0);
+        return true;
+    }
+    if (!strcmp(name, "loop")) {
+        media->setLoop(antb_to_boolean(value) != 0);
+        return true;
+    }
+    if (!strcmp(name, "autoplay")) {
+        media->setAutoplay(antb_to_boolean(value) != 0);
+        return true;
+    }
+    if (!strcmp(name, "controls")) {
+        media->setControls(antb_to_boolean(value) != 0);
+        return true;
+    }
+    if (!strcmp(name, "src")) {
+        char* text = antb_to_utf8(value);
+
+        if (text) {
+            media->setSrc(WebCore::String::fromUTF8(text));
+            antb_free(text);
+        }
+        return true;
+    }
+    if (!strcmp(name, "poster")) {
+        char* text = antb_to_utf8(value);
+
+        if (text) {
+            media->setPoster(WebCore::String::fromUTF8(text));
+            antb_free(text);
+        }
+        return true;
+    }
+    if (!strcmp(name, "preload")) {
+        char* text = antb_to_utf8(value);
+
+        if (text) {
+            media->setPreload(WebCore::String::fromUTF8(text));
+            antb_free(text);
+        }
+        return true;
+    }
+
+    return false;
+}
+
+/* --- TextTrack / TextTrackList / TextTrackCue objects -------------------- */
+
+int textTrackGetter(AntbEngine* engine, AntbValue* self, const char* name,
+                    AntbValue* out, void*)
+{
+    WebCore::TextTrack* track = self
+        ? (WebCore::TextTrack*)antb_get_native(self, AGB_TAG_TEXTTRACK) : 0;
+
+    if (!track || !name)
+        return 0;
+
+    if (!strcmp(name, "kind"))
+        return canvasReturnString(engine, out, track->kind().utf8().data());
+    if (!strcmp(name, "label"))
+        return canvasReturnString(engine, out, track->label().utf8().data());
+    if (!strcmp(name, "language"))
+        return canvasReturnString(engine, out, track->language().utf8().data());
+    if (!strcmp(name, "id"))
+        return canvasReturnString(engine, out, track->id().utf8().data());
+    if (!strcmp(name, "mode"))
+        return canvasReturnString(engine, out, track->mode().utf8().data());
+
+    if (!strcmp(name, "cues")) {
+        AntbValue* array = antb_make_array(engine);
+
+        if (!array)
+            return 0;
+
+        for (unsigned i = 0; i < track->cues().size(); ++i) {
+            AntbValue* cue = wrapTextTrackCue(engine, track->cues()[i].get());
+
+            if (cue) {
+                antb_array_push(engine, array, cue);
+                antb_value_release(cue);
+            }
+        }
+
+        antb_value_assign(out, array);
+        antb_value_release(array);
+        return 1;
+    }
+
+    if (!strcmp(name, "activeCues")) {
+        AntbValue* array = antb_make_array(engine);
+        Vector<RefPtr<WebCore::TextTrackCue> > active;
+
+        if (!array)
+            return 0;
+
+        {
+            WebCore::HTMLMediaElement* media = track->mediaElement();
+            double now = media ? media->currentTime() : 0;
+
+            track->cuesAt(now, active);
+        }
+
+        for (unsigned i = 0; i < active.size(); ++i) {
+            AntbValue* cue = wrapTextTrackCue(engine, active[i].get());
+
+            if (cue) {
+                antb_array_push(engine, array, cue);
+                antb_value_release(cue);
+            }
+        }
+
+        antb_value_assign(out, array);
+        antb_value_release(array);
+        return 1;
+    }
+
+    return 0;
+}
+
+int textTrackListGetter(AntbEngine* engine, AntbValue* self, const char* name,
+                        AntbValue* out, void*)
+{
+    WebCore::TextTrackList* list = self
+        ? (WebCore::TextTrackList*)antb_get_native(self, AGB_TAG_TRACKLIST) : 0;
+    char* end = NULL;
+    long index;
+
+    if (!list || !name)
+        return 0;
+
+    if (!strcmp(name, "length"))
+        return canvasReturnNumber(engine, out, list->length());
+
+    /* Numeric index access: textTracks[0]. */
+    index = strtol(name, &end, 10);
+
+    if (end && *end == '\0' && index >= 0) {
+        WebCore::TextTrack* track = list->item((unsigned)index);
+
+        if (!track)
+            return 0;
+
+        {
+            AntbValue* v = wrapTextTrack(engine, track);
+
+            if (v) {
+                antb_value_assign(out, v);
+                antb_value_release(v);
+            }
+        }
+        return 1;
+    }
+
+    return 0;
+}
+
+int textTrackCueGetter(AntbEngine* engine, AntbValue* self, const char* name,
+                       AntbValue* out, void*)
+{
+    WebCore::TextTrackCue* cue = self
+        ? (WebCore::TextTrackCue*)antb_get_native(self, AGB_TAG_CUE) : 0;
+
+    if (!cue || !name)
+        return 0;
+
+    if (!strcmp(name, "startTime"))
+        return canvasReturnNumber(engine, out, cue->startTime());
+    if (!strcmp(name, "endTime"))
+        return canvasReturnNumber(engine, out, cue->endTime());
+    if (!strcmp(name, "id"))
+        return canvasReturnString(engine, out, cue->id().utf8().data());
+    if (!strcmp(name, "text"))
+        return canvasReturnString(engine, out, cue->text().utf8().data());
+    if (!strcmp(name, "pauseOnExit"))
+        return mediaReturnBool(engine, out, false);
+
+    return 0;
 }
 
 AntbValue* wrapNode(AntbEngine* engine, WebCore::Node* node)
