@@ -124,4 +124,8 @@ H:\ant-v16\build-zig\ant.exe                # REPL
 - 输出是 UTF-8；把日志重定向到文件再 grep，不要依赖控制台编码。
 - 网络偶发长滞（WinHTTP `SendRequest`）通常是 WPAD/PAC 抖动：同刻 GUI 正常就不是代码回归，先重试；
   `AGB_NO_PROXY=1` 可以绕开代理解析。
-- 构建日志别直接进上下文（几千行）：`*> build-native.log` 然后 `grep`。
+- **`--shot` 写到 `debug/` 会静默失败**：探针在沙箱里跑，只有**构建目录**
+  （`build-zig-native\`）保证可写；写别处 `probeCapture` 打一行 `shot failed` 就继续，
+  依赖像素的回归组会报 "probe failed"。所有截图/scratch 都放构建目录
+  （`run_media_tests.ps1` / `run_layout_tests.ps1` 已按此约定）。
+- **构建日志别直接进上下文**（几千行）：`*> build-native.log` 然后 `grep`。

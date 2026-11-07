@@ -33,6 +33,11 @@
 #>
 $ErrorActionPreference = 'Stop'
 
+# Scratch BMPs go next to the executable, not into debug/: the headless probe
+# writes them from inside its sandbox, whose only writable tree is the build
+# directory (the same reason run_media_tests.ps1 keeps its shots there). With
+# them under debug/ every shot silently fails and three pixel groups report
+# "probe failed".
 $root = Split-Path -Parent $PSScriptRoot
 Push-Location $root
 
@@ -53,7 +58,7 @@ try {
     if ($LASTEXITCODE -ne 0) { $failed++ }
 
     Write-Host '== paint: transform repaint'
-    $bmp = Join-Path $root 'debug\layout_transform.bmp'
+    $bmp = Join-Path $root 'build-zig-native\layout_transform.bmp'
     $url = 'file:///' + (Join-Path $root 'tools/pages/layout/transform_repaint.html').Replace('\', '/')
     & (Join-Path $root 'build-zig-native\agave_shell.exe') --probe $url `
         --wait 1500 --settle 100 --timeout 30000 --shot $bmp | Out-Null
@@ -67,7 +72,7 @@ try {
     }
 
     Write-Host '== paint: transform text (glyphs follow the matrix)'
-    $bmp = Join-Path $root 'debug\layout_transform_text.bmp'
+    $bmp = Join-Path $root 'build-zig-native\layout_transform_text.bmp'
     $url = 'file:///' + (Join-Path $root 'tools/pages/layout/transform_text.html').Replace('\', '/')
     & (Join-Path $root 'build-zig-native\agave_shell.exe') --probe $url `
         --wait 1200 --settle 100 --timeout 30000 --shot $bmp | Out-Null
@@ -87,7 +92,7 @@ try {
     }
 
     Write-Host '== paint: background shorthand (image + colour / position / size)'
-    $bmp = Join-Path $root 'debug\layout_background.bmp'
+    $bmp = Join-Path $root 'build-zig-native\layout_background.bmp'
     $url = 'file:///' + (Join-Path $root 'tools/pages/layout/background_paint.html').Replace('\', '/')
     & (Join-Path $root 'build-zig-native\agave_shell.exe') --probe $url `
         --wait 1200 --settle 200 --timeout 30000 --shot $bmp | Out-Null
