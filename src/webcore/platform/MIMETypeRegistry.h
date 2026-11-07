@@ -55,6 +55,11 @@ public:
     // Check to see if the type is audio/video, i.e. a top-level navigation to
     // it should show the built-in media document instead of downloading.
     static bool isSupportedMediaMIMEType(const String& mimeType);
+
+    // Check to see if a URL path has an audio/video extension. Servers often
+    // label .mp4 as application/octet-stream; the extension is then the only
+    // thing that says "play this", which is what Chrome goes by.
+    static bool isMediaPathExtension(const String& path);
     
     // Check to see if a mime type is a valid Java applet mime type
     static bool isJavaAppletMIMEType(const String& mimeType);

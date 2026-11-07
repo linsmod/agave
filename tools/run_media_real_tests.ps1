@@ -258,6 +258,32 @@ if (Test-Path -LiteralPath $mp3) {
     Skip 'audio document' 'mp3 not present'
 }
 
+# A server that lies about the type: "application/octet-stream" for a .mp4 (or
+# no Content-Type at all) must still open the player - the extension decides,
+# which is what Chrome does too.
+if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
+    Skip 'octet-stream mp4' 'python not available'
+} else {
+    $mimeServer = Start-Process -FilePath python `
+        -ArgumentList 'tools\media_mime_server.py', '--root', 'debug/media', '--port', '8731' `
+        -PassThru -WindowStyle Hidden
+    Start-Sleep -Milliseconds 800
+
+    try {
+        foreach ($mode in @('octet', 'none')) {
+            $r = Probe -Query "http://127.0.0.1:8731/$mode/clip640x360.mp4" -Wait 2500 -Settle 5000 -Eval `
+                "var v=document.querySelector('video'); probeExit('tag='+(v?v.tagName:'-')+' real='+(v?v._agbRealPlayback:'-')+' ct='+(v?v.currentTime.toFixed(2):'-')+' dur='+(v?v.duration:-1))"
+
+            Check "$mode Content-Type still plays" $r.Exit {
+                param($t) $t -match 'tag=VIDEO' -and $t -match 'real=1' -and $t -match 'ct=[12]\.'
+            } 'tag=VIDEO real=1 ct>1'
+            Check "$mode Content-Type is not a download" $r.Text { param($t) $t -notmatch 'download mime' } 'no "[nav] download"'
+        }
+    } finally {
+        Stop-Process -Id $mimeServer.Id -Force -ErrorAction SilentlyContinue
+    }
+}
+
 # --- 5. pixels -------------------------------------------------------------
 if ($SkipPixels) {
     Skip 'pixels' 'SkipPixels'

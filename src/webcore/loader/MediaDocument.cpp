@@ -104,6 +104,17 @@ void MediaDocument::createDocumentStructure()
     String mimeType = frame->loader()->responseMIMEType();
     bool isAudio = mimeType.startsWith("audio/", false);
 
+    /* Servers that send application/octet-stream (or nothing) for a media
+     * file: the extension decides, and the element's canPlayType() answers
+     * from the same place. */
+    if (!mimeType.startsWith("video/", false) && !mimeType.startsWith("audio/", false)) {
+        String path = frame->loader()->url().path().lower();
+
+        isAudio = path.endsWith(".mp3") || path.endsWith(".m4a") || path.endsWith(".aac")
+               || path.endsWith(".wav") || path.endsWith(".flac") || path.endsWith(".opus")
+               || path.endsWith(".oga") || path.endsWith(".ogg");
+    }
+
     RefPtr<Element> rootElement = createElementNS(xhtmlNamespaceURI, "html", ec);
     appendChild(rootElement, ec);
 

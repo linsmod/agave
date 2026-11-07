@@ -163,7 +163,10 @@ void FrameLoaderClientMC::dispatchDecidePolicyForMIMEType(FramePolicyFunction po
 
     if (response && isAttachmentResponse(*response))
         policy = PolicyDownload;
-    else if (!MIMEType.isEmpty() && !canShowMIMEType(MIMEType))
+    else if (!MIMEType.isEmpty() && !canShowMIMEType(MIMEType)
+             /* "application/octet-stream" for a .mp4: the extension decides,
+              * same as Chrome (the media document takes over below). */
+             && !MIMETypeRegistry::isMediaPathExtension(request.url().path()))
         /* An empty MIME type must stay on the display path: the content
          * sniffer decides, and isSupportedNonImageMIMEType() reports false for
          * "" - which would turn an untyped HTML page into a download. */
@@ -347,6 +350,16 @@ bool FrameLoaderClientMC::canShowMIMEType(const String& MIMEType) const
      * player (MediaDocument), the same way Chrome shows a bare .mp4. */
     if (MIMETypeRegistry::isSupportedMediaMIMEType(MIMEType))
         return true;
+
+    /* A server that labels a .mp4 "application/octet-stream" (common with
+     * CDNs and file servers): the extension is what says "play this", which is
+     * exactly how Chrome decides. */
+    if (m_frame) {
+        DocumentLoader* loader = m_frame->loader()->activeDocumentLoader();
+
+        if (loader && MIMETypeRegistry::isMediaPathExtension(loader->response().url().path()))
+            return true;
+    }
 
     return false;
 }

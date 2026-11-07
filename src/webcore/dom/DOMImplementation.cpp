@@ -30,6 +30,7 @@
 #include "Element.h"
 #include "ExceptionCode.h"
 #include "Frame.h"
+#include "FrameLoader.h"
 #include "FTPDirectoryDocument.h"
 #include "HTMLDocument.h"
 #include "HTMLNames.h"
@@ -390,8 +391,12 @@ PassRefPtr<Document> DOMImplementation::createDocument(const String& type, Frame
         return new ImageDocument(this, frame);
 
     /* A bare .mp4/.mp3 opened as a top-level document: show the built-in
-     * player instead of downloading (what Chrome does). */
+     * player instead of downloading (what Chrome does). The MIME type can lie
+     * ("application/octet-stream" from a CDN), so the extension counts too. */
     if (MIMETypeRegistry::isSupportedMediaMIMEType(type))
+        return new MediaDocument(this, frame);
+
+    if (frame && MIMETypeRegistry::isMediaPathExtension(frame->loader()->url().path()))
         return new MediaDocument(this, frame);
     // Everything else except text/plain can be overridden by plugins. In particular, Adobe SVG Viewer should be used for SVG, if installed.
     // Disallowing plug-ins to use text/plain prevents plug-ins from hijacking a fundamental type that the browser is expected to handle,

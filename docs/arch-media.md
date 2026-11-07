@@ -227,6 +227,13 @@ FNV-1a 哈希 + 原扩展名，完成后旁边多一个 `<名>.complete` 标记�
 - 判定在 `FrameLoaderClientMC::canShowMIMEType()`：`MIMETypeRegistry::isSupportedMediaMIMEType()`
   对 `audio/*`、`video/*`（加 `application/ogg`、HLS 的 `application/vnd.apple.mpegurl`）返回真，
   于是策略是 `PolicyUse` 而不是 `PolicyDownload`（`Content-Disposition: attachment` 仍然优先）。
+- **MIME 类型会撒谎**：CDN/文件服务器常把 `.mp4` 标成 `application/octet-stream`（或干脆不发）。
+  这时**按扩展名**判定（`MIMETypeRegistry::isMediaPathExtension()`：
+  mp4/m4v/m4a/mov/webm/mkv/ogv/ogg/oga/mp3/aac/wav/flac/opus/mpd），策略仍是 `PolicyUse`，
+  `DOMImplementation::createDocument()` 也据此建 `MediaDocument`，`<audio>`/`<video>`
+  由扩展名决定 —— 与 Chrome 一致（它也是扩展名兜底）。
+  复测用 `tools/media_mime_server.py`：`/octet/` 发 `application/octet-stream`，
+  `/none/` 不发 Content-Type，`/ok/` 是正常对照。
 - `DOMImplementation::createDocument()` 遇到媒体类型返回 `MediaDocument`；它的 tokenizer
   `wantsRawData()`，把字节全部丢弃（不解析二进制），第一个字节到达时建结构：
   ```
@@ -313,6 +320,10 @@ pwsh -File tools\run_media_real_tests.ps1
 
 ```powershell
 $page='tools\pages\cap_media_real.html'
+# MIME 撒谎也要能播（扩展名兜底）；另起一个终端跑服务器
+python tools\media_mime_server.py --root debug/media --port 8731
+build-zig-native\agave_shell.exe --probe "http://127.0.0.1:8731/octet/clip640x360.mp4" `
+  --wait 2500 --eval "var v=document.querySelector('video'); probeExit(v.tagName+' '+v.currentTime.toFixed(2))" --settle 4000
 # 本地视频：play/pause/seek/resume
 build-zig-native\agave_shell.exe --probe "$page`?src=../../debug/media/clip640x360.mp4" `
   --eval-file tools\pages\cap_media_real_state.js --wait 1200 --settle 6000

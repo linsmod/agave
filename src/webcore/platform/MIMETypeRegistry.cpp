@@ -138,6 +138,30 @@ bool MIMETypeRegistry::isSupportedMediaMIMEType(const String& mimeType)
         || mimeType == "application/ogg" || mimeType == "application/vnd.apple.mpegurl";
 }
 
+bool MIMETypeRegistry::isMediaPathExtension(const String& path)
+{
+    static const char* const extensions[] = {
+        "mp4", "m4v", "m4a", "mov", "webm", "mkv", "ogv", "ogg", "oga",
+        "mp3", "aac", "wav", "flac", "opus", "mpd"
+    };
+
+    int dot = path.reverseFind('.');
+
+    if (dot < 0 || dot + 1 >= (int)path.length())
+        return false;
+
+    {
+        String extension = path.substring(dot + 1).lower();
+
+        for (size_t i = 0; i < sizeof(extensions) / sizeof(extensions[0]); ++i) {
+            if (extension == extensions[i])
+                return true;
+        }
+    }
+
+    return false;
+}
+
 bool MIMETypeRegistry::isJavaAppletMIMEType(const String& mimeType)
 {
     // Since this set is very limited and is likely to remain so we won't bother with the overhead
