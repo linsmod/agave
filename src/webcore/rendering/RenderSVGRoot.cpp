@@ -121,9 +121,13 @@ void RenderSVGRoot::applyContentTransforms(PaintInfo& paintInfo, int parentX, in
     paintInfo.context->concatCTM(AffineTransform().scale(svg->currentScale()));
 
     if (!viewport().isEmpty()) {
-        if (style()->overflowX() != OVISIBLE)
-            paintInfo.context->clip(enclosingIntRect(viewport())); // FIXME: Eventually we'll want float-precision clipping
-        
+        if (style()->overflowX() != OVISIBLE) {
+            // Clip to the *renderer* box (layout px, page zoom already applied),
+            // not to viewport() (SVG user units): at zoom != 100% they differ and
+            // the content got clipped/shrunk while the box stayed zoomed.
+            paintInfo.context->clip(IntRect(0, 0, width(), height()));
+        }
+
         paintInfo.context->concatCTM(AffineTransform().translate(viewport().x(), viewport().y()));
     }
 

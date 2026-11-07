@@ -119,3 +119,28 @@ HTML 回归：`debug/imgbox_160.html` 深色占比 **37.8%**（R29 基线 37.7%�
 **探针注意**：本代理环境给子进程的文件写权限只覆盖 `build-zig-native`，`--shot` 输出必须落在那；
 `debug/`、`%TEMP%` 会 `fopen` 失败（exit 4，日志 `shot failed`）。
 
+## 阶段 B（前置）：JS 创建的 inline SVG 已渲染（2026-11-08）
+
+DeepSeek 登录页（`https://chat.deepseek.com/sign_in`）的 logo 不是静态 `<svg>` 标记，而是 React 用
+`document.createElementNS('http://www.w3.org/2000/svg', 'svg')` 建的：DOM 侧本来就正确
+（`namespaceURI` = SVG、11 个 `path`、`getBoundingClientRect()` = 182×28），但不显示。
+
+定位过程与结论：
+
+1. 布局/绘制日志显示 SVG 根**有 layout（w=182 h=28, viewport=182×29）但从未进入 `paint`**；
+   它的祖先链是 `RenderBlock → FlexibleBox(0×0) → FlexibleBox(576×40) → 相对定位 FlexibleBox[L](1100×0) → FlexibleBox[L]`。
+   父级块在 `RenderBlock::paintChildren` 里没有被遍历到（整段 flex 子树的绘制被跳过）。
+2. 修复：`RenderSVGRoot::requiresLayer()` 强制为 true。SVG 根拥有自己的图层后，由 layer 树独立绘制，
+   不再依赖可能被跳过的父块绘制链。验证：`paint` 正常进入（phase 0/2/3/4/6/7），logo 画出。
+3. 裁剪修正：`RenderSVGRoot::paint` 里 overflow 裁剪原用 `viewport()`（SVG 用户单位 182×29），
+   页面缩放时渲染盒是 227×35，两者不一致；改为按渲染盒 `IntRect(0,0,width(),height())`（布局 px）。
+
+验收：DeepSeek 登录页 830/1100 宽都能完整显示 logo（蓝色像素 13692）；`debug/svg_shapes.svg` 仍
+红 4800/绿 2804/蓝 1200/黑 420；`debug/svg_inline_js.html` 红 3200；`imgbox_160` 深色 37.8%。
+
+已知仍未解决：
+
+- **HTML 静态标记里的 `<svg>`** 仍不渲染（HTMLParser 没有外来内容解析，见阶段 B2）；
+- **页面缩放 ≠100%** 时 inline SVG 内容相对盒子有偏移（125% 实测盒子 227×35、内容仍按 182×29 的用户
+  单位变换），需要把 zoom 统一到 viewport/CTM 计算；
+

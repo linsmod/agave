@@ -61,7 +61,11 @@ public:
     FloatRect viewport() const;
 
     virtual bool nodeAtPoint(const HitTestRequest&, HitTestResult&, int x, int y, int tx, int ty, HitTestAction);
-    
+
+    // 内联 SVG（HTML 里的 <svg>）常被放在 flex/层叠容器里；父块的绘制遍历
+    // 可能整段跳过。给 SVG 根自己的图层，layer 树会独立绘制它（见 P1-y）。
+    virtual bool requiresLayer() { return true; }
+
 private:
     void calcViewport(); 
     void applyContentTransforms(PaintInfo&, int parentX, int parentY);

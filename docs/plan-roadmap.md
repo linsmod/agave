@@ -263,11 +263,19 @@
   `PathTraversalState`/`ImageBuffer` 等缺失实现。**SVG 文档**能渲染 rect/circle/path 的 fill/stroke：
   `debug/svg_shapes.svg` 探针像素验收 红 4800（80×60）/绿 2804（≈π·30²）/蓝 1200（40×30/2）/黑 420；
   HTML 回归 `imgbox_160` 深色占比 37.8%（R29 基线 37.7%）。
+- 已完成 B1（2026-11-08）：**JS 创建的 inline SVG 能渲染**。DeepSeek 登录页 logo（React 用
+  `createElementNS` 建的 `<svg>`，182×29 / 11 个 `<path>`）在 830、1100 宽下均能画出（探针蓝色像素
+  13692）。根因：SVG 根在 flex/零高度图层里被父块的绘制遍历整段跳过，`RenderSVGRoot::requiresLayer()`
+  给 SVG 根自己的图层后由 layer 树独立绘制；同时把 overflow 裁剪改成按**渲染盒**（布局 px，含页面缩放）
+  而不是按 SVG 用户单位 `viewport()`。回归：`debug/svg_shapes.svg` 红 4800/绿 2804/蓝 1200/黑 420 不变，
+  `debug/svg_inline_js.html` 红 3200，`imgbox_160` 深色 37.8%。
 - 待办（按顺序）：
-  1. 阶段 B：HTMLParser 外来内容（HTML 里的 `<svg>`）。验收：`debug/svg_inline.html` 渲染出红矩形
-     （当前 0 像素，解析器把它当普通未知元素）。
+  1. 阶段 B2：HTMLParser 外来内容（HTML **静态标记**里的 `<svg>`，React 动态建树已可用）。
+     验收：`debug/svg_inline.html` 渲染出红矩形（当前 0 像素，解析器把它当普通未知元素）。
   2. 阶段 C：`SVGImage`（`<img src=*.svg>`、CSS `url(*.svg)` 背景）。验收：`debug/svg_img.html`
      （当前 0 像素）。可复用新增的 picasso `ImageBuffer`。
+  3. 页面缩放（≠100%）下 inline SVG 的偏移：125% 时 SVG 内容相对盒子整体偏移/被裁（盒子 rect 227×35，
+     内容仍按 182×29 的用户单位变换）。需要把 zoom 统一到 SVG 的 viewport/CTM 计算里。
   3. 渐变真渲染：`SVGPaintServerGradient::draw` 接 `ps_gradient_create_linear/radial`（含
      objectBoundingBox 变换），替换现在的“首停靠色”降级。
   4. marker / clipPath / mask / pattern / filter：marker 不画、mask 不应用、clipPath 只逐子路径
