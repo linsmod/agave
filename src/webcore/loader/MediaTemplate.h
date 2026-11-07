@@ -23,38 +23,38 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef MediaDocument_h
-#define MediaDocument_h
+#ifndef MediaTemplate_h
+#define MediaTemplate_h
 
-#include "HTMLDocument.h"
+#include "PlatformString.h"
+
+class KURL;
 
 namespace WebCore {
 
-class DOMImplementation;
+class Frame;
 
-/* Top-level navigation to an audio/video resource: instead of downloading
- * the file, the browser shows it the way Chrome does - a document with a
- * single <video controls autoplay> (or <audio>) element pointing at the URL,
- * on a black background.
+/* A top-level navigation to a media resource is not a document load: the frame
+ * gets a locally generated page - about:blank plus one <video|audio src=URL> -
+ * and the element fetches the media itself, exactly once.
  *
- * The element loads the resource itself through the media layer, so this
- * document never parses the bytes: the tokenizer throws them away (the same
- * shape as ImageDocument / PluginDocument). */
-class MediaDocument : public HTMLDocument {
-public:
-    MediaDocument(DOMImplementation*, Frame*);
+ * This is the "replace" load (SubstituteData): the pending navigation is
+ * dropped before its body is read, so the media is never downloaded twice. The
+ * page itself is the same template Chrome synthesises for `:-webkit-full-page-media`.
+ * See docs/arch-media.md section 7.2. */
+namespace MediaTemplate {
 
-    virtual bool isMediaDocument() const { return true; }
-    virtual Tokenizer* createTokenizer();
+/* The template as HTML text (title = file name, controls + autoplay). */
+String html(const KURL&, bool isAudio);
 
-    /* Builds <html><body><video|audio controls autoplay src=URL>. Called by
-     * the tokenizer on the first byte (the bytes themselves are discarded). */
-    void createDocumentStructure();
+/* Replaces `frame`'s current navigation with the template. */
+void load(Frame*, const KURL&, bool isAudio);
 
-private:
-    bool m_createdStructure;
-};
+/* True when the URL's last path component names an audio file. */
+bool urlLooksLikeAudio(const KURL&);
+
+} // namespace MediaTemplate
 
 } // namespace WebCore
 
-#endif // MediaDocument_h
+#endif // MediaTemplate_h

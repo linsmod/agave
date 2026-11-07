@@ -107,10 +107,18 @@ HTMLMediaElement::HTMLMediaElement(const QualifiedName& tagName, Document* doc)
     , m_poster(0)
     , m_frame(0)
 {
+    if (Document* doc = document())
+        doc->registerMediaElement(this);
 }
 
 HTMLMediaElement::~HTMLMediaElement()
 {
+    if (getenv("AGB_MEDIA_DEBUG"))
+        fprintf(stderr, "[media] element destroyed src=%s\n", m_currentSrc.utf8().data());
+
+    if (Document* doc = document())
+        doc->unregisterMediaElement(this);
+
     stopTimers();
     stopPipeline();
 
@@ -632,6 +640,19 @@ void HTMLMediaElement::pause()
         m_pipeline->setPaused(true);
 
     DISPATCH_MEDIA_EVENT("pause");
+}
+
+void HTMLMediaElement::stopForDocumentTeardown()
+{
+    /* No events: the page is going away and listeners are being torn down too.
+     * The decoder processes and the waveOut device must die here - the element
+     * destructor can come much later (the node may still be referenced by JS
+     * wrappers or a pending load). */
+    m_paused = true;
+    stopTimers();
+    stopPipeline();
+
+    m_readyState = HAVE_NOTHING;
 }
 
 void HTMLMediaElement::tickTimerFired(Timer<HTMLMediaElement>*)

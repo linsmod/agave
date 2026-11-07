@@ -143,6 +143,49 @@ $ended = (Probe -Query ("$pages\cap_media_real.html?src=../../debug/media/clip64
                 -Script "$pages\cap_media_real_end.js").Exit
 Check 'ended transition' $ended { param($t) $t -match 'ended=1 paused=1 ct=5\.000' } 'ended=1 paused=1 ct=5.000'
 
+# Lifecycle: a playing element owns decoder processes. Reloading the page (which
+# detaches the old document but may keep its nodes alive) must stop them -
+# before Document::stopMediaElements() existed the old decoders kept running and
+# the count doubled on every reload.
+Write-Host '== lifecycle: reload stops the decoders'
+
+function Count-Decoders {
+    param([string]$Needle)
+
+    @(Get-CimInstance Win32_Process -Filter "Name='ffmpeg.exe'" -ErrorAction SilentlyContinue |
+      Where-Object { $_.CommandLine -and $_.CommandLine.Contains($Needle) }).Count
+}
+
+Get-CimInstance Win32_Process -Filter "Name='ffmpeg.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -and $_.CommandLine.Contains('clip640x360.mp4') } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+
+$life = Start-Process -FilePath $shell -PassThru -WindowStyle Hidden `
+    -ArgumentList '--probe', ($pages + '\cap_media_real.html?src=../../debug/media/clip640x360.mp4'), `
+                   '--wait', '1200', '--eval', 'document.getElementById("v").play()', `
+                   '--reload-every', '2000', '--reload-count', '1', '--settle', '6000'
+
+Start-Sleep -Milliseconds 1500
+$before = Count-Decoders 'clip640x360.mp4'
+Start-Sleep -Milliseconds 2200
+$after = Count-Decoders 'clip640x360.mp4'
+Wait-Process -Id $life.Id -Timeout 25 -ErrorAction SilentlyContinue
+
+# ffmpeg dies when the decoder pipe closes, but that is a process teardown on
+# the child side: give it a moment before calling it a leak.
+$deadline = (Get-Date).AddSeconds(4)
+do {
+    Start-Sleep -Milliseconds 200
+    $gone = Count-Decoders 'clip640x360.mp4'
+} while (($gone -ne 0) -and ((Get-Date) -lt $deadline))
+
+Check 'decoder runs while playing' "count=$before" { param($t) $t -match 'count=[1-9]' } 'at least one ffmpeg'
+Check 'reload does not stack decoders' "count=$after" {
+    param($t)
+    ($t -match 'count=(\d+)') -and ([int]$Matches[1] -le 2)   # one pipeline = shim + real binary
+} 'no more than one pipeline after reload'
+Check 'no decoders after the view closes' "count=$gone" { param($t) $t -eq 'count=0' } 'zero ffmpeg'
+
 # --- 2. remote video -------------------------------------------------------
 if ($SkipRemote) {
     Skip 'remote video' 'SkipRemote'

@@ -1555,28 +1555,52 @@ bool CSSStyleSelector::checkOneSelector(CSSSelector* sel, Element* e, bool isAnc
                     return true;
                 break;
             case CSSSelector::PseudoFullPageMedia: {
-                /* Chrome's rule for a bare audio/video document: the body of
-                 * the media document and the single media element inside it
-                 * (not a page that merely embeds media). */
+                /* Chrome's rule for a bare audio/video document: the body and
+                 * the single media element inside it. That is the template
+                 * MediaTemplate loads (about:blank + <video|audio src=URL>), so
+                 * the body holds exactly one element, it is a video/audio, and
+                 * its src is the document's own URL. */
                 Document* doc = e->document();
 
-                if (!doc || !doc->isMediaDocument())
+                if (!doc)
                     break;
 
-                if (e->hasTagName(bodyTag))
-                    return true;
-
                 {
-                    Node* parent = e->parentNode();
+                    Element* body = doc->body();
 
-                    if (!parent || !parent->isElementNode() || !parent->hasTagName(bodyTag))
+                    if (!body)
                         break;
 
-                    if (parent->firstChild() != e || e->nextSibling())
-                        break;
+                    {
+                        Node* child = body->firstChild();
+                        Element* media = 0;
+                        bool several = false;
 
-                    if (e->hasTagName(videoTag) || e->hasTagName(audioTag))
-                        return true;
+                        while (child) {
+                            if (child->isElementNode()) {
+                                if (media) {
+                                    several = true;   /* more than one element */
+                                    break;
+                                }
+                                media = static_cast<Element*>(child);
+                            }
+                            child = child->nextSibling();
+                        }
+
+                        if (!media || several)
+                            break;   /* zero or several elements */
+
+                        if (!media->hasTagName(videoTag) && !media->hasTagName(audioTag))
+                            break;
+
+                        /* The element plays the document itself (not some
+                         * embedded clip): that is what makes it full page. */
+                        if (doc->completeURL(media->getAttribute(srcAttr)) != doc->URL())
+                            break;
+
+                        if (e == body || e == media)
+                            return true;
+                    }
                 }
 
                 break;

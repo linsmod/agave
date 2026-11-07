@@ -61,6 +61,7 @@
 #include "HTMLImageLoader.h"
 #include "HTMLInputElement.h"
 #include "HTMLLinkElement.h"
+#include "HTMLMediaElement.h"
 #include "HTMLMapElement.h"
 #include "HTMLNameCollection.h"
 #include "HTMLNames.h"
@@ -1202,6 +1203,12 @@ void Document::detach()
 
     RenderObject* render = renderer();
 
+    /* The document is going away (reload, navigation, teardown). Media
+     * elements own decoder processes and an audio device, and the nodes
+     * themselves can outlive the detach (JS wrappers, pending loads), so stop
+     * playback here instead of waiting for their destructors. */
+    stopMediaElements();
+
     // indicate destruction mode,  i.e. attached() but renderer == 0
     setRenderer(0);
     
@@ -1229,6 +1236,30 @@ void Document::detach()
     }
 }
 
+void Document::registerMediaElement(HTMLMediaElement* element)
+{
+    m_mediaElements.add(element);
+}
+
+void Document::unregisterMediaElement(HTMLMediaElement* element)
+{
+    m_mediaElements.remove(element);
+}
+
+void Document::stopMediaElements()
+{
+    if (m_mediaElements.isEmpty())
+        return;
+
+    /* Copy: stopping an element can re-enter (event listeners) and unregister. */
+    {
+        HashSet<HTMLMediaElement*> elements = m_mediaElements;
+
+        for (HashSet<HTMLMediaElement*>::iterator it = elements.begin(); it != elements.end(); ++it)
+            (*it)->stopForDocumentTeardown();
+    }
+}
+
 void Document::removeAllEventListenersFromAllNodes()
 {
     m_windowEventListeners.clear();
@@ -1241,8 +1272,7 @@ void Document::removeAllEventListenersFromAllNodes()
 }
 
 void Document::registerDisconnectedNodeWithEventListeners(Node* node)
-{
-    m_disconnectedNodesWithEventListeners.add(node);
+{    m_disconnectedNodesWithEventListeners.add(node);
 }
 
 void Document::unregisterDisconnectedNodeWithEventListeners(Node* node)

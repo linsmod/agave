@@ -133,6 +133,11 @@ public:
     void play();
     void pause();
 
+    /* The document that owns this element is being torn down (reload,
+     * navigation, view close): stop the decoders and the audio device now,
+     * even if the node itself is still referenced and will die later. */
+    void stopForDocumentTeardown();
+
     /* True when a real decoder is driving this element (audio through waveOut
      * and/or decoded video frames). Falls back to the simulated ticker when
      * no decoder is available, so pages never see a dead element. */

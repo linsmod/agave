@@ -271,6 +271,12 @@ FNV-1a 哈希 + 原扩展名，完成后旁边多一个 `<名>.complete` 标记�
 
 ## 8. 已知缺口（记录，不在本次修）
 
+- **生命周期**：页面被拆掉时（reload / 导航 / 关标签页）`Document::detach()` 会调
+  `Document::stopMediaElements()`，把该文档里所有还在播的元素停掉（`stopPipeline()` 杀解码进程、
+  关 waveOut）。**不这样做**旧的解码器会一直活着 —— 节点在 detach 之后往往还被 JS wrapper
+  或未完成的加载引用着，元素析构可能拖到进程退出（实测：播放中 reload，ffmpeg 进程数 2 → 4）。
+  回归：`run_media_real_tests.ps1` 的 "lifecycle: reload stops the decoders" 三条。
+
 - **流式没有 Range**：seek 到还没下载的位置时会"等下载追上"（时钟冻结），而不是发
   `Range: bytes=` 只取那一段；媒体文档更是整段由文档加载一次、元素再拉一次。
 - **流式重启要等 512 KB**：网络慢时每轮等于一次缓冲（时钟停住），这是"缓冲"而非"跳帧"；

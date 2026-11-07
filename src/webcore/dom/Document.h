@@ -67,6 +67,7 @@ namespace WebCore {
     class HTMLFormElement;
     class HTMLHeadElement;
     class HTMLImageLoader;
+    class HTMLMediaElement;
     class HTMLInputElement;
     class HTMLMapElement;
     class IntPoint;
@@ -255,7 +256,6 @@ public:
     virtual bool isSVGDocument() const { return false; }
 #endif
     virtual bool isPluginDocument() const { return false; }
-    virtual bool isMediaDocument() const { return false; }
     
     CSSStyleSelector* styleSelector() const { return m_styleSelector; }
 
@@ -345,6 +345,14 @@ public:
     void setStateForNewFormElements(const Vector<String>&);
     bool hasStateForNewFormElements() const;
     bool takeStateForFormElement(AtomicStringImpl* name, AtomicStringImpl* type, String& state);
+
+    /* A playing media element owns decoder processes and the audio device, so
+     * it must not outlive the document: detaching the document (reload,
+     * navigation, view close) stops them, even when the nodes themselves are
+     * still referenced. See docs/arch-media.md §8. */
+    void registerMediaElement(HTMLMediaElement*);
+    void unregisterMediaElement(HTMLMediaElement*);
+    void stopMediaElements();
 
     FrameView* view() const; // can be NULL
     Frame* frame() const { return m_frame; } // can be NULL
@@ -810,6 +818,8 @@ private:
     typedef HashMap<FormElementKey, Vector<String>, FormElementKeyHash, FormElementKeyHashTraits> FormElementStateMap;
     ListHashSet<HTMLFormControlElementWithState*> m_formElementsWithState;
     FormElementStateMap m_stateForNewFormElements;
+
+    HashSet<HTMLMediaElement*> m_mediaElements;
 
     HashSet<Element*> m_didRestorePageCallbackSet;
     

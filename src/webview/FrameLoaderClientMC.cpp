@@ -23,6 +23,7 @@
 #include "HTMLInputElement.h"
 #include "HTMLFrameOwnerElement.h"
 #include "HTMLNames.h"
+#include "MediaTemplate.h"
 #include "MIMETypeRegistry.h"
 #include "ResourceResponse.h"
 #include "Page.h"
@@ -160,6 +161,26 @@ void FrameLoaderClientMC::dispatchDecidePolicyForMIMEType(FramePolicyFunction po
     PolicyAction policy = PolicyUse;
     DocumentLoader* loader = m_frame->loader()->activeDocumentLoader();
     const ResourceResponse* response = loader ? &loader->response() : 0;
+    bool isMedia = MIMETypeRegistry::isSupportedMediaMIMEType(MIMEType)
+                || MIMETypeRegistry::isMediaPathExtension(request.url().path());
+
+    /* A top-level navigation to a media resource is not a document load at
+     * all: like about:blank, the frame gets a locally generated page - blank
+     * plus one <video|audio src=URL> - and the element fetches the media
+     * itself, once. The response is dropped here, before any body byte is
+     * read, so nothing is downloaded twice. */
+    if (isMedia && response && !isAttachmentResponse(*response)) {
+        KURL url = request.url();
+        bool isAudio = MIMEType.startsWith("audio/", false)
+                    || MediaTemplate::urlLooksLikeAudio(url);
+
+        agbLog(AGB_LOG_NAV, "media template replaces the load url=%s type=%s",
+               url.url().utf8().data(), MIMEType.isEmpty() ? "(none)" : MIMEType.utf8().data());
+
+        (m_frame->loader()->*policyFunction)(PolicyIgnore);
+        MediaTemplate::load(m_frame, url, isAudio);
+        return;
+    }
 
     if (response && isAttachmentResponse(*response))
         policy = PolicyDownload;
