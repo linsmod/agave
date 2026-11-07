@@ -60,6 +60,12 @@ protected:
 
     bool m_flexingChildren : 1;
     bool m_stretchingChildren : 1;
+    /* The height calcHeight() resolved for this box before the flex layout
+     * zeroes m_height (spec percentage/specified heights). The cross-axis
+     * placement needs it: line stretch and align-items centering work against
+     * the container's used height, which is computed after the lines are
+     * placed. 0 when nothing was resolved. */
+    int m_preFlexHeight;
 };
 
 } // namespace WebCore

@@ -51,11 +51,11 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
   target_compile_options(picasso2_sw PRIVATE -fno-sanitize=alignment -fno-sanitize=undefined)
 endif()
 
-# Everything in this project includes <picasso/picasso.h> and gets it from
-# ${PROJ_OUT}/include, which is what the ExternalProject's install step used to
-# populate. Keep the same layout without an install step.
-file(GLOB PICASSO_PUBLIC_HEADERS "${PICASSO_SOURCE}/include/*.h")
-file(COPY ${PICASSO_PUBLIC_HEADERS} DESTINATION "${PROJ_OUT}/include/picasso")
+# Everything in this project includes <picasso/picasso.h>. Point straight at
+# the vendored include tree (3rdparty/picasso/include/picasso.h matches the
+# <picasso/picasso.h> path through the parent directory): a configure-time
+# file(COPY) used to publish headers into ${PROJ_OUT}/include and went stale
+# after header edits until the next full reconfigure rebuilt silently against
+# the old header.
+include_directories(${PICASSO_SOURCE}/include)
 
-include_directories(${PROJ_OUT}/include)
-link_directories(${PROJ_OUT}/lib)

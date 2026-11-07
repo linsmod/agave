@@ -103,7 +103,7 @@ private:
 };
     
 RenderFlexibleBox::RenderFlexibleBox(Node* node)
-:RenderBlock(node)
+:RenderBlock(node), m_preFlexHeight(0)
 {
     setChildrenInline(false); // All of our children must be block-level
     m_flexingChildren = m_stretchingChildren = false;
@@ -236,6 +236,15 @@ void RenderFlexibleBox::layoutBlock(bool relayoutChildren)
         (parent()->isFlexibleBox() && parent()->style()->boxOrient() == HORIZONTAL &&
          parent()->style()->boxAlign() == BSTRETCH))
         relayoutChildren = true;
+
+    /* Cross-axis placement runs below, after `m_height` is zeroed for the
+     * flex pass. Keep the resolved height (any specified/percentage height
+     * calcHeight() just set): align-content:stretch and align-items centering
+     * must align inside the container's used height, not inside a line of
+     * max(item heights) - the guide bubble text in Baidu's chat input was
+     * top-aligned inside a 38px box because the 20px line was never stretched
+     * to the 38px container. */
+    m_preFlexHeight = m_height;
 
     m_height = 0;
     m_overflowHeight = 0;
@@ -569,6 +578,19 @@ void RenderFlexibleBox::layoutFlexLines(bool wrap, bool relayoutChildren)
     m_flexingChildren = true;
     for (unsigned i = 0; i < items.size(); ++i) {
         RenderObject* child = items[i].child;
+
+        /* The hypothetical main size is the flex base size clamped by the
+         * item's min/max main size - for every item, frozen ones included.
+         * A non-growing item (flex-grow: 0) is frozen above, and frozen items
+         * skip the clamp inside the resolution pass, so `flex: 0 1 0%` with a
+         * min-width:auto stayed at a 0 base instead of the min-content floor
+         * (Baidu's chat-input guide bubble measured 402px in Chrome, 0 here). */
+        int clamped = max(items[i].minContent, min(items[i].contentWidth, items[i].maxContent));
+        if (clamped != items[i].contentWidth) {
+            items[i].contentWidth = clamped;
+            items[i].outerWidth = clamped + items[i].extraWidth;
+        }
+
         int borderBox = items[i].contentWidth + child->borderLeft() + child->borderRight()
                       + child->paddingLeft() + child->paddingRight();
 
@@ -631,11 +653,17 @@ void RenderFlexibleBox::layoutFlexLines(bool wrap, bool relayoutChildren)
     for (int l = 0; l < lineCount; ++l)
         totalHeight += lineHeights[l] + (l > 0 ? rowGap : 0);
 
-    /* m_height still holds the previous layout's result here; a specified
-     * height is the authority for align-content. */
+    /* A specified height is the authority for align-content. A percentage
+     * height (or one the old percentage resolver already resolved) arrives
+     * through m_preFlexHeight - layoutBlock zeroed m_height for the flex
+     * pass, so height() alone here was always 0 and `align-content: normal`
+     * (= stretch for one line) never stretched the line: items centered
+     * inside max(item heights) instead of the container (Baidu guide bubble). */
     int containerHeight = style()->height().isFixed()
         ? style()->height().value()
-        : height() - borderTop() - borderBottom() - paddingTop() - paddingBottom();
+        : (m_preFlexHeight > 0
+              ? max(0, m_preFlexHeight - borderTop() - borderBottom() - paddingTop() - paddingBottom())
+              : height() - borderTop() - borderBottom() - paddingTop() - paddingBottom());
     int lineGap = rowGap;
     int alignOffset = 0;
 

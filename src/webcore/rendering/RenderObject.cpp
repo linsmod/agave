@@ -2720,10 +2720,33 @@ short RenderObject::getVerticalPosition(bool firstLine) const
             vpos += fontsize / 5 + 1;
         else if (va == SUPER)
             vpos -= fontsize / 3 + 1;
-        else if (va == TEXT_TOP)
+        else if (va == TEXT_TOP) {
+            /* CSS: text-top aligns the top of the box to the top of the
+             * parent's CONTENT area (the font box), not to the line box top -
+             * the half-leading between the line height and the font box is
+             * skipped on top. Without the offset a text-top icon sat half a
+             * leading higher than its neighbour inline content (Baidu's
+             * hot-search title icon vs the arrow next to it). */
+            int parentLH = parent()->lineHeight(firstLine);
+            int halfLead = (parentLH - (f.ascent() + f.descent())) / 2;
+            if (halfLead > 0)
+                vpos += halfLead;
             vpos += baselinePosition(firstLine) - f.ascent();
-        else if (va == MIDDLE)
-            vpos += -static_cast<int>(f.xHeight() / 2) - lineHeight(firstLine) / 2 + baselinePosition(firstLine);
+        }
+        else if (va == MIDDLE) {
+            /* CSS 2.1 §10.8.1: middle aligns the box so that its CENTER sits
+             * half the parent x-height above the parent baseline. For
+             * replaced / inline-block content the relevant own size is the
+             * visual box height: lineHeight() here returns the inherited
+             * font line spacing (e.g. a 36px line on a 18px icon), which
+             * pushed icons several px above their Chrome position. */
+            int ownHalf;
+            if (isReplaced() || isInlineBlockOrInlineTable())
+                ownHalf = (height() + marginTop() + marginBottom()) / 2;
+            else
+                ownHalf = lineHeight(firstLine) / 2;
+            vpos += -static_cast<int>(f.xHeight() / 2) - ownHalf + baselinePosition(firstLine);
+        }
         else if (va == TEXT_BOTTOM) {
             vpos += f.descent();
             if (!isReplaced())

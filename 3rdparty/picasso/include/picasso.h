@@ -2416,6 +2416,23 @@ PEXPORT ps_bool PICAPI ps_get_path_from_glyph(ps_context* ctx,
  */
 PEXPORT ps_bool PICAPI ps_glyph_get_extent(const ps_glyph* glyph, ps_size* rsize);
 
+/**
+ * \fn ps_bool ps_glyph_get_ink_bounds(const ps_glyph* glyph, ps_rect* rrect)
+ * \brief Get the ink (rendered pixel) bounds of a glyph object.
+ *
+ * \param glyph  Pointer to an existing glyph object.
+ * \param rrect  Pointer to a buffer to receiving the ink bounds.
+ *
+ * \return  True if is success, otherwise False.
+ *
+ * \note Unlike ps_glyph_get_extent, which reports the advance height (the
+ * full font box), this reports the actual rendered ink box of the glyph -
+ * what "vertical-align: middle" and font x-height math need.
+ *
+ * \sa ps_glyph_get_extent
+ */
+PEXPORT ps_bool PICAPI ps_glyph_get_ink_bounds(const ps_glyph* glyph, ps_rect* rrect);
+
 /** @} end of text functions*/
 
 /**

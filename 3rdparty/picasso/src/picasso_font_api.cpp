@@ -675,6 +675,29 @@ ps_bool PICAPI ps_glyph_get_extent(const ps_glyph* g, ps_size* rsize)
     return True;
 }
 
+ps_bool PICAPI ps_glyph_get_ink_bounds(const ps_glyph* g, ps_rect* rrect)
+{
+    if (!picasso::is_valid_system_device()) {
+        global_status = STATUS_DEVICE_ERROR;
+        return False;
+    }
+
+    if (!g || !rrect) {
+        global_status = STATUS_INVALID_ARGUMENT;
+        return False;
+    }
+
+    if (g->glyph) {
+        const picasso::glyph* gp = reinterpret_cast<const picasso::glyph*>(g->glyph);
+        rrect->x = SCALAR_TO_FLT(gp->bounds.x1);
+        rrect->y = SCALAR_TO_FLT(gp->bounds.y1);
+        rrect->w = SCALAR_TO_FLT(gp->bounds.x2 - gp->bounds.x1);
+        rrect->h = SCALAR_TO_FLT(gp->bounds.y2 - gp->bounds.y1);
+        return True;
+    }
+    return False;
+}
+
 ps_bool PICAPI ps_get_font_info(ps_context* ctx, ps_font_info* info)
 {
     if (!picasso::is_valid_system_device()) {

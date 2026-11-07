@@ -21,23 +21,34 @@ namespace WebCore
 extern ps_context* getGlobalContext(void);
 
 void FontData::platformInit()
-{    
+{
 	ps_font_info info;
 	ps_font* f = ps_set_font(getGlobalContext(), m_font.hfont());
 	ps_get_font_info(getGlobalContext(), &info);
     m_ascent = info.ascent;
     m_descent = info.descent;
-    
+
+    /* x-height from the ink box of lowercase "x". ps_get_text_extent().h is
+     * NOT text-dependent (the API reports the font's box height), which made
+     * Font::xHeight() return the full box (20px on a 14px font) and pushed
+     * every vertical-align:middle icon too far up (Baidu hot-search rows). */
+    ps_glyph g;
     ps_size size;
-	ps_get_text_extent(getGlobalContext(), "x", 1, &size);
-    m_xHeight = size.h;
-    
+    if (ps_get_glyph(getGlobalContext(), 'x', &g)) {
+        ps_rect ink = {0, 0, 0, 0};
+        if (ps_glyph_get_ink_bounds(&g, &ink) && ink.h > 0)
+            m_xHeight = ink.h;
+        else
+            m_xHeight = info.ascent * 0.5f;   /* sane fallback */
+    } else
+        m_xHeight = info.ascent * 0.5f;
+
 	ps_get_text_extent(getGlobalContext(), " ", 1, &size);
     m_spaceWidth = size.w;
 
     m_lineGap = info.leading;
     m_unitsPerEm = info.unitsEM;
-    m_lineSpacing = info.ascent+info.descent+m_lineGap; 
+    m_lineSpacing = info.ascent+info.descent+m_lineGap;
 	ps_set_font(getGlobalContext(), f);
 }
 
