@@ -60,7 +60,7 @@ UI 线程只负责窗口/消息循环；引擎线程、命令队列和回调线�
 | Ctrl+D | 加书签（存 `<数据目录>\bookmarks.txt`） |
 | `=` 按钮 / 菜单 | 书签、历史、缩放、注入调试脚本 |
 | 右键菜单 → 注入 vConsole | 从 exe 同目录读 `vconsole.min.js` 注入当前页（默认注入目标） |
-| 右键菜单 → 注入 inspector.js | 从 exe 同目录读 `inspector.js` 注入当前页：hover 高亮元素 + 半透明信息浮层 |
+| 右键菜单 → 注入 inspector.js | 从 exe 同目录读 `inspector.js` 注入当前页：hover 高亮元素 + 信息浮层；在页面上再右键出页内菜单，可复制元素信息（JSON）/选择器/尺寸/文本/HTML |
 | 探针 `--inject <name\|path>` | `--probe` 时在 `--eval` 之前注入（`inspector` / `vconsole` / 文件路径） |
 | Ctrl+= / Ctrl+- / Ctrl+0 | 放大 / 缩小 / 重置（25% 步进，状态栏显示百分比） |
 | 会话恢复 | 退出时把打开的标签写 `session.txt`，下次无参启动自动恢复 |
@@ -84,10 +84,40 @@ UI 线程只负责窗口/消息循环；引擎线程、命令队列和回调线�
   **拼在同一个 eval 的末尾**（`injectScriptAsset` 的 `suffix`），注册与实例化之间
   不依赖命令队列的时序。
 
-`inspector.js` 的行为：hover 时在 `<html>` 下放一个绝对定位的框 + 半透明信息浮层
-（`z-index` 最大），**不参与文档流**；Esc 退出；再次注入等于关闭。它靠
-`elementFromPoint` 命中元素，命中前把自己的浮层 `display:none`（本引擎的 HTML
-不认 `pointer-events`，否则浮层会挡住 hover）。
+`inspector.js` 的行为：
+
+- hover 时在 `<html>` 下放一个绝对定位的框 + 半透明信息浮层（`z-index` 最大），
+  **不参与文档流**；Esc 退出（菜单开着时先关菜单）；再次注入等于关闭。
+- 它靠 `elementFromPoint` 命中元素，命中前把自己的浮层 `display:none`
+  （本引擎的 HTML 不认 `pointer-events`，否则浮层会挡住 hover）。
+- **页内右键菜单**（不是 Win32 菜单）：右键先 `preventDefault`，引擎的默认 handler
+  被跳过，所以外壳的原生右键菜单不会同时弹出（`[probe] context menu at …` 不会出现）。
+  菜单项：`Copy element info`、`Copy selector`、`Copy bounds`、`Copy text`、
+  `Copy HTML`、`Select parent`、`Exit inspector`；↑/↓ + Enter 也能选。
+- `Copy element info` 是一行 JSON，用来把"是哪个元素、放在哪儿"交给别人（或 agent）：
+
+  ```json
+  {"kind":"agave-element","version":1,
+   "page":{"url":"https://example.com/","title":"…",
+           "viewport":{"width":1100,"height":800},"scroll":{"x":0,"y":100}},
+   "element":{"tag":"div","id":"target","class":"","selector":"div#target",
+              "text":"target","outerHTML":"<div …>target</div>","inViewport":true,
+              "viewportRect":{"left":100,"top":20,"width":240,"height":80},
+              "documentRect":{"left":100,"top":120,"width":240,"height":80},
+              "style":{"display":"block","position":"absolute","font-size":"14px",…}}}
+  ```
+
+  `viewportRect` 就是 `getBoundingClientRect()`（R82 起是**视口**坐标，截图对得上），
+  `documentRect` 是页面坐标（滚动时不变，布局对得上）；`selector` 是短 CSS 路径。
+- 复制走 `navigator.clipboard.writeText`（prelude polyfill）→ 宿主全局
+  `__agbClipboardSetText` → 控件的 `cb_clipboard_set_data`（`CF_UNICODETEXT`，和
+  Ctrl+C 同一条路）。本引擎没有 `document.execCommand('copy')`。
+- 自动化钩子：`window.__agaveInspector` 暴露 `inspectAt(x,y)` / `menuAt(x,y)` /
+  `menuSelect(label)` / `elementInfo()`；回归
+  `pwsh -File tools/run_inspector_tests.ps1`（进程内断言 + 真实右键/左键，26 项）。
+- 已知限制：监听挂在 `document` 上、按引擎的冒泡顺序执行；如果页面自己在更内层
+  `stopPropagation()` 了 `contextmenu`（自定义右键菜单的站点），页内菜单不会出现
+  （此时原生右键菜单也不会被压低）。
 
 ## 踩过的坑
 

@@ -18,6 +18,9 @@
 #include <map>
 
 #include "AgbLog.h"
+/* cb_clipboard_set_data: the host's Win32 clipboard writer, used by
+ * __agbClipboardSetText (the engine has no document.execCommand('copy')). */
+#include "../../webview/WebCallback.h"
 #include "DownloadEvents.h"
 #include "DownloadManager.h"
 #include "AgbGapJsdom.h"
@@ -638,6 +641,7 @@ int nodeQuerySelector(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, voi
 int globalFrameSlot(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalOpenWindow(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalPostMessage(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int globalClipboardSetText(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalFramePostMessage(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalConsoleLine(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalConsoleLineEx(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
@@ -5503,6 +5507,8 @@ static void installGlobalApi(AntbEngine* engine, AntbValue* global)
         antb_define_method(g_engine, global, "__agbActivateSlot", globalActivateSlot, NULL);
         antb_define_method(g_engine, global, "__agbOpenWindow", globalOpenWindow, NULL);
         antb_define_method(g_engine, global, "__agbPostMessage", globalPostMessage, NULL);
+        /* (text) - write CF_UNICODETEXT; backs navigator.clipboard.writeText. */
+        antb_define_method(g_engine, global, "__agbClipboardSetText", globalClipboardSetText, NULL);
         antb_define_method(g_engine, global, "__agbFramePostMessage", globalFramePostMessage, NULL);
         antb_define_method(g_engine, global, "__agbConsoleLine", globalConsoleLine, NULL);
         antb_define_method(g_engine, global, "__agbConsoleLineEx", globalConsoleLineEx, NULL);
@@ -10020,6 +10026,39 @@ int globalPostMessage(AntbEngine*, AntbValue*, AntbValue** args, int argc,
 
     antb_free(message);
     (void)out;
+    return 1;
+}
+
+/* __agbClipboardSetText(text) -> 1 on success.
+ *
+ * The 2008 editor writes the clipboard through Pasteboard -> the host's
+ * cb_clipboard_set_data, but only from a selection (ctrl+c). A page (or the
+ * injected inspector.js) needs to put an arbitrary string there; without this
+ * the only copy path is document.execCommand('copy'), which this engine does
+ * not implement. Runs on the engine thread, the same thread ctrl+c uses, so
+ * OpenClipboard(NULL) in the control's callback behaves identically. */
+int globalClipboardSetText(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
+                           AntbValue* out, void*)
+{
+    char* text = (argc > 0 && args[0]) ? antb_to_utf8(args[0]) : NULL;
+    int ok = 0;
+
+    if (text && text[0] && MaCross::cb_clipboard_set_data) {
+        MaCross::cb_clipboard_set_data(text, (unsigned int)strlen(text));
+        ok = 1;
+    }
+
+    antb_free(text);
+
+    {
+        AntbValue* v = antb_make_number(engine, ok ? 1.0 : 0.0);
+
+        if (!v)
+            return 0;
+
+        antb_value_assign(out, v);
+        antb_value_release(v);
+    }
     return 1;
 }
 

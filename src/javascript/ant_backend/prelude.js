@@ -53,6 +53,26 @@
     if (!g.navigator.languages) g.navigator.languages = ['zh-CN', 'zh'];
     if (!g.navigator.hardwareConcurrency) g.navigator.hardwareConcurrency = 4;
     if (!g.navigator.maxTouchPoints) g.navigator.maxTouchPoints = 0;
+    /* navigator.clipboard.writeText: "copy to clipboard" buttons on real sites
+     * (and inspector.js) go through this; the host primitive writes the Win32
+     * clipboard from the engine thread, same as ctrl+c. No permission model —
+     * the page can write whenever it wants. */
+    if (typeof g.__agbClipboardSetText === 'function' && !g.navigator.clipboard) {
+      var _agbClipboardResult = function (ok) {
+        if (typeof Promise === 'function')
+          return ok ? Promise.resolve() : Promise.reject(new Error('clipboard write failed'));
+        return { then: function (f) { if (ok && f) f(); return this; },
+                 'catch': function (f) { if (!ok && f) f(); return this; } };
+      };
+      g.navigator.clipboard = {
+        writeText: function (text) {
+          var ok = false;
+          try { ok = !!g.__agbClipboardSetText(text == null ? '' : String(text)); } catch (e) { ok = false; }
+          return _agbClipboardResult(ok);
+        },
+        write: function () { return _agbClipboardResult(false); }
+      };
+    }
   }
   {
     var _origin = g.location && g.location.origin ? g.location.origin : '';

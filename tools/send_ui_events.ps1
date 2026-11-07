@@ -11,6 +11,9 @@ param(
     # left/move/wheel/key sequence. The right-click path is the one that ends in
     # the host's on_context_menu callback, so it needs its own switch.
     [switch]$RightClick,
+    # Post only WM_LBUTTONDOWN/UP at X,Y: in-page UI (menus, buttons) has to be
+    # clicked where it actually is, unlike the fixed left-click below.
+    [switch]$LeftClick,
     [int]$X = 60,
     [int]$Y = 60
 )
@@ -64,6 +67,15 @@ if ($RightClick) {
     Post 0x204 0 $lp                        # right down at X,Y
     Post 0x205 0 $lp                        # right up (this posts AGW_CMD_CONTEXT)
     "posted right click at $X,$Y"
+    exit 0
+}
+
+if ($LeftClick) {
+    $lp = (($Y -shl 16) -bor $X)
+    Post 0x200 0 $lp                        # move there first (hover state)
+    Post 0x201 0 $lp                        # left down at X,Y
+    Post 0x202 0 $lp                        # left up
+    "posted left click at $X,$Y"
     exit 0
 }
 
