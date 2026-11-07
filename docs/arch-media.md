@@ -80,15 +80,23 @@ video, canvas, img { overflow-x: clip; overflow-y: clip; overflow-clip-margin: c
 | `<audio controls>`（空） | `300x54` | `300x54` |
 | `<video width=200 height=100>` | 属性映射成 CSS 宽高 | `200x100` |
 
-落到 agave 的 `html4.css`（手写，不用生成器）：
+落到 agave 的 `html4.css`（手写，不用生成器；**但改完必须重新生成字节数组**：
+`python tools/gen-ua-stylesheets.py`，否则规则不会进二进制，见 hist-lessons R101）：
 
 ```css
 audio:not([controls]) { display: none !important }
 audio { width: 300px; height: 54px }
 video { object-fit: contain }
+video:-webkit-full-page-media, audio:-webkit-full-page-media {
+    position: absolute; top: 0; right: 0; bottom: 0; left: 0;
+    max-height: 100%; max-width: 100%; margin: auto
+}
+body:-webkit-full-page-media { background-color: rgb(0, 0, 0) }
 video, canvas, img { overflow-x: hidden; overflow-y: hidden }
 ```
 
+- 最后两条是 Chrome 的媒体文档样式（§7.2），逐字抄过来的：auto margin + 绝对定位把播放器
+  居中（本引擎的 `calcAbsoluteHorizontal/Vertical` 支持 auto margin 居中），body 规则给黑底。
 - `overflow: clip` 不在 2008 语法里，用 `hidden` 近似（裁剪语义一致，只是可滚动性不同；
   replaced 元素本来没有可滚动内容）。
 - `object-fit` 目前不参与布局，只记录 computed 值（见 §8 缺口）。
@@ -190,21 +198,16 @@ paused:       true --play()--> false --pause()--> true
 （`ffmpeg -v error -ss <t> -i <path> -frames:v 1 -f image2pipe -vcodec png -`），
 在独立线程跑、引擎线程 `pollFrame()` 取回，转 `BitmapImage` → `CachedImage` 交给渲染器。
 
-## 7.1 网络媒体：引擎自己下载，工具只读本地文件
+## 7.1 网络媒体：引擎自己下载，边下边播
 
 ffmpeg/ffprobe 是本引擎 fork 出来的子进程。**在本进程树里它们完成不了 TLS 握手**
 （报 `Peer certificate failed verification`，而同一个 ffprobe 从普通命令行跑没问题），
-所以 http(s) 媒体不交给工具去联网：
+所以 http(s) 媒体不交给工具去联网，由引擎的后台下载器（§7.3）落到本地文件，工具只读文件。
 
-1. `HTMLMediaElement` 的元数据探测对 http(s) 走引擎自己的网络栈（`ResourceHandle::
-   loadResourceSynchronously`），拿到 body 后既解析容器头，也写一份本地副本；
-2. 副本放在 `AGB_MEDIA_CACHE`（显式指定）→ `%LOCALAPPDATA%\Agave\cache\media` →
-   `%TEMP%\agave-media-cache` → `%LOCALAPPDATA%\Agave\probe\media-cache` → exe 旁的
-   `media-cache`（第一个**实测可写**的目录），文件名是 URL 的 FNV-1a 哈希 + 原扩展名；
-3. `MediaPipeline` 用这份本地副本起解码进程，`-ss` 因此是瞬时的。
-
-代价（写进 §8）：远程媒体要**整段下载完**才开始播，没有渐进式流；远程 body 还会
-在内存里过一遍（同步 API 的限制）。探测是同步的，大文件会卡住引擎线程。
+目录选择：`AGB_MEDIA_CACHE`（显式指定）→ `%LOCALAPPDATA%\Agave\cache\media` →
+`%TEMP%\agave-media-cache` → `%LOCALAPPDATA%\Agave\probe\media-cache` → exe 旁的
+`media-cache`（第一个**实测可写**的目录，每个候选都用真实写文件验证过）；文件名是 URL 的
+FNV-1a 哈希 + 原扩展名，完成后旁边多一个 `<名>.complete` 标记。
 
 ## 7.2 顶层导航到媒体 URL：媒体文档（`MediaDocument`）
 
@@ -216,22 +219,48 @@ ffmpeg/ffprobe 是本引擎 fork 出来的子进程。**在本进程树里它们
 - `DOMImplementation::createDocument()` 遇到媒体类型返回 `MediaDocument`；它的 tokenizer
   `wantsRawData()`，把字节全部丢弃（不解析二进制），第一个字节到达时建结构：
   ```
-  <html><head><title>文件名</title><style>…黑底、居中、max-width/height 100%…</style></head>
+  <html><head><title>文件名</title></head>
         <body><video|audio controls autoplay src="文档 URL"></body></html>
   ```
-- `autoplay` 让元素在元数据到手后自己 `play()`，解码走 §4.1 的管线；音频文档的元素宽度 100%。
+  样式不用页面自己写：Chrome 的 UA 表里就有（§3）——
+  `video:-webkit-full-page-media { position:absolute; inset 0; max-*:100%; margin:auto }`
+  负责居中，`body:-webkit-full-page-media { background-color: rgb(0,0,0) }` 负责黑底。
+  伪类在本引擎里由 `CSSStyleSelector` 的 `PseudoFullPageMedia` 匹配（文档是 `MediaDocument`
+  时，body 与「body 里唯一的 video/audio」命中）。
+- `autoplay` 让元素在元数据到手后自己 `play()`，解码走 §4.1 的管线。
 - 元素是**自己再拉一次**资源的（文档那份字节被丢掉），所以远程直开会下载两遍；
   `file:` 直开没有代价。见 §8。
 
+## 7.3 流式播放（`MediaDownloader`）
+
+`src/webcore/platform/media/MediaDownloader.{h,cpp}`：WinHTTP 在自己的线程上 GET，
+每收到一块就追加写进缓存文件并 flush，**元数据探测直接从还在长大的文件里解析**：
+
+1. `MediaDecoder::probe()` 对 http(s) 启动下载器，然后每 50ms（元素的 probe timer）
+   读一次文件头：拿到 `duration`/`width` 之一才算完整（容器解析器"认得 magic"就返回 true，
+   但截断的头只给出 0，所以判据是**字段非空**，不是 `parsed`）；
+2. 元数据一到就 `metadataReady` → `play()` 起解码器，ffmpeg 读的也是这份**部分**文件；
+3. ffmpeg 在文件末尾会 EOF 退出（它不会等新数据）。视频/音频解码线程发现"字节断流"后：
+   冻结时钟（`stalled`，`currentTime()` 返回冻结值）、等下载前沿再前进 512 KB（或下载完成），
+   然后 `needsRestart`；元素在 50ms 的 `tick()` 里看到就 `seek(currentTime)` 重开解码器。
+   暂停/播放/求解都不会漏掉这条路径；
+4. 下载完成时写 `<名>.complete` 标记：`MediaDecoder::localCopyComplete()` 据此判断
+   "EOF 是真的结尾"，不再重开。数据文件本身不改名（ffmpeg 还开着它），
+   所以"标记存在"才是完成判据。
+
+这就是"缓冲"：网络比码率慢时，媒体时钟会停住而不是跑飞，恢复后从原位置继续。
+
 ## 8. 已知缺口（记录，不在本次修）
 
-- **媒体文档不居中（垂直方向）**：`body { display: flex; align-items: center }` 在本引擎里
-  只居中了水平方向（`justify-content` 生效，`align-items` 没有作用到 replaced 元素），
-  所以视频贴顶；Chrome 是水平+垂直居中。
-- **媒体文档会把资源下载两遍**（文档主资源 + 元素自己的加载）。远程直开时是双倍流量；
-  正确做法是把主资源的字节交给元素（`setLoadManually` 式的通道），或者边下边解。
-- **没有渐进式/流式播放**：http(s) 媒体先整段下载（§7.1），大文件既卡加载又占内存；
-  需要 Range 请求 + 边下边解（或 `MediaSource`）。
+- **流式没有 Range**：seek 到还没下载的位置时会"等下载追上"（时钟冻结），而不是发
+  `Range: bytes=` 只取那一段；媒体文档更是整段由文档加载一次、元素再拉一次。
+- **流式重启要等 512 KB**：网络慢时每轮等于一次缓冲（时钟停住），这是"缓冲"而非"跳帧"；
+  想要真正的实时感需要在 ffmpeg 前加喂数据的管道（让它阻塞而不是 EOF 退出）。
+- **`seek` 到未下载区域没有进度事件**：没有 `waiting`/`canplaythrough`，页面自绘播放器
+  只能看 `currentTime` 不走。
+- **媒体文档会把资源下载两遍**（文档主资源 + 元素自己的加载）。正确做法是把主资源的
+  字节交给元素（`setLoadManually` 式的通道），或者让文档加载本身喂给元素。
+- **缓存不清理**：`AGB_MEDIA_CACHE`/用户目录下的副本按 URL 哈希永久留存（含 `.complete`）。
 - **没有音画严格同步**：视频按共享时钟节流，长时间抖动会累积（设备时钟领先时以它为准，
   但视频帧不按 PTS 精确对齐）。
 - **解码全在 CPU**：每路播放一个 ffmpeg 进程 + 每帧一次缩放拷贝，4K 会很吃力；
@@ -284,6 +313,12 @@ build-zig-native\agave_shell.exe --probe "$page`?src=../../debug/media/clip640x3
 # 直接打开媒体链接/文件：应该是内置播放器而不是下载
 build-zig-native\agave_shell.exe --probe "https://artplayer.org/assets/sample/video.mp4" --wait 4000 `
   --eval "var v=document.querySelector('video'); probeExit(document.title+' '+v.tagName+' ct='+v.currentTime.toFixed(2)+' real='+v._agbRealPlayback)"
+# 流式：用一个新的缓存目录，日志里应能看到元数据在下载完成前就解析出来了
+$env:AGB_MEDIA_DEBUG='1'; $env:AGB_MEDIA_CACHE="$PWD\build-zig-native\stream-cache"
+Remove-Item $env:AGB_MEDIA_CACHE -Recurse -Force -ErrorAction SilentlyContinue
+build-zig-native\agave_shell.exe --probe "$page`?src=https%3A%2F%2Fartplayer.org%2Fassets%2Fsample%2Fvideo.mp4" `
+  --eval "document.querySelector('video').play(); setTimeout(function(){ probeExit('ct='+document.querySelector('video').currentTime.toFixed(2)); }, 6000)" --wait 800 --settle 8000
+# 期望：[media] probe copy: ... done=0 ... complete=1（下载还没完就拿到元数据）
 ```
 
 诊断开关：`AGB_MEDIA_DEBUG=1`（管线启动、时钟/设备位置、首帧、ffprobe 输出）、

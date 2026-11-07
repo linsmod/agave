@@ -13,6 +13,7 @@
 
 #include "MediaDecoder.h"
 
+#include "MediaDownloader.h"
 #include "ResourceError.h"
 #include "ResourceHandle.h"
 #include "ResourceRequest.h"
@@ -242,15 +243,13 @@ static bool readLocalFile(const std::string& path, size_t maxBytes, Vector<unsig
     return total > 0;
 }
 
-/* The header slice, used by both the in-process parser and (as a fallback
- * source of truth) by the ffprobe path. `allowNetwork` is false for the
- * synchronous case so a page can never make load() download a whole video. */
-#if PLATFORM(WIN32)
-static void writeCachedBody(const std::string& url, const std::vector<char>& body);
-#endif
-
+/* The header slice for the in-process parser. Local files only: an http(s)
+ * body is fetched by the background downloader (MediaDownloader) and parsed
+ * from the growing local copy - see probe() below. */
 static bool readMediaHeader(const String& url, bool allowNetwork, Vector<unsigned char>& out, size_t maxBytes)
 {
+    (void)allowNetwork;
+
     std::string urlText = url.utf8().data();
     std::string path;
 
@@ -259,43 +258,7 @@ static bool readMediaHeader(const String& url, bool allowNetwork, Vector<unsigne
     if (localPathForFileUrl(urlText.c_str(), &path))
         return readLocalFile(path, maxBytes, out);
 
-    if (!allowNetwork)
-        return false;
-
-    if (strncasecmp(urlText.c_str(), "http:", 5) != 0
-            && strncasecmp(urlText.c_str(), "https:", 5) != 0)
-        return false;
-
-    {
-        KURL kurl(urlText.c_str());
-        ResourceRequest request(kurl);
-        ResourceError error;
-        ResourceResponse response;
-        Vector<char> data;
-
-        ResourceHandle::loadResourceSynchronously(request, error, response, data);
-
-        if (!error.isNull() || data.isEmpty())
-            return false;
-
-        /* The body is already in memory: keep a local copy so the decoders
-         * (which cannot do TLS from this process) can read it. */
-#if PLATFORM(WIN32)
-        {
-            std::vector<char> body(data.data(), data.data() + data.size());
-
-            writeCachedBody(urlText, body);
-        }
-#endif
-
-        {
-            size_t take = data.size() < maxBytes ? data.size() : maxBytes;
-
-            for (size_t i = 0; i < take; ++i)
-                out.append((unsigned char)data[i]);
-            return take > 0;
-        }
-    }
+    return false;
 }
 
 std::string toolPathForURL(const std::string& url)
@@ -486,22 +449,43 @@ static std::string cacheFileNameForURL(const std::string& url)
 
     return out;
 }
-
-static void writeCachedBody(const std::string& url, const std::vector<char>& body)
+/* Reads the first `maxBytes` of a growing file (the downloader's copy)
+ * without disturbing the writer. */
+static bool readFilePrefix(const std::string& path, size_t maxBytes, Vector<unsigned char>& out)
 {
-    if (body.empty())
-        return;
+    FILE* f = fopen(path.c_str(), "rb");
+    unsigned char buffer[65536];
+    size_t total = 0;
 
-    {
-        std::string path = cacheFileNameForURL(url);
-        FILE* f = path.empty() ? 0 : fopen(path.c_str(), "wb");
+    out.clear();
 
-        if (!f)
-            return;
+    if (!f)
+        return false;
 
-        fwrite(body.data(), 1, body.size(), f);
-        fclose(f);
+    while (total < maxBytes) {
+        size_t want = sizeof(buffer);
+        size_t got;
+
+        if (want > maxBytes - total)
+            want = maxBytes - total;
+
+        got = fread(buffer, 1, want, f);
+
+        if (!got)
+            break;
+
+        {
+            size_t i;
+
+            for (i = 0; i < got; ++i)
+                out.append(buffer[i]);
+        }
+
+        total += got;
     }
+
+    fclose(f);
+    return total > 0;
 }
 
 bool localPathForURL(const std::string& url, std::string& out)
@@ -522,11 +506,14 @@ bool localPathForURL(const std::string& url, std::string& out)
     {
         std::string path = cacheFileNameForURL(url);
 
-        if (GetFileAttributesA(path.c_str()) == INVALID_FILE_ATTRIBUTES)
-            return false;
+        /* Present means readable: the downloader writes this file in place and
+         * the decoders may start on a partial copy (streaming). */
+        if (GetFileAttributesA(path.c_str()) != INVALID_FILE_ATTRIBUTES) {
+            out = path;
+            return true;
+        }
 
-        out = path;
-        return true;
+        return false;
     }
 }
 #else
@@ -545,6 +532,47 @@ bool localPathForURL(const std::string& url, std::string& out)
 bool readHeaderBytes(const String& url, size_t maxBytes, Vector<unsigned char>& out)
 {
     return readMediaHeader(url, false, out, maxBytes);
+}
+
+std::string cachePathForURL(const std::string& url)
+{
+#if PLATFORM(WIN32)
+    return cacheFileNameForURL(url);
+#else
+    (void)url;
+    return std::string();
+#endif
+}
+
+bool localCopyComplete(const std::string& url)
+{
+#if PLATFORM(WIN32)
+    std::string path;
+    std::string local;
+    std::string path_;
+
+    if (localPathForFileUrl(url.c_str(), &path))
+        return true;
+
+    if (strncasecmp(url.c_str(), "http:", 5) != 0
+            && strncasecmp(url.c_str(), "https:", 5) != 0)
+        return true;
+
+    path_ = cacheFileNameForURL(url);
+
+    /* No copy at all: nothing is "complete", but there is also nothing to wait
+     * for - the caller treats it as not streaming. */
+    if (path_.empty() || GetFileAttributesA(path_.c_str()) == INVALID_FILE_ATTRIBUTES)
+        return true;
+
+    if (MediaDownloader::finished(url))
+        return true;
+
+    return GetFileAttributesA((path_ + ".complete").c_str()) != INVALID_FILE_ATTRIBUTES;
+#else
+    (void)url;
+    return true;
+#endif
 }
 
 /* ------------------------------------------------------------------------- */
@@ -910,36 +938,122 @@ void pump()
     }
 }
 
+/* ------------------------------------------------------------------------- */
+/* streaming probes                                                          */
+/* ------------------------------------------------------------------------- */
+
+/* An http(s) resource is downloaded by MediaDownloader into the media cache.
+ * The metadata probe then parses the *growing* local file, so `loadedmetadata`
+ * (and playback) start long before the body is complete. */
+struct PendingProbe {
+    const void* element;
+    std::string url;
+    std::string path;
+};
+
+static std::vector<PendingProbe>* g_pendingProbes = 0;
+
+static bool isNetworkMediaURL(const std::string& url)
+{
+    return !strncasecmp(url.c_str(), "http:", 5) || !strncasecmp(url.c_str(), "https:", 5);
+}
+
+/* Tries to get `out` from the local copy of a network resource: the file
+ * exists from the first chunk, and the `.complete` marker tracks the end. */
+static bool probeNetworkCopy(const std::string& url, const std::string& path, MediaInfo& out)
+{
+    const size_t kHeaderBytes = 1024 * 1024;
+    const unsigned long long kEnoughBytes = 64 * 1024;
+    Vector<unsigned char> data;
+
+    {
+        unsigned long long have = MediaDownloader::bytes(url);
+        bool done = MediaDownloader::finished(url);
+
+        /* Too little to hold a container header yet. */
+        if (!done && have < kEnoughBytes)
+            return false;
+
+        if (!readFilePrefix(path, kHeaderBytes, data) || data.isEmpty())
+            return false;
+
+        {
+            bool parsed = parseMediaHeader(data.data(), data.size(), out);
+
+            /* The container parser reports "recognized" as soon as it sees the
+             * magic, even when the header is still truncated - keep polling
+             * until the fields a player needs are actually there. */
+            bool complete = parsed && (out.duration > 0 || (out.width > 0 && out.height > 0));
+
+            if (getenv("AGB_MEDIA_DEBUG"))
+                fprintf(stderr, "[media] probe copy: bytes=%llu done=%d read=%d parsed=%d complete=%d dur=%.3f %dx%d\n",
+                        have, (int)done, (int)data.size(), (int)parsed, (int)complete,
+                        out.duration, out.width, out.height);
+
+            return complete;
+        }
+    }
+}
+
 ProbeStatus probe(const void* element, const String& url, MediaInfo& out)
 {
-    /* Header parse first: local files and http(s) resources are answered
-     * without a thread. 1 MiB of header is enough for every container we
-     * parse; an http(s) body is additionally kept as a local copy for the
-     * decoders (they cannot do TLS here - see the cache comment above).
-     * AGB_MEDIA_PROBE=ffprobe forces the external path, which is how the
-     * fallback itself is tested (tools/run_media_tests.ps1). */
-    {
-        const size_t kHeaderBytes = 1024 * 1024;
-        Vector<unsigned char> data;
-        bool forceExternal = getenv("AGB_MEDIA_PROBE")
-            && !strcmp(getenv("AGB_MEDIA_PROBE"), "ffprobe");
+    const std::string urlText = url.utf8().data();
+    bool forceExternal = getenv("AGB_MEDIA_PROBE")
+        && !strcmp(getenv("AGB_MEDIA_PROBE"), "ffprobe");
 
-        if (!forceExternal
-                && readMediaHeader(url, true, data, kHeaderBytes)
+    /* Local files: in-process header parse, no thread. */
+    if (!forceExternal && !isNetworkMediaURL(urlText)) {
+        Vector<unsigned char> data;
+
+        if (readMediaHeader(url, false, data, 1024 * 1024)
                 && data.size() > 0
                 && parseMediaHeader(data.data(), data.size(), out))
             return ProbeReady;
     }
 
+    if (!forceExternal && isNetworkMediaURL(urlText)) {
+        std::string path = cachePathForURL(urlText);
+
+        if (!path.empty()) {
+            /* The downloader writes `path` directly and drops a `.complete`
+             * marker when the body is whole (see MediaDownloader.h). */
+            std::string local = path;
+
+            MediaDownloader::ensure(urlText, path);
+
+            if (probeNetworkCopy(urlText, local, out))
+                return ProbeReady;
+
+            if (!MediaDownloader::failed(urlText)) {
+                if (!g_pendingProbes)
+                    g_pendingProbes = new std::vector<PendingProbe>();
+
+                {
+                    PendingProbe pending;
+
+                    pending.element = element;
+                    pending.url = urlText;
+                    pending.path = local;
+                    g_pendingProbes->push_back(pending);
+                }
+
+                return ProbePending;
+            }
+        }
+    }
+
+    /* Everything else: ffprobe on a worker (a local copy when there is one,
+     * the URL otherwise). */
     if (!ffprobeAvailable())
         return ProbeFailed;
 
     {
         Job* job = new Job();
+        std::string local;
 
         job->probe = true;
         job->element = element;
-        job->url = url.utf8().data();
+        job->url = localPathForURL(urlText, local) ? local : urlText;
         job->time = 0;
         job->done = 0;
         job->ok = false;
@@ -954,6 +1068,52 @@ ProbeStatus probe(const void* element, const String& url, MediaInfo& out)
 
 ProbeStatus pollProbe(const void* element, MediaInfo& out)
 {
+    /* A download that is still feeding the header parse. */
+    for (size_t i = 0; g_pendingProbes && i < g_pendingProbes->size(); ++i) {
+        PendingProbe& pending = (*g_pendingProbes)[i];
+
+        if (pending.element != element)
+            continue;
+
+        if (probeNetworkCopy(pending.url, pending.path, out)) {
+            g_pendingProbes->erase(g_pendingProbes->begin() + i);
+            return ProbeReady;
+        }
+
+        if (MediaDownloader::failed(pending.url)) {
+            g_pendingProbes->erase(g_pendingProbes->begin() + i);
+            return ProbeFailed;
+        }
+
+        /* The body is complete but the built-in parser did not like it: hand
+         * the finished local file to ffprobe. */
+        if (MediaDownloader::finished(pending.url)) {
+            std::string local = pending.path;
+
+            g_pendingProbes->erase(g_pendingProbes->begin() + i);
+
+            if (ffprobeAvailable()) {
+                Job* job = new Job();
+
+                job->probe = true;
+                job->element = element;
+                job->url = local;
+                job->time = 0;
+                job->done = 0;
+                job->ok = false;
+#if PLATFORM(WIN32)
+                job->thread = NULL;
+#endif
+                startJob(job);
+                return ProbePending;
+            }
+
+            return ProbeFailed;
+        }
+
+        return ProbePending;
+    }
+
     for (size_t i = 0; i < g_results.size(); ++i) {
         Job* job = g_results[i];
         ProbeStatus status;
@@ -981,6 +1141,15 @@ ProbeStatus pollProbe(const void* element, MediaInfo& out)
 
 void cancel(const void* element)
 {
+    if (g_pendingProbes) {
+        for (size_t i = 0; i < g_pendingProbes->size(); ) {
+            if ((*g_pendingProbes)[i].element == element)
+                g_pendingProbes->erase(g_pendingProbes->begin() + i);
+            else
+                ++i;
+        }
+    }
+
     /* Running jobs are not killed: `element` is cleared so their result is
      * ignored when it arrives (the Job itself must outlive the thread). */
     if (g_jobs) {

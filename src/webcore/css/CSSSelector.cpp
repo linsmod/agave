@@ -85,6 +85,7 @@ void CSSSelector::extractPseudoType() const
     static AtomicString firstLine("first-line");
     static AtomicString firstOfType("first-of-type");
     static AtomicString focus("focus");
+    static AtomicString fullPageMedia("-webkit-full-page-media");
     static AtomicString hover("hover");
     static AtomicString indeterminate("indeterminate");
     static AtomicString link("link");
@@ -145,6 +146,8 @@ void CSSSelector::extractPseudoType() const
         m_pseudoType = PseudoFirstOfType;
     else if (m_value == focus)
         m_pseudoType = PseudoFocus;
+    else if (m_value == fullPageMedia)
+        m_pseudoType = PseudoFullPageMedia;
     else if (m_value == hover)
         m_pseudoType = PseudoHover;
     else if (m_value == indeterminate)

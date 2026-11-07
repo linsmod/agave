@@ -449,6 +449,11 @@ void HTMLMediaElement::metadataReady(const MediaInfo& info)
 
     if (m_autoplay)
         play();
+
+    /* A play() that arrived before the metadata (common: pages call play() in
+     * their own onload) can start the decoder now that the kind is known. */
+    if (!m_paused && !m_pipeline)
+        startPlayback();
 }
 
 void HTMLMediaElement::frameTimerFired(Timer<HTMLMediaElement>*)
@@ -559,6 +564,26 @@ void HTMLMediaElement::stopPipeline()
     m_pipeline = 0;
 }
 
+void HTMLMediaElement::startPlayback()
+{
+    /* Resume a paused pipeline in place (decoder and device stay warm). */
+    if (m_pipeline) {
+        m_pipeline->setPaused(false);
+
+        if (m_pipeline->hasVideo())
+            m_frameTimer.startRepeating(1.0 / 30.0);
+        return;
+    }
+
+    /* The pipeline kind depends on the metadata (audio-only vs audio+video),
+     * so play() before `loadedmetadata` must wait for it: starting here would
+     * spawn an audio-only decoder for a video. metadataReady() calls back. */
+    if (m_networkState == NETWORK_NO_SOURCE || m_readyState < HAVE_METADATA)
+        return;
+
+    startPipeline();
+}
+
 void HTMLMediaElement::play()
 {
     if (!m_paused)
@@ -574,16 +599,9 @@ void HTMLMediaElement::play()
      * neither is available the ticker below simulates the clock, which is the
      * documented fallback (no ffmpeg installed). An element whose resource
      * failed to load must not start a decoder: sites rely on `error` to pick
-     * another source. A pipeline that already exists is resumed in place (a
-     * paused element keeps its decoder, so buffers and the device stay warm). */
-    if (m_pipeline) {
-        m_pipeline->setPaused(false);
-
-        if (m_pipeline->hasVideo())
-            m_frameTimer.startRepeating(1.0 / 30.0);
-    } else if (m_networkState != NETWORK_NO_SOURCE) {
-        startPipeline();
-    }
+     * another source. Before `loadedmetadata` there is nothing to start yet -
+     * metadataReady() calls startPlayback() again. */
+    startPlayback();
 
     DISPATCH_MEDIA_EVENT("play");
     DISPATCH_MEDIA_EVENT("playing");
@@ -625,6 +643,14 @@ void HTMLMediaElement::tick()
         /* The decoder's own clock (device position for audio) is authoritative;
          * the ticker only reports it. */
         m_currentTime = m_pipeline->currentTime();
+
+        /* Streaming: the decoder reached the end of the downloaded part and
+         * more bytes have landed since. Re-spawn it at the frozen position. */
+        if (m_pipeline->needsRestart()) {
+            m_pipeline->clearRestart();
+            m_pipeline->seek(m_currentTime);
+        }
+
         if (getenv("AGB_MEDIA_DEBUG"))
             m_pipeline->debugState("tick");
     } else {

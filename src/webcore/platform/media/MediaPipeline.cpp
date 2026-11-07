@@ -13,6 +13,7 @@
 
 #include "MediaPipeline.h"
 #include "MediaDecoder.h"
+#include "MediaDownloader.h"
 #include "MediaMetadata.h"
 
 #include "CString.h"
@@ -83,6 +84,9 @@ struct MediaPipeline::Impl {
         , frameIndex(0)
         , frameStamp(0)
         , frameValid(false)
+        , needsRestart(0)
+        , stalled(0)
+        , stalledAt(0)
     {
         memset(buffers, 0, sizeof(buffers));
         memset(&freq, 0, sizeof(freq));
@@ -120,6 +124,10 @@ struct MediaPipeline::Impl {
     bool frameValid;
     CRITICAL_SECTION frameLock;
 
+    /* --- streaming --- */
+    volatile LONG needsRestart;   /* a decoder hit EOF, more bytes are coming */
+    volatile LONG stalled;
+    double stalledAt;             /* clock value frozen while stalled */
 };
 
 /* ------------------------------------------------------------------------- */
@@ -261,6 +269,7 @@ MediaPipeline* MediaPipeline::create(const String& url, Kind kind,
 
     pipeline->m_url = url;
     pipeline->m_kind = kind;
+    pipeline->m_streaming = false;
     pipeline->m_width = videoWidth;
     pipeline->m_height = videoHeight;
     pipeline->m_muted = muted;
@@ -268,11 +277,15 @@ MediaPipeline* MediaPipeline::create(const String& url, Kind kind,
 
     {
         /* The decoders only ever read files: a file: URL becomes its path,
-         * an http(s) URL the engine's downloaded copy (see MediaDecoder). */
+         * an http(s) URL the engine's downloaded copy (see MediaDecoder).
+         * While that copy is incomplete the decoders will hit EOF and ask for
+         * a restart until the download finishes. */
         std::string local;
 
         if (MediaDecoder::localPathForURL(url.utf8().data(), local))
             pipeline->m_localPath = local;
+
+        pipeline->m_streaming = !MediaDecoder::localCopyComplete(url.utf8().data());
     }
 
     {
@@ -530,6 +543,11 @@ double MediaPipeline::currentTime() const
     if (!m_impl)
         return 0;
 
+    /* While the decoder is waiting for the download to reach the next second
+     * the clock must not run away - the element is buffering, not playing. */
+    if (m_impl->stalled)
+        return m_impl->stalledAt;
+
     /* Wall clock minus paused time: the lower bound, and the whole clock for
        video-only pipelines. */
     QueryPerformanceCounter(&now);
@@ -642,6 +660,9 @@ void MediaPipeline::seek(double seconds)
         m_impl->seekBase = seconds;
         m_impl->frameValid = false;
         m_impl->frameIndex = 0;
+        m_impl->needsRestart = 0;
+        m_impl->stalled = 0;
+        m_impl->stalledAt = 0;
 
         if (!start())
             return;
@@ -649,6 +670,17 @@ void MediaPipeline::seek(double seconds)
         if (wasPaused)
             setPaused(true);
     }
+}
+
+bool MediaPipeline::needsRestart() const
+{
+    return m_impl && m_impl->needsRestart != 0;
+}
+
+void MediaPipeline::clearRestart()
+{
+    if (m_impl)
+        m_impl->needsRestart = 0;
 }
 
 bool MediaPipeline::hasFrame() const
@@ -692,6 +724,56 @@ bool MediaPipeline::copyFrame(Vector<unsigned char>& out, double position, doubl
 
 #if PLATFORM(WIN32)
 
+/* A decoder ran out of bytes. If the resource is still arriving, freeze the
+ * clock at the byte frontier and ask the engine to re-spawn the decoders at
+ * that position once enough new data has landed; the decoders do not retry by
+ * themselves (ffmpeg exits at EOF on a growing file).
+ *
+ * Returns true when nothing more is coming (the caller should treat it as the
+ * real end); false means "restart requested, stop this thread". */
+bool MediaPipeline::waitForMoreData()
+{
+    if (!m_streaming || MediaDownloader::finished(m_url.utf8().data()))
+        return true;
+
+    if (!m_impl->stalled) {
+        m_impl->stalledAt = currentTime();
+        m_impl->stalled = 1;
+    }
+
+    {
+        std::string url = m_url.utf8().data();
+
+        /* One restart per chunk of downloaded data. The chunk must be worth
+         * the (re)spawn cost but small enough that the player does not sit
+         * idle while the rest of a file arrives: 512 KB is ~20 s of a
+         * typical web video. */
+        const unsigned long long kRestartChunk = 512 * 1024;
+        unsigned long long seen = MediaDownloader::bytes(url);
+
+        while (!m_impl->stopRequested) {
+            unsigned long long now = MediaDownloader::bytes(url);
+
+            if (MediaDownloader::finished(url)) {
+                if (now > seen) {
+                    m_impl->needsRestart = 1;
+                    return false;
+                }
+                return true;
+            }
+
+            if (now >= seen + kRestartChunk) {
+                m_impl->needsRestart = 1;
+                return false;
+            }
+
+            Sleep(50);
+        }
+    }
+
+    return true;
+}
+
 /* Audio: ffmpeg's PCM on stdout -> waveOut buffers. The ring is small (6 x
  * 100 ms) so pause/seek respond immediately and memory stays bounded. */
 void mediaPipelineThreadAudio(MediaPipeline* pipeline)
@@ -731,7 +813,10 @@ void mediaPipelineThreadAudio(MediaPipeline* pipeline)
             }
 
             if (filled == 0) {
-                /* Decoder finished: let what is queued drain, then stop. */
+                /* Out of PCM: either the decoder finished or the download
+                 * frontier moved on (streaming). */
+                if (!pipeline->waitForMoreData())
+                    return;
                 break;
             }
 
@@ -796,8 +881,13 @@ void mediaPipelineThreadVideo(MediaPipeline* pipeline)
             filled += got;
         }
 
-        if (filled < want)
-            break;   /* decoder finished or failed */
+        if (filled < want) {
+            /* Out of frames: either the decoder finished or the download
+             * frontier moved on (streaming). */
+            if (!pipeline->waitForMoreData())
+                return;
+            break;
+        }
 
         {
             double due = impl->seekBase + (double)impl->frameIndex * frameInterval;

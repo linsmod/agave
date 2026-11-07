@@ -64,6 +64,15 @@ public:
 
     void seek(double seconds);
 
+    /* --- streaming ------------------------------------------------------ */
+    /* A decoder that runs out of bytes while the download is still feeding the
+     * local file sets a restart request and stops publishing; the engine asks
+     * `needsRestart()` from its timer and re-spawns the decoders at the current
+     * position with `seek()`. While that happens the clock is frozen, so the
+     * element stalls instead of running past the data. */
+    bool needsRestart() const;
+    void clearRestart();
+
     /* --- video ---------------------------------------------------------- */
     /* Copies the newest decoded frame as BGRA into `out` (resized to the
      * pipeline's video size). Returns false when no frame has arrived yet or
@@ -80,6 +89,11 @@ public:
 private:
     MediaPipeline();
 
+    /* Called from a decoder thread that ran out of bytes: freezes the clock at
+     * the frontier, waits for the download to move on and requests a restart.
+     * Returns false when the resource is finished (a real EOF). */
+    bool waitForMoreData();
+
     struct Impl;
     Impl* m_impl;
 
@@ -91,8 +105,10 @@ private:
     String m_url;
 
     /* A local file the decoders read (the URL itself for file:, the engine's
-     * downloaded copy for http(s)); empty means "hand the URL to the tool". */
+     * downloaded copy for http(s)); empty means "hand the URL to the tool".
+     * For a resource that is still downloading this is the .part file. */
     std::string m_localPath;
+    bool m_streaming;
     Kind m_kind;
     int m_width;
     int m_height;

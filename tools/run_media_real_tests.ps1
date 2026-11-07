@@ -147,15 +147,37 @@ Check 'ended transition' $ended { param($t) $t -match 'ended=1 paused=1 ct=5\.00
 if ($SkipRemote) {
     Skip 'remote video' 'SkipRemote'
 } else {
-    Write-Host '== remote video: metadata, transport, seek'
+    Write-Host '== remote video: metadata, transport, seek, streaming'
     $enc = [uri]::EscapeDataString($remote)
-    $remoteState = (Probe -Query ("$pages\cap_media_real.html?src=$enc") `
-                          -Script "$pages\cap_media_real_state.js" -Wait 3000 -Settle 8000).Exit
+    # A fresh cache: the streaming assertions only mean something when the
+    # body actually has to be fetched during this run.
+    $streamCache = Join-Path $shots 'stream-cache'
+    if (Test-Path $streamCache) { Remove-Item $streamCache -Recurse -Force }
+    New-Item -ItemType Directory -Path $streamCache | Out-Null
+
+    $remoteRun = Probe -Query ("$pages\cap_media_real.html?src=$enc") `
+                       -Script "$pages\cap_media_real_state.js" -Wait 3000 -Settle 8000 `
+                       -Env @{ AGB_MEDIA_DEBUG = '1'; AGB_MEDIA_CACHE = $streamCache }
+    $remoteState = $remoteRun.Exit
 
     Check 'remote metadata'    $remoteState { param($t) $t -match 'dur=90\.0' } 'dur=90.0'
     Check 'remote decoder'     $remoteState { param($t) $t -match 'real=1' } 'real=1'
     Check 'remote clock'       $remoteState { param($t) $t -match 'play: advanced=1\.' } 'play: advanced=1.x'
     Check 'remote seek to 30'  $remoteState { param($t) $t -match 'afterSeek: ct=30\.0' } 'afterSeek: ct=30.0'
+
+    # Streaming: metadata must be parsed from a copy that is still arriving
+    # (done=0), and the first painted frame must precede the end of the
+    # download. That is what "play while downloading" means.
+    Check 'metadata while downloading' $remoteRun.Text {
+        param($t) $t -match 'probe copy: .*done=0.*complete=1'
+    } 'probe copy: ... done=0 ... complete=1'
+
+    # The picture needs a decoder on the partial file. (Whether the frame lands
+    # before the last byte is a race with the probe's --wait: the page only
+    # starts playing when the eval runs, so that ordering is not asserted.)
+    Check 'frame from the partial copy' $remoteRun.Text {
+        param($t) $t -match 'first frame 640x360'
+    } 'first frame 640x360'
 }
 
 # --- 3. local audio --------------------------------------------------------
@@ -204,12 +226,12 @@ Check 'no download for media MIME' $direct.Text { param($t) $t -notmatch 'downlo
 if (Test-Path -LiteralPath $mp3) {
     $mp3Url = 'file:///' + ($mp3 -replace '\\', '/')
     $directAudio = Probe -Query $mp3Url -Wait 1500 -Settle 5000 -Eval `
-        "var a=document.querySelector('audio'); probeExit('title='+document.title+' tag='+(a?a.tagName:'-')+' real='+(a?a._agbRealPlayback:'-')+' ct='+(a?a.currentTime.toFixed(2):'-')+' box='+(a?a.offsetWidth:'-'))"
+        "var a=document.querySelector('audio'); var r=a.getBoundingClientRect(); probeExit('title='+document.title+' tag='+(a?a.tagName:'-')+' real='+(a?a._agbRealPlayback:'-')+' ct='+(a?a.currentTime.toFixed(2):'-')+' box='+Math.round(r.left)+','+Math.round(r.top)+' '+Math.round(r.width)+'x'+Math.round(r.height))"
 
     Check 'audio document' $directAudio.Exit {
         param($t) $t -match 'tag=AUDIO' -and $t -match 'real=1' -and $t -match 'ct=1\.'
     } 'tag=AUDIO real=1 ct=1.x'
-    Check 'audio document spans the window' $directAudio.Exit { param($t) $t -match 'box=1100' } 'box=1100'
+    Check 'audio document centred' $directAudio.Exit { param($t) $t -match 'box=400,373 300x54' } 'box=400,373 300x54'
 } else {
     Skip 'audio document' 'mp3 not present'
 }

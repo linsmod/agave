@@ -176,6 +176,10 @@ private:
     bool startPipeline();
     void stopPipeline();
 
+    /* Starts or resumes decoding once the element is ready enough to know
+     * which kind of pipeline it needs (see play() / metadataReady()). */
+    void startPlayback();
+
     void startLoad();
     void tryNextSource();
     void stopTimers();

@@ -91,8 +91,16 @@ std::string toolPathForURL(const std::string& url);
 
 /* A local file for `url`: the path itself for file:, the downloaded copy for
  * http(s) (the engine fetches it; the tools cannot do TLS in this process
- * tree). False when there is no copy yet. */
+ * tree). A partially downloaded copy (`.part`) counts too - the decoders can
+ * read it while it grows. False when there is none. */
 bool localPathForURL(const std::string& url, std::string& out);
+
+/* The cache file name for an http(s) resource (without the `.part` suffix). */
+std::string cachePathForURL(const std::string& url);
+
+/* True when the local copy of `url` (if any) is the whole resource, so a
+ * decoder that hits EOF really is at the end. */
+bool localCopyComplete(const std::string& url);
 
 /* Reads at most `maxBytes` from the start of `url` (local files only). */
 bool readHeaderBytes(const String& url, size_t maxBytes, Vector<unsigned char>& out);

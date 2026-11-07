@@ -1554,6 +1554,33 @@ bool CSSStyleSelector::checkOneSelector(CSSSelector* sel, Element* e, bool isAnc
                 if (e && e->focused() && e->document()->frame()->isActive())
                     return true;
                 break;
+            case CSSSelector::PseudoFullPageMedia: {
+                /* Chrome's rule for a bare audio/video document: the body of
+                 * the media document and the single media element inside it
+                 * (not a page that merely embeds media). */
+                Document* doc = e->document();
+
+                if (!doc || !doc->isMediaDocument())
+                    break;
+
+                if (e->hasTagName(bodyTag))
+                    return true;
+
+                {
+                    Node* parent = e->parentNode();
+
+                    if (!parent || !parent->isElementNode() || !parent->hasTagName(bodyTag))
+                        break;
+
+                    if (parent->firstChild() != e || e->nextSibling())
+                        break;
+
+                    if (e->hasTagName(videoTag) || e->hasTagName(audioTag))
+                        return true;
+                }
+
+                break;
+            }
             case CSSSelector::PseudoHover: {
                 // If we're in quirks mode, then hover should never match anchors with no
                 // href and *:hover should not match anything.  This is important for sites like wsj.com.

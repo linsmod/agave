@@ -41,15 +41,10 @@ using namespace HTMLNames;
 
 namespace {
 
-/* Chrome's media document: black page, the player centred and never larger
- * than the window. `max-width/max-height` keep the intrinsic aspect ratio
- * (object-fit is not implemented yet - see docs/arch-media.md section 8), so
- * a video is shown at its own size instead of being stretched. */
-const char* const kDocumentStyle =
-    "html, body { margin: 0; padding: 0; background: #000; height: 100%; }"
-    "body { display: flex; align-items: center; justify-content: center; }"
-    "video { display: block; max-width: 100%; max-height: 100%; }"
-    "audio { display: block; width: 100%; }";
+/* Nothing here needs styling: the player geometry and the black page come from
+ * Chrome's UA rule for `:-webkit-full-page-media` (html4.css), so a bare media
+ * document looks the same here and in Chrome. */
+const char* const kDocumentStyle = "";
 
 } // namespace
 

@@ -147,7 +147,8 @@ namespace WebCore {
             PseudoSearchCancelButton,
             PseudoSearchDecoration,
             PseudoSearchResultsDecoration,
-            PseudoSearchResultsButton
+            PseudoSearchResultsButton,
+            PseudoFullPageMedia
         };
 
         PseudoType pseudoType() const
