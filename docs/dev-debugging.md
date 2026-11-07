@@ -212,7 +212,8 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
 | 模块 | `AGB_MODULE_CACHE=0` / `AGB_MODULE_CACHE_TTL` / `AGB_MODULE_CONCURRENCY=n` | 关磁盘缓存 / TTL / 并发槽（默认 12） |
 | 模块 | `AGB_OFFLINE=1` | 只从缓存取（`--offline` 就是设它） |
 | 网络 | `AGB_NET_LOG=1` | 导航与请求时间线（`net.stage`：crack/connected/openrequest/sending/sent） |
-| 网络 | `AGB_NET_DEBUG=1` / `AGB_NET_TIMEOUT_MS` / `AGB_NO_PROXY=1` | 请求细节 / 超时 / 绕开代理解析 |
+| 网络 | `AGB_NET_DEBUG=1` / `AGB_NET_TIMEOUT_MS` / `AGB_NO_PROXY=1` | 请求细节 / 超时（**默认 0 = 系统默认**：WinHTTP 的 connect 60 s、send/receive 30 s；设了才用，注意 WinHTTP 的精度约 4 s 一档）/ 绕开代理解析 |
+| 模块 | `AGB_MODULE_WAIT_MS=<ms>` | 模块体同步等待的上限（默认跟随网络超时，系统默认时 30 s）；`debug/xhr_timeout.html` 不涉及它 |
 | 网络 | `AGB_HTTP_CACHE=0\|1` / `AGB_HTTP_CACHE_MB=n` | HTTP 缓存开关（默认开）/ 内存上限（默认 64MB） |
 | 网络 | `AGB_SKIPRES=<file>` | 资源跳过表（默认读 `skipres.txt`） |
 | 字体 | `AGB_FONT_LOG=1` | `[fontsel] src[i] ... supported=0/1` 与 `[font] beginLoad/data` |
@@ -314,14 +315,37 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
 | `AGB_GC_OFF=1` | `src/gc/gc.c:380` | **完全关闭 GC**（诊断） | "关掉就不崩" = 对象被提前回收的判据（R60/R63/R67） |
 | `AGB_PROXY_DEBUG=1` | `src/ant.c:19779,19792` | Proxy `get` 不变量失败时打印 `[proxy] key=… result=… target=…` | 命中即读 |
 | `ANT_GC_STRESS=1` | `src/verify.c` | 每次分配都触发 GC（测试用） | meson `put-elem-gc` 用它跑 |
-| `AGB_USER_ABORT_MS=<ms>` | `src/webview_control/AgaveWebView.c`（`agwWatchdogStart`） | 用户动作（导航/刷新/停止/查找）被页面脚本挡住的容忍时间，默认 1500 | 看门狗启动时读一次 |
+| `AGB_NAV_ABORT_MS=<ms>` | `src/webview_control/AgaveWebView.c`（`agwWatchdogStart`） | 导航排队兜底：导航命令在队首等这么久、且有 JS 在跑，就中断一次（正常路径在 `agwPost()` 里**投递时就中断**，这里只在"投递时引擎还没进 JS、随后才进"的情况下兜底），默认 100；触发时**不弹提示框** | 看门狗启动时读一次 |
+| `AGB_TEARDOWN_MS=<ms>` | 同上 | 收尾预算：旧文档的 `pagehide`/`visibilitychange`/`unload` 任何一步跑这么久还没返回就中断它（下一个事件照常发），默认 100。导航时旧页被立即中断、收尾按流程走，就靠这一档保证收尾不会拖住导航 | 调小可复现：`debug/teardown_hang.html`（pagehide 死循环）+ `--nav-after 800` |
+| `AGB_USER_ABORT_MS=<ms>` | 同上 | 不换文档的用户动作（停止 / 查找）被页面脚本挡住的容忍时间，默认 1500（导航走上面的 100） | 看门狗启动时读一次 |
 | `AGB_UNRESPONSIVE_MS=<ms>` | 同上 | JS 连续在跑多久算"页面无响应"，默认 12000（`AGB_STUCK_EXEC_MS` 是它的旧名，仍然认） | 调小可复现：`AGB_UNRESPONSIVE_MS=2000` + 20 s 死循环 → `[evt] watchdog: aborting an unresponsive page script` |
 | `AGB_NATIVE_STALL_MS=<ms>` | 同上 | 没有 JS、命令却多久不 drain 算"引擎在 JS 之外卡住"，默认 10000；这一档**不中断**，只记日志 | — |
 | `AGB_WD_DEBUG=1` | 同上 | 每个 tick 打印 `wd js=… jsbusy=… busy=… queue=… head=…` | 调阈值、判断"真卡/慢"的第一手数据 |
+| `AGB_PARSE_LOG=1` | `src/webcore/html/HTMLTokenizer.cpp` / `HTMLScriptElement.cpp` | HTML 解析轨迹（默认关）：每个 `<script>`/`<style>`/`<link>` 起标签的属性（`src`/`href`/`rel`/`type`/`media`/`charset`/`defer`/`async`/`nomodule`），以及脚本真正执行的时刻与形态（inline/external、classic/module、`defer` 排队到解析后、`async` 立即跑）。排查"脚本为什么在这个时机跑"从这里开始 | 见下例 |
 | `AGB_HANG_POPUP=0` | `examples/browser_shell/main.c`（`onUnresponsive`） | 关掉"页面无响应"提示框（无人值守/自动化时用） | — |
 
 ant 自身 CLI / 基础设施的开关（`ANT_MANIFEST_URL`、`ANT_SANDBOX_*`、`ANT_NO_CRASH_HANDLER` 等）
 在 `H:\ant-v16` 里读，**和 agave 的运行无关**，排查浏览器问题时不用管。
+
+- **解析轨迹（`AGB_PARSE_LOG=1`，默认关）**：`debug/parse_log.html` 的实测输出（链接、内联样式、
+  经典/模块/defer/async 各一条）：
+
+  ```
+  [parse] link href=... rel=stylesheet media=screen
+  [parse] style
+  [parse] script
+  [parse] run classic script url=(inline) len=25
+  [parse] script type=module
+  [parse] run module (deferred to parse end) url=... len=24
+  [parse] script src=... defer
+  [parse] script src=... async
+  [parse] script (defer) queued for parse end url=... len=17
+  [parse] script (async/dynamic) running url=... len=17
+  [parse] deferred classic script running url=... len=17
+  ```
+
+  标签行走 `HTMLTokenizer::processToken`（属性按作者写法原样打印），执行行走
+  `HTMLTokenizer::scriptExecution` / `HTMLScriptElement::evaluateScript` / 解析后 flush。
 
 - **卡死的页面怎么恢复（不用杀进程）**：刷新/导航在控件里是排队命令，脚本不返回时队列永不 drain，
   所以窗口“活着但没反应”。中断机制：引擎在下一个 safepoint（解释器调用点 / JIT 循环回边）抛终止错误，
@@ -333,20 +357,28 @@ ant 自身 CLI / 基础设施的开关（`ANT_MANIFEST_URL`、`ANT_SANDBOX_*`、
 
   | 现象 | 判定 | 动作 |
   |---|---|---|
-  | 用户动作（导航/刷新/停止/查找）被脚本挡住 ≥1.5 s | 用户要离开 | 中断（`AGB_USER_ABORT_MS`） |
+  | 导航（navigate/刷新/前进后退/load-html）投递时 JS 正在跑 | 用户要离开，页面马上被替换 | **投递即中断**（`agwPost()`，无等待），静默 |
+  | 导航命令在队首 ≥100 ms 且有 JS 在跑 | 投递时引擎还没进 JS（原生解析），随后才进 | 中断兜底（`AGB_NAV_ABORT_MS`），静默 |
+  | 旧文档收尾（pagehide/visibilitychange/unload）≥100 ms 未返回 | 收尾 handler 卡住 | 中断它，**下一个事件照常发**，静默（`AGB_TEARDOWN_MS`） |
+  | 其它用户动作（停止/查找）被脚本挡住 ≥1.5 s | 用户要操作，但页面留在屏幕上 | 中断并提示（`AGB_USER_ABORT_MS`） |
   | JS 连续在跑 ≥12 s，没有人在等 | 页面无响应（Chrome 同量级） | 中断并弹提示（`AGB_UNRESPONSIVE_MS`） |
   | 没有 JS、命令却 ≥10 s 不 drain | 引擎在 JS 之外卡住（模态/死锁/原生长活） | **不中断**（没人轮询标志），只记日志（`AGB_NATIVE_STALL_MS`） |
 
   页面脚本在 `macross_event_dispatch()` 里跑（load 事件、timer），**不在命令里** —— 所以"队首等了 1.5 s"
-  不能当成卡死（css3test 的 2.9 s onload 就是这样被误杀成 0% 的）。看门狗每 200 ms 采样一次，
-  `AGB_WD_DEBUG=1` 打印每个 tick 的四元组（`js/jsbusy/busy/queue/head`），是调这三个阈值的第一手数据。
+  不能当成卡死（css3test 的 2.9 s onload 就是这样被误杀成 0% 的）。看门狗每 50 ms 采样一次（导航预算只有
+  100 ms，200 ms 的 tick 会让实际反应变成 100–300 ms），
+  `AGB_WD_DEBUG=1` 打印每个 tick 的四元组（`js/jsbusy/busy/queue/head`），是调这几个阈值的第一手数据。
+  收尾预算的起点来自引擎：`documentWillUnload()` 写 `g_teardownStart`，控件通过
+  `agb_teardown_started_ms()`（`src/webview/AgbRuntime.h`）轮询——commit 是异步的，控件自己看不到收尾从哪一刻开始。
   中断只对 A 类（失控 JS）有效；B 类（原生阻塞）中断标志挂在那里没人看，所以第三档只记录不动作。
   每次判定同时写一行 `build-zig-native\agb_watchdog.txt`（pid / kind / jsdepth / 队首命令 / busy / queue）——
   GUI 里没有 stderr，"探针好好的、窗口里是 0%" 这种问题就靠它。
   回归：`pwsh -File tools/run_hang_recovery_tests.ps1`（8 条：中断、导航中断、空闲误中断、慢页连刷、
   timer 长脚本不被杀、卡死页刷新恢复、HTTP 连刷、reload 链）。
-  验证手段：`--probe <卡死页> --interrupt-after 2000`（到点中断，页面继续加载）或
-  `--nav-after 2000`（模拟“卡着时重新导航”）；回归 `pwsh -File tools/run_hang_recovery_tests.ps1`。
+  验证手段：`--probe <卡死页> --interrupt-after 2000`（到点中断，页面继续加载）、
+  `--nav-after 2000`（模拟"卡着时重新导航"）、`debug/teardown_hang.html`（pagehide 死循环，
+  收尾被切断且 unload 仍执行）、`--hide-after/--show-after`（Page Visibility，不经 GUI 切 tab）。
+  页面生命周期（事件顺序、Chrome 对拍工具）：`tools/chrome_lifecycle.py`。
   卡死时先 `tools/js_stack.ps1 -Pid <pid>` 留证据再点刷新。`AGB_CRASH_POPUP=0` 可关崩溃弹框
   （弹框会给出 `agb_crash.txt` 的绝对路径与符号化命令）。
 - **一条命令跑站点冒烟**：`pwsh -File tools/run_site_smoke.ps1`

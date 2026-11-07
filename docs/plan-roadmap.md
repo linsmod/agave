@@ -452,6 +452,15 @@
    同一次运行还可能打印 `LEAK: 4628 RenderObject` —— 像是 render 树 teardown 递归。判据：同一条命令重跑
    几次，成功与崩溃都可能出现；`#hgroup` 之类的 payload 不受影响。要修先拿 `tools/js_stack.ps1`/`cdb_stack.ps1`
    抓符号，别从 CSS 侧猜。
+10. `navigator.sendBeacon` 不存在（R106 把页面生命周期事件补齐后暴露的下一个缺口）：`pagehide` 里发最后一份
+   统计/埋点的页面会抛 `TypeError`，退而用 `fetch(keepalive)` 也保不住——`stopRealm()` 的
+   `cancelInFlightResources()` 会按 realm 取消在飞请求。做法：桥加 `antb_beacon_post(url, body, type)`
+   走 network manager 的**保活表**（不挂在 realm generation 上、不随 realm 拆除取消），prelude 里补
+   `navigator.sendBeacon`（入队成功返回 true）。验收：`debug/lifecycle_probe.html` 的 `pagehide` 里
+   `navigator.sendBeacon('/log', ...)` 在导航后仍到达本地 server；`run_nav_tests.ps1` 不退化。
+11. 窗口最小化（`WM_SIZE` 的 `SIZE_MINIMIZED`）目前不触发 `visibilitychange`（切 tab 已接
+   `agave_webview_set_visible()`）；Chrome 会发。做法：shell 的 `WM_SIZE` 里按最小化状态调
+   `agave_webview_set_visible(g_tabs[g_activeTab].view, !minimized)`。
 
 ### P2 不推进（已评估，保留理由）
 

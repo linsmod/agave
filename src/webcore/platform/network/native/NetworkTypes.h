@@ -17,16 +17,19 @@ namespace Net {
 
 typedef std::vector<std::pair<std::string, std::string> > HeaderList;
 
-/* Default network timeout. Overridable via AGB_NET_TIMEOUT_MS; tests use a small
- * value so a dead endpoint fails fast instead of stalling the run. */
+/* Default network timeout: 0 means "the system default" (WinHTTP's own budgets:
+ * resolve unlimited, connect 60 s, send/receive 30 s). It used to be a hard
+ * 5 s for every phase, which failed any resource that took longer on a slow
+ * link. Overridable via AGB_NET_TIMEOUT_MS; tests use a small value so a dead
+ * endpoint fails fast instead of stalling the run. */
 inline int netDefaultTimeoutMs()
 {
     static int cached = -1;
     if (cached < 0) {
         const char* env = getenv("AGB_NET_TIMEOUT_MS");
-        cached = env ? atoi(env) : 5000;
-        if (cached <= 0)
-            cached = 8000;
+        cached = env ? atoi(env) : 0;
+        if (cached < 0)
+            cached = 0;
     }
     return cached;
 }

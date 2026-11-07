@@ -136,6 +136,11 @@ AGW_API void agave_webview_eval(AgaveWebView* view, const char* script);
 AGW_API void agave_webview_set_zoom(AgaveWebView* view, int percent);
 AGW_API int  agave_webview_zoom(AgaveWebView* view);
 
+/* Page Visibility (tab switch, minimize): sets document.hidden /
+ * document.visibilityState and fires `visibilitychange`. Queued like the other
+ * commands; call it whenever the host shows/hides a tab. */
+AGW_API void agave_webview_set_visible(AgaveWebView* view, int visible);
+
 /* Last known state (valid on any thread, copied under lock). */
 AGW_API const char* agave_webview_url(AgaveWebView* view);
 AGW_API const char* agave_webview_title(AgaveWebView* view);

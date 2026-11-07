@@ -616,6 +616,9 @@
       this._mimeOverride = null;       /* charset from overrideMimeType() */
       this._reachedHeaders = false;    /* readyState 2 already delivered */
       this._reachedLoading = false;    /* readyState 3 already delivered */
+      this._reqId = 0;                 /* native request id, for abort/timeout */
+      this._timer = null;              /* xhr.timeout timer */
+      this._finished = false;          /* timeout/abort already answered */
     };
     /* responseText per spec: valid for '' and 'text'; throws an
      * InvalidStateError DOMException otherwise (pages branch on name). */
@@ -670,7 +673,20 @@
       this._mimeOverride = null;
       this._reachedHeaders = false;
       this._reachedLoading = false;
+      this._clearTimer();
+      this._reqId = 0;
+      this._finished = false;
       this.readyState = 1; this._fireState();
+    };
+    XHR.prototype._clearTimer = function () {
+      if (this._timer !== null) { clearTimeout(this._timer); this._timer = null; }
+    };
+    XHR.prototype._abortNative = function () {
+      var id = this._reqId;
+      this._reqId = 0;
+      if (id && typeof __agbHttpAbort === 'function') {
+        try { __agbHttpAbort(id); } catch (e) { }
+      }
     };
     XHR.prototype.setRequestHeader = function (k, v) { this._headers[k] = v; };
     XHR.prototype.getAllResponseHeaders = function () {
@@ -690,7 +706,21 @@
       if (this.readyState < 2) return null;
       return this._headerValue(name);
     };
-    XHR.prototype.abort = function () { this.readyState = 0; if (this.onabort) this.onabort.call(this, this); };
+    /* abort(): drop the native request, then answer the page with the spec's
+     * sequence (readystatechange -> abort -> loadend). Before this it only set
+     * readyState and called onabort, so the socket kept downloading. */
+    XHR.prototype.abort = function () {
+      this._clearTimer();
+      if (this._reqId === 0 && this.readyState !== 4) { this.readyState = 0; return; }
+      if (this._finished) return;
+      this._finished = true;
+      this._abortNative();
+      this.status = 0; this.statusText = '';
+      this.readyState = 4;
+      this._fireState();
+      this._fire('abort');
+      this._fire('loadend');
+    };
     /* overrideMimeType(): only the charset part is used here - it overrides the
      * one from Content-Type when decoding the body. Legal after open() and
      * before send(); discarded by the next open(). */
@@ -736,6 +766,9 @@
       }
     };
     XHR.prototype._finish = function (status, payload, binary, meta) {
+      this._clearTimer();
+      if (this._finished) return;
+      this._finished = true;
       this.status = status || 0;
       this.statusText = (meta && meta.statusText) ? String(meta.statusText) : '';
       if (meta && meta.headers) this._headerPairs = meta.headers;
@@ -839,10 +872,31 @@
        * later frame, so the UI keeps running. */
       /* Everything goes through the full request entry: pages POST JSON to
          auth/RPC/fingerprint endpoints, and a GET without body made those
-         fail and retry in a loop. */
-      __agbHttpRequestEx(target, method, ctype, payload, function (status, b64, meta) {
+         fail and retry in a loop. The returned id is what lets abort() and
+         xhr.timeout kill the request on the network side too. */
+      var reqId = __agbHttpRequestEx(target, method, ctype, payload, function (status, b64, meta) {
+        if (self._finished) return;
+        self._reqId = 0;
         self._finish(status, b64, true, meta);
       });
+      this._reqId = (typeof reqId === 'number') ? reqId : 0;
+
+      /* xhr.timeout: the spec's timer, not the transport's (WinHTTP quantizes
+       * its own timeouts to ~4 s, and the page must see `timeout` at the
+       * requested time). The native request is aborted for real. */
+      if (this.timeout > 0) {
+        this._timer = setTimeout(function () {
+          self._timer = null;
+          if (self._finished || self.readyState === 4) return;
+          self._finished = true;
+          self._abortNative();
+          self.status = 0; self.statusText = '';
+          self.readyState = 4;
+          self._fireState();
+          self._fire('timeout');
+          self._fire('loadend');
+        }, this.timeout);
+      }
     };
     g.XMLHttpRequest = XHR;
   }
@@ -864,8 +918,33 @@
         }
       }
       var payload = (opts.body === undefined || opts.body === null) ? '' : String(opts.body);
+      var signal = opts.signal;
       return new Promise(function (resolve, reject) {
-        __agbHttpRequestEx(url, method, ctype, payload, function (status, b64) {
+        var reqId = 0;
+        var finished = false;
+
+        function cleanup() {
+          if (signal && signal.removeEventListener) {
+            try { signal.removeEventListener('abort', onAbort); } catch (e) { }
+          }
+        }
+        function onAbort() {
+          if (finished) return;
+          finished = true;
+          if (reqId && typeof __agbHttpAbort === 'function') {
+            try { __agbHttpAbort(reqId); } catch (e) { }
+          }
+          cleanup();
+          var err;
+          try { err = new DOMException('The operation was aborted.', 'AbortError'); }
+          catch (e) { err = new Error('The operation was aborted.'); err.name = 'AbortError'; }
+          reject(err);
+        }
+
+        reqId = __agbHttpRequestEx(url, method, ctype, payload, function (status, b64) {
+          if (finished) return;
+          finished = true;
+          cleanup();
           if (!status) { reject(new Error('network error: ' + url)); return; }
           var buffer = g.__agbB64ToBuffer(b64);
           var response = {
@@ -889,6 +968,14 @@
           };
           resolve(response);
         });
+
+        /* AbortSignal: reject with AbortError and drop the native request, the
+         * same way a timeout drops an XHR. An already-aborted signal never
+         * starts the request at all. */
+        if (signal) {
+          if (signal.aborted) { onAbort(); return; }
+          if (signal.addEventListener) signal.addEventListener('abort', onAbort);
+        }
       });
     };
   }

@@ -488,6 +488,22 @@ MACROSS_API MC_STATUS macross_view_get_rendering_mode(MaCrossView* view, MC_REND
 MACROSS_API MC_STATUS macross_view_set_scale_factor(MaCrossView* view, int precent);
 
 /**
+ * \fn MC_STATUS macross_view_set_visible(MaCrossView* view, int visible)
+ *
+ * Page Visibility: the host reports whether this view is on screen (tab
+ * switch, window minimize). Sets document.hidden / document.visibilityState
+ * for the view's document and fires `visibilitychange` when the state changes.
+ *
+ * \param view     Pointer to an existing webview object.
+ * \param visible  Non-zero when the view is visible.
+ *
+ * \return
+ * 		- MC_STATUS_SUCCESS on success.
+ * 		- Other status code on failed.
+ */
+MACROSS_API MC_STATUS macross_view_set_visible(MaCrossView* view, int visible);
+
+/**
  * \brief window.open() hook.
  *
  * The engine asks this hook to create a new view. Returning non-zero means the

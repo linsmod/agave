@@ -132,9 +132,20 @@ void dispatchFrameDocumentEvent(void* document, const char* type);
 void dispatchResizeEvent(void* document);
 
 /* The document is about to be replaced: fires the outgoing page's teardown
- * events (pagehide, unload) at its own listeners and stops its realm. Call it
- * while the old document is still the current one. */
+ * events (pagehide, visibilitychange to hidden, unload) at its own listeners
+ * and stops its realm. Call it while the old document is still the current
+ * one. */
 void documentWillUnload(void);
+
+/* A child frame's document is being replaced (its Frame stays): fires that
+ * frame's pagehide/unload in its own realm, then drops the realm. No-op unless
+ * per-frame realms are on and the document had one. `document` may be NULL. */
+void frameDocumentWillUnload(void* document);
+
+/* The host says this view is visible or not (tab switch, minimize). Updates
+ * document.hidden / document.visibilityState and fires visibilitychange at the
+ * current document. */
+void setViewVisible(int visible);
 
 /* Runs the page's beforeunload guards (window.onbeforeunload /
  * addEventListener). Returns true when leaving must be confirmed and fills

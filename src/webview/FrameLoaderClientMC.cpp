@@ -791,6 +791,11 @@ void FrameLoaderClientMC::dispatchWillClose()
      * only the main frame may deliver them. */
     if (isMainFrameClient(m_frame))
         AntRuntime::documentWillUnload();
+    else
+        /* Frames get the same teardown (pagehide/unload in their own realm)
+         * and their realm is dropped here instead of leaking until the next
+         * main-frame navigation. */
+        AntRuntime::frameDocumentWillUnload(m_frame ? m_frame->document() : 0);
 #endif
 }
 void FrameLoaderClientMC::dispatchDidReceiveIcon()
@@ -829,10 +834,16 @@ void FrameLoaderClientMC::dispatchDidFinishLoad()
 {
     Net::logEvent("page.load", "url=%s", m_frame && m_frame->document() ? m_frame->document()->URL().utf8().data() : "");
 #if ENABLE(ANTJS)
-    if (isMainFrameClient(m_frame))
+    /* Chrome order: the load event, then pageshow (persisted=false). Pages use
+     * pageshow for "restored from cache" bookkeeping and for the counterpart of
+     * their pagehide cleanup, so it has to exist even without a bfcache. */
+    if (isMainFrameClient(m_frame)) {
         AntRuntime::dispatchWindowEvent("load");
-    else
+        AntRuntime::dispatchWindowEvent("pageshow");
+    } else {
         AntRuntime::dispatchFrameDocumentEvent(m_frame ? m_frame->document() : 0, "load");
+        AntRuntime::dispatchFrameDocumentEvent(m_frame ? m_frame->document() : 0, "pageshow");
+    }
 #endif
 
     /* Report progress 100 / finished: hosts use this to stop their frame loop,

@@ -40,6 +40,11 @@
  *                            src/javascript/ant_backend/AgbGapJsdom.h
  *   [dl]    downloads        start/progress/finish/fail/cancel of a download
  *                            job (default on, AGB_DL_LOG=0 silences it)
+ *   [parse] HTML parser      opt-in (AGB_PARSE_LOG=1): each <script>/<style>/
+ *                            <link> start tag with its attributes (src/href/
+ *                            rel/type/media/defer/async/nomodule), plus one line
+ *                            per script execution (classic/module, deferred or
+ *                            now)
  *
  * This is not the place for the opt-in debug channels ([netlog], [modfetch],
  * [snippet], [call], ...): they are separate tools with their own switches and
@@ -77,6 +82,7 @@ enum AgbLogChannel {
     AGB_LOG_CACHE,
     AGB_LOG_GAP,
     AGB_LOG_DL,
+    AGB_LOG_PARSE,
     AGB_LOG_CHANNEL_COUNT
 };
 
@@ -94,6 +100,7 @@ static const char* agbLogChannelName(int channel)
     case AGB_LOG_CACHE: return "cache";
     case AGB_LOG_GAP:   return "gap-jsdom";
     case AGB_LOG_DL:    return "dl";
+    case AGB_LOG_PARSE: return "parse";
     default:            break;
     }
 
@@ -211,6 +218,10 @@ static inline int agbLogEnabled(int channel)
      * must be "1" (default off) and AGB_STYLE_FILTER narrows it to the ids,
      * classes or tags that contain that substring. */
     case AGB_LOG_STYLE: value = getenv("AGB_STYLE_LOG");
+                        return value && value[0] == '1' && value[1] == 0;
+    /* Parser trace: <script>/<style>/<link> with their attributes. Per tag, so
+     * opt-in (AGB_PARSE_LOG=1) like the render-tree trace. */
+    case AGB_LOG_PARSE: value = getenv("AGB_PARSE_LOG");
                         return value && value[0] == '1' && value[1] == 0;
     default:          return 1;
     }

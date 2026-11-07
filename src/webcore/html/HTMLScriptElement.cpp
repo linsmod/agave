@@ -32,6 +32,9 @@
 #include "HTMLNames.h"
 #include "Text.h"
 
+/* The one diagnostics sink (src/webview/AgbLog.h, header-only). */
+#include "../../webview/AgbLog.h"
+
 #if ENABLE(KJS)
 #include "kjs_proxy.h"
 #endif
@@ -291,6 +294,8 @@ void HTMLScriptElement::evaluateScript(const String& URL, const String& script)
      * died). The element path is only reached for non-blocking scripts
      * (async / defer / dynamic), so queue it for the post-parse flush. */
     if (defer() && !hasAttribute(AtomicString("async"))) {
+        agbLog(AGB_LOG_PARSE, "script (defer) queued for parse end url=%s len=%u",
+               URL.utf8().data(), (unsigned)script.length());
         AntRuntime::queueDeferredScript(document(), URL.utf8().data(), script.utf8().data(), this);
         m_evaluated = true;
         return;
@@ -313,8 +318,12 @@ void HTMLScriptElement::evaluateScript(const String& URL, const String& script)
                 /* Modules run after parsing, like defer; evaluating here would
                  * run them against a half built document. They also never set
                  * document.currentScript (HTML spec). */
+                agbLog(AGB_LOG_PARSE, "script (module, src) queued for parse end url=%s len=%u",
+                       URL.utf8().data(), (unsigned)script.length());
                 AntRuntime::queueModule(URL.utf8().data(), script.utf8().data());
             } else {
+                agbLog(AGB_LOG_PARSE, "script (async/dynamic) running url=%s len=%u",
+                       URL.utf8().data(), (unsigned)script.length());
                 CurrentScriptScope currentScript(document(), this);
                 proxy->evaluate(URL, 0, script);
             }

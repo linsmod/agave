@@ -10,6 +10,7 @@
  */
 
 #include <windows.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -379,8 +380,13 @@ static void recordHistory(const char* url)
         fprintf(file, "%s\n", url);
         fclose(file);
     } else {
-        /* Silent before: "history keeps disappearing" started here. */
-        agbLog(AGB_LOG_SHELL, "history: cannot append to %s", path);
+        /* Silent before: "history keeps disappearing" started here. The errno
+         * number (and its text) is the point: the path alone cannot tell a
+         * locked/read-only profile from a full disk or a vanished directory. */
+        int savedErrno = errno;
+
+        agbLog(AGB_LOG_SHELL, "history: cannot append to %s (errno=%d: %s)",
+               path, savedErrno, strerror(savedErrno));
     }
 }
 
@@ -639,8 +645,14 @@ static void setActiveTab(int index)
     g_activeTab = index;
 
     for (i = 0; i < MAX_TABS; ++i) {
-        if (g_tabs[i].used && g_tabs[i].hwnd)
+        if (g_tabs[i].used && g_tabs[i].hwnd) {
             ShowWindow(g_tabs[i].hwnd, i == index ? SW_SHOW : SW_HIDE);
+
+            /* Page Visibility: background tabs keep loading, but their
+             * document.hidden is true and pages pause timers/media on it. */
+            if (g_tabs[i].view)
+                agave_webview_set_visible(g_tabs[i].view, i == index);
+        }
     }
 
     layoutTab(index);
@@ -1029,7 +1041,7 @@ static void onUnresponsive(AgaveWebView* view, const char* reason,
 }
 
 /* Right click: the control reports the hit-test; the shell owns the menu. */
-static void navigateActive(const char* text, int newTab);
+static void navigateActive(const char* text, int newTab, const char* source);
 static void addBookmarkCurrent(void);
 static void reloadActive(const char* source);
 static void backActive(const char* source);
@@ -1300,8 +1312,8 @@ static void onContextMenu(AgaveWebView* view, int x, int y,
     case 1: backActive("context menu"); break;
     case 2: forwardActive("context menu"); break;
     case 3: reloadActive("context menu"); break;
-    case 4: if (linkUrl && linkUrl[0]) navigateActive(linkUrl, 0); break;
-    case 5: if (linkUrl && linkUrl[0]) navigateActive(linkUrl, 1); break;
+    case 4: if (linkUrl && linkUrl[0]) navigateActive(linkUrl, 0, "context menu"); break;
+    case 5: if (linkUrl && linkUrl[0]) navigateActive(linkUrl, 1, "context menu"); break;
     case 6:
         if (linkUrl && linkUrl[0]) {
             wchar_t wide[2048];
@@ -1437,6 +1449,48 @@ static void appendUrlEncoded(char* out, size_t outSize, size_t* written, const c
     *written = o;
 }
 
+static int hexValue(char c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+/* Decodes the %XX escapes of a URL path; invalid escapes stay literal. Needed
+ * when a file: URL that is already encoded has to be rebuilt: treating it as a
+ * raw filesystem path would encode its '%' again ("%20" -> "%2520") on every
+ * pass, which is what made repeated Go clicks grow the address bar. */
+static void decodeUrlPath(const char* text, char* out, size_t outSize)
+{
+    size_t o = 0;
+
+    if (!outSize)
+        return;
+
+    if (!text) {
+        out[0] = 0;
+        return;
+    }
+
+    while (*text && o + 1 < outSize) {
+        if (text[0] == '%' && text[1] && text[2]) {
+            int hi = hexValue(text[1]);
+            int lo = hexValue(text[2]);
+
+            if (hi >= 0 && lo >= 0) {
+                out[o++] = (char)((hi << 4) | lo);
+                text += 3;
+                continue;
+            }
+        }
+
+        out[o++] = *text++;
+    }
+
+    out[o] = 0;
+}
+
 /* Splits "path?query#fragment" into the on-disk path and the URL suffix.
  * The suffix is appended to the file: URL verbatim - a query or fragment is
  * not part of the file name, and percent-encoding its '?' would make the path
@@ -1531,8 +1585,11 @@ static void fileUrlFromLocalPath(const char* input, char* out, size_t outSize)
         return;
     }
 
-    /* "C:/dir/x" -> file:///C:/dir/x (the leading slash comes from the path). */
-    appendUrlEncoded(out, outSize, &written, "file://");
+    /* "C:/dir/x" -> file:///C:/dir/x. A drive path has no leading slash, so the
+     * URL has to spell all three of them: with two ("file://C:/x") the third
+     * rebuild below classified it as "file: + drive path" again and re-encoded
+     * the path - the "%20" -> "%2520" growth on repeated Go clicks. */
+    appendUrlEncoded(out, outSize, &written, "file:///");
     appendUrlEncoded(out, outSize, &written, full);
 }
 
@@ -1607,14 +1664,25 @@ static void normalizeUrl(const char* input, char* out, size_t outSize)
 
         /* Windows separators, or a drive/UNC path without the third slash:
          * rebuild the canonical file:/// form (the engine needs it). A
-         * ?query / #fragment rides along verbatim. */
+         * ?query / #fragment rides along verbatim. The path may already be
+         * percent-encoded (it came from a URL, not from a typed path): decode
+         * first, or every rebuild would encode the '%' again. */
         if (strchr(p, '\\') || (slashes < 3 && (isDrivePath(q) || isUncPath(q)))) {
             char localPath[MAX_PATH_CHARS];
+            char decoded[MAX_PATH_CHARS];
             const char* suffix;
             const char* candidate = (strchr(p, '\\') && slashes == 0) ? p : q;
 
             splitLocalSuffix(candidate, localPath, sizeof(localPath), &suffix);
-            fileUrlFromLocalPath(localPath, out, outSize);
+            if (strchr(localPath, '\\')) {
+                /* A typed Windows path: its '%' is a literal file-name byte,
+                 * not an escape. Only URL paths get decoded. */
+                strncpy(decoded, localPath, sizeof(decoded) - 1);
+                decoded[sizeof(decoded) - 1] = 0;
+            } else {
+                decodeUrlPath(localPath, decoded, sizeof(decoded));
+            }
+            fileUrlFromLocalPath(decoded, out, outSize);
             appendLocalSuffix(out, outSize, suffix);
             return;
         }
@@ -1622,10 +1690,12 @@ static void normalizeUrl(const char* input, char* out, size_t outSize)
         if (slashes < 2 && q[0]) {
             /* file:C:/x */
             char localPath[MAX_PATH_CHARS];
+            char decoded[MAX_PATH_CHARS];
             const char* suffix;
 
             splitLocalSuffix(q, localPath, sizeof(localPath), &suffix);
-            fileUrlFromLocalPath(localPath, out, outSize);
+            decodeUrlPath(localPath, decoded, sizeof(decoded));
+            fileUrlFromLocalPath(decoded, out, outSize);
             appendLocalSuffix(out, outSize, suffix);
             return;
         }
@@ -1762,11 +1832,17 @@ static void createTab(const char* url)
     agave_webview_navigate(tab->view, url);
 }
 
-static void navigateActive(const char* text, int newTab)
+static void navigateActive(const char* text, int newTab, const char* source)
 {
     char url[MAX_PATH_CHARS];
 
     normalizeUrl(text, url, sizeof(url));
+
+    /* The one line that tells which entry point started the navigation: the
+     * engine only logs [nav] open url, which every path shares. Without this
+     * an address-bar Enter, a Go click and a history-menu pick look identical. */
+    agbLog(AGB_LOG_SHELL, "navigate (%s) url=%s newtab=%d",
+           source ? source : "?", url, newTab);
 
     if (newTab || !g_tabs[g_activeTab].used) {
         createTab(url);
@@ -1979,7 +2055,7 @@ static void showMainMenu(void)
         int index = g_historyCount - 1 - (choice - 200);
 
         if (index >= 0 && index < g_historyCount)
-            navigateActive(g_history[index], 0);
+            navigateActive(g_history[index], 0, "history menu");
         return;
     }
 
@@ -1987,7 +2063,7 @@ static void showMainMenu(void)
         int index = choice - 100;
 
         if (index >= 0 && index < g_bookmarkCount)
-            navigateActive(g_bookmarks[index].url, 0);
+            navigateActive(g_bookmarks[index].url, 0, "bookmark menu");
         return;
     }
 
@@ -1996,7 +2072,7 @@ static void showMainMenu(void)
     case 2: setZoom(g_zoom + 25, "menu zoom in"); break;
     case 3: setZoom(g_zoom - 25, "menu zoom out"); break;
     case 4: setZoom(100, "menu reset zoom"); break;
-    case 5: navigateActive("about:blank", 1); break;
+    case 5: navigateActive("about:blank", 1, "menu"); break;
     case 6: toggleFind(); break;
     case 7: reloadActive("menu"); break;
     case 8: injectVConsole(g_tabs[g_activeTab].view); break;
@@ -2175,11 +2251,11 @@ static LRESULT CALLBACK shellProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM
             char text[MAX_PATH_CHARS];
 
             readControlText(g_address, text, sizeof(text));
-            navigateActive(text, 0);
+            navigateActive(text, 0, "button");
             break;
         }
 
-        case ID_NEWTAB: navigateActive("about:blank", 1); break;
+        case ID_NEWTAB: navigateActive("about:blank", 1, "button"); break;
         case ID_MENU:   showMainMenu(); break;
 
         case ID_FIND_NEXT:  doFind(1); break;
@@ -2223,6 +2299,10 @@ static int g_probeInterruptAfterMs;
 /* --nav-after <ms>: navigate while the page is still busy (choke-point test). */
 static int g_probeNavAfterMs;
 static char g_probeNavUrl[MAX_PATH_CHARS];
+/* --hide-after/--show-after <ms>: Page Visibility changes without a GUI tab
+ * switch (the control's set_visible path). */
+static int g_probeHideAfterMs;
+static int g_probeShowAfterMs;
 /* --reload-every <ms> --reload-count <n>: hammer Reload regardless of load state. */
 static int g_probeReloadEveryMs;
 static int g_probeReloadCount;
@@ -2464,6 +2544,8 @@ static void shellExitTrace(void)
 #define PROBE_TIMER_INTERRUPT 5 /* one-shot: --interrupt-after (hang recovery) */
 #define PROBE_TIMER_NAV     6   /* one-shot: --nav-after (navigation aborts a stuck page) */
 #define PROBE_TIMER_RELOAD  7   /* repeating: --reload-every (hammer Reload) */
+#define PROBE_TIMER_HIDE    8   /* one-shot: --hide-after (Page Visibility) */
+#define PROBE_TIMER_SHOW    9   /* one-shot: --show-after (Page Visibility) */
 
 /* Engine-thread callbacks post this to the probe window (main thread) to arm
  * the eval timer: window timers must be installed by the owning thread. */
@@ -3111,6 +3193,10 @@ static int probeRun(const char* url)
         SetTimer(g_probeWnd, PROBE_TIMER_INTERRUPT, (UINT)g_probeInterruptAfterMs, NULL);
     if (g_probeNavAfterMs > 0)
         SetTimer(g_probeWnd, PROBE_TIMER_NAV, (UINT)g_probeNavAfterMs, NULL);
+    if (g_probeHideAfterMs > 0)
+        SetTimer(g_probeWnd, PROBE_TIMER_HIDE, (UINT)g_probeHideAfterMs, NULL);
+    if (g_probeShowAfterMs > 0)
+        SetTimer(g_probeWnd, PROBE_TIMER_SHOW, (UINT)g_probeShowAfterMs, NULL);
     if (g_probeReloadEveryMs > 0)
         SetTimer(g_probeWnd, PROBE_TIMER_RELOAD, (UINT)g_probeReloadEveryMs, NULL);
 
@@ -3154,6 +3240,24 @@ static int probeRun(const char* url)
                     probePrint("[probe]", "nav-after: navigating while the page is busy");
                     agave_webview_navigate(g_probeView,
                                            g_probeNavUrl[0] ? g_probeNavUrl : "about:blank");
+                }
+                continue;
+            }
+
+            if (msg.wParam == PROBE_TIMER_HIDE) {
+                KillTimer(g_probeWnd, PROBE_TIMER_HIDE);
+                if (g_probeView) {
+                    probePrint("[probe]", "hide-after: tab hidden");
+                    agave_webview_set_visible(g_probeView, 0);
+                }
+                continue;
+            }
+
+            if (msg.wParam == PROBE_TIMER_SHOW) {
+                KillTimer(g_probeWnd, PROBE_TIMER_SHOW);
+                if (g_probeView) {
+                    probePrint("[probe]", "show-after: tab visible again");
+                    agave_webview_set_visible(g_probeView, 1);
                 }
                 continue;
             }
@@ -3497,6 +3601,9 @@ static void probeUsage(void)
             "  --settle  time after the eval script returns before exit (default 1000;\n"
             "            a script slower than settle is still allowed to finish)\n"
             "  --timeout hard cap from start (default 60000)\n"
+            "  --nav-after <ms> [--nav-url <url>]  navigate while the page is busy\n"
+            "  --hide-after <ms> / --show-after <ms>  Page Visibility change\n"
+            "            (document.hidden + visibilitychange) without a GUI tab switch\n"
             "  --shot <path>  write a BMP of what the page painted and exit; the\n"
             "            window stays hidden, so this is the headless screenshot\n"
             "            path (no focus stealing, nothing on screen)\n"
@@ -3655,6 +3762,10 @@ static void parseShellArgv(void)
             /* Navigate N ms after the probe starts, while the page is still
              * busy: the control aborts the running script at agwPost(). */
             g_probeNavAfterMs = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "--hide-after") && i + 1 < argc) {
+            g_probeHideAfterMs = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "--show-after") && i + 1 < argc) {
+            g_probeShowAfterMs = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--nav-url") && i + 1 < argc) {
             strncpy(g_probeNavUrl, argv[++i], sizeof(g_probeNavUrl) - 1);
             g_probeNavUrl[sizeof(g_probeNavUrl) - 1] = 0;
@@ -3869,7 +3980,7 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
                 char text[MAX_PATH_CHARS];
 
                 readControlText(g_address, text, sizeof(text));
-                navigateActive(text, 0);
+                navigateActive(text, 0, "enter");
                 continue;
             }
 
@@ -3898,12 +4009,12 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
                 int shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
 
                 if (msg.wParam == 'D' && !shift) { addBookmarkCurrent(); continue; }
-                if (msg.wParam == 'J' && !shift) { navigateActive("agave://downloads", 1); continue; }
+                if (msg.wParam == 'J' && !shift) { navigateActive("agave://downloads", 1, "ctrl+j"); continue; }
                 if (msg.wParam == 'F' && !shift) { toggleFind(); continue; }
                 if (msg.wParam == 'T') {
                     /* ctrl+shift+T reopens the last closed tab, ctrl+T a new one. */
                     if (shift) reopenClosedTab();
-                    else navigateActive("about:blank", 1);
+                    else navigateActive("about:blank", 1, "ctrl+t");
                     continue;
                 }
                 if (msg.wParam == 'W' && !shift) { closeTab(g_activeTab); continue; }

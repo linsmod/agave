@@ -20,22 +20,34 @@
 #include "agave_webview.h"
 #include "AntBridge.h"   /* antb_interrupt_all_engines: abort a stuck page script */
 #include "../webview/AgbLog.h"
+#include "../webview/AgbRuntime.h"   /* agb_teardown_started_ms: budget the teardown */
 
 /* Defined next to the command drain loop; needed here because agwPost() is the
  * single choke point every host call goes through. */
 static volatile LONG g_engineBusy;
 static DWORD         g_engineBusySince;
 
-/* The three responsiveness budgets (see the watchdog for how they are used):
- * a user action blocked by a page script, a page script with nobody waiting on
- * it, and an engine that stopped draining without running JS (reported, not
- * aborted). AGW_REPORT_GAP_MS rate-limits the report so a script that ignores
- * the abort cannot fill the log or pop a dialog every tick. */
+/* The responsiveness budgets (see the watchdog for how they are used):
+ * a navigation blocked by a page script, a stop/search blocked by one, and a
+ * page script with nobody waiting on it, plus an engine that stopped draining
+ * without running JS (reported, not aborted). AGW_REPORT_GAP_MS rate-limits the
+ * report so a script that ignores the abort cannot fill the log or pop a dialog
+ * every tick.
+ *
+ * Navigations get a much shorter budget than the other user actions: a
+ * navigation replaces the document, so aborting the outgoing page's script
+ * cannot corrupt anything the user will see again. A stop/search keeps the
+ * page, so it keeps the old budget - killing there leaves a half-run script in
+ * a page that stays on screen. */
+#define AGW_NAV_ABORT_MS       100u
 #define AGW_USER_ABORT_MS     1500u
+#define AGW_TEARDOWN_MS        100u
 #define AGW_UNRESPONSIVE_MS  12000u
 #define AGW_NATIVE_STALL_MS  10000u
 #define AGW_REPORT_GAP_MS     5000u
+static DWORD g_navAbortMs = AGW_NAV_ABORT_MS;
 static DWORD g_userAbortMs = AGW_USER_ABORT_MS;
+static DWORD g_teardownMs = AGW_TEARDOWN_MS;
 static DWORD g_unresponsiveMs = AGW_UNRESPONSIVE_MS;
 static DWORD g_nativeStallMs = AGW_NATIVE_STALL_MS;
 static int   g_watchdogDebug;
@@ -84,7 +96,7 @@ enum {
     AGW_CMD_RELOAD, AGW_CMD_STOP, AGW_CMD_EVAL, AGW_CMD_ZOOM,
     AGW_CMD_RESIZE, AGW_CMD_UA, AGW_CMD_DL_DIR, AGW_CMD_MOUSE, AGW_CMD_KEY,
     AGW_CMD_CHAR, AGW_CMD_FOCUS, AGW_CMD_SEARCH, AGW_CMD_CONTEXT,
-    AGW_CMD_DL_CANCEL
+    AGW_CMD_DL_CANCEL, AGW_CMD_VISIBLE
 };
 
 /* Commands that mean "the user wants the page to change": while one of them
@@ -107,9 +119,27 @@ static int agwCommandIsUserAction(int type)
     }
 }
 
+/* The user-action commands that replace the document. Aborting the script
+ * behind one of them costs nothing (the page is going away), so they get a
+ * much shorter budget than stop/search, which keep the page on screen. */
+static int agwCommandIsNavigation(int type)
+{
+    switch (type) {
+    case AGW_CMD_NAVIGATE:
+    case AGW_CMD_LOAD_HTML:
+    case AGW_CMD_BACK:
+    case AGW_CMD_FORWARD:
+    case AGW_CMD_RELOAD:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 /* Why the watchdog spoke up. AGW_HANG_STALL is the one case where aborting is
  * pointless: the engine is not in JS, so nothing would poll the flag. */
-enum { AGW_HANG_NONE, AGW_HANG_USER_ACTION, AGW_HANG_UNRESPONSIVE, AGW_HANG_STALL };
+enum { AGW_HANG_NONE, AGW_HANG_USER_ACTION, AGW_HANG_UNRESPONSIVE, AGW_HANG_STALL,
+       AGW_HANG_TEARDOWN };
 
 /* Watchdog -> UI thread payload (the reason text and the numbers behind it). */
 typedef struct {
@@ -317,10 +347,15 @@ static void agwPost(int type, AgaveWebView* view, const char* text,
      * reload, new tab, eval) queues here. If the engine has been inside a
      * script for a while, the command would sit behind that script forever -
      * so this is where "navigation aborts the current page" belongs, not in
-     * each caller. */
-    /* Abort decisions are made by the watchdog thread below: at post time the
-     * command has just been queued (age 0), and an idle engine looks exactly
-     * like a hung one from here. */
+     * each caller.
+     *
+     * A navigation aborts whatever script is running *now*: the page is going
+     * away, so there is nothing to preserve and no grace period to wait out
+     * (the teardown that follows has its own budget, see the watchdog). The
+     * flag is consumed by the aborted script; the teardown handlers run later
+     * as fresh top-level evals and are unaffected. */
+    if (queued && agwCommandIsNavigation(type) && antb_engines_js_depth() > 0)
+        antb_interrupt_all_engines();
 
     memset(&command, 0, sizeof(command));
     command.type = type;
@@ -904,15 +939,19 @@ static void agwApplyPendingResizes(void)
  *   JS on the stack (antb_engines_js_depth)  -> a page script is running, i.e.
  *       interruptible.  Load events and timers run in macross_event_dispatch(),
  *       outside any command, so the queue head ages while the page works.
- *   A user action waiting (navigate/reload/stop/eval/search)  -> the user asked
- *       to leave; 1.5 s of a blocked user action is already too long.
+ *   A navigation waiting (navigate/load/reload/back/forward)  -> the user asked
+ *       to leave; the page is replaced, so its script can be killed after a
+ *       very short budget (AGW_NAV_ABORT_MS, 100 ms).
+ *   Any other user action waiting (stop/search) -> the page stays, so the
+ *       longer budget applies (AGW_USER_ABORT_MS, 1.5 s).
  *   Neither JS nor a command running, and the queue still does not move ->
  *       the engine is wedged outside JS (modal dialog, deadlock, native loop).
  *       Aborting does nothing here: nobody polls the flag.
  *
- * Three verdicts, three actions:
+ * Verdicts and actions:
  *
- *   user action blocked by JS   -> abort after AGW_USER_ABORT_MS   (1.5 s)
+ *   navigation blocked by JS  -> abort after AGW_NAV_ABORT_MS    (100 ms, silent)
+ *   user action blocked by JS -> abort after AGW_USER_ABORT_MS   (1.5 s)
  *   JS running with nobody waiting -> abort after AGW_UNRESPONSIVE_MS (12 s,
  *       the browser "page unresponsive" scale; a legitimate 2.9 s onload
  *       (css3test) is not touched)
@@ -928,7 +967,10 @@ static const char* agwHangReason(int kind)
 {
     switch (kind) {
     case AGW_HANG_USER_ACTION:
-        return "A page script was blocking a navigation, so it was aborted.";
+        return "A page script was blocking a user action, so it was aborted.";
+    case AGW_HANG_TEARDOWN:
+        return "A page teardown handler (pagehide/visibilitychange/unload) did not "
+               "return, so it was aborted.";
     case AGW_HANG_UNRESPONSIVE:
         return "The page script was unresponsive, so it was aborted.";
     case AGW_HANG_STALL:
@@ -1022,12 +1064,15 @@ static DWORD WINAPI agwWatchdogThread(LPVOID param)
     (void)param;
 
     while (!InterlockedCompareExchange(&g_watchdogStop, 0, 0)) {
-        DWORD now, delta, busyMs = 0, queueMs = 0;
+        DWORD now, delta, busyMs = 0, queueMs = 0, teardownMs = 0;
         unsigned int jsDepth;
         int headType = -1;
         int kind = AGW_HANG_NONE;
 
-        Sleep(200);
+        /* 50 ms, not 200: the navigation budget is 100 ms, so a coarser tick
+         * would make the real reaction 100-300 ms. The tick only reads two
+         * integers and the queue head. */
+        Sleep(50);
 
         now = GetTickCount();
         delta = now - lastTick;
@@ -1053,7 +1098,23 @@ static DWORD WINAPI agwWatchdogThread(LPVOID param)
                    jsDepth, (unsigned long)jsBusyMs, (unsigned long)busyMs,
                    (unsigned long)queueMs, headType);
 
-        if (jsDepth && headType >= 0 && agwCommandIsUserAction(headType) && queueMs >= g_userAbortMs) {
+        if (jsDepth) {
+            unsigned long teardownAt = agb_teardown_started_ms();
+
+            teardownMs = teardownAt ? (DWORD)(now - (DWORD)teardownAt) : 0;
+        } else {
+            teardownMs = 0;
+        }
+
+        if (jsDepth && teardownMs && teardownMs >= g_teardownMs) {
+            /* The outgoing document's pagehide/visibilitychange/unload handler
+             * is not returning. Cutting it is safe: each handler is a separate
+             * top-level eval, so the next event still fires. Re-armed every
+             * tick so a second stuck handler is cut too. */
+            kind = AGW_HANG_TEARDOWN;
+        } else if (jsDepth && headType >= 0 &&
+            ((agwCommandIsNavigation(headType) && queueMs >= g_navAbortMs) ||
+             (agwCommandIsUserAction(headType) && queueMs >= g_userAbortMs))) {
             kind = AGW_HANG_USER_ACTION;
         } else if (jsBusyMs >= g_unresponsiveMs || busyMs >= g_unresponsiveMs) {
             kind = AGW_HANG_UNRESPONSIVE;
@@ -1075,16 +1136,24 @@ static DWORD WINAPI agwWatchdogThread(LPVOID param)
         lastReport = now;
 
         agbLog(AGB_LOG_EVT,
-               "watchdog: %s (jsdepth=%u head=%d busy=%lums queue=%lums)",
-               kind == AGW_HANG_USER_ACTION ? "aborting a script that blocks a user action"
+               "watchdog: %s (jsdepth=%u head=%d busy=%lums queue=%lums teardown=%lums)",
+               kind == AGW_HANG_TEARDOWN ? "aborting a teardown handler that does not return"
+               : kind == AGW_HANG_USER_ACTION
+                   ? (agwCommandIsNavigation(headType) ? "aborting a script that blocks a navigation"
+                                                       : "aborting a script that blocks a user action")
                : kind == AGW_HANG_UNRESPONSIVE ? "aborting an unresponsive page script"
                : "engine stalled outside JS",
-               jsDepth, headType, (unsigned long)busyMs, (unsigned long)queueMs);
+               jsDepth, headType, (unsigned long)busyMs, (unsigned long)queueMs,
+               (unsigned long)teardownMs);
         agwWatchdogRecord(kind, jsDepth, headType, busyMs, queueMs);
         /* Only a verdict that changed something is worth a dialog. The stall
          * verdict kills nothing and is the one a merely slow (big layout, slow
-         * image decode) page can produce, so it stays in the log. */
-        if (kind != AGW_HANG_STALL)
+         * image decode) page can produce, so it stays in the log. A navigation
+         * abort is routine (the user asked to leave; the page was mid-script),
+         * so it must not pop a dialog on every click either; the same holds for
+         * a teardown handler that overran its budget. */
+        if (kind != AGW_HANG_STALL && kind != AGW_HANG_TEARDOWN &&
+            !(kind == AGW_HANG_USER_ACTION && agwCommandIsNavigation(headType)))
             agwNotifyHang(kind, jsDepth, headType, busyMs, queueMs);
     }
 
@@ -1097,6 +1166,10 @@ static void agwWatchdogStart(void)
 
     if (g_watchdog) return;
 
+    if ((env = getenv("AGB_NAV_ABORT_MS")) != NULL && atoi(env) > 0)
+        g_navAbortMs = (DWORD)atoi(env);
+    if ((env = getenv("AGB_TEARDOWN_MS")) != NULL && atoi(env) > 0)
+        g_teardownMs = (DWORD)atoi(env);
     if ((env = getenv("AGB_USER_ABORT_MS")) != NULL && atoi(env) > 0)
         g_userAbortMs = (DWORD)atoi(env);
     if ((env = getenv("AGB_UNRESPONSIVE_MS")) != NULL && atoi(env) > 0)
@@ -1232,6 +1305,13 @@ static void agwDrainCommands(void)
         case AGW_CMD_EVAL:
             if (item->view)
                 macross_view_eval_script(item->view, payload);
+            break;
+
+        case AGW_CMD_VISIBLE:
+            /* Page Visibility: only the document state and the event; the
+             * window itself is shown/hidden by the host. */
+            if (item->view)
+                macross_view_set_visible(item->view, command.a ? 1 : 0);
             break;
 
         case AGW_CMD_ZOOM:
@@ -2308,6 +2388,14 @@ void agave_webview_set_zoom(AgaveWebView* item, int percent)
 int agave_webview_zoom(AgaveWebView* item)
 {
     return item ? item->zoom : 100;
+}
+
+void agave_webview_set_visible(AgaveWebView* item, int visible)
+{
+    if (!item)
+        return;
+
+    agwPost(AGW_CMD_VISIBLE, item, NULL, 0, 0, visible ? 1 : 0, 0);
 }
 
 int agave_webview_search(AgaveWebView* item, const char* text, int forward, int case_sensitive)

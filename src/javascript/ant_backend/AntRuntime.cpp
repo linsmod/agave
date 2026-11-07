@@ -175,6 +175,12 @@ struct RuntimeState {
     int                currentSlot;
     unsigned long      generation;      /* id of the realm (see nextGeneration) */
     unsigned long      polyfillsGeneration; /* realm whose VM already got polyfills.js */
+    /* Page Visibility: one flag per view, shared by every document in it (a
+     * frame inherits the top-level state, like the spec). `viewHidden` is what
+     * the host last said; `hidden` is what the current document reports, which
+     * the teardown forces to 1 without changing what the host said. */
+    int                hidden;
+    int                viewHidden;
 };
 
 /* Every realm (one document) gets a fresh id. Resources that can outlive
@@ -206,6 +212,17 @@ static unsigned long currentGeneration(void)
         return 0;
 
     return g_currentState->generation;
+}
+
+/* Page Visibility, as the page sees it: document.hidden / visibilityState. */
+static int documentHidden(void)
+{
+    return (g_currentState && g_currentState != &g_emptyState) ? g_currentState->hidden : 0;
+}
+
+static const char* visibilityStateName(void)
+{
+    return documentHidden() ? "hidden" : "visible";
 }
 
 /* DOM nodes are pinned (ref'd) so a freed node's address is never reused for
@@ -691,6 +708,17 @@ static std::string base64Encode(const char* data, size_t len)
     return out;
 }
 
+/* Monotonic ids for JS-initiated requests. The shim keeps the id so it can
+ * abort a request the page gave up on (xhr.timeout, xhr.abort(), a fetch
+ * AbortSignal): the request itself is still running on the network thread, and
+ * nothing else can reach it from JS. */
+static long long nextXhrId(void)
+{
+    static long long counter = 0;
+
+    return ++counter;
+}
+
 struct XhrJob : public WebCore::ResourceHandleClient {
     XhrJob(AntbEngine* engine, AntbValue* callback, bool binary = false,
            const char* method = NULL, const char* contentType = NULL,
@@ -708,6 +736,7 @@ struct XhrJob : public WebCore::ResourceHandleClient {
         , m_doneMs(0)
         , m_slot(g_currentSlot)
         , m_generation(currentGeneration())
+        , m_id(nextXhrId())
     {
     }
 
@@ -962,8 +991,10 @@ struct XhrJob : public WebCore::ResourceHandleClient {
     std::string                     m_contentType;
     std::string                     m_postBody;    /* request body (text) */
     unsigned long                   m_generation;  /* the realm that started it */
+    long long                       m_id;          /* the id JS aborts with */
 
     unsigned long generation() const { return m_generation; }
+    long long id() const { return m_id; }
 };
 
 static Vector<XhrJob*>& xhrJobs()
@@ -1048,13 +1079,28 @@ static void collectXhrJobs()
     g_inCollectXhr = false;
 }
 
+/* Hands the job id to JS: __agbHttpRequest* return it so the shim can abort the
+ * request later (xhr.timeout / abort / fetch signal). */
+static void assignXhrId(AntbEngine* engine, AntbValue* out, XhrJob* job)
+{
+    AntbValue* value;
+
+    if (!out || !job)
+        return;
+
+    value = antb_make_number(engine, (double)job->id());
+
+    if (value) {
+        antb_value_assign(out, value);
+        antb_value_release(value);
+    }
+}
+
 int globalHttpRequest(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
                       AntbValue* out, void*)
 {
     char* urlText;
     XhrJob* job;
-
-    (void)out;
 
     if (argc < 2)
         return 1;
@@ -1066,6 +1112,7 @@ int globalHttpRequest(AntbEngine* engine, AntbValue*, AntbValue** args, int argc
     job = new XhrJob(engine, args[1]);
     xhrJobs().append(job);
     job->start(urlText);
+    assignXhrId(engine, out, job);
 
     antb_free(urlText);
     return 1;
@@ -1090,6 +1137,7 @@ int globalHttpRequestBin(AntbEngine* engine, AntbValue*, AntbValue** args, int a
     job = new XhrJob(engine, args[1], true);
     xhrJobs().append(job);
     job->start(urlText);
+    assignXhrId(engine, out, job);
 
     antb_free(urlText);
     return 1;
@@ -1128,11 +1176,40 @@ int globalHttpRequestEx(AntbEngine* engine, AntbValue*, AntbValue** args, int ar
     job = new XhrJob(engine, args[4], true, methodText, typeText, bodyText);
     xhrJobs().append(job);
     job->start(urlText);
+    assignXhrId(engine, out, job);
 
     antb_free(urlText);
     antb_free(methodText);
     antb_free(typeText);
     antb_free(bodyText);
+    return 1;
+}
+
+/* __agbHttpAbort(id): the page gave up on a request (timeout, abort(),
+ * AbortSignal). cancel() closes the socket and drops the JS callback; the job
+ * stays in the list with done=true, so the next collectXhrJobs() reaps it
+ * without delivering anything. */
+int globalHttpAbort(AntbEngine*, AntbValue*, AntbValue** args, int argc,
+                    AntbValue*, void*)
+{
+    long long id;
+    Vector<XhrJob*>& jobs = xhrJobs();
+
+    if (argc < 1 || !args[0])
+        return 1;
+
+    id = (long long)antb_to_number(args[0]);
+
+    if (id <= 0)
+        return 1;
+
+    for (unsigned i = 0; i < jobs.size(); ++i) {
+        if (jobs[i] && jobs[i]->id() == id) {
+            jobs[i]->cancel();
+            break;
+        }
+    }
+
     return 1;
 }
 
@@ -1143,6 +1220,7 @@ int globalClassOp(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalHttpRequest(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalHttpRequestBin(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalHttpRequestEx(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int globalHttpAbort(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeSetter(AntbEngine*, AntbValue*, const char*, const AntbValue*, void*);
 int docCreateElement(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int docCreateElementNS(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
@@ -1783,7 +1861,7 @@ int titleGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue
     }
 
     if (!strcmp(name, "visibilityState")) {
-        AntbValue* v = antb_make_string(engine, "visible");
+        AntbValue* v = antb_make_string(engine, visibilityStateName());
 
         if (!v)
             return 0;
@@ -1795,7 +1873,7 @@ int titleGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue
     if (!strcmp(name, "hidden")) {
         /* document.hidden is the counterpart of visibilityState, not the
          * element attribute. */
-        AntbValue* v = antb_make_number(engine, 0);
+        AntbValue* v = antb_make_number(engine, documentHidden() ? 1 : 0);
 
         if (!v)
             return 0;
@@ -3622,7 +3700,10 @@ static void moduleStart(const std::string& url, bool force)
 
         request.url = url;
         request.method = "GET";
-        request.timeoutMs = 5000;
+        /* 0 = the network layer's default (the system's budgets). The 5 s
+         * literal here was the reason slow module graphs "failed" while their
+         * requests were still downloading. */
+        request.timeoutMs = 0;
 
         entry->id = g_moduleSession->start(request, new ModuleFetchClient(url, entry->serial));
 
@@ -3721,6 +3802,25 @@ static void modulePrefetchImports(const std::string& url, const std::string& bod
                 url.c_str(), found, g_moduleInFlight);
 }
 
+/* How long the tokenizer may block on the engine thread waiting for one module
+ * body. It has to be at least the network budget, otherwise a module that is
+ * merely slow "fails" while its request is still in flight (the old hard 5 s
+ * did that). 0 network timeout = the system default, whose receive budget is
+ * 30 s; AGB_MODULE_WAIT_MS overrides for tests and for very slow links. */
+static int moduleWaitMs()
+{
+    const char* env = getenv("AGB_MODULE_WAIT_MS");
+
+    if (env && atoi(env) > 0)
+        return atoi(env);
+
+    {
+        int net = Net::netDefaultTimeoutMs();
+
+        return net > 0 ? net : 30000;
+    }
+}
+
 static char* moduleFetch(const char* urlText, unsigned long* outSize)
 {
     std::string url(urlText ? urlText : "");
@@ -3766,7 +3866,7 @@ static char* moduleFetch(const char* urlText, unsigned long* outSize)
 
         began = GetTickCount();
 
-        while (!entry->done && GetTickCount() - began < 5000) {
+        while (!entry->done && GetTickCount() - began < moduleWaitMs()) {
             if (g_moduleSession)
                 g_moduleSession->pump();
 
@@ -4448,6 +4548,9 @@ void flushDeferredModules(void* document)
              * order. The document is fully parsed here, so document.body and
              * the rest of the DOM exist. */
             char* out = NULL;
+
+            agbLog(AGB_LOG_PARSE, "deferred classic script running url=%s len=%u",
+                   pending[i].url.c_str(), (unsigned)pending[i].source.size());
             setFilename(pending[i].url.c_str());
             {
                 WebCore::CurrentScriptScope currentScript((WebCore::Document*)pending[i].document,
@@ -4457,6 +4560,8 @@ void flushDeferredModules(void* document)
             if (out)
                 free(out);
         } else {
+            agbLog(AGB_LOG_PARSE, "deferred module running url=%s len=%u",
+                   pending[i].url.c_str(), (unsigned)pending[i].source.size());
             evaluateModule(pending[i].source.c_str(), pending[i].source.size(),
                            pending[i].url.c_str(), NULL, &err);
         }
@@ -4820,6 +4925,14 @@ static void cancelInFlightResources(unsigned long generation)
     }
 }
 
+/* Set while the outgoing document's teardown (pagehide, visibilitychange,
+ * unload, realm stop) runs: the GetTickCount() of its start, 0 when idle.
+ * Written on the engine thread, read by the control's watchdog thread (a
+ * plain 32-bit aligned load/store), which uses it to budget the teardown: a
+ * pagehide/unload handler that never returns must not keep the navigation
+ * waiting. */
+static volatile LONG g_teardownStart = 0;
+
 /* Stops the current realm: the page's JS world goes away with its document.
  * The VM is destroyed, so its globals, its module registry and its timers
  * cannot be seen by the next document. */
@@ -4964,6 +5077,10 @@ void beginNewRealm(void)
 
     state->mainRealm = state->engine ? antb_realm_current(state->engine) : NULL;
     forgetFrameRealms();
+
+    /* The new document starts in whatever state the host last reported: a
+     * background tab keeps loading hidden, a foreground one visible. */
+    state->hidden = state->viewHidden;
 
     agbLog(AGB_LOG_EVT, "realm start gen=%lu engine=%p",
            state->generation, (void*)state->engine);
@@ -5346,6 +5463,8 @@ static void installGlobalApi(AntbEngine* engine, AntbValue* global)
         antb_define_method(g_engine, global, "__agbHttpRequestBin", globalHttpRequestBin, NULL);
         /* (url, method, contentType, body, cb) - POST/PUT with a text body. */
         antb_define_method(g_engine, global, "__agbHttpRequestEx", globalHttpRequestEx, NULL);
+        /* (id) - drop a request the page gave up on (xhr.timeout / abort()). */
+        antb_define_method(g_engine, global, "__agbHttpAbort", globalHttpAbort, NULL);
         antb_define_method(g_engine, global, "__agbClassOp", globalClassOp, NULL);
         antb_define_method(g_engine, global, "__agbFrameSlot", globalFrameSlot, NULL);
         antb_define_method(g_engine, global, "__agbActivateSlot", globalActivateSlot, NULL);
@@ -12100,6 +12219,18 @@ void dispatchWindowEventState(const char* type, AntbValue* state)
                     antb_value_release(nullValue);
                 }
             }
+
+            /* PageTransitionEvent.persisted: this engine has no bfcache, so a
+             * pagehide/pageshow here is always a real load, but pages branch on
+             * the field (`if (!e.persisted) cleanup()`), so it must exist. */
+            if (!strcmp(type, "pagehide") || !strcmp(type, "pageshow")) {
+                AntbValue* persisted = antb_make_number(g_engine, 0.0);
+
+                if (persisted) {
+                    antb_set_prop(g_engine, evt, "persisted", persisted);
+                    antb_value_release(persisted);
+                }
+            }
         }
 
         for (size_t i = 0; i < snapshot.size(); ++i) {
@@ -12154,9 +12285,20 @@ void documentWillUnload(void)
     agbLog(AGB_LOG_EVT, "documentWillUnload doc=%p listeners=%d",
            g_document, g_listeners ? (int)g_listeners->size() : 0);
 
-    /* Browser order: pagehide, then unload. The listeners belong to the
-     * document that is going away - g_document still points at it. */
+    InterlockedExchange(&g_teardownStart, (LONG)GetTickCount());
+
+    /* Browser order (measured in Chrome 132): pagehide -> visibilitychange
+     * (hidden) -> unload. The visibility change is part of the teardown: the
+     * document must report hidden from here on, but the host's own view state
+     * (viewHidden) must not flip, or the next document in a foreground tab
+     * would start hidden. */
     dispatchWindowEvent("pagehide");
+
+    if (g_currentState && g_currentState != &g_emptyState && !g_currentState->hidden) {
+        g_currentState->hidden = 1;
+        dispatchWindowEvent("visibilitychange");
+    }
+
     dispatchWindowEvent("unload");
 
     /* A teardown handler may have thrown: do not leave the exception
@@ -12174,6 +12316,55 @@ void documentWillUnload(void)
      * its module registry and its timers must not be visible to the next
      * document. */
     stopRealm();
+
+    InterlockedExchange(&g_teardownStart, 0);
+}
+
+/* Same teardown for a child frame document that is being replaced: its own
+ * realm gets pagehide/unload, then the realm is dropped (the frame lives on and
+ * the new document gets a new realm). */
+void frameDocumentWillUnload(void* document)
+{
+    WebCore::Document* doc = (WebCore::Document*)document;
+
+    if (!doc || !g_engine || !doc->parentDocument() || !perFrameRealmEnabled())
+        return;
+
+    if (!realmForFrameDocument(g_engine, doc))
+        return;
+
+    bindDocument(doc);
+
+    dispatchWindowEvent("pagehide");
+    dispatchWindowEvent("unload");
+
+    if (char* pending = antb_take_pending_error(g_engine)) {
+        fprintf(stderr, "[antjs] (frame unload) %s\n", pending);
+        free(pending);
+    }
+
+    forgetFrameRealm(doc);
+
+    if (doc->parentDocument())
+        bindDocument(doc->parentDocument());
+}
+
+/* The host says whether this view is visible (tab switch, window minimize).
+ * document.hidden/visibilityState follow it and the page gets the event. */
+void setViewVisible(int visible)
+{
+    int hidden = visible ? 0 : 1;
+
+    if (!g_currentState || g_currentState == &g_emptyState)
+        return;
+
+    g_currentState->viewHidden = hidden;
+
+    if (g_currentState->hidden == hidden)
+        return;
+
+    g_currentState->hidden = hidden;
+    dispatchWindowEvent("visibilitychange");
 }
 
 /* Builds the JS event object: the prelude adds the DOM methods (which only set
@@ -12681,6 +12872,14 @@ void setDialogHook(DialogHook hook)
 }
 
 } /* namespace AntRuntime */
+
+/* C entry point for the webview control (a C translation unit, so it cannot
+ * include the C++ runtime header): the tick of the teardown that is currently
+ * running, 0 when none is. */
+extern "C" unsigned long agb_teardown_started_ms(void)
+{
+    return (unsigned long)AntRuntime::g_teardownStart;
+}
 
 
 

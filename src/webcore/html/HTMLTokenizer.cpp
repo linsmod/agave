@@ -46,6 +46,9 @@
 #include "SystemTime.h"
 #include <wtf/ASCIICType.h>
 
+/* The one diagnostics sink (src/webview/AgbLog.h, header-only). */
+#include "../../webview/AgbLog.h"
+
 #if ENABLE(ANTJS)
 #include "../javascript/ant_backend/AntRuntime.h"
 #endif
@@ -91,6 +94,54 @@ static void moduleEntryNotifyTrampoline(const char* url, const char* source, int
         s_moduleEntryWaiter->notifyModuleEntry(source, failed != 0);
 }
 #endif
+
+/* AGB_PARSE_LOG=1: what the parser sees for the tags that pull in code or
+ * style. The attributes are logged as written - `type=module`, `defer`,
+ * `async`, `nomodule` decide whether a script runs inline, after the parse, or
+ * as a module, so "why did this script run at the wrong time" is answered by
+ * this line ("tag ...") plus the "run ..." lines scriptExecution emits. */
+static void agbParseAttr(std::string& line, const char* name, const String& value)
+{
+    if (value.isEmpty())
+        return;
+
+    line += " ";
+    line += name;
+    line += "=";
+    line += value.utf8().data();
+}
+
+static void agbLogParseTag(const AtomicString& tagName, NamedMappedAttrMap* attrs)
+{
+    std::string line;
+    MappedAttribute* a;
+
+    if (!agbLogEnabled(AGB_LOG_PARSE))
+        return;
+
+    if (attrs) {
+        if ((a = attrs->getAttributeItem(srcAttr)))
+            agbParseAttr(line, "src", a->value().domString());
+        if ((a = attrs->getAttributeItem(hrefAttr)))
+            agbParseAttr(line, "href", a->value().domString());
+        if ((a = attrs->getAttributeItem(relAttr)))
+            agbParseAttr(line, "rel", a->value().domString());
+        if ((a = attrs->getAttributeItem(typeAttr)))
+            agbParseAttr(line, "type", a->value().domString());
+        if ((a = attrs->getAttributeItem(mediaAttr)))
+            agbParseAttr(line, "media", a->value().domString());
+        if ((a = attrs->getAttributeItem(charsetAttr)))
+            agbParseAttr(line, "charset", a->value().domString());
+        if (attrs->getAttributeItem(deferAttr))
+            line += " defer";
+        if (attrs->getAttributeItem(String("async")))
+            line += " async";
+        if (attrs->getAttributeItem(String("nomodule")))
+            line += " nomodule";
+    }
+
+    agbLog(AGB_LOG_PARSE, "%s%s", tagName.domString().utf8().data(), line.c_str());
+}
 
 #if MOBILE
 // As the chunks are smaller (above), the tokenizer should not yield for as long a period, otherwise
@@ -652,10 +703,15 @@ HTMLTokenizer::State HTMLTokenizer::scriptExecution(const DeprecatedString& str,
          * v.qq.com's Vue entry call mount("#channel-app") while that element
          * was still unparsed, so the app never mounted and the header slice was
          * never fetched. */
-        if (m_doc->parsing() && !m_parserStopped)
+        if (m_doc->parsing() && !m_parserStopped) {
             AntRuntime::queueDeferredModule(m_doc, url.utf8().data(), str.utf8().data());
-        else
+            agbLog(AGB_LOG_PARSE, "run module (deferred to parse end) url=%s len=%u",
+                   url.utf8().data(), (unsigned)str.length());
+        } else {
             m_doc->frame()->loader()->executeModule(url, str);
+            agbLog(AGB_LOG_PARSE, "run module (evaluated now) url=%s len=%u",
+                   url.utf8().data(), (unsigned)str.length());
+        }
         /* A module never sets document.currentScript (HTML spec). */
     } else
 #endif
@@ -666,6 +722,8 @@ HTMLTokenizer::State HTMLTokenizer::scriptExecution(const DeprecatedString& str,
          * `document.currentScript.src` / `.getAttribute('data-…')` work in
          * third-party loaders. */
         CurrentScriptScope currentScript(m_doc, scriptElement);
+        agbLog(AGB_LOG_PARSE, "run classic script url=%s len=%u",
+               scriptURL.isNull() ? "(inline)" : url.utf8().data(), (unsigned)str.length());
         m_doc->frame()->loader()->executeScript(url, baseLine, str);
     }
     state = m_state;
@@ -1364,6 +1422,12 @@ HTMLTokenizer::State HTMLTokenizer::parseTag(SegmentedString &src, State state)
                     }
                 }
             }
+
+            /* AGB_PARSE_LOG=1: report the code/style tags the parser meets,
+             * attributes included (defer/async/type=module/rel/media/...). */
+            if (currToken.beginTag &&
+                (tagName == scriptTag || tagName == styleTag || tagName == linkTag))
+                agbLogParseTag(tagName, currToken.attrs.get());
 
             RefPtr<Node> n = processToken();
             m_cBufferPos = cBufferPos;

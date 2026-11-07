@@ -390,6 +390,18 @@ MC_STATUS macross_view_set_scale_factor(MaCrossView* view, int scale)
 	return MC_STATUS_SUCCESS;
 }
 
+/* Page Visibility: the runtime state is per view, so activate it before
+ * touching document.hidden (the getter reads the active state). */
+MC_STATUS macross_view_set_visible(MaCrossView* view, int visible)
+{
+	if (!view)
+		return MC_STATUS_FAILED;
+
+	AntRuntime::activateContext(view->jscontext);
+	AntRuntime::setViewVisible(visible ? 1 : 0);
+	return MC_STATUS_SUCCESS;
+}
+
 MC_STATUS macross_view_get_scale_factor(MaCrossView* view, int* scale)
 {
 	if (!view || !scale)

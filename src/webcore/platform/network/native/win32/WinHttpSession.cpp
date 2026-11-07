@@ -244,9 +244,12 @@ static HINTERNET poolAcquire(const std::wstring& host, INTERNET_PORT port, int t
                          &maxConns, sizeof(maxConns));
     }
 
-    /* Resolve and connect get short budgets so a dead host fails fast, the way a
-     * browser does; send/receive keep the caller's timeout for slow servers. */
-    {
+    /* The caller's timeout, when it set one. A timeout of 0 means "whatever the
+     * system says": WinHTTP's own defaults are resolve 0 (no limit), connect
+     * 60 s, send/receive 30 s. Setting them here would *override* those with a
+     * shorter budget - the old 5 s default failed every resource that took
+     * longer than that on a slow link. */
+    if (timeout > 0) {
         int resolveTimeout = timeout < 2000 ? timeout : 2000;
         int connectTimeout = timeout < 3000 ? timeout : 3000;
 
