@@ -219,6 +219,9 @@ FNV-1a 哈希 + 原扩展名，完成后旁边多一个 `<名>.complete` 标记�
 
 ## 7.2 顶层导航到媒体 URL：媒体文档（`MediaDocument`）
 
+**和 Chrome 一样，这就是"一个页面模板 + 把 URL 填进 `<video src>`"**，没有别的魔法：
+导航到媒体类型时不下载，而是合成一个只有播放器的文档，资源由元素自己加载。
+
 `src/webcore/loader/MediaDocument.cpp`（与 `ImageDocument` / `PluginDocument` 同一套路）：
 
 - 判定在 `FrameLoaderClientMC::canShowMIMEType()`：`MIMETypeRegistry::isSupportedMediaMIMEType()`
@@ -236,8 +239,9 @@ FNV-1a 哈希 + 原扩展名，完成后旁边多一个 `<名>.complete` 标记�
   伪类在本引擎里由 `CSSStyleSelector` 的 `PseudoFullPageMedia` 匹配（文档是 `MediaDocument`
   时，body 与「body 里唯一的 video/audio」命中）。
 - `autoplay` 让元素在元数据到手后自己 `play()`，解码走 §4.1 的管线。
-- 元素是**自己再拉一次**资源的（文档那份字节被丢掉），所以远程直开会下载两遍；
-  `file:` 直开没有代价。见 §8。
+- ⚠ 代价：导航本身已经把资源拉了一遍（字节被丢弃），元素又用自己的下载器拉一遍，所以
+  远程直开是**两次取**。Chrome 不走这条亏路——它的元素加载能复用导航那次响应的
+  资源缓存；我们的媒体通道走 WinHTTP（§7.3），绕过了引擎的缓存。见 §8。
 
 ## 7.3 流式播放（`MediaDownloader`）
 

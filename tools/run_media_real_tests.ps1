@@ -266,9 +266,12 @@ if ($SkipPixels) {
 
     $cases = @(
         @{ Name = 'local clip @0.7s'; Query = "$pages\cap_media_real.html?src=../../debug/media/clip640x360.mp4&t=0&hold=1";
-           File = $clip; At = 0.7; Shot = "$shots\media_clip_hold.bmp"; Ref = "$media\ref_clip_07.png" },
+           File = $clip; At = 0.7; Shot = "$shots\media_clip_hold.bmp"; Ref = "$media\ref_clip_07.png"; Env = $null },
         @{ Name = 'remote @30.7s';    Query = "$pages\cap_media_real.html?src=$([uri]::EscapeDataString($remote))&t=30&hold=1";
-           File = $null; At = 30.7; Shot = "$shots\media_remote_hold.bmp"; Ref = "$media\ref_remote_307.png" }
+           File = $null; At = 30.7; Shot = "$shots\media_remote_hold.bmp"; Ref = "$media\ref_remote_307.png";
+           # Seek to 30 s needs those bytes on disk: reuse the cache the remote
+           # section just filled, and take the reference from the same file.
+           Env = (Get-Variable -Name streamCache -Scope Script -ErrorAction SilentlyContinue).Value }
     )
 
     foreach ($c in $cases) {
@@ -276,11 +279,20 @@ if ($SkipPixels) {
             & ffmpeg -v error -ss $c.At -i $c.File -frames:v 1 -vf scale=320:180 -y $c.Ref 2>$null
         }
 
-        if (-not $c.File -and -not (Test-Path $c.Ref)) {
-            # Remote reference comes from the engine's own download cache.
-            $cached = Get-ChildItem (Join-Path $shots 'media-cache') -Filter *.mp4 -ErrorAction SilentlyContinue |
+        if (-not $c.File) {
+            # Seeking to 30 s needs those bytes on disk. Warm the cache first
+            # (one plain probe that lets the download finish), then take the
+            # reference from exactly the file the engine will decode.
+            if ($c.Env) {
+                Probe -Query "$pages\cap_media_real.html?src=$([uri]::EscapeDataString($remote))" `
+                      -Eval '0' -Wait 9000 -Settle 9000 -Env @{ AGB_MEDIA_CACHE = $c.Env } | Out-Null
+            }
+
+            $dir = if ($c.Env) { $c.Env } else { Join-Path $shots 'media-cache' }
+            $cached = Get-ChildItem $dir -Filter *.mp4 -ErrorAction SilentlyContinue |
                       Sort-Object Length -Descending | Select-Object -First 1
-            if ($cached) {
+
+            if ($cached -and -not (Test-Path $c.Ref)) {
                 & ffmpeg -v error -ss $c.At -i $cached.FullName -frames:v 1 -vf scale=320:180 -y $c.Ref 2>$null
             }
         }
@@ -290,7 +302,8 @@ if ($SkipPixels) {
             continue
         }
 
-        $p = Probe -Query $c.Query -Eval '0' -Wait 5000 -Settle 1500 -Shot $c.Shot
+        $probeEnv = if ($c.Env) { @{ AGB_MEDIA_CACHE = $c.Env } } else { $null }
+        $p = Probe -Query $c.Query -Eval '0' -Wait 5000 -Settle 1500 -Shot $c.Shot -Env $probeEnv
         if (-not (Test-Path $c.Shot)) { Skip $c.Name 'no screenshot'; continue }
 
         $data = & python -c @"
