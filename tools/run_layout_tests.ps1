@@ -21,6 +21,9 @@
     * cssom     - document.styleSheets / cssRules / <style>.sheet, including a
                   @media rule, @font-face, @page, CSS.supports('selector(...)')
                   and <style> elements added after load (in body and in <html>).
+    * flexom    - getComputedStyle(el).flex / .flexGrow / .flexShrink /
+                  .flexBasis, compared with the strings headless Chrome reports
+                  for the same page (cap_flex_cssom.html, R115).
     * lifecycle - document.readyState is loading/interactive/complete as the
                   parser advances, and document.body is null (not undefined)
                   until <body> exists - the branch bilibili's log-reporter
@@ -238,6 +241,36 @@ try {
             }
         }
         if ($missing) { $failed++ } else { Write-Host 'cssom: ok' }
+    }
+
+    Write-Host '== flex computed values (flex / flex-grow / flex-shrink / flex-basis)'
+    $url = 'file:///' + (Join-Path $root 'tools/pages/cap_flex_cssom.html').Replace('\', '/')
+    $out = & (Join-Path $root 'build-zig-native\agave_shell.exe') --probe $url `
+        --eval-file (Join-Path $root 'tools/pages/check_flex_cssom.js') `
+        --wait 500 --settle 200 --timeout 30000 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host 'flexom: probe failed'
+        $failed++
+    } else {
+        $text = $out -join "`n"
+        $missing = 0
+        foreach ($needle in @(
+                              # Expected strings come from headless Chrome on
+                              # the same page (see check_flex_cssom.js).
+                              'a.flex=2 3 40px', 'a.grow=2', 'a.shrink=3',
+                              'a.basis=40px',
+                              'b.flex=1 1 0%', 'c.flex=1 1 auto',
+                              'd.flex=0 0 auto', 'e.flex=4 0.5 25%',
+                              'f.basis=0px', 'g.basis=calc(50% - 4px)',
+                              'h.basis=33.3281%',
+                              'gv.shrink=2', 'gv.basis=30px',
+                              'set.flex=1 7 5px')) {
+            if ($text -notmatch [regex]::Escape($needle)) {
+                Write-Host ('flexom: missing ' + $needle)
+                $missing++
+            }
+        }
+        if ($missing) { $failed++ } else { Write-Host 'flexom: ok' }
     }
 
     Write-Host '== DOM lifecycle (document.readyState / document.body before <body>)'

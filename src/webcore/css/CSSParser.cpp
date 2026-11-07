@@ -2866,6 +2866,7 @@ static bool propertyAcceptsCalcLength(int propId)
     case CSS_PROP_BOTTOM:
     case CSS_PROP_LEFT:
     case CSS_PROP_TEXT_INDENT:
+    case CSS_PROP_FLEX_BASIS:
         return true;
     default:
         return false;

@@ -4309,6 +4309,11 @@ void CSSStyleSelector::applyProperty(int id, CSSValue *value)
                 style->setFlexBasis(Length(primitiveValue->getDoubleValue(), Percent));
             else if (type == CSSPrimitiveValue::CSS_CALC_LENGTH)
                 style->setFlexBasis(Length(primitiveValue->calcPercent(), primitiveValue->calcPx()));
+            else if (type == CSSPrimitiveValue::CSS_NUMBER && primitiveValue->getFloatValue() == 0.0f)
+                /* `flex-basis: 0` is a legal <length> (unitless zero); CSS_NUMBER
+                 * is not in the length range above, so it used to be dropped and
+                 * the computed value stayed "auto". Chrome reports "0px". */
+                style->setFlexBasis(Length(0, Fixed));
         }
         return;
     case CSS_PROP_SCROLLBAR_WIDTH:

@@ -257,7 +257,8 @@
       'fontSize','fontFamily','fontWeight','lineHeight',
       'opacity','visibility','overflow','zIndex','textAlign','verticalAlign','float','clear','cursor',
       'whiteSpace','textDecoration','borderRadius','boxShadow','transform','boxSizing',
-      'gap','rowGap','columnGap','aspectRatio'];
+      'gap','rowGap','columnGap','aspectRatio',
+      'flex','flexGrow','flexShrink','flexBasis'];
     /* Accessors live on one shared prototype: defining 40 properties per call
      * made every getComputedStyle() cost ~0.57ms; css3test calls it thousands
      * of times, which is what pinned a core. The raw bridge is ~0.003ms. */

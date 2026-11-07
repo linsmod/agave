@@ -69,6 +69,8 @@ static const int computedProperties[] = {
     CSS_PROP_DIRECTION,
     CSS_PROP_DISPLAY,
     CSS_PROP_EMPTY_CELLS,
+    CSS_PROP_FLEX_BASIS,
+    CSS_PROP_FLEX_SHRINK,
     CSS_PROP_FLOAT,
     CSS_PROP_FONT_FAMILY,
     CSS_PROP_FONT_SIZE,
@@ -513,6 +515,36 @@ static String numberAsString(double n)
 {
     long i = static_cast<long>(n);
     return i == n ? String::number(i) : String::number(n);
+}
+
+/* Computed serialisation of a flex-basis length, the way Chrome reports it:
+ * "auto", "25%", "40px" or "calc(50% - 4px)". */
+static String flexBasisText(const Length& basis)
+{
+    switch (basis.type()) {
+        case Percent:
+            return numberAsString(basis.percent()) + "%";
+        case Fixed:
+            return numberAsString(basis.value()) + "px";
+        case Calculated: {
+            int px = basis.calcPx();
+            String text = "calc(";
+            text += numberAsString(basis.calcPercent());
+            text += "%";
+
+            if (px < 0) {
+                text += " - ";
+                px = -px;
+            } else
+                text += " + ";
+
+            text += String::number(px);
+            text += "px)";
+            return text;
+        }
+        default:
+            return "auto";
+    }
 }
 
 PassRefPtr<CSSValue> CSSComputedStyleDeclaration::getPropertyCSSValue(int propertyID) const
@@ -1650,6 +1682,30 @@ PassRefPtr<CSSValue> CSSComputedStyleDeclaration::getPropertyCSSValue(int proper
             list->append(new CSSPrimitiveValue(column, CSSPrimitiveValue::CSS_PX));
             return list;
         }
+        case CSS_PROP_FLEX_SHRINK:
+            return new CSSPrimitiveValue(style->flexShrink(), CSSPrimitiveValue::CSS_NUMBER);
+        case CSS_PROP_FLEX_BASIS: {
+            Length basis = style->flexBasis();
+
+            if (basis.type() == Percent)
+                return new CSSPrimitiveValue(basis.percent(), CSSPrimitiveValue::CSS_PERCENTAGE);
+            if (basis.type() == Fixed)
+                return new CSSPrimitiveValue(basis.value(), CSSPrimitiveValue::CSS_PX);
+            if (basis.type() == Auto)
+                return new CSSPrimitiveValue(CSS_VAL_AUTO);
+
+            /* Whatever is left (a percentage+px calc) has no single unit. */
+            return new CSSPrimitiveValue(flexBasisText(basis), CSSPrimitiveValue::CSS_IDENT_TEXT);
+        }
+        case CSS_PROP_FLEX: {
+            /* Shorthand: "grow shrink basis", like Chrome serialises it. */
+            String text = numberAsString(style->boxFlex());
+            text += " ";
+            text += numberAsString(style->flexShrink());
+            text += " ";
+            text += flexBasisText(style->flexBasis());
+            return new CSSPrimitiveValue(text, CSSPrimitiveValue::CSS_IDENT_TEXT);
+        }
         case CSS_PROP_ASPECT_RATIO:
             if (style->aspectRatio() <= 0.0f)
                 return new CSSPrimitiveValue(CSS_VAL_AUTO);
@@ -1808,12 +1864,12 @@ PassRefPtr<CSSValue> CSSComputedStyleDeclaration::getPropertyCSSValue(int proper
              *
              * This used to call getSVGPropertyCSSValue() for EVERY node. That
              * function aborts on property IDs its switch does not know, so a
-             * modern property missing from this switch (flex, flex-grow,
-             * align-items, align-self, order, transform) killed the process:
-             * `getComputedStyle(el).flex` asserted "unimplemented propertyID:
-             * 207" and then wrote through a null CSSValue. With ENABLE_SVG off
-             * the default branch returned 0 quietly, which is why the crash
-             * only appeared after the ksvg2 revival. */
+             * modern property missing from this switch (align-items,
+             * align-self, order, transform, flex before R114) killed the
+             * process: `getComputedStyle(el).flex` asserted "unimplemented
+             * propertyID: 207" and then wrote through a null CSSValue. With
+             * ENABLE_SVG off the default branch returned 0 quietly, which is
+             * why the crash only appeared after the ksvg2 revival. */
             if (m_node && m_node->isSVGElement())
                 return getSVGPropertyCSSValue(propertyID, DoNotUpdateLayout);
             break;
