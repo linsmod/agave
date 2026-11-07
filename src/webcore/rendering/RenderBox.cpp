@@ -1510,6 +1510,9 @@ void RenderBox::calcHeight()
             h = Length(parent()->contentHeight() - marginTop() - marginBottom() -
                        borderTop() - paddingTop() - borderBottom() - paddingBottom(), Fixed);
             checkMinMaxHeight = false;
+            if (getenv("AGB_FLEX_DEBUG"))
+                fprintf(stderr, "[flex] stretch %p %s to parent %p contentH=%d (was %d)\n",
+                        (void*)this, renderName(), (void*)parent(), parent()->contentHeight(), m_height);
         }
 
         int height;

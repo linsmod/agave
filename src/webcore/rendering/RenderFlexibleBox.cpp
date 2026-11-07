@@ -115,6 +115,7 @@ RenderFlexibleBox::~RenderFlexibleBox()
 
 void RenderFlexibleBox::calcHorizontalPrefWidths()
 {
+    bool firstItem = true;
     RenderObject *child = firstChild();
     while (child) {
         // positioned children don't affect the minmaxwidth
@@ -122,6 +123,18 @@ void RenderFlexibleBox::calcHorizontalPrefWidths()
             child = child->nextSibling();
             continue;
         }
+
+        /* flex gap sits between items and therefore widens the container's
+         * preferred width. Leaving it out made a shrink-to-fit row 32px too
+         * narrow (DeepSeek sign-in: hero 336 + 32 + 240 = 608 in Chrome, 576
+         * here), which then squeezed the first item through flex-shrink. */
+        if (!firstItem) {
+            int gap = max(0, style()->flexColumnGap().calcValue(m_maxPrefWidth));
+
+            m_minPrefWidth += gap;
+            m_maxPrefWidth += gap;
+        }
+        firstItem = false;
 
         // A margin basically has three types: fixed, percentage, and auto (variable).
         // Auto and percentage margins simply become 0 when computing min/max width.
@@ -596,7 +609,14 @@ void RenderFlexibleBox::layoutFlexLines(bool wrap, bool relayoutChildren)
 
         child->setOverrideSize(borderBox);
         child->setChildNeedsLayout(true, false);
-        child->layoutIfNeeded();
+        {
+            bool hadLayout = child->needsLayout();
+            child->layoutIfNeeded();
+            if (flexDebugEnabled())
+                fprintf(stderr, "[flex] widthpass box=%p child=%p needed=%d h=%d stretch=%d\n",
+                        (void*)this, (void*)child, hadLayout ? 1 : 0, child->height(),
+                        m_stretchingChildren ? 1 : 0);
+        }
         items[i].outerWidth = child->width() + child->marginLeft() + child->marginRight();
         items[i].outerHeight = child->height() + child->marginTop() + child->marginBottom();
     }
@@ -605,6 +625,9 @@ void RenderFlexibleBox::layoutFlexLines(bool wrap, bool relayoutChildren)
         fprintf(stderr, "[flex] lines box=%p inner=%d wrap=%d lines=%d\n",
                 (void*)this, innerWidth, (int)wrap, lineCount);
         for (unsigned i = 0; i < items.size(); ++i) {
+            fprintf(stderr, "[flex]   item %p h=%d outerH=%d w=%d\n",
+                    (void*)items[i].child, items[i].child->height(), items[i].outerHeight,
+                    items[i].child->width());
             flexDebugChild("line", this, items[i].child);
             if (flexDebugEnabled())
                 fprintf(stderr, "[flex]   item %p base=%d min=%d max=%d final=%d extra=%d\n",
@@ -658,10 +681,21 @@ void RenderFlexibleBox::layoutFlexLines(bool wrap, bool relayoutChildren)
      * through m_preFlexHeight - layoutBlock zeroed m_height for the flex
      * pass, so height() alone here was always 0 and `align-content: normal`
      * (= stretch for one line) never stretched the line: items centered
-     * inside max(item heights) instead of the container (Baidu guide bubble). */
+     * inside max(item heights) instead of the container (Baidu guide bubble).
+     *
+     * `height: auto` must NOT use m_preFlexHeight: for an auto-height box it is
+     * just the previous layout's height, and stretching the line to it makes
+     * every relayout monotonic. DeepSeek's sign-in card is the case: the QR
+     * column temporarily grew (a placeholder appeared and went away), its
+     * stretched 526px survived into m_preFlexHeight, and the row kept 526
+     * forever - the agreement text below then absorbed the difference
+     * (flex-grow: 1) and sat in a 286px box instead of 62px. An auto-height
+     * container is sized by its content (contentBottom below), so there is no
+     * "free space" for align-content to distribute in the first place. */
+    bool definiteHeight = !style()->height().isAuto();
     int containerHeight = style()->height().isFixed()
         ? style()->height().value()
-        : (m_preFlexHeight > 0
+        : (definiteHeight && m_preFlexHeight > 0
               ? max(0, m_preFlexHeight - borderTop() - borderBottom() - paddingTop() - paddingBottom())
               : height() - borderTop() - borderBottom() - paddingTop() - paddingBottom());
     int lineGap = rowGap;
@@ -1445,6 +1479,10 @@ void RenderFlexibleBox::layoutVerticalBox(bool relayoutChildren)
 
         remainingSpace = borderTop() + paddingTop() + contentHeight() - yPos;
         
+        if (flexDebugEnabled())
+            fprintf(stderr, "[flex] vbox %p w=%d h=%d contentH=%d yPos=%d remain=%d haveFlex=%d\n",
+                    (void*)this, m_width, m_height, contentHeight(), yPos, remainingSpace, haveFlex ? 1 : 0);
+        
         if (m_flexingChildren)
             haveFlex = false; // We're done.
         else if (haveFlex) {
@@ -1497,6 +1535,9 @@ void RenderFlexibleBox::layoutVerticalBox(bool relayoutChildren)
                     while (child && spaceAvailableThisPass && totalFlex) {
                         if (allowedChildFlex(child, expanding, i)) {
                             int spaceAdd = (int)(spaceAvailableThisPass * (child->style()->boxFlex()/totalFlex));
+                            if (flexDebugEnabled() && spaceAdd)
+                                fprintf(stderr, "[flex] vbox grow %p child=%p add=%d overH=%d\n",
+                                        (void*)this, (void*)child, spaceAdd, child->overrideHeight());
                             if (spaceAdd) {
                                 child->setOverrideSize(child->overrideHeight() + spaceAdd);
                                 m_flexingChildren = true;
