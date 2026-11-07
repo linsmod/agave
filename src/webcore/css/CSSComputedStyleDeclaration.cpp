@@ -1803,7 +1803,23 @@ PassRefPtr<CSSValue> CSSComputedStyleDeclaration::getPropertyCSSValue(int proper
             break;
 #if ENABLE(SVG)
         default:
-            return getSVGPropertyCSSValue(propertyID, DoNotUpdateLayout);
+            /* Only SVG nodes get the SVG declaration; everything else falls
+             * through to the "unimplemented" answer below.
+             *
+             * This used to call getSVGPropertyCSSValue() for EVERY node. That
+             * function aborts on property IDs its switch does not know, so a
+             * modern property missing from this switch (flex, flex-grow,
+             * align-items, align-self, order, transform) killed the process:
+             * `getComputedStyle(el).flex` asserted "unimplemented propertyID:
+             * 207" and then wrote through a null CSSValue. With ENABLE_SVG off
+             * the default branch returned 0 quietly, which is why the crash
+             * only appeared after the ksvg2 revival. */
+            if (m_node && m_node->isSVGElement())
+                return getSVGPropertyCSSValue(propertyID, DoNotUpdateLayout);
+            break;
+#else
+        default:
+            break;
 #endif
     }
 

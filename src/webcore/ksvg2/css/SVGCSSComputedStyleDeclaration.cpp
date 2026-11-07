@@ -21,6 +21,7 @@
 #if ENABLE(SVG)
 #include "CSSComputedStyleDeclaration.h"
 
+#include <stdlib.h>
 #include "CSSPropertyNames.h"
 #include "CSSValueKeywords.h"
 #include "Document.h"
@@ -303,11 +304,16 @@ PassRefPtr<CSSValue> CSSComputedStyleDeclaration::getSVGPropertyCSSValue(int pro
             // the above properties are not yet implemented in the engine
             break;
     default:
-        // If you crash here, it's because you added a css property and are not handling it
-        // in either this switch statement or the one in CSSComputedStyleDelcaration::getPropertyCSSValue
-        ASSERT_WITH_MESSAGE(0, "unimplemented propertyID: %d", propertyID);
+        // If you get here, the property is not an SVG property (a modern CSS
+        // property such as flex, or a webkit-* longhand this file does not
+        // know). The caller falls back to the generic "unimplemented" answer,
+        // which reads as "" in JS - the same thing Chrome reports. It must not
+        // abort: an SVG page (or a script asking for .flex on an <svg>) would
+        // take the whole process down.
+        break;
     }
-    LOG_ERROR("unimplemented propertyID: %d", propertyID);
+    if (getenv("AGB_CSS_DEBUG"))
+        LOG_ERROR("unimplemented SVG propertyID: %d", propertyID);
     return 0;
 }
 
