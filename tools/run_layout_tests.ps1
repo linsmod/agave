@@ -21,6 +21,10 @@
     * cssom     - document.styleSheets / cssRules / <style>.sheet, including a
                   @media rule, @font-face, @page, CSS.supports('selector(...)')
                   and <style> elements added after load (in body and in <html>).
+    * lifecycle - document.readyState is loading/interactive/complete as the
+                  parser advances, and document.body is null (not undefined)
+                  until <body> exists - the branch bilibili's log-reporter
+                  takes when it decides whether to wait for DOMContentLoaded.
 
   Exit code is the verdict: 0 all green, 1 any failure.
 
@@ -229,6 +233,35 @@ try {
             }
         }
         if ($missing) { $failed++ } else { Write-Host 'cssom: ok' }
+    }
+
+    Write-Host '== DOM lifecycle (document.readyState / document.body before <body>)'
+    $url = 'file:///' + (Join-Path $root 'tools/pages/cap_lifecycle.html').Replace('\', '/')
+    $out = & (Join-Path $root 'build-zig-native\agave_shell.exe') --probe $url `
+        --eval-file (Join-Path $root 'tools/pages/check_lifecycle.js') `
+        --wait 500 --settle 200 --timeout 30000 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host 'lifecycle: probe failed'
+        $failed++
+    } else {
+        $text = $out -join "`n"
+        $missing = 0
+        foreach ($needle in @('head:ready=loading', 'head:body=null', 'head:head=HEAD',
+                              'body:ready=loading', 'body:el=BODY',
+                              'dcl:ready=interactive', 'dcl:body=BODY',
+                              'load:ready=complete', 'load:body=BODY',
+                              'appended=yes')) {
+            if ($text -notmatch [regex]::Escape($needle)) {
+                Write-Host ('lifecycle: missing ' + $needle)
+                $missing++
+            }
+        }
+        # The head script must have taken the DOMContentLoaded branch.
+        if ($text -match 'branch=WRONG') {
+            Write-Host 'lifecycle: head script saw a non-loading readyState'
+            $missing++
+        }
+        if ($missing) { $failed++ } else { Write-Host 'lifecycle: ok' }
     }
 
     if ($failed) {

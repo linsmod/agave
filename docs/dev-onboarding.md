@@ -67,6 +67,8 @@ agave 是**从零移植的浏览器**：**WebKit 2008 的 WebCore**（HTML/CSS �
 | 布局不对（位置/间距/元素 0×0/滚动区） | [arch-rendering.md](arch-rendering.md) §7；先用 `__agbLayoutInfo()` 分清"没 renderer"和"有 renderer 没布局" |
 | 画错 / 残影 / 不重绘 | 隐藏窗口没有 WM_PAINT（用 `--probe AGB_PROBE_SHOW=1` 或 `agave_view_host` 出 BMP）；再看 clip/repaint |
 | 卡住 / CPU 100% | `AGB_PROFILE=1` 直方图 + `cdb` 抓忙线程栈（[dev-debugging.md](dev-debugging.md)） |
+| `Cannot read properties of undefined/null (reading 'appendChild')`，页面在 `DOMContentLoaded` 之前就改 DOM | 先看 `document.readyState` 与 `document.body` 是否"提前为真/为假"（R93：`readyState` 曾写死 `"complete"`）；对照 `tools/pages/cap_lifecycle.html` 与 Chrome 的输出 |
+| `ASSERTION FAILED: i < size()` + `write 0xbbadbeef`，页面开了 XHR | 回调里又进了运行时（插 `<script>`/模块）→ `collectXhrJobs()` 重入（R94）；`tools/run_xhr_tests.ps1` 一条命令复现 |
 | 崩溃 / `0xC0000005`，尤其**只与时长相关**（长循环、长 eval、大脚本） | 先查**生命周期**不是优化器：宿主是否在引擎线程还在跑 `AGW_CMD_EVAL` 时销毁了视图（`tools/run_jit_loop_tests.ps1`，[hist-lessons.md](hist-lessons.md) R61）；再 `cdb` 断首次异常。**`AGB_GC_OFF=1` 一关就不崩 → GC 扎根**（R63，ant callback builtin）；调试器里出现 `HEAP: Free Heap block ... modified` → 开 `AGB_GUARD_MALLOC=512-4096` 抓写入者（R62） |
 | 网络没提交 / 一直重试 | `AGB_NET_LOG=1` 看 stage；`progress finished=1` **不代表**加载成功 |
 | 崩溃 | `cdb` 断在首次异常抓全线程栈；worker 崩在**非主线程**（`worker_thread_main`） |

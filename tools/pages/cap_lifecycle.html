@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>cap lifecycle</title>
+<script>
+/* Document lifecycle as the page sees it: document.readyState at each stage and
+ * document.body being null (not undefined) before <body> exists.
+ *
+ * The harness shape is bilibili's log-reporter: a report script in <head> that
+ * must wait for DOMContentLoaded before it touches document.body. It used to
+ * see readyState === "complete" (hardcoded) while <head> was still parsing, skip
+ * the wait and blow up on document.body.appendChild().
+ *
+ * Reported with:  --eval-file tools/pages/check_lifecycle.js  (--wait 500) */
+var obs = [];
+
+obs.push('head:ready=' + document.readyState);
+obs.push('head:body=' + (document.body === null ? 'null' : typeof document.body));
+obs.push('head:head=' + (document.head ? String(document.head.nodeName) : 'null'));
+window.__appended = 'no';
+
+if (document.readyState !== 'loading') {
+    obs.push('head:branch=WRONG');    /* would crash on document.body */
+} else {
+    document.addEventListener('DOMContentLoaded', function () {
+        obs.push('dcl:ready=' + document.readyState);
+        obs.push('dcl:body=' + (document.body ? String(document.body.nodeName) : 'null'));
+        var d = document.createElement('div');
+        d.id = 'late';
+        document.body.appendChild(d);
+        window.__appended = document.getElementById('late') ? 'yes' : 'no';
+    });
+}
+</script>
+</head>
+<body>
+<script>
+obs.push('body:ready=' + document.readyState);
+obs.push('body:el=' + (document.body ? String(document.body.nodeName) : 'null'));
+
+window.addEventListener('load', function () {
+    obs.push('load:ready=' + document.readyState);
+    obs.push('load:body=' + (document.body ? String(document.body.nodeName) : 'null'));
+    window.__obs = obs;
+    /* Also in the DOM so headless Chrome (--dump-dom) reports the same string. */
+    document.getElementById('p').textContent = obs.join(' ') + ' appended=' + window.__appended;
+});
+</script>
+<p id="p">lifecycle</p>
+</body>
+</html>

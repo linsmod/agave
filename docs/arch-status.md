@@ -1,6 +1,6 @@
 # agave 现状：能力、已知限制与验证入口
 
-> 状态：**当前态，最后核对 2026-11-06**。本文只回答"现在能做什么、哪些是已知限制"。
+> 状态：**当前态，最后核对 2026-11-07**。本文只回答"现在能做什么、哪些是已知限制"。
 > 架构与所有权见 [arch-overview.md](arch-overview.md)；待办与验收标准见 [plan-roadmap.md](plan-roadmap.md)；
 > 历史根因与设计取舍见 [hist-lessons.md](hist-lessons.md)；API 级缺口见
 > [arch-capability-gaps.md](arch-capability-gaps.md)；函数级锚点见 [ref-code-index.md](ref-code-index.md)。
@@ -10,7 +10,7 @@
 | 领域 | 现在具备 | 证据 / 细节 |
 |---|---|---|
 | 页面与导航 | HTTP(S)/`file:` 加载、HTML/CSS 解析、`defer`/`async`/ESM、301/302、`about:blank`、iframe、`agave://` 内部页、前进后退 | R44–R49；[hist-lessons.md](hist-lessons.md) |
-| JS / DOM | ant VM、DOM 桥、事件（鼠标/键盘/IME/输入）、computed style、选择器、`history` state、真实 DOM 集合、每 frame 一个 Window 代理；页面脚本按 **classic script** 语义执行（顶层 `var`/`function` 落到 `window`，R66）；**每 frame 一个 realm**（iframe 独立全局/intrinsics/wrapper，`var` 不串帧；`AGB_PER_FRAME_REALM=0` 回退旧模型） | R27/R31/R34–R37/R45/R66/R67 + [design-per-frame-realm.md](design-per-frame-realm.md) |
+| JS / DOM | ant VM、DOM 桥、事件（鼠标/键盘/IME/输入）、computed style、选择器、`history` state、真实 DOM 集合、每 frame 一个 Window 代理；页面脚本按 **classic script** 语义执行（顶层 `var`/`function` 落到 `window`，R66）；**每 frame 一个 realm**（iframe 独立全局/intrinsics/wrapper，`var` 不串帧；`AGB_PER_FRAME_REALM=0` 回退旧模型）；文档生命周期 `document.readyState` 是真实状态（`loading`/`interactive`/`complete`，R93） | R27/R31/R34–R37/R45/R66/R67/R93 + [design-per-frame-realm.md](design-per-frame-realm.md) |
 | 模块加载 | 入口 module 单槽等待（等待期间到达的数据不提前解析，R50）、解析调用栈内求值、延迟模块 flush；三条泳道时序 | [arch-module-loading.md](arch-module-loading.md) |
 | CSS | 自定义属性/`var()`、`display:flex`/blockify、`gap`、`aspect-ratio`、`:is()`/`:where()`、媒体查询与深色模式、`box-shadow`、常量 `calc()`、圆角裁剪 | R39–R43；能力矩阵见 [arch-capability-gaps.md](arch-capability-gaps.md) §2 |
 | 网络 | WinHTTP 后端、HTTP 缓存、代理解析、重定向、MIME/下载决策、`[netlog]` | [dev-debugging.md](dev-debugging.md) |

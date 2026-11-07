@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>xhr reentry</title>
+</head>
+<body>
+<p id="p">xhr reentry</p>
+<script>
+/* Two requests finishing in the same frame, and the first callback runs a
+ * nested evaluation (an inline <script> is evaluated synchronously).
+ *
+ * That is the shape that used to kill the probe on v.qq.com: collectXhrJobs()
+ * delivered a finished job, the callback re-entered the runtime, and the nested
+ * evaluation called collectXhrJobs() again *while the outer loop still held an
+ * index into the same vector*. The nested frame delivered and freed the job the
+ * outer frame was delivering, then `jobs[i]` was past the end ->
+ * "ASSERTION FAILED: i < size()" (Vector<XhrJob*>::at) and a write to the
+ * assertion's poison value 0xbbadbeef.
+ *
+ * Served over http (XHR needs a real origin): tools/run_xhr_tests.ps1 starts
+ * python -m http.server in tools/pages. Report with tools/pages/check_xhr_reentry.js */
+window.__done = 0;
+window.__nested = 0;
+window.__log = [];
+
+function tick() {
+    var self = this;
+
+    window.__done++;
+    window.__log.push('cb' + window.__done + '@' + document.readyState);
+
+    if (window.__done === 1) {
+        /* Nested evaluation from inside an XHR delivery. */
+        var s = document.createElement('script');
+        s.textContent = 'window.__nested = (window.__nested || 0) + 1;';
+        document.body.appendChild(s);
+        window.__log.push('nested=' + window.__nested);
+    }
+
+    if (window.__done === 2)
+        setTimeout(function () { window.__log.push('settled'); }, 60);
+}
+
+function start() {
+    for (var i = 0; i < 2; i++) {
+        var x = new XMLHttpRequest();
+        x.open('GET', 'cap_pixel.png?n=' + i);
+        x.onload = tick;
+        x.send();
+    }
+}
+
+start();
+</script>
+</body>
+</html>

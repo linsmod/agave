@@ -31,7 +31,8 @@
 | 地址栏输入 → URL | `examples/browser_shell/main.c`：`parseShellArgv()` / `normalizeUrl()` / `fileUrlFromLocalPath()`；`file:` URL 只允许单次转义 → `KURL::encode_string()`（幂等） |
 | 无头探针 | `examples/browser_shell/main.c`：`probeRun()`（`WS_POPUP` + `WS_EX_TOOLWINDOW` 隐藏父窗口）+ `probeWndProc()`；`AGB_PROBE_SHOW=1` 才显示 |
 | Web Worker | `prelude.js` 末尾「Web Workers」段（`_agbWorkerStart` / `_agbWorkerPreamble` / `_agbWorkerPrefetch`）；ant 侧 `H:\ant-v16\src\modules\worker\{web,core}.c`；栈帧短名 `esm_frame_filename`（`H:\ant-v16\src\esm\loader.c`） |
-| 回归页 / 脚本 | 页面在 `debug/`；`tools/run_worker_tests.ps1`、`tools/run_nav_tests.ps1`、`tools/run_typing_tests.ps1`、`tools/run_jit_loop_tests.ps1`、`tools/check_window_visible.ps1`、`tools/bench_compile.ps1`、`tools/measure_cpu.ps1` |
+| 回归页 / 脚本 | 页面在 `debug/`；`tools/run_worker_tests.ps1`、`tools/run_nav_tests.ps1`、`tools/run_typing_tests.ps1`、`tools/run_xhr_tests.ps1`（XHR 投递重入）、`tools/run_jit_loop_tests.ps1`、`tools/check_window_visible.ps1`、`tools/bench_compile.ps1`、`tools/measure_cpu.ps1` |
+| XHR / `fetch` | `src/javascript/ant_backend/prelude.js`（`XMLHttpRequest` 包 `__agbHttpRequestEx`，`fetch` 用同一入口）→ `AntRuntime.cpp`：`XhrJob`（`start`/`deliver`/`cancel`）、`xhrJobs()`、`collectXhrJobs()`（先摘后投 + 重入守卫，R94）、`cancelXhrJobsForGeneration()`；回归 `tools/run_xhr_tests.ps1` |
 | 控件生命周期（R61） | `src/webview_control/AgaveWebView.c`：`agwDrainCommands()`（命令按 `viewId` 查目标并 `refs++`，跑完 `agwRelease()`）、`agave_webview_destroy()`（`refs>0` 时推迟到引擎线程）、`agwRelease()`；探针侧 `examples/browser_shell/main.c` 的 `__agb_evaldone__` → `AGW_PROBE_EVALDONE` → `--settle` |
 | 裸引擎复现（无浏览器） | `tools/ant_loop_repro.c`：`antb_engine_create + antb_eval` 跑任意脚本；用来判定"是不是 ant/JIT 的锅"（R61 用它排除了 JIT） |
 | 堆破坏 / UAF 定位 | `AGB_GUARD_MALLOC`（`src/wtf/FastMalloc.cpp`，页守卫 + free 即 unmap）+ `tools/cdb_heap_probe.ps1`（cdb 启动、dump 被写坏的块）；HEAP 消息是**发现点**不是写入点（R62） |

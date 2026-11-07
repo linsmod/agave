@@ -783,7 +783,16 @@ struct XhrJob : public WebCore::ResourceHandleClient {
 
     void deliver()
     {
+        AntbValue* callback = m_callback;
         int previousSlot = g_currentSlot;
+
+        /* Take the callback out first: (a) a re-entrant delivery must not run it
+         * twice, (b) cancel() during the call must not release what we hold,
+         * (c) the handle from antb_retain() has exactly one owner - this frame.
+         * It used to be dropped by `m_callback = NULL` without a release, which
+         * leaked one AntbValue per delivered request (the GC pin itself stays
+         * for the engine's lifetime, see antb_retain()). */
+        m_callback = NULL;
 
         if (m_slot >= 0)
             activateSlot(m_slot);
@@ -793,10 +802,8 @@ struct XhrJob : public WebCore::ResourceHandleClient {
                          m_doneMs > 0 ? Net::logElapsedMs() - m_doneMs : -1.0,
                          m_startMs > 0 ? Net::logElapsedMs() - m_startMs : -1.0,
                          m_status, (unsigned)m_body.size());
-        if (!m_callback || !m_engine)
-            return;
 
-        {
+        if (callback && m_engine) {
             std::string payloadText;
 
             if (m_binary)
@@ -804,42 +811,34 @@ struct XhrJob : public WebCore::ResourceHandleClient {
             else
                 payloadText = WebCore::String(m_body.data(), m_body.size()).utf8().data();
 
-            AntbValue* textValue = antb_make_string(m_engine, payloadText.c_str());
-            AntbValue* statusValue = antb_make_number(m_engine, m_failed ? 0.0 : (double)m_status);
-            AntbValue* argArray[2];
-            AntbValue* result;
+            {
+                AntbValue* textValue = antb_make_string(m_engine, payloadText.c_str());
+                AntbValue* statusValue = antb_make_number(m_engine, m_failed ? 0.0 : (double)m_status);
 
-            if (!textValue || !statusValue) {
+                if (textValue && statusValue) {
+                    AntbValue* argArray[2];
+                    AntbValue* result;
+
+                    argArray[0] = statusValue;
+                    argArray[1] = textValue;
+                    result = antb_call(m_engine, callback, NULL, argArray, 2, NULL);
+                    if (result)
+                        antb_value_release(result);
+                }
+
                 if (textValue) antb_value_release(textValue);
                 if (statusValue) antb_value_release(statusValue);
-                return;
             }
-
-            argArray[0] = statusValue;
-            argArray[1] = textValue;
-            result = antb_call(m_engine, m_callback, NULL, argArray, 2, NULL);
-            if (result)
-                antb_value_release(result);
-
-            antb_value_release(textValue);
-            antb_value_release(statusValue);
         }
 
-        m_callback = NULL;
+        if (callback)
+            antb_value_release(callback);
+
         if (previousSlot >= 0)
             activateSlot(previousSlot);
     }
 
     bool done() const { return m_done; }
-
-    bool deliverAndMaybeFinish()
-    {
-        if (!m_done)
-            return false;
-
-        deliver();
-        return true;
-    }
 
     AntbEngine*                     m_engine;
     AntbValue*                      m_callback;
@@ -887,19 +886,59 @@ static void cancelXhrJobsForGeneration(unsigned long generation)
 
 /* Delivers finished responses and frees jobs. Called from the start of every
  * evaluation: the network pump runs outside JS, so delivery has to be flushed
- * somewhere that is known to be safe. */
+ * somewhere that is known to be safe.
+ *
+ * Deliveries run page JS, and that JS re-enters the runtime (appending a
+ * <script>, a module, a job boundary that flushes microtasks). The nested
+ * evaluation calls this function again, and the first version then walked a
+ * vector that the nested frame had already shortened: `delete jobs[i]`
+ * destroyed a *different* job and `jobs[i]` past the end tripped
+ * `ASSERT(i < size())` in Vector::at (v.qq.com, 0xc0000005, write 0xbbadbeef
+ * - the assertion's poison value).
+ *
+ * Two rules keep it safe:
+ *   - the finished jobs are detached from xhrJobs() *before* any JS runs, so a
+ *     nested collect() only ever sees the jobs nobody is delivering yet;
+ *   - a nested collect() returns immediately: the outer frame delivers the
+ *     detached list itself. */
+static bool g_inCollectXhr = false;
+
 static void collectXhrJobs()
 {
     Vector<XhrJob*>& jobs = xhrJobs();
+    Vector<XhrJob*> finished;
+
+    if (g_inCollectXhr)
+        return;
 
     for (unsigned i = 0; i < jobs.size(); ) {
-        if (jobs[i]->deliverAndMaybeFinish()) {
-            delete jobs[i];
+        if (jobs[i]->done()) {
+            finished.append(jobs[i]);
             jobs.remove(i);
         } else {
             ++i;
         }
     }
+
+    if (finished.isEmpty())
+        return;
+
+    g_inCollectXhr = true;
+
+    for (unsigned i = 0; i < finished.size(); ++i) {
+        XhrJob* job = finished[i];
+
+        /* The callback can navigate away (or reload): then the realm that
+         * started this request is gone and the response must not be handed to
+         * the one that replaces it. */
+        if (job->generation() < currentGeneration())
+            job->cancel();
+        else
+            job->deliver();
+        delete job;
+    }
+
+    g_inCollectXhr = false;
 }
 
 int globalHttpRequest(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
@@ -1476,6 +1515,20 @@ static void setCookieForCurrentDocument(const std::string& text)
         jar.push_back(entry);
     saveCookies();
 }
+/* A getter that returns 1 without touching `out` leaves the property
+ * undefined; where the DOM says "null" (document.body before <body> is
+ * parsed, a detached cssRule.parentStyleSheet, ...) say null explicitly. */
+static int assignNull(AntbEngine* engine, AntbValue* out)
+{
+    AntbValue* v = antb_make_null(engine);
+
+    if (!v)
+        return 0;
+    antb_value_assign(out, v);
+    antb_value_release(v);
+    return 1;
+}
+
 /* document.title */
 int titleGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue* out, void*)
 {
@@ -1518,7 +1571,7 @@ int titleGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue
         RefPtr<WebCore::NodeList> heads = d->getElementsByTagName("head");
         WebCore::Node* headNode = (heads && heads->length()) ? heads->item(0) : 0;
         if (!headNode)
-            return 1;
+            return assignNull(engine, out);
         {
             AntbValue* v = wrapNode(engine, headNode);
             if (v) { antb_value_assign(out, v); antb_value_release(v); }
@@ -1527,8 +1580,14 @@ int titleGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue
     }
 
     if (!strcmp(name, "body")) {
+        /* document.body is null - not undefined - before the body element has
+         * been parsed (a script in <head> reading it early).  Returning
+         * undefined here made the difference visible: sites that follow the
+         * spec ("Cannot read properties of null") crashed with an undefined
+         * message, and page code that tests document.body !== null took the
+         * wrong branch. */
         if (!d->body())
-            return 1;
+            return assignNull(engine, out);
         {
             AntbValue* v = wrapNode(engine, d->body());
             if (v) { antb_value_assign(out, v); antb_value_release(v); }
@@ -1548,7 +1607,7 @@ int titleGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue
 
     if (!strcmp(name, "documentElement")) {
         if (!d->documentElement())
-            return 1;
+            return assignNull(engine, out);
         {
             AntbValue* v = wrapNode(engine, d->documentElement());
             if (v) { antb_value_assign(out, v); antb_value_release(v); }
@@ -1647,7 +1706,22 @@ int titleGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue
     }
 
     if (!strcmp(name, "readyState")) {
-        AntbValue* v = antb_make_string(engine, "complete");
+        /* The real state, not the "complete" this used to hardcode.  Pages
+         * branch on it to decide whether it is safe to touch the DOM: a
+         * report script that saw "complete" while <head> was still being
+         * parsed skipped its DOMContentLoaded wait and called
+         * document.body.appendChild() too early (bilibili log-reporter).
+         * WebKit 2008 spells the middle state "loaded"; the standard name is
+         * "interactive", and page code compares against that. */
+        WebCore::String state = d->readyState();
+        const char* text = "complete";
+        AntbValue* v;
+
+        if (state == "loading")
+            text = "loading";
+        else if (state == "loaded")
+            text = "interactive";
+        v = antb_make_string(engine, text);
         if (!v)
             return 0;
         antb_value_assign(out, v);
@@ -5838,17 +5912,6 @@ static int cssomAssignNumber(AntbEngine* engine, AntbValue* out, double number)
     return 1;
 }
 
-static int cssomAssignNull(AntbEngine* engine, AntbValue* out)
-{
-    AntbValue* v = antb_make_null(engine);
-
-    if (!v)
-        return 0;
-    antb_value_assign(out, v);
-    antb_value_release(v);
-    return 1;
-}
-
 static void cssomTrack(AntbEngine* engine, void* ptr, int kind)
 {
     (void)engine;
@@ -6155,7 +6218,7 @@ int cssomGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue
         if (!strcmp(name, "cssText"))
             return cssomAssignString(engine, out, decl->cssText());
         if (!strcmp(name, "parentRule"))
-            return cssomAssignNull(engine, out);
+            return assignNull(engine, out);
         return 0;
     }
     default:

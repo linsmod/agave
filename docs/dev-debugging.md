@@ -465,12 +465,14 @@ ant 自身 CLI / 基础设施的开关（`ANT_MANIFEST_URL`、`ANT_SANDBOX_*`、
 
 ## 7. 验证闭环：回归清单 + A/B
 
-- 一条命令级回归：`tools/run_worker_tests.ps1`（Worker 九项）；`tools/run_nav_tests.ps1`
+- 一条命令级回归：`tools/run_worker_tests.ps1`（Worker 九项）；`tools/run_xhr_tests.ps1`
+  （XHR 投递重入：回调里再进运行时不得重复投递/越界，R94）；`tools/run_nav_tests.ps1`
   （`[nav]` 八项：链接/脚本跳转/历史后退/meta refresh/window.open/表单提交/302 重定向/关日志）；
   `tools/run_typing_tests.ps1`（键盘/IME 八项）；`tools/run_jit_loop_tests.ps1`（长循环 +
   引擎线程运行期间销毁视图）；`debug/csscheck.html`（CSS 能力矩阵）；`debug/life.html`（生命周期）；
-  `debug/defercheck.html`；deepseek 登录页（`inp=2 all=129`）。回归清单与基线以本文为准；
-  状态总结见 [arch-status.md](arch-status.md)。
+  `tools/pages/cap_lifecycle.html`（`document.readyState` 三段 + `document.body` 为 `null`，
+  与 Chrome 逐字节对拍，R93）；`debug/defercheck.html`；deepseek 登录页（`inp=2 all=129`）。
+  回归清单与基线以本文为准；状态总结见 [arch-status.md](arch-status.md)。
 - **页面清单**：`debug/` 下 `life.html`、`evalenv_test.html`、`expando_test.html`、`sched.html`、
   `font_test.html`、`csscheck.html`、`clipcheck.html`、`scrollcheck.html`、`beforeunload.html`、
   `defercheck.html`、`newtab.html`、`worker_support.html`；大图 `chat.deepseek.com`、
