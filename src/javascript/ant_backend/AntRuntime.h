@@ -74,8 +74,9 @@ void flushDeferredModules(void* document);
  * <body> existed) and must run after parsing, before DOMContentLoaded. The
  * element queues the body when it arrives; the post-parse flush runs it in
  * document order. If the flush already happened for `document`, it runs
- * immediately. */
-void queueDeferredScript(void* document, const char* url, const char* source);
+ * immediately. `scriptElement` (an HTMLScriptElement*, may be NULL) becomes
+ * document.currentScript while the body runs. */
+void queueDeferredScript(void* document, const char* url, const char* source, void* scriptElement = 0);
 
 /* Module scripts (external entry, inline, or fetched while parsing) are
  * deferred by spec: they run after the document is parsed, in document order

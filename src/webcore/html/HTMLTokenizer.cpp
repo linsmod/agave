@@ -415,7 +415,11 @@ HTMLTokenizer::State HTMLTokenizer::scriptHandler(State state)
     // (Bugzilla 3837) Scripts following a frameset element should not execute or, 
     // in the case of extern scripts, even load.
     bool followingFrameset = (m_doc->body() && m_doc->body()->hasTagName(framesetTag));
-  
+
+    /* The element behind an inline script: document.currentScript has to point
+     * at it while the code runs, and scriptNode is cleared before execution. */
+    RefPtr<HTMLScriptElement> inlineScriptElement;
+
     CachedScript* cs = 0;
     // don't load external scripts for standalone documents (for now)
     if (!inViewSourceMode()) {
@@ -517,6 +521,7 @@ HTMLTokenizer::State HTMLTokenizer::scriptHandler(State state)
 #endif
             doScriptExec = static_cast<HTMLScriptElement*>(scriptNode.get())->shouldExecuteAsJavaScript();
             inlineModuleScript = static_cast<HTMLScriptElement*>(scriptNode.get())->isModuleScript();
+            inlineScriptElement = static_cast<HTMLScriptElement*>(scriptNode.get());
             scriptNode = 0;
         }
     }
@@ -575,7 +580,8 @@ HTMLTokenizer::State HTMLTokenizer::scriptHandler(State state)
             else
                 prependingSrc = src;
             setSrc(SegmentedString());
-            state = scriptExecution(exScript, state, DeprecatedString::null, scriptStartLineno, inlineModuleScript);
+            state = scriptExecution(exScript, state, DeprecatedString::null, scriptStartLineno, inlineModuleScript,
+                                    inlineScriptElement.get());
         }
     }
 
@@ -608,7 +614,8 @@ HTMLTokenizer::State HTMLTokenizer::scriptHandler(State state)
     return state;
 }
 
-HTMLTokenizer::State HTMLTokenizer::scriptExecution(const DeprecatedString& str, State state, DeprecatedString scriptURL, int baseLine, bool isModule)
+HTMLTokenizer::State HTMLTokenizer::scriptExecution(const DeprecatedString& str, State state, DeprecatedString scriptURL, int baseLine, bool isModule,
+                                                    HTMLScriptElement* scriptElement)
 {
     if (m_fragment || !m_doc->frame())
         return state;
@@ -649,9 +656,18 @@ HTMLTokenizer::State HTMLTokenizer::scriptExecution(const DeprecatedString& str,
             AntRuntime::queueDeferredModule(m_doc, url.utf8().data(), str.utf8().data());
         else
             m_doc->frame()->loader()->executeModule(url, str);
+        /* A module never sets document.currentScript (HTML spec). */
     } else
 #endif
+    {
+        /* document.currentScript for the duration of a classic script - the
+         * parser knows which element it is running (the <script> tag it just
+         * finished tokenising), which is what makes
+         * `document.currentScript.src` / `.getAttribute('data-…')` work in
+         * third-party loaders. */
+        CurrentScriptScope currentScript(m_doc, scriptElement);
         m_doc->frame()->loader()->executeScript(url, baseLine, str);
+    }
     state = m_state;
 
     state.setAllowYield(true);
@@ -1957,7 +1973,8 @@ void HTMLTokenizer::notifyFinished(CachedResource*)
         else {
             if (static_cast<HTMLScriptElement*>(n.get())->shouldExecuteAsJavaScript())
                 m_state = scriptExecution(scriptSource.deprecatedString(), m_state, cachedScriptUrl, 0,
-                                          static_cast<HTMLScriptElement*>(n.get())->isModuleScript());
+                                          static_cast<HTMLScriptElement*>(n.get())->isModuleScript(),
+                                          static_cast<HTMLScriptElement*>(n.get()));
             EventTargetNodeCast(n.get())->dispatchHTMLEvent(loadEvent, false, false);
         }
 

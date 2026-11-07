@@ -581,6 +581,15 @@ public:
     void setTitle(const String&, Element* titleElement = 0);
     void removeTitle(Element* titleElement);
 
+    /* document.currentScript: the <script> element whose code is running right
+     * now, or 0. Only classic scripts set it; a module keeps it null (HTML
+     * spec), and it is null again as soon as the script returns - which is what
+     * makes `document.currentScript` a reliable "am I being executed by a
+     * <script> tag" test (JSONP loaders, `document.currentScript.src` for a
+     * base URL, data-* attributes on the tag). */
+    Element* currentScript() const { return m_currentScript.get(); }
+    void setCurrentScript(Element* script) { m_currentScript = script; }
+
     String cookie() const;
     void setCookie(const String&);
 
@@ -825,6 +834,8 @@ private:
     String m_title;
     bool m_titleSetExplicitly;
     RefPtr<Element> m_titleElement;
+
+    RefPtr<Element> m_currentScript;
     
     RenderArena* m_renderArena;
 
@@ -978,6 +989,32 @@ private:
 #endif
 
     bool m_async;
+};
+
+/* Scopes document.currentScript to the script execution that sets it and puts
+ * the previous value back afterwards: a classic script may insert another
+ * <script>, which executes nested, and the outer script must still see itself
+ * when the inner one returns. The document is held by reference so a script
+ * that navigates away cannot leave a dangling pointer here. */
+class CurrentScriptScope {
+public:
+    CurrentScriptScope(Document* document, Element* script)
+        : m_document(document)
+        , m_saved(document ? document->currentScript() : 0)
+    {
+        if (m_document)
+            m_document->setCurrentScript(script);
+    }
+
+    ~CurrentScriptScope()
+    {
+        if (m_document)
+            m_document->setCurrentScript(m_saved.get());
+    }
+
+private:
+    RefPtr<Document> m_document;
+    RefPtr<Element> m_saved;
 };
 
 } // namespace WebCore

@@ -291,7 +291,7 @@ void HTMLScriptElement::evaluateScript(const String& URL, const String& script)
      * died). The element path is only reached for non-blocking scripts
      * (async / defer / dynamic), so queue it for the post-parse flush. */
     if (defer() && !hasAttribute(AtomicString("async"))) {
-        AntRuntime::queueDeferredScript(document(), URL.utf8().data(), script.utf8().data());
+        AntRuntime::queueDeferredScript(document(), URL.utf8().data(), script.utf8().data(), this);
         m_evaluated = true;
         return;
     }
@@ -311,9 +311,11 @@ void HTMLScriptElement::evaluateScript(const String& URL, const String& script)
 
             if (isModuleScript()) {
                 /* Modules run after parsing, like defer; evaluating here would
-                 * run them against a half built document. */
+                 * run them against a half built document. They also never set
+                 * document.currentScript (HTML spec). */
                 AntRuntime::queueModule(URL.utf8().data(), script.utf8().data());
             } else {
+                CurrentScriptScope currentScript(document(), this);
                 proxy->evaluate(URL, 0, script);
             }
 

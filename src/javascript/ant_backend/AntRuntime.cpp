@@ -1605,6 +1605,21 @@ int titleGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue
         return 1;
     }
 
+    if (!strcmp(name, "currentScript")) {
+        /* The <script> whose code is running, or null (R95). A JSONP loader or a
+         * third-party snippet reads its own tag through this - `.src` for a base
+         * URL, `data-*` attributes for configuration. */
+        WebCore::Element* script = d->currentScript();
+
+        if (!script)
+            return assignNull(engine, out);
+        {
+            AntbValue* v = wrapNode(engine, script);
+            if (v) { antb_value_assign(out, v); antb_value_release(v); }
+        }
+        return 1;
+    }
+
     if (!strcmp(name, "documentElement")) {
         if (!d->documentElement())
             return assignNull(engine, out);
@@ -4216,6 +4231,10 @@ struct DeferredModule {
     void* document;             /* the document it belongs to (bound before it
                                  * runs: the bridge may still point at the
                                  * frame's initial about:blank document) */
+    RefPtr<WebCore::Element> scriptElement; /* classic defer: what
+                                 * document.currentScript points at while it
+                                 * runs. Held by reference: the queue can outlive
+                                 * a script element the page removed. */
     bool isClassic;             /* classic <script defer> runs via evaluate(),
                                  * module scripts via evaluateModule() */
     DeferredModule() : generation(0), document(NULL), isClassic(false) {}
@@ -4311,7 +4330,11 @@ void flushDeferredModules(void* document)
              * the rest of the DOM exist. */
             char* out = NULL;
             setFilename(pending[i].url.c_str());
-            evaluate(pending[i].source.c_str(), pending[i].source.size(), &out, &err);
+            {
+                WebCore::CurrentScriptScope currentScript((WebCore::Document*)pending[i].document,
+                                                          pending[i].scriptElement.get());
+                evaluate(pending[i].source.c_str(), pending[i].source.size(), &out, &err);
+            }
             if (out)
                 free(out);
         } else {
@@ -4361,8 +4384,10 @@ void queueDeferredModule(void* document, const char* url, const char* source)
     modulePrefetchImports(module.url, module.source);
 }
 
-void queueDeferredScript(void* document, const char* url, const char* source)
+void queueDeferredScript(void* document, const char* url, const char* source, void* scriptElement)
 {
+    WebCore::Element* element = (WebCore::Element*)scriptElement;
+
     /* The post-parse flush already ran for this document: nothing will consume
      * the queue anymore, so run the script right away (slow network, dynamic
      * insertion). */
@@ -4374,7 +4399,10 @@ void queueDeferredScript(void* document, const char* url, const char* source)
             bindDocument(document);
 
         setFilename(url ? url : "");
-        evaluate(source ? source : "", source ? strlen(source) : 0, &out, &err);
+        {
+            WebCore::CurrentScriptScope currentScript((WebCore::Document*)document, element);
+            evaluate(source ? source : "", source ? strlen(source) : 0, &out, &err);
+        }
         if (out)
             free(out);
         if (err) {
@@ -4393,6 +4421,7 @@ void queueDeferredScript(void* document, const char* url, const char* source)
     script.source = source ? source : "";
     script.generation = currentGeneration();
     script.document = document;
+    script.scriptElement = element;
     script.isClassic = true;
     g_deferredModules->push_back(script);
 }
@@ -9128,7 +9157,8 @@ int nodeQuerySelector(AntbEngine* engine, AntbValue* self, AntbValue** args, int
         if (first) {
             antb_value_assign(out, first);
             antb_value_release(first);
-        }
+        } else
+            assignNull(engine, out);   /* null, not undefined (R95) */
     }
 
     antb_value_release(holder);
@@ -10975,7 +11005,7 @@ int docGetElementById(AntbEngine* engine, AntbValue* self, AntbValue** args, int
     antb_free(id);
 
     if (!element)
-        return 1;   /* undefined */
+        return assignNull(engine, out);   /* null, not undefined (R95) */
 
     {
         AntbValue* v = wrapNode(engine, element);

@@ -17,7 +17,10 @@
 #   2. a page's top-level var/function/this still look like classic script;
 #   3. `AGB_PAGE_EVAL=eval` still opts back into the old semantics;
 #   4. bench_hot.js stays in single-digit..tens of ns per iteration (eval mode
-#      was 100-600 ns).
+#      was 100-600 ns);
+#   5. document.currentScript (R95): the <script> element while its code runs
+#      (inline, external, defer, async, dynamic, nested), null for modules and
+#      for anything that runs after the script returned.
 #
 # Usage:
 #   pwsh -File tools/run_script_mode_tests.ps1
@@ -51,9 +54,12 @@ function Invoke-Probe {
         Set-Content -Path $ScriptFile -Value $Js -Encoding ascii
     }
 
-    $args = @('--probe', $Url)
-    if ($ScriptFile) { $args += @('--eval-file', $ScriptFile) }
-    $args += @('--wait', "$Wait", '--settle', "$Settle", '--timeout', "$Timeout")
+    # Not $args: that is PowerShell's automatic argument array, and assigning to
+    # it then splatting it silently loses the assignments (the bench case used to
+    # start the probe with no arguments at all and report an empty exit code).
+    $cmdArgs = @('--probe', $Url)
+    if ($ScriptFile) { $cmdArgs += @('--eval-file', $ScriptFile) }
+    $cmdArgs += @('--wait', "$Wait", '--settle', "$Settle", '--timeout', "$Timeout")
 
     $stdout = Join-Path $tmp 'out.txt'
     $stderr = Join-Path $tmp 'err.txt'
@@ -63,7 +69,7 @@ function Invoke-Probe {
     else { $env:AGB_PAGE_EVAL = $PageEval }
 
     try {
-        $p = Start-Process -FilePath $exe -NoNewWindow -PassThru -Wait -ArgumentList $args `
+        $p = Start-Process -FilePath $exe -NoNewWindow -PassThru -Wait -ArgumentList $cmdArgs `
             -RedirectStandardOutput $stdout -RedirectStandardError $stderr
         [pscustomobject]@{
             Code   = $p.ExitCode
@@ -159,6 +165,36 @@ if ($bench.Code -ne 0) {
     }
 }
 
+# 5. document.currentScript (R95). The page writes `key=value` into #out and the
+# observer reports that text, so the needles below are the page's own answers.
+# Chrome agrees on every one of them except the microtask case: its microtask
+# checkpoint runs inside "run a classic script", before currentScript is
+# cleared, so Chrome reports inline1 there and agave reports null.
+$cs = Invoke-Probe -Url (Join-Path $root 'tools/pages/cap_currentscript.html') `
+    -ScriptFile (Join-Path $root 'tools/pages/check_currentscript.js') -Wait 2500 -Settle 300
+
+if ($cs.Code -ne 0) {
+    $failures++
+    Write-Host ("FAIL  document.currentScript: exit {0}" -f $cs.Code)
+    Write-Host (($cs.Stderr -split "`n" | Select-Object -Last 8) -join "`n")
+} else {
+    $csMissing = 0
+    foreach ($needle in @('inline.self=inline1', 'inline.data=one', 'inline.src=""',
+                          'fn=inline1', 'eval=inline1', 'newFunction=inline1',
+                          'nested.id=nested', 'inline.afterNested=inline1',
+                          'listener=inline1', 'inline2.self=inline2',
+                          'timer=null', 'microtask=null', 'module=null', 'afterLoad=null',
+                          'ext.seen=ext', 'ext.data=ext', 'defer.seen=defer',
+                          'async.seen=async', 'module.inDom=yes')) {
+        if ($cs.Stdout -notmatch [regex]::Escape($needle)) {
+            $failures++
+            $csMissing++
+            Write-Host ("FAIL  document.currentScript: missing '{0}'" -f $needle)
+        }
+    }
+    if (-not $csMissing) { Write-Host 'PASS  document.currentScript (inline/external/defer/async/nested, null elsewhere)' }
+}
+
 Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 
 if ($failures -gt 0) {
@@ -168,3 +204,4 @@ if ($failures -gt 0) {
 
 Write-Host "`nALL SCRIPT MODE CHECKS PASSED"
 exit 0
+

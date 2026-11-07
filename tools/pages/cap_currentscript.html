@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>currentScript</title>
+<style>
+  body { font-family: sans-serif; }
+</style>
+<script id="inline1" data-mark="one">
+/* document.currentScript: the <script> element whose code is running.
+ *
+ * Each probe answer is written into #out as `key=value` so headless Chrome
+ * (--dump-dom) and agave (--eval-file) can produce the same string.
+ * Needles live in tools/run_script_mode_tests.ps1. */
+window.__obs = [];
+
+function obs(key, value) {
+    window.__obs.push(key + '=' + value);
+}
+
+function flush() {
+    var out = document.getElementById('out');
+    if (out)
+        out.textContent = window.__obs.join(' ');
+}
+
+obs('inline.self', document.currentScript ? document.currentScript.id : 'null');
+obs('inline.data', document.currentScript ? document.currentScript.getAttribute('data-mark') : 'null');
+obs('inline.src', document.currentScript ? JSON.stringify(document.currentScript.src) : 'null');
+obs('inline.type', document.currentScript ? document.currentScript.nodeName : 'null');
+
+/* Nested function / eval / new Function keep the same element: the script is
+ * still executing. */
+function readFromFunction() {
+    return document.currentScript ? document.currentScript.id : 'null';
+}
+obs('fn', readFromFunction());
+obs('eval', eval('document.currentScript ? document.currentScript.id : "null"'));
+obs('newFunction', (new Function('return document.currentScript ? document.currentScript.id : "null"'))());
+
+/* A dynamically inserted classic script sees itself, and while it runs the
+ * outer script must still see itself. It goes into <head>: this runs before
+ * <body> exists, so document.body is null here (R93). */
+var nested = document.createElement('script');
+nested.id = 'nested';
+nested.textContent = 'window.__nestedId = document.currentScript ? document.currentScript.id : "null";';
+document.head.appendChild(nested);
+obs('nested.id', window.__nestedId || 'missing');
+obs('inline.afterNested', document.currentScript ? document.currentScript.id : 'null');
+
+/* Not during script execution. A microtask queued here is reported as null by
+ * agave (the checkpoint runs after the script returned); Chrome reports
+ * inline1 because its checkpoint happens inside "run a classic script", before
+ * currentScript is cleared - a documented difference, see docs/hist-lessons.md
+ * R95. */
+setTimeout(function () {
+    obs('timer', document.currentScript === null ? 'null' : String(document.currentScript.id));
+    flush();
+}, 0);
+
+document.addEventListener('currentscript-test', function () {
+    obs('listener', document.currentScript === null ? 'null' : String(document.currentScript.id));
+});
+document.dispatchEvent(new Event('currentscript-test'));
+
+Promise.resolve().then(function () {
+    obs('microtask', document.currentScript === null ? 'null' : String(document.currentScript.id));
+});
+</script>
+<script id="inline2">
+obs('inline2.self', document.currentScript ? document.currentScript.id : 'null');
+</script>
+<script id="ext" src="cap_currentscript_ext.js" data-mark="ext"></script>
+<script id="defer" defer src="cap_currentscript_defer.js" data-mark="defer"></script>
+<script id="async" async src="cap_currentscript_async.js" data-mark="async"></script>
+<script id="mod" type="module">
+window.__moduleScript = document.currentScript === null ? 'null' : String(document.currentScript.id);
+window.__obs.push('module=' + window.__moduleScript);
+</script>
+</head>
+<body>
+<p id="out">pending</p>
+<script id="inline3">
+window.addEventListener('load', function () {
+    obs('afterLoad', document.currentScript === null ? 'null' : String(document.currentScript.id));
+    obs('ext.seen', window.__extId || 'missing');
+    obs('ext.data', window.__extData || 'missing');
+    obs('ext.src', window.__extSrc || 'missing');
+    obs('defer.seen', window.__deferId || 'missing');
+    obs('async.seen', window.__asyncId || 'missing');
+    /* The module tag is in the document even though currentScript was null. */
+    obs('module.inDom', document.getElementById('mod') ? 'yes' : 'no');
+    flush();
+});
+</script>
+</body>
+</html>

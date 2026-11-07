@@ -471,7 +471,9 @@ ant 自身 CLI / 基础设施的开关（`ANT_MANIFEST_URL`、`ANT_SANDBOX_*`、
   `tools/run_typing_tests.ps1`（键盘/IME 八项）；`tools/run_jit_loop_tests.ps1`（长循环 +
   引擎线程运行期间销毁视图）；`debug/csscheck.html`（CSS 能力矩阵）；`debug/life.html`（生命周期）；
   `tools/pages/cap_lifecycle.html`（`document.readyState` 三段 + `document.body` 为 `null`，
-  与 Chrome 逐字节对拍，R93）；`debug/defercheck.html`；deepseek 登录页（`inp=2 all=129`）。
+  与 Chrome 逐字节对拍，R93）；`tools/pages/cap_currentscript.html`（`document.currentScript`
+  在内联/外链/`defer`/`async`/动态/嵌套脚本里的值，R95，`run_script_mode_tests.ps1` 第 5 组）；
+  `debug/defercheck.html`；deepseek 登录页（`inp=2 all=129`）。
   回归清单与基线以本文为准；状态总结见 [arch-status.md](arch-status.md)。
 - **页面清单**：`debug/` 下 `life.html`、`evalenv_test.html`、`expando_test.html`、`sched.html`、
   `font_test.html`、`csscheck.html`、`clipcheck.html`、`scrollcheck.html`、`beforeunload.html`、
