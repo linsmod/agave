@@ -809,7 +809,11 @@ struct XhrJob : public WebCore::ResourceHandleClient {
             if (m_binary)
                 payloadText = base64Encode(m_body.data(), m_body.size());
             else
-                payloadText = WebCore::String(m_body.data(), m_body.size()).utf8().data();
+                /* m_body holds the raw response bytes: UTF-8 in practice. Going
+                 * through WebCore::String(data, size) treats them as Latin-1 and
+                 * .utf8() then double-encodes (v.qq's console text arrived as
+                 * "é¢„çº¦..." instead of "预约..."). Decode UTF-8 once. */
+                payloadText = WebCore::String::fromUTF8(m_body.data(), m_body.size()).utf8().data();
 
             {
                 AntbValue* textValue = antb_make_string(m_engine, payloadText.c_str());
@@ -9218,7 +9222,11 @@ int globalHttpGet(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
             return 1;   /* undefined → the shim reports status 0 */
 
         {
-            WebCore::String body(data.data(), data.size());
+            /* The response bytes are UTF-8, not Latin-1: WebCore::String(ptr,
+             * len) maps every *byte* to U+0000..U+00FF, so feeding it UTF-8 and
+             * then calling .utf8() double-encodes (E9 A2 84 became C3 A9 C2 A2
+             * C2 84 -> "é¢„" instead of "预"). Decode it as UTF-8 once. */
+            WebCore::String body = WebCore::String::fromUTF8(data.data(), data.size());
             AntbValue* v = antb_make_string(engine, body.utf8().data());
             if (!v)
                 return 1;

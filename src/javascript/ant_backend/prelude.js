@@ -601,10 +601,27 @@
       this.status = status;
       this.statusText = status ? 'OK' : '';
       if (binary) {
+        /* The async path always delivers bytes (base64), because a text-only
+         * channel cannot carry non-UTF-8 or NUL bodies. responseText is still
+         * required for the default responseType ('' / 'text'): leaving it
+         * empty made every JSON endpoint's xhr.responseText === '' and
+         * JSON.parse() fail on the caller's side. Decode the bytes once and
+         * answer both views from them. */
         this._buffer = g.__agbB64ToBuffer(payload);
-        this.responseText = '';
-        if (this.responseType === 'blob') {
+        var type = this.responseType;
+        var asText = (type === '' || type === undefined || type === null || type === 'text');
+        if (asText || type === 'json') {
+          try { this.responseText = g.__agbDecodeUtf8(this._buffer); }
+          catch (e) { this.responseText = ''; }
+        } else {
+          this.responseText = '';
+        }
+        if (type === 'json') {
+          try { this.response = JSON.parse(this.responseText); } catch (e) { this.response = null; }
+        } else if (type === 'blob') {
           try { this.response = new Blob([this._buffer]); } catch (e) { this.response = this._buffer; }
+        } else if (asText) {
+          this.response = this.responseText;
         } else {
           this.response = this._buffer;
         }

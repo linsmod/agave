@@ -1,0 +1,30 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>xhr text</title></head>
+<body><div id="out">pending</div>
+<script>
+var out = [];
+function done() {
+  document.getElementById('out').textContent = out.join(' ');
+}
+
+var x = new XMLHttpRequest();
+x.open('GET', 'cap_xhr_text.json', true);
+x.onload = function () {
+  out.push('status=' + x.status);
+  out.push('rtLen=' + x.responseText.length);
+  out.push('rtHas=' + (x.responseText.indexOf('预约状态获取失败') >= 0 ? 'yes' : 'no'));
+  out.push('rt0=' + (x.responseText.charCodeAt(x.responseText.indexOf('预')) || 0).toString(16));
+  try {
+    var o = JSON.parse(x.responseText);
+    out.push('json.ok=' + o.ok);
+    out.push('json.msgHas=' + (o.msg.indexOf('预约状态') === 0 ? 'yes' : 'no'));
+    out.push('json.list2=' + (o.list && o.list[1] === '中文二' ? 'yes' : 'no'));
+  } catch (e) {
+    out.push('json.ERR=' + e);
+  }
+  done();
+};
+x.onerror = function () { out.push('onerror'); done(); };
+x.send();
+</script>
+</body></html>

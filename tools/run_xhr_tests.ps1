@@ -1,7 +1,8 @@
 # tools/run_xhr_tests.ps1
 #
 # XHR delivery regression: the delivery loop calls back into page JS, so it has
-# to survive its own re-entrancy.
+# to survive its own re-entrancy - and the body it hands over has to be decoded
+# as UTF-8, not passed through as raw bytes.
 #
 #   * xhr_reentry.html - two requests finish in the same frame and the first
 #     callback runs a nested evaluation (an inline <script>). collectXhrJobs()
@@ -9,6 +10,12 @@
 #     xhrJobs(): the nested frame destroyed the job the outer frame was
 #     delivering, then `jobs[i]` was past the end -> "ASSERTION FAILED:
 #     i < size()" (v.qq.com, 0xc0000005, write 0xbbadbeef).
+#
+#   * cap_xhr_text.html - an async XHR whose response is UTF-8 JSON with Chinese
+#     text, read back through responseText and JSON.parse. The async path always
+#     delivers bytes (base64), and _finish() used to leave responseText empty for
+#     the default responseType, so every JSON endpoint threw
+#     "JSON.parse: unexpected character" (v.qq.com's remote-config fetch).
 #
 # The pages need a real origin (XHR to file:// has no transport), so this runs a
 # throwaway python http.server over tools/pages.
@@ -75,6 +82,30 @@ try {
             $missing++
         }
         if ($missing) { $failed++ } else { Write-Host 'PASS  xhr_reentry.html (delivery survives re-entrancy)' }
+    }
+
+    # ---- UTF-8 responseText -------------------------------------------------
+    $url = "http://127.0.0.1:$Port/cap_xhr_text.html"
+    $out = & $exe --probe $url `
+        --eval-file (Join-Path $pageDir 'check_xhr_text.js') `
+        --wait 2500 --settle 500 --timeout 30000 2>&1
+    $code = $LASTEXITCODE
+
+    $text = $out -join "`n"
+    $missing = 0
+
+    if ($code -ne 0) {
+        Write-Host "FAIL  cap_xhr_text.html: probe exit $code"
+        $failed++
+    } else {
+        foreach ($needle in @('status=200', 'rtHas=yes', 'rt0=9884', 'json.ok=true',
+                              'json.msgHas=yes', 'json.list2=yes')) {
+            if ($text -notmatch [regex]::Escape($needle)) {
+                Write-Host "FAIL  cap_xhr_text.html: missing '$needle'"
+                $missing++
+            }
+        }
+        if ($missing) { $failed++ } else { Write-Host 'PASS  cap_xhr_text.html (responseText is decoded UTF-8)' }
     }
 } finally {
     Stop-Server
