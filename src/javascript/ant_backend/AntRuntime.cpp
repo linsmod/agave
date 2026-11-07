@@ -24,6 +24,7 @@
 
 namespace WebCore { bool prefersDarkColorScheme(); }
 #include "AgbSelector.h"
+#include "AgbTextCodec.h"
 #include "AntBridge.h"
 #include "../../webcore/platform/network/native/NetworkSession.h"
 #include "../platform/network/native/NetLog.h"
@@ -3808,6 +3809,10 @@ bool start()
 
     initCookieStorage();
     antb_set_logger(antbLogSink, 0);
+    /* Legacy codecs (gbk/big5/shift_jis) come from WebCore's tables: ant has
+     * none and asks the host through this hook. Must be registered before the
+     * first engine, because TextDecoder resolves labels at construction. */
+    Agb::installTextCodecProvider();
     /* Ant needs the address of a stack variable from the calling thread. */
     volatile char stack_anchor = 0;
     engine = antb_engine_create((const void*)&stack_anchor);
@@ -3837,6 +3842,8 @@ void* createContext()
 {
     volatile char stack_anchor = 0;
     antb_set_logger(antbLogSink, 0);
+    /* Process-wide and idempotent; both engine-creation paths install it. */
+    Agb::installTextCodecProvider();
     AntbEngine* engine = antb_engine_create((const void*)&stack_anchor);
 
     if (!engine)

@@ -155,6 +155,41 @@ try {
 
         if ($missing) { $failed++ } else { Write-Host "PASS  $($case.Page) ($($case.What))" }
     }
+
+    # ---- legacy TextDecoder codecs ------------------------------------------
+    # ant has no gbk/big5/shift_jis tables; the browser hands it its own through
+    # antb_set_text_codec_provider. Every needle is Chrome's answer except
+    # shift_jis, which is a KNOWN DIVERGENCE in WebCore's table lookup
+    # (shiftjis_conv_to_uchar) and is therefore not asserted here.
+    $out = & $exe --probe "http://127.0.0.1:$Port/cap_textdecoder_legacy.html" `
+        --eval-file (Join-Path $pageDir 'check_textdecoder_legacy.js') `
+        --wait 2000 --settle 300 --timeout 30000 2>&1
+    $code = $LASTEXITCODE
+    $text = $out -join "`n"
+    $missing = 0
+
+    if ($code -ne 0) {
+        Write-Host "FAIL  cap_textdecoder_legacy.html: probe exit $code"
+        $failed++
+    } else {
+        foreach ($needle in @(
+            'gbk=预约', 'gbk=预约 A', 'gb2312=预约', 'gb18030=预约',
+            'big5=頌地', 'euc-kr=예한', 'gbk=gbk', 'big5=big5',
+            'utf-8=预', 'windows-1252=é', 'bogus=rejected')) {
+            if ($text -notmatch [regex]::Escape($needle)) {
+                Write-Host "FAIL  cap_textdecoder_legacy.html: missing '$needle'"
+                $missing++
+            }
+        }
+        # Guarded so the known shift_jis divergence cannot silently spread.
+        if ($text -notmatch [regex]::Escape('shift_jis=椿Δ')) {
+            Write-Host "NOTE  cap_textdecoder_legacy.html: shift_jis changed - check the R97 known divergence"
+            $missing++
+        }
+        if ($missing) { $failed++ } else {
+            Write-Host 'PASS  cap_textdecoder_legacy.html (gbk/gb18030/big5/euc-kr come from the host provider)'
+        }
+    }
 } finally {
     Stop-Server
 }

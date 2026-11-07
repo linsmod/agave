@@ -1,0 +1,37 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>textdecoder legacy</title></head>
+<body><div id="out">pending</div>
+<script>
+/* Legacy codec labels. ant ships no CJK tables; the host supplies them through
+ * antb_set_text_codec_provider (AgbTextCodec.cpp) and ant routes any label its
+ * own table does not know there. Chrome is the reference; shift_jis is a
+ * KNOWN DIVERGENCE (WebCore's shiftjis_conv_to_uchar maps to the wrong row),
+ * so it is reported but not asserted. */
+var out = [];
+function t(label, arr) {
+  try { return label + '=' + new TextDecoder(label).decode(new Uint8Array(arr)); }
+  catch (e) { return label + '=THREW'; }
+}
+function enc(label) {
+  try { return label + '=' + new TextDecoder(label).encoding; }
+  catch (e) { return label + '=THREW'; }
+}
+
+out.push(t('gbk', [0xD4, 0xA4, 0xD4, 0xBC]));          /* 预约 */
+out.push(t('gbk', [0xD4, 0xA4, 0xD4, 0xBC, 0x20, 0x41]));
+out.push(t('gb2312', [0xD4, 0xA4, 0xD4, 0xBC]));
+out.push(t('gb18030', [0xD4, 0xA4, 0xD4, 0xBC]));
+out.push(t('big5', [0xB9, 0x7C, 0xA6, 0x61]));
+out.push(t('euc-kr', [0xBF, 0xB9, 0xC7, 0xD1]));
+out.push(t('shift_jis', [0x97, 0x5C, 0x8C, 0xEA]));
+out.push(enc('gbk'));
+out.push(enc('big5'));
+/* ant's own table must stay authoritative for its built-ins. */
+out.push(t('utf-8', [0xE9, 0xA2, 0x84]));
+out.push(t('windows-1252', [0xE9]));
+out.push('bogus=' + (function () {
+  try { new TextDecoder('no-such-thing'); return 'accepted'; } catch (e) { return 'rejected'; }
+})());
+document.getElementById('out').textContent = out.join(' | ');
+</script>
+</body></html>
