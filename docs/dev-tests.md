@@ -31,7 +31,7 @@
 | `run_script_mode_tests.ps1` | classic script 语义（顶层 `var`/`function` 进 `window`，R66）+ 热点循环性能 + `document.readyState`/`currentScript` | 无（Chrome 数值为注释里的基准） | `ALL SCRIPT MODE CHECKS PASSED` |
 | `run_realm_tests.ps1` | 每 frame 一个 realm（`design-per-frame-realm.md`）：先编译 `tools/ant_realm_probe.c` 直接测桥（一 isolate 三 realm），再走 iframe 页面 | 本机编译器（脚本自己编 `ant_realm_probe.exe`） | `ALL REALM CHECKS PASSED` |
 | `run_sticky_tests.ps1` | `position:sticky`：视口/内层滚动容器/containing block 边界、命中跟随（R82），几何 + 像素 | 无（期望值来自 Chrome） | `STICKY=PASS` |
-| `run_image_tests.ps1` | 图片解码预算（R136）：切片解码与一次性解码**逐字节同像素**（JPEG + PNG）、大图不再单帧停摆（paint 上限 / rAF gap）、`AGB_IMG_DECODE_MS=0` 恢复旧行为、缩放采样开关有效 | 无（脚本自己用 System.Drawing 生成 4000×3000 JPEG / 3000×2000 PNG 到 `build-zig-native/img_test`） | `IMAGE=PASS` |
+| `run_image_tests.ps1` | 图片解码（R136/R137/R138）：切片解码与一次性解码**逐字节同像素**（JPEG + PNG）、**工作线程解出的帧与内联帧逐字节一致**且 paint 里不再解码、大图不再单帧停摆（paint 上限 / rAF gap）、L3 缩放解码的加速比、`AGB_IMG_DECODE_MS=0`/`AGB_IMG_NO_SCALE`/`AGB_IMG_SAMPLE_MAX` 开关有效 | 无（脚本自己用 System.Drawing 生成 4000×3000 JPEG / 3000×2000 PNG 到 `build-zig-native/img_test`） | `IMAGE=PASS` |
 | `run_media_tests.ps1` | 媒体元素 API/几何/传输（play → timeupdate → ended）；有 ffmpeg 走真解码，没有则内部 ticker | 无（ffmpeg 可选） | `MEDIA=PASS` |
 | `run_media_real_tests.ps1` | 真解码回放：`currentTime` 走墙钟、暂停/续播、seek、`ended`、画面与 ffmpeg 同位置解码一致 | ffmpeg（缺失则跳过像素项）、网络（远程样片；`-SkipRemote` 可关） | `MEDIA-REAL=PASS (n skipped)` |
 | `run_site_smoke.ps1` | 真实站点冒烟：deepseek / baidu / vqq 的加载、JS 执行、DOM 规模（vqq 带 `AGB_GC_OFF=1`，见 R68） | **网络** | `ALL SITE SMOKE PASSED`；每站打印 `all=元素数` |

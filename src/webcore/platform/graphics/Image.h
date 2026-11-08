@@ -45,6 +45,7 @@ class IntRect;
 class IntSize;
 class SharedBuffer;
 class String;
+class PixelsBuffer;
 
 // This class gets notified when an image creates or destroys decoded frames and when it advances animation frames.
 class ImageObserver;
@@ -83,6 +84,11 @@ public:
     
     // Typically the CachedImage that owns us.
     ImageObserver* imageObserver() const { return m_imageObserver; }
+
+    /* A worker thread finished decoding a frame (ImageDecodeService, L2).
+     * Takes ownership of `frame`; the default drops it. Only called on the
+     * engine thread. */
+    virtual void didDecodeFrame(PixelsBuffer* frame, unsigned generation);
 
     enum TileRule { StretchTile, RoundTile, RepeatTile };
     

@@ -77,8 +77,7 @@ struct FrameData : Noncopyable {
 
 class BitmapImage : public Image {
     friend class GraphicsContext;
-public:
-    BitmapImage(ImageObserver* = 0);
+public:    BitmapImage(ImageObserver* = 0);
     ~BitmapImage();
     
     virtual IntSize size() const;
@@ -94,7 +93,10 @@ public:
     virtual unsigned decodedSize() const { return m_decodedSize; }
 
 
-    virtual NativeImagePtr nativeImageForCurrentFrame() { return frameAtIndex(currentFrame()); }
+    /* Also gates the L2 off-thread path: while a decode is in flight this
+     * returns 0 instead of starting an inline decode, so paint cannot cache a
+     * stale partially decoded frame. */
+    virtual NativeImagePtr nativeImageForCurrentFrame();
 
 private:
     virtual void draw(GraphicsContext*, const FloatRect& dstRect, const FloatRect& srcRect, CompositeOperator);
@@ -130,7 +132,19 @@ private:
      * producing rows. See docs/design-async-image-decode.md. */
     void requestFrameProgress();
     void resetFrameProgress();
-    
+
+    /* L2: off-thread decoding (ImageDecodeService). draw() asks for a frame when
+     * it has none and the data is complete; the worker hands the pixels back
+     * through didDecodeFrame() on the engine thread. */
+    void requestAsyncDecode(const IntSize& displaySize);
+    virtual void didDecodeFrame(PixelsBuffer* frame, unsigned generation);
+    bool asyncDecodingAllowed();
+    void cancelAsyncDecode();
+    bool m_decodePending;
+    unsigned m_decodeGeneration;
+    int m_asyncEligible; // -1 unknown, 1 single frame (async ok), 0 animated
+    IntSize m_pendingDisplaySize; // last display size seen by draw(), for requestAsyncDecode
+
     // Handle platform-specific data
     void initPlatformData();
     void invalidatePlatformData();

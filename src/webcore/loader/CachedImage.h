@@ -72,6 +72,7 @@ public:
     virtual void decodedSizeChanged(const Image* image, size_t delta);
     virtual void didDraw(const Image*);
     virtual void imageFrameProgress(const Image*);
+    virtual void imageFrameReady(const Image*);
 
     virtual bool shouldPauseAnimation(const Image*);
     virtual void animationAdvanced(const Image*);

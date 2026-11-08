@@ -269,9 +269,16 @@
   且缺 `jidctred.c`，已补（`dist/include/jmorecfg.h`、`dist/src/jpeg/jidctred.c`）。12MP JPEG
   显示 400×300：decode **424ms → 35ms**，切片帧 35 → 5，`paint` 最大 15ms；判据
   `run_image_tests.ps1` 的 L3 组。重复背景（`drawPattern`）仍按 natural 解码，PNG/GIF 暂不缩放。
-- 待做（设计见 [design-async-image-decode.md](design-async-image-decode.md)）：
-  **L2** `ImageDecodeService` 工作线程（行级发布 + 引擎线程轮询，模式同 `MediaPipeline`），
-  paint 里 `decode=0`。L2 之后引擎线程在工作线程解码期间完全不参与。
+- **已完成 L2（R138）**：`ImageDecodeService` 工作线程（2 条 + 队列 + 每帧 `poll()`），
+  引擎线程只排队/收帧；`ImageSource` 增加 adopt 模式，`Image` 不是 refcounted 所以用
+  `cancel()` 而不是持引用。**paint 里 `decode=0`**，off-thread 帧与内联帧逐字节一致；
+  canvas/打印走内联同步（无后续重绘），动画格式仍同步。踩坑：`Image::drawTiled` 提前调
+  `nativeImageForCurrentFrame()`，内联解码会缓存半帧、把 adopt 帧挡住（背景图消失），
+  已让 `nativeImageForCurrentFrame()` 也过异步门。判据 `run_image_tests.ps1` 的 L2 组 +
+  8 图×3 reload 压测 + layout/sticky/typing/nav/fuzz。
+- 剩余：GIF/APNG 逐帧同步解码；PNG 无缩放解码（只挪到 worker）；**canvas `drawImage(<img>)`
+  画不出东西**（既有缺口，见 [arch-capability-gaps.md](arch-capability-gaps.md)）；
+  `img.decode()` 仍是立即 resolve 的 stub（`CachedImage::imageFrameReady` 是可用的挂点）。
 - 验收：L2 后同页 `decode=0ms` 且反复导航/关窗 50 次无线程泄漏；L3 后大图 `decode` 降到 1/4 以下；
   `run_image_tests`、`run_layout_tests` 像素组、`fuzz_layer`、deepseek/v.qq smoke 不退化。
 

@@ -96,8 +96,15 @@ static int imageDecodeBudgetRows()
 /* Applies this frame's remaining decode budget to the decoder. Every public
  * ImageSource entry that can decode goes through here, so the budget covers
  * scaled draws and pattern fills too. */
-static void applyDecodeBudget(ImageDecoder* decoder)
+static void applyDecodeBudget(ImageDecoder* decoder, bool ignoreBudget)
 {
+    /* Canvas drawImage / printing: no later frame to continue in, so decode the
+     * whole frame now. */
+    if (ignoreBudget) {
+        decoder->setDecodeBudget(0, 0.0);
+        return;
+    }
+
     double budgetMs = imageDecodeBudgetMs();
     double deadline = 0.0;
 
@@ -193,8 +200,9 @@ ImageDecoder* createDecoder(const Vector<char>& data)
 
 ImageSource::ImageSource()
   : m_decoder(0)
+  , m_adoptedFrame(0)
+  , m_ignoreDecodeBudget(false)
 {
-
 }
 
 ImageSource::~ImageSource()
@@ -204,19 +212,41 @@ ImageSource::~ImageSource()
 
 void ImageSource::clear()
 {
+    clearDecodedFrame();
     if (m_decoder) {
         delete m_decoder;
         m_decoder = 0;
     }
 }
 
+/* L2: a worker decoded the frame; from now on the frame accessors serve it and
+ * the engine-side decoder is only kept for the natural size / animation
+ * metadata. Takes ownership of `frame`. */
+void ImageSource::adoptDecodedFrame(PixelsBuffer* frame)
+{
+    clearDecodedFrame();
+    m_adoptedFrame = frame;
+    m_adoptedNaturalSize = size();
+}
+
+void ImageSource::clearDecodedFrame()
+{
+    if (m_adoptedFrame) {
+        delete m_adoptedFrame;
+        m_adoptedFrame = 0;
+    }
+}
+
 bool ImageSource::initialized() const
 {
-    return m_decoder ? true : false;
+    return (m_decoder || m_adoptedFrame) ? true : false;
 }
 
 void ImageSource::setData(SharedBuffer* data, bool allDataReceived)
 {
+    /* New bytes invalidate whatever a worker produced for the old data. */
+    clearDecodedFrame();
+
     // Make the decoder by sniffing the bytes.
     // This method will examine the data and instantiate an instance of the appropriate decoder plugin.
     // If insufficient bytes are available to determine the image type, no decoder plugin will be
@@ -246,6 +276,19 @@ bool ImageSource::setScaleHint(const IntSize& displaySize)
         return false;
 
     m_scaleHint = displaySize;
+    if (m_adoptedFrame) {
+        /* L2: the adopted frame is the only pixels we have. Ask for a new
+         * decode when it is smaller than the display (and smaller than the
+         * image itself, otherwise re-decoding cannot help). */
+        IntSize natural = m_adoptedNaturalSize;
+        unsigned width = m_adoptedFrame->width();
+
+        if (width == 0)
+            return false;
+        if (natural.width() > 0 && width >= (unsigned)natural.width())
+            return false;
+        return width < (unsigned)displaySize.width();
+    }
     if (!m_decoder)
         return false;
 
@@ -268,6 +311,8 @@ bool ImageSource::setScaleHint(const IntSize& displaySize)
 
 bool ImageSource::isSizeAvailable()
 {
+    if (m_adoptedFrame)
+        return true;
     if (!m_decoder)
         return false;
 
@@ -276,6 +321,8 @@ bool ImageSource::isSizeAvailable()
 
 IntSize ImageSource::size() const
 {
+    if (m_adoptedFrame)
+        return m_adoptedNaturalSize;
     if (!m_decoder)
         return IntSize();
 
@@ -292,25 +339,36 @@ int ImageSource::repetitionCount()
 
 size_t ImageSource::frameCount() const
 {
+    if (m_adoptedFrame)
+        return 1;
     return m_decoder ? m_decoder->frameCount() : 0;
 }
 
 PixelsBuffer* ImageSource::frameBufferAtIndex(size_t index)
 {
+    if (m_adoptedFrame)
+        return index == 0 ? m_adoptedFrame : 0;
     if (!m_decoder)
         return 0;
 
-    applyDecodeBudget(m_decoder);
+    applyDecodeBudget(m_decoder, m_ignoreDecodeBudget);
     return timedFrameBufferAtIndex(m_decoder, index);
 }
 
 bool ImageSource::frameHasMoreWork() const
 {
+    if (m_adoptedFrame)
+        return false;
     return m_decoder && m_decoder->hasMoreWork();
 }
 
 IntSize ImageSource::decodedFrameSize(size_t index) const
 {
+    if (m_adoptedFrame)
+        return index == 0
+            ? IntSize((int)m_adoptedFrame->width(), (int)m_adoptedFrame->fullHeight())
+            : IntSize();
+
     const PixelsBuffer* buffer = m_decoder ? m_decoder->cachedFrameBuffer(index) : 0;
 
     if (!buffer || buffer->width() == 0)
@@ -383,6 +441,8 @@ NativeImagePtr ImageSource::createFrameAtIndex(size_t index)
 
 float ImageSource::frameDurationAtIndex(size_t index)
 {
+    if (m_adoptedFrame)
+        return 0;
     if (!m_decoder)
         return 0;
 
@@ -395,6 +455,8 @@ float ImageSource::frameDurationAtIndex(size_t index)
 
 bool ImageSource::frameHasAlphaAtIndex(size_t index)
 {
+    if (m_adoptedFrame)
+        return m_adoptedFrame->hasAlpha();
     if (!m_decoder || !m_decoder->supportsAlpha())
         return false;
 
@@ -407,6 +469,8 @@ bool ImageSource::frameHasAlphaAtIndex(size_t index)
 
 bool ImageSource::frameIsCompleteAtIndex(size_t index)
 {
+    if (m_adoptedFrame)
+        return index == 0;
     if (!m_decoder)
         return false;
 

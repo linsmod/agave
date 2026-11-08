@@ -29,6 +29,7 @@
 
 #include "AffineTransform.h"
 #include "GraphicsContext.h"
+#include "ImageDecodeService.h"
 #include "IntRect.h"
 #include "MIMETypeRegistry.h"
 
@@ -43,6 +44,16 @@ Image::Image(ImageObserver* observer)
 
 Image::~Image()
 {
+    /* A worker may still be decoding a frame for this image (L2); the service
+     * only keeps the pointer for matching, but tell it to drop the result. */
+    ImageDecodeService::shared().cancel(this);
+}
+
+/* Engine thread; only ImageDecodeService calls this. The base class has no
+ * frame storage, so an unhandled result is simply dropped. */
+void Image::didDecodeFrame(PixelsBuffer* frame, unsigned)
+{
+    delete frame;
 }
 
 bool Image::supportsType(const String& type)

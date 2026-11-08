@@ -44,6 +44,10 @@ public:
      * decode another slice. See docs/design-async-image-decode.md. */
     virtual void imageFrameProgress(const Image*) = 0;
 
+    /* A worker thread finished decoding the frame (L2): observers should
+     * repaint it. */
+    virtual void imageFrameReady(const Image*) = 0;
+
     virtual bool shouldPauseAnimation(const Image*) = 0;
     virtual void animationAdvanced(const Image*) = 0;
 };

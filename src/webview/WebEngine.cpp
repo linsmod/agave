@@ -20,6 +20,7 @@
 #include "CookieManager.h"
 #include "CacheManager.h"
 #include "GraphicsContext.h"
+#include "ImageDecodeService.h"
 #include "ImageDecodeStats.h"
 #include "PlatformScrollBar.h"
 #include "PopupMenu.h"
@@ -920,6 +921,11 @@ MC_STATUS macross_initialize(MC_PIXEL_FORMAT format, int w, int h)
 void macross_shutdown(void)
 {
 	if (g_initialize) {
+		/* Stop the image decode workers before the graphics device and the
+		 * rest of the engine go away: they decode into plain buffers, but a
+		 * job still running at ps_shutdown() has no business outliving it. */
+		WebCore::ImageDecodeService::shared().shutdown();
+
 		WebCore::eventShatdown();
 		globalDataSave();
 #if ENABLE(ANTJS)

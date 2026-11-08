@@ -26,6 +26,8 @@
 
 #include "config.h"
 #include "BitmapImage.h"
+
+#include "ImageDecodeService.h"
 #include "ImageDecoder.h"
 #include "FloatRect.h"
 #include "ImageObserver.h"
@@ -58,6 +60,9 @@ BitmapImage::BitmapImage(ImageObserver* observer)
     , m_allDataReceived(false)
     , m_useNaturalDecode(false)
     , m_frameProgressRequests(0)
+    , m_decodePending(false)
+    , m_decodeGeneration(0)
+    , m_asyncEligible(-1)
     , m_haveSize(false)
     , m_sizeAvailable(false)
     , m_decodedSize(0)
@@ -76,6 +81,7 @@ void BitmapImage::destroyDecodedData(bool incremental)
     /* A new decoder is about to be built (or the frames dropped): repaints that
      * were queued for the old partial frame are meaningless now. */
     resetFrameProgress();
+    cancelAsyncDecode();
 
     // Destroy the cached images and release them.
     if (m_frames.size()) {
@@ -151,6 +157,10 @@ IntSize BitmapImage::size() const
 
 bool BitmapImage::dataChanged(bool allDataReceived)
 {
+    /* New bytes: whatever a worker decoded (or is decoding) is for older data. */
+    cancelAsyncDecode();
+    m_asyncEligible = -1;
+
     destroyDecodedData(true);
     
     // Feed all the data we've seen so far to the image decoder.
@@ -160,6 +170,83 @@ bool BitmapImage::dataChanged(bool allDataReceived)
     // Image properties will not be available until the first frame of the file
     // reaches kCGImageStatusIncomplete.
     return isSizeAvailable();
+}
+
+NativeImagePtr BitmapImage::nativeImageForCurrentFrame()
+{
+    /* L2: while the off-thread decode is in flight there is nothing to hand
+     * out. Do not fall through to the inline decoder - that would decode a
+     * budgeted slice and cache it in m_frames, and the adopted frame would then
+     * be ignored (that is how background images stopped appearing). */
+    if (asyncDecodingAllowed()) {
+        if (!m_source.hasDecodedFrame()) {
+            requestAsyncDecode(m_pendingDisplaySize);
+            return 0;
+        }
+    }
+    return frameAtIndex(m_currentFrame);
+}
+
+bool BitmapImage::asyncDecodingAllowed()
+{
+    static int allowed = -1;
+
+    if (allowed < 0) {
+        const char* value = getenv("AGB_IMG_ASYNC");
+
+        allowed = (value && value[0] == '0') ? 0 : 1;
+    }
+    if (!allowed)
+        return false;
+    /* Repeating backgrounds need tiles in image space (drawPattern), so those
+     * decode at the natural size on the inline path. */
+    if (m_useNaturalDecode)
+        return false;
+    if (!m_allDataReceived || !m_data.get() || m_data->isEmpty())
+        return false;
+    /* Animated formats decode frame by frame on the paint path; the off-thread
+     * service only produces whole single frames. frameCount() can scan the
+     * data, so ask once per data revision (dataChanged resets it). */
+    if (m_asyncEligible < 0)
+        m_asyncEligible = frameCount() <= 1 ? 1 : 0;
+    return m_asyncEligible != 0;
+}
+
+void BitmapImage::requestAsyncDecode(const IntSize& displaySize)
+{
+    if (m_decodePending)
+        return;
+    if (!asyncDecodingAllowed())
+        return;
+
+    m_decodeGeneration++;
+    if (ImageDecodeService::shared().request(this, m_data->buffer(), displaySize, m_decodeGeneration))
+        m_decodePending = true;
+}
+
+void BitmapImage::cancelAsyncDecode()
+{
+    /* A queued decode cannot be recalled, but its result is discarded by the
+     * generation check in didDecodeFrame(). */
+    m_decodeGeneration++;
+    m_decodePending = false;
+}
+
+void BitmapImage::didDecodeFrame(PixelsBuffer* frame, unsigned generation)
+{
+    if (!frame)
+        return;
+
+    if (generation != m_decodeGeneration) {
+        delete frame; /* stale: data changed or a newer request was queued */
+        return;
+    }
+
+    m_decodePending = false;
+    m_source.adoptDecodedFrame(frame);
+
+    if (imageObserver())
+        imageObserver()->imageFrameReady(this);
 }
 
 size_t BitmapImage::frameCount()

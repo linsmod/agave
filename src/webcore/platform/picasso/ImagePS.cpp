@@ -381,7 +381,10 @@ void BitmapImage::draw(GraphicsContext* context, const FloatRect& dst, const Flo
      * shown in a 400x300 box decodes at 1/8 scale instead of full size. If the
      * frame we have is now too small for the display (zoom in, resize), drop it
      * and decode again - the hint is applied to the fresh decoder. */
-    if (context && !getenv("AGB_IMG_NO_SCALE") && !m_useNaturalDecode) {
+    int displayWidth = 0;
+    int displayHeight = 0;
+
+    if (context && dst.width() > 0 && dst.height() > 0) {
         ps_point p0 = { dst.x(), dst.y() };
         ps_point p1 = { dst.x() + dst.width(), dst.y() + dst.height() };
         ps_context* gc = context->platformContext();
@@ -389,14 +392,48 @@ void BitmapImage::draw(GraphicsContext* context, const FloatRect& dst, const Flo
         ps_world_to_viewport(gc, &p0);
         ps_world_to_viewport(gc, &p1);
 
-        int dw = (int)(p1.x - p0.x + 0.5f);
-        int dh = (int)(p1.y - p0.y + 0.5f);
+        displayWidth = (int)(p1.x - p0.x + 0.5f);
+        displayHeight = (int)(p1.y - p0.y + 0.5f);
+    }
 
-        if (dw > 0 && dh > 0 && m_source.setScaleHint(IntSize(dw, dh)))
+    m_pendingDisplaySize = IntSize(displayWidth, displayHeight);
+
+    bool painting = imageDecodeStatsInFrame();
+
+    /* L2: when the frame is not here yet, ask a worker for it and draw nothing
+     * this frame; ImageDecodeService delivers the pixels and the observer
+     * repaints. Only inside a paint traversal: canvas drawImage()/printing have
+     * no later repaint, so they take the inline path below and decode fully.
+     * The inline path also stays the fallback when async is disabled or the
+     * format animates. */
+    if (asyncDecodingAllowed() && painting) {
+        if (m_source.hasDecodedFrame() && displayWidth > 0
+            && m_source.setScaleHint(IntSize(displayWidth, displayHeight))) {
+            /* Zoomed in past the decoded buffer: drop it and decode again. */
+            m_source.clearDecodedFrame();
+            m_frames.clear();
+            m_decodedSize = 0;
+        }
+        if (!m_source.hasDecodedFrame()) {
+            requestAsyncDecode(IntSize(displayWidth, displayHeight));
+            return;
+        }
+    } else if (context && !getenv("AGB_IMG_NO_SCALE") && !m_useNaturalDecode) {
+        /* L3 on the inline path: tell the decoder how big the image is drawn.
+         * Outside a paint traversal (canvas) the caller needs the whole frame,
+         * so the budget is bypassed. */
+        if (displayWidth > 0 && m_source.setScaleHint(IntSize(displayWidth, displayHeight)))
             destroyDecodedData();
     }
 
+    /* Outside a paint traversal the caller needs pixels now (canvas drawImage,
+     * printing): decode the whole frame instead of a budgeted slice. */
+    m_source.setDecodeBudgetIgnored(!painting);
+
     NativeImagePtr imgref = nativeImageForCurrentFrame();
+
+    m_source.setDecodeBudgetIgnored(false);
+
 	if (!imgref) {
         /* Nothing to draw yet, but the decoder may still owe rows (the per-paint
          * budget stopped it): keep the progression alive. */

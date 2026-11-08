@@ -316,4 +316,12 @@ void CachedImage::imageFrameProgress(const Image* image)
         notifyObservers();
 }
 
+/* A worker finished decoding this image (L2): its pixels just became
+ * available, so repaint the renderers that show it. */
+void CachedImage::imageFrameReady(const Image* image)
+{
+    if (image == m_image)
+        notifyObservers();
+}
+
 } //namespace WebCore

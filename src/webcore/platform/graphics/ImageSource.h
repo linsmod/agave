@@ -121,6 +121,18 @@ public:
     /* Geometry of the pixels actually decoded (0x0 when nothing is decoded).
      * Smaller than size() when the decoder used a scale (L3). */
     IntSize decodedFrameSize(size_t index) const;
+
+    /* L2: install a frame decoded by ImageDecodeService (takes ownership). The
+     * engine-side decoder is no longer used for painting; all the frame
+     * accessors below serve this buffer instead. */
+    void adoptDecodedFrame(PixelsBuffer* frame);
+    bool hasDecodedFrame() const { return m_adoptedFrame != 0; }
+    void clearDecodedFrame();
+
+    /* Callers that are not inside a paint traversal (canvas drawImage, printing)
+     * need the whole frame right now and have nowhere to repaint later, so they
+     * bypass the per-paint decode budget. */
+    void setDecodeBudgetIgnored(bool ignored) { m_ignoreDecodeBudget = ignored; }
     
     float frameDurationAtIndex(size_t);
     bool frameHasAlphaAtIndex(size_t); // Whether or not the frame actually used any alpha.
@@ -132,6 +144,9 @@ private:
     void applyScaleHint();
 
     NativeImageSourcePtr m_decoder;
+    PixelsBuffer* m_adoptedFrame; // L2: frame decoded off the engine thread
+    IntSize m_adoptedNaturalSize; // natural size when the frame was adopted
+    bool m_ignoreDecodeBudget;
     IntSize m_scaleHint; // Display size in device pixels (0x0 = natural size).
 };
 

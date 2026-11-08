@@ -108,6 +108,13 @@ qsChild=3 qsDesc=3 qsAdj=1 qsSib=2 qsNth=1 qsOdd=2 qsNot=2 qsFirst=1 qsList2=4 q
 详见 [arch-media.md](arch-media.md)，复测 `pwsh -File tools/run_media_tests.ps1`（API/几何）
 与 `pwsh -File tools/run_media_real_tests.ps1`（真实播放）。
 
+**`<canvas>` 部分可用**：`fillRect`/路径/颜色能画（`debug/canvas_fill.html` 像素验证），
+但 **`drawImage(<img>)` 画不出东西**、`getImageData()` 也不存在（`undefined`）——
+`CanvasRenderingContext2D::drawImage` 走到 `GraphicsContext::drawImage` 之后没有任何像素落地，
+与 R138 的异步解码无关（关掉 `AGB_IMG_ASYNC` 同样不画；canvas 本来就走内联同步路径）。
+`fillText`/`measureText` 仍缺（见 [plan-roadmap.md](plan-roadmap.md) 的 canvas 项）。
+复测页：`debug/canvas_drawimage.html`（`big_image.jpg` 画进 canvas）。
+
 `Audio` 全局构造器在 `prelude.js` 里：`new Audio(src)` 返回真正的 `<audio>` 元素
 （此前是 `undefined`，Howler/video.js 这类库会在碰 DOM 前就抛错）。
 

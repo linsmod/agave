@@ -232,14 +232,16 @@ DOM attach（Element::attach / Text::attach）
   `PopupMenu::windowRect()` 区域先填白，再 `translate` 到菜单原点画条目，最后描 1px 灰边。
   菜单不是独立窗口（宿主没有 `cb_create_popup_menu`），所以它同时出现在无头截图里；
   输入也由 `WebView` 优先路由给它。设计与限制见 [design-select-popup.md](design-select-popup.md)。
-- **图片解码是 paint 的一部分**（`RenderImage::paint → BitmapImage::draw →
-  ImageSource::frameBufferAtIndex → ImageDecoder`），但按**每帧预算**切片：`AGB_IMG_DECODE_MS`
-  （默认 12ms，所有图共享）× `AGB_IMG_DECODE_ROWS`，JPEG 按行、PNG 按 64KB 块，超出的行留在
-  后续帧（部分帧 alpha=0 的行画出来就是空白，未定义 `IMAGE_DISPLAY_ONCE`）。续解靠
-  `BitmapImage::requestFrameProgress()` → 观察者重绘 → 下一帧再解一片；图滚出视口链条自然停。
-  缩放绘制只采已解出的行，并按 `AGB_IMG_SAMPLE_MAX` 限制盒式滤波的 taps（完整帧 4、未完成帧 2，
-  0=精确）。`[perf]` 的 `decode=` 是这部分时间（R136，设计见
-  [design-async-image-decode.md](design-async-image-decode.md)；L2 工作线程、L3 按显示尺寸解码待做）。
+- **图片解码**默认**不在引擎线程上**（`ImageDecodeService`，L2）：paint 的 `BitmapImage::draw`
+  在 paint 遍历里发现帧还没解好，就排队给工作线程（整帧、按 L3 的显示尺寸），自己这一帧不画；
+  `WebView::paintView()` 开头 `poll()` 交付解码结果 → adopt 到 `ImageSource` → 观察者重绘。
+  canvas `drawImage`/打印没有后续重绘，走内联同步路径并绕过每帧预算。内联路径（L1）仍保留为
+  `AGB_IMG_ASYNC=0`、动画格式和 worker 起不来时的后备：JPEG 按行、PNG 按 64KB 块，预算
+  `AGB_IMG_DECODE_MS`（默认 12ms，所有图共享）× `AGB_IMG_DECODE_ROWS`；未完成帧 alpha=0 的行
+  画出来就是空白，靠重绘续解。缩放绘制只采已解出的行，`AGB_IMG_SAMPLE_MAX` 限制盒式滤波 taps。
+  JPEG 按显示尺寸解码（libjpeg IDCT scaling，`AGB_IMG_NO_SCALE` 可关）。判据 `[perf]` 的
+  `decode=` 与 `tools/run_image_tests.ps1`（R136–R138，设计见
+  [design-async-image-decode.md](design-async-image-decode.md)）。
 - **脏矩形永远是视口的子集**：`WebView::updateRect()` 把引擎给的失效矩形与
   `(0,0,width,height)` 求交（surface 就只有视口那么大）。长文档会失效整篇高度
   （css3test：`1096x21593`），放大到 surface 上就是几十倍的无用工作（R135：一帧 paint 933ms → 70ms）。

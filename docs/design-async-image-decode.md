@@ -1,7 +1,8 @@
 # 设计：图片解码不要发生在 paint 里（异步/预算化解码）
 
-状态：**L0 + L1 已实现（R136，2026-11-08）；L2/L3 待做**。现状见 [arch-rendering.md](arch-rendering.md)，
-历史根因见 [hist-lessons.md](hist-lessons.md)，媒体侧已有的异步解码先例见 [arch-media.md](arch-media.md)。
+状态：**L0/L1/L2/L3 均已实现（R136、R137、R138，2026-11-08）**；剩余项见文末。现状见
+[arch-rendering.md](arch-rendering.md)，历史根因见 [hist-lessons.md](hist-lessons.md)，媒体侧已有的
+异步解码先例见 [arch-media.md](arch-media.md)。
 
 ## 1. 现状：解码是 paint 的一部分，而 paint 跑在唯一的引擎线程上
 
@@ -90,27 +91,32 @@ agwEngineThread (src/webview_control/AgaveWebView.c)
 - 风险：paint 内请求重绘的自激循环（预算 + 只有 `hasMoreWork()` 才续 + 计数器兜底）；
   GIF 帧率未动（GIF 一次一帧，大 GIF 仍可能单帧偏长）。
 
-### L2 工作线程解码（待做）
+### L2 工作线程解码（已实现，R138）
 
-- 新增 `ImageDecodeService`（`src/webcore/platform/image-decoders/`）：懒启动 1 条线程 + 任务队列。
-  `DecodeJob { RefPtr<Image> keepAlive; ImageSource* source; generation; rowsBudget; }`。
-- 所有权移交：引擎线程把该图的解码交给队列并置 `DecodeRunning`；paint **只 peek**，不再调
-  `frameBufferAtIndex()`。
-- 行级发布：worker 每解完一段用 `InterlockedExchange` 发布 `publishedHeight`，引擎线程只读
-  ≤ 该高度的行（x86 写后发布天然有序）；alpha 标志同样发布。
-- 完成/进度通知：worker 只把结果入队；引擎线程在 `macross_event_dispatch()` 或
-  `paintView()` 开头 `ImageDecodeService::poll()` → `CachedImage::notifyObservers()` → 重绘。
-  与 `pumpAsyncRequests()`/`RenderMedia` 轮询是同一套模式。
-- 生命周期：job 持 `RefPtr<Image>`；图被销毁/换源时置 cancel，worker 解完丢弃结果。
-  `BitmapImage::destroyDecodedData()` 遇到 running 只清"已解出的帧"，不碰 decoder。
-- 预解码：`RenderImage::attach()`/布局后把视口内的图按文档顺序入队，首帧前大概率已就绪
-  （日志 `[img] ahead hit/miss`）。
-- 线程边界：worker 只能碰 `ImageDecoder`/`PixelsBuffer`/`SharedBuffer` 引用，绝不碰
-  DOM/RenderObject/RenderArena；libjpeg/libpng 每实例独立、`FastMalloc` 有锁，可以并发。
-- 风险：线程生命周期与取消路径（最难测试的一层）；退出/挂起要按 `MediaPipeline::stop()`
-  的模式停线程。测试必须包含反复导航、关窗、`AGB_*` 压力开关。
-- 收益：paint 的 `decode=` 掉到 0，解码与 JS/布局完全并行；配合 L1 的切片，worker 也不会
-  单次霸占 460ms（对大图更平滑）。
+- 新增 `src/webcore/platform/image-decoders/ImageDecodeService.{h,cpp}`：懒启动 2 条工作线程 +
+  任务队列（`CRITICAL_SECTION` + 自动复位事件），模式与 `MediaPipeline`/`WinHttpSession` 一致。
+  引擎线程只做三件事：`request(image, bytes, displaySize, generation)`、`poll()`（在
+  `WebView::paintView()` 开头，交付的帧能在同一帧画出来）、`Image::~Image()` 里的 `cancel()`。
+- **所有权不共享**：工作线程拿到的是编码字节的副本，自己 `createDecoder()`、自己解码，
+  产出独立的 `PixelsBuffer`；引擎线程从不碰这个解码器。`Image` 只以裸指针参与"结果是不是你的"
+  匹配——`Image` 不是 refcounted，所以 `request()` 不持引用，改为 `cancel()`：图销毁时把它的
+  槽位置空，`poll()` 看到就丢弃结果（工作线程从不解引用 Image）。
+- 引擎侧：`ImageSource` 增加 adopt 模式（`adoptDecodedFrame()` / `hasDecodedFrame()`），
+  画面、尺寸、alpha、动画元数据都从这块帧读；`size()`/`naturalWidth` 仍是原尺寸。
+  `BitmapImage` 用 `m_decodePending`/`m_decodeGeneration` 防止重复请求、丢弃过期结果。
+- 只对"绘制时"异步：`BitmapImage::draw` 里用 `imageDecodeStatsInFrame()` 判断是不是在 paint
+  遍历里。canvas `drawImage()`、打印这些**没有后续重绘**的调用走内联同步路径，并且
+  `ImageSource::setDecodeBudgetIgnored(true)` 绕过每帧预算，保证一次拿到整帧。
+- **关键修复（背景图消失）**：`Image::drawTiled` 在真正 draw 之前就调
+  `nativeImageForCurrentFrame()`；如果这里退回内联解码，会解出一个"预算切片"并被 `m_frames`
+  缓存成 ImageRef，之后 adopt 的帧就被这份过期缓存挡住（`background-size:cover` 的图永远不出现）。
+  现在 `BitmapImage::nativeImageForCurrentFrame()` 也走异步门：没有 adopt 帧就请求并返回 0，
+  绝不缓存半帧。重复背景（`drawPattern`）仍然同步按 natural 尺寸解（瓷砖要按图像像素重复）。
+- 动画（GIF 等）仍走原来的逐帧同步路径：服务只产出单帧。
+- 开关：`AGB_IMG_ASYNC=0` 回到内联解码（L1 + L3 仍然生效）。
+- 实测（4000×3000 JPEG，400×300 显示）：`[perf]` 里不再有 `decode=`（paint 里 0 解码），
+  图像由工作线程解好后**逐字节同像素**出现（`run_image_tests.ps1` 的 "off-thread" 组）；
+  8 张大图 + 3 次 reload 的压测无崩溃、无新增泄漏；deepseek 登录页（iframe + 二维码）不退化。
 
 ### L3 按显示尺寸解码（已实现，R137）
 
@@ -150,21 +156,22 @@ agwEngineThread (src/webview_control/AgaveWebView.c)
 | L0 | 1h | `AGB_PERF_LOG=1` 的 `[perf]` 行出现 `decode=`；大图页 `decode≈paint` ✅ |
 | L1 | ~0.5d | `debug/img_decode_block.html`：`paint<20ms`、rAF `maxgap<40ms`、像素与一次性解码逐字节一致 ✅（`run_image_tests.ps1`） |
 | L3 | ~1d | 大图按 1/8 解码后 `decode` 从 424ms 降到 35ms（`run_image_tests.ps1` 的 L3 组）✅ |
-| L2 | 1–2d | 同页 `[perf] ... decode=0ms`；`[img] ahead hit` 占多数；反复导航/关窗 50 次无线程泄漏或 UAF；`fuzz_layer` + v.qq/deepseek smoke |
-| L3 | ~1d | 大图按 1/8 解码后 `decode` 降至 1/4 以下；`getBoundingClientRect`/`naturalWidth` 不变；`AGB_IMG_NO_SCALE=1` 行为退化到 L2 |
+| L2 | 1–2d | 同页 paint 里 `decode=0ms`、off-thread 帧与内联帧逐字节一致、8 张图 × 3 reload 无崩溃 ✅（`run_image_tests.ps1` 的 L2 组） |
 
-每层都进 `tools/run_image_tests.ps1`（新增）：预算上限、渐进可见、最终像素、动画帧、
-取消路径。L1 与 L2 是互补的：L2 里去线程化的解码器仍然要能切片，否则 worker 单张图
-会占满整条线程，取消/关闭时的等待也会变长。
+每层都进 `tools/run_image_tests.ps1`：预算上限、渐进可见、最终像素、off-thread 像素、L3 加速比。
+L1 与 L2 是互补的：`AGB_IMG_ASYNC=0` 时 L1 仍是完整可用的内联路径（也是动画/canvas 的后备）。
 
-## 5. 风险与开放问题
+## 5. 剩余与风险
 
-- **部分帧的观感**：L1/L2 都会先显示已解出的行（下方为空/黑）。Chrome 也这样；若要更平滑，
-  可以在部分帧上撒一次缩略图（先用低分辨率整帧，再逐行细化），但这需要 decoder 支持多分辨率
-  输出，本期不做。
-- **GIF/APNG 动画**：`BitmapImage` 的 `Timer` 现在直接 `frameAtIndex()`（同步解码下一帧）。
-  L2 之后动画帧也走队列，`advanceAnimation` 只请求、不等待；帧率以"解完即推进"为准。
-- **图片内存**：`decodedSize` 与 `Cache::prune` 已经存在，异步化不改变预算，但要保证
-  "worker 正在解的帧"计入 decoded 预算（否则会被 prune 掉一半）。
-- **测试稳定性**：L2 引入线程，几何/像素断言要等"首帧解码完成"（`img.decode()` 的 Promise
-  正好可以在这里落地：目前 `img.decode` 的路径见 `AntRuntime.cpp` 的 `imgDecode`）。
+- **动画（GIF/APNG）仍在 paint 里逐帧同步解码**：服务只产出单帧；下一步可以按帧请求
+  （`advanceAnimation` 只请求、不等待），但 GIF 帧依赖前帧合成，需要把帧序列搬进 job。
+- **canvas `drawImage(<img>)` 目前画不出东西**（`getImageData` 也没有）：与本次无关的既有缺口
+  （`CanvasRenderingContext2D::drawImage` 走到 `GraphicsContext::drawImage` 后没有任何像素落地），
+  已记进 [arch-capability-gaps.md](arch-capability-gaps.md)。L2 已经为它留好同步路径
+  （canvas 不在 paint 遍历里 → 内联 + 无预算），修好 canvas 本身即可。
+- **PNG 没有 DCT 级缩放**：L3 只对 JPEG 生效；PNG 的 inflate 成本省不了，但可以在 worker 上跑
+  （L2 已经把它挪出引擎线程）。
+- **图片内存**：`decodedSize` 与 `Cache::prune` 没变；worker 手上的那份帧在 adopt 前不计入，
+  极端情况下峰值多一帧（L3 之后很小）。
+- **`img.decode()`** 仍是立即 resolve 的 stub；L2 之后更有意义的是"等 adopt"，
+  但这需要从 C++ 通知 JS promise（`CachedImage::imageFrameReady` 已经是个现成的挂点）。

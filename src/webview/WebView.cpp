@@ -26,6 +26,7 @@
 #include "Editor.h"
 #include "EventHandler.h"
 #include "GraphicsContext.h"
+#include "ImageDecodeService.h"
 #include "ImageDecodeStats.h"
 #include "Settings.h"
 #include "ContextMenu.h"
@@ -276,6 +277,12 @@ void WebView::updateViewNow(void)
 
 void WebView::paintView(void)
 {
+	/* Deliver frames the image decode workers finished since the last frame.
+	 * Their observers queue a repaint of the image area, so a freshly decoded
+	 * frame is painted by this same call (L2 in
+	 * docs/design-async-image-decode.md). */
+	ImageDecodeService::shared().poll();
+
 	Settings* setting = Settings::globalSettings();
 	if (d->m_txtanti != setting->textAntialias()) {
 		ps_set_text_antialias(d->m_context, isTextAntialias() ? True : False);

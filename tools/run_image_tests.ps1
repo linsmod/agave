@@ -178,25 +178,31 @@ function Max-Gap($log) {
     return $null
 }
 
-# 1. sliced decode must be pixel-identical to a one-shot decode
+# 1. sliced decode must be pixel-identical to a one-shot decode, and the
+#    off-thread decode (L2) must produce the very same pixels again.
 $oneShot = Join-Path $tmp 'oneshot.bmp'
 $sliced = Join-Path $tmp 'sliced.bmp'
-$r1 = Run-Probe $staticUrl $oneShot 2500 @{ AGB_IMG_DECODE_MS = '0'; AGB_IMG_SAMPLE_MAX = '0' }
-$r2 = Run-Probe $staticUrl $sliced 2500 @{ AGB_IMG_DECODE_MS = '12'; AGB_IMG_SAMPLE_MAX = '0' }
-if (-not (Test-Path $oneShot) -or -not (Test-Path $sliced)) {
+$async = Join-Path $tmp 'async.bmp'
+$r1 = Run-Probe $staticUrl $oneShot 2500 @{ AGB_IMG_ASYNC = '0'; AGB_IMG_DECODE_MS = '0'; AGB_IMG_SAMPLE_MAX = '0' }
+$r2 = Run-Probe $staticUrl $sliced 2500 @{ AGB_IMG_ASYNC = '0'; AGB_IMG_DECODE_MS = '12'; AGB_IMG_SAMPLE_MAX = '0' }
+Run-Probe $staticUrl $async 2500 @{ AGB_IMG_SAMPLE_MAX = '0' } | Out-Null
+if (-not (Test-Path $oneShot) -or -not (Test-Path $sliced) -or -not (Test-Path $async)) {
     Fail 'progressive decode: screenshot missing'
 } else {
     $h1 = (Get-FileHash $oneShot -Algorithm SHA256).Hash
     $h2 = (Get-FileHash $sliced -Algorithm SHA256).Hash
+    $h3 = (Get-FileHash $async -Algorithm SHA256).Hash
     if ($h1 -eq $h2) { Pass 'JPEG: sliced decode draws the same pixels as one-shot' }
     else { Fail 'JPEG: progressive decode changed the pixels' }
+    if ($h1 -eq $h3) { Pass 'JPEG: off-thread decode draws the same pixels' }
+    else { Fail 'JPEG: off-thread decode changed the pixels' }
 }
 
-# 1b. same for PNG (its decoder now feeds libpng in byte chunks)
+# 1b. same for PNG (its decoder feeds libpng in byte chunks)
 $pngOne = Join-Path $tmp 'png_oneshot.bmp'
 $pngSliced = Join-Path $tmp 'png_sliced.bmp'
-Run-Probe $pngUrl $pngOne 2500 @{ AGB_IMG_DECODE_MS = '0'; AGB_IMG_SAMPLE_MAX = '0' } | Out-Null
-Run-Probe $pngUrl $pngSliced 2500 @{ AGB_IMG_DECODE_MS = '4'; AGB_IMG_SAMPLE_MAX = '0' } | Out-Null
+Run-Probe $pngUrl $pngOne 2500 @{ AGB_IMG_ASYNC = '0'; AGB_IMG_DECODE_MS = '0'; AGB_IMG_SAMPLE_MAX = '0' } | Out-Null
+Run-Probe $pngUrl $pngSliced 2500 @{ AGB_IMG_ASYNC = '0'; AGB_IMG_DECODE_MS = '4'; AGB_IMG_SAMPLE_MAX = '0' } | Out-Null
 if (-not (Test-Path $pngOne) -or -not (Test-Path $pngSliced)) {
     Fail 'PNG: screenshot missing'
 } else {
@@ -206,16 +212,40 @@ if (-not (Test-Path $pngOne) -or -not (Test-Path $pngSliced)) {
     else { Fail 'PNG: progressive decode changed the pixels' }
 }
 
-# 2. the page must not stall for the whole decode: bounded paint + live frame loop
+# 1c. L2: with the decode service on, a paint must not decode at all, and the
+#     image still has to appear (compare against the inline-decode render).
+$asyncShot = Join-Path $tmp 'async_paint.bmp'
+$syncShot = Join-Path $tmp 'sync_paint.bmp'
+$rAsync = Run-Probe $staticUrl $asyncShot 2500 @{ AGB_PERF_LOG = '1' }
+Run-Probe $staticUrl $syncShot 2500 @{ AGB_IMG_ASYNC = '0'; AGB_IMG_SAMPLE_MAX = '0' } | Out-Null
+$asyncPerf = Perf-Paints $rAsync.Log
+$asyncDecode = ($asyncPerf.Decodes | Measure-Object -Sum).Sum
+if ($null -eq $asyncDecode) { $asyncDecode = 0 }
+if ($asyncDecode -gt 2.0) {
+    Fail ("L2: paint still decoded {0:N1}ms (should be off-thread)" -f $asyncDecode)
+} else {
+    Pass ("L2: paint decoded {0:N1}ms (off-thread)" -f $asyncDecode)
+}
+if ((Test-Path $asyncShot) -and (Test-Path $syncShot)) {
+    if ((Get-FileHash $asyncShot -Algorithm SHA256).Hash -eq (Get-FileHash $syncShot -Algorithm SHA256).Hash) {
+        Pass 'L2: off-thread frame is painted'
+    } else {
+        Fail 'L2: off-thread frame differs from the inline render'
+    }
+} else {
+    Fail 'L2: screenshot missing'
+}
+
+# 2. the inline path (L1) must not stall for the whole decode either
 $paintLimit = 90      # was ~467ms before the budget
 $gapLimit = 70        # was ~100ms (the whole decode landing in one frame)
-$r3 = Run-Probe $timerUrl $null 3000 @{ AGB_PERF_LOG = '1' }
+$r3 = Run-Probe $timerUrl $null 3000 @{ AGB_PERF_LOG = '1'; AGB_IMG_ASYNC = '0' }
 $perf = Perf-Paints $r3.Log
 $gap = Max-Gap $r3.Log
 if ($perf.Paints.Count -lt 1) {
-    Fail 'no decoding frame at all'
+    Fail 'no decoding frame at all (inline path)'
 } else {
-    Pass ("decode finished in {0} frame(s)" -f $perf.Paints.Count)
+    Pass ("inline decode finished in {0} frame(s)" -f $perf.Paints.Count)
 }
 $maxPaint = ($perf.Paints | Measure-Object -Maximum).Maximum
 if ($maxPaint -gt $paintLimit) {
@@ -232,8 +262,8 @@ if ($null -eq $gap) {
 }
 
 # 2b. L3: decoding at display size must be much cheaper than decoding natural size
-$rScaled = Run-Probe $timerUrl $null 3000 @{ AGB_PERF_LOG = '1' }
-$rNatural = Run-Probe $timerUrl $null 3000 @{ AGB_PERF_LOG = '1'; AGB_IMG_NO_SCALE = '1' }
+$rScaled = Run-Probe $timerUrl $null 3000 @{ AGB_PERF_LOG = '1'; AGB_IMG_ASYNC = '0' }
+$rNatural = Run-Probe $timerUrl $null 3000 @{ AGB_PERF_LOG = '1'; AGB_IMG_NO_SCALE = '1'; AGB_IMG_ASYNC = '0' }
 $scaledMs = (Perf-Paints $rScaled.Log).Decodes | Measure-Object -Sum
 $naturalMs = (Perf-Paints $rNatural.Log).Decodes | Measure-Object -Sum
 if (-not $scaledMs.Count -or -not $naturalMs.Count) {
@@ -246,7 +276,7 @@ if (-not $scaledMs.Count -or -not $naturalMs.Count) {
 
 # 3. AGB_IMG_DECODE_MS=0 restores the one-shot path (with L3 disabled, otherwise
 #    the frame is small enough to be cheap even in one shot)
-$r4 = Run-Probe $timerUrl $null 3000 @{ AGB_PERF_LOG = '1'; AGB_IMG_DECODE_MS = '0'; AGB_IMG_NO_SCALE = '1' }
+$r4 = Run-Probe $timerUrl $null 3000 @{ AGB_PERF_LOG = '1'; AGB_IMG_DECODE_MS = '0'; AGB_IMG_NO_SCALE = '1'; AGB_IMG_ASYNC = '0' }
 $perfOld = Perf-Paints $r4.Log
 $oldMax = 0
 if ($perfOld.Paints.Count) { $oldMax = ($perfOld.Paints | Measure-Object -Maximum).Maximum }
@@ -259,8 +289,8 @@ if ($perfOld.Paints.Count -le 2 -and $oldMax -gt 200) {
 # 4. the sampling cap must be live (otherwise the scaled-draw path is not used)
 $nearest = Join-Path $tmp 'nearest.bmp'
 $exact = Join-Path $tmp 'exact.bmp'
-Run-Probe $staticUrl $nearest 2500 @{ AGB_IMG_SAMPLE_MAX = '1'; AGB_IMG_DECODE_MS = '12' } | Out-Null
-Run-Probe $staticUrl $exact 2500 @{ AGB_IMG_SAMPLE_MAX = '0'; AGB_IMG_DECODE_MS = '12' } | Out-Null
+Run-Probe $staticUrl $nearest 2500 @{ AGB_IMG_SAMPLE_MAX = '1'; AGB_IMG_DECODE_MS = '12'; AGB_IMG_ASYNC = '0' } | Out-Null
+Run-Probe $staticUrl $exact 2500 @{ AGB_IMG_SAMPLE_MAX = '0'; AGB_IMG_DECODE_MS = '12'; AGB_IMG_ASYNC = '0' } | Out-Null
 if ((Test-Path $nearest) -and (Test-Path $exact)) {
     $hn = (Get-FileHash $nearest -Algorithm SHA256).Hash
     $he = (Get-FileHash $exact -Algorithm SHA256).Hash
