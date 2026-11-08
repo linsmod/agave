@@ -157,6 +157,12 @@ struct CssomRef {
     int   kind;
 };
 
+/* Per-document JS state (one document == one realm). Defined right after
+ * RuntimeState; the forward declaration keeps the view struct independent of
+ * the document details. */
+struct DocumentRuntime;
+struct Listener;
+
 struct RuntimeState {
     AntbEngine*        engine;
     AntbRealm*         mainRealm;       /* realm of the top-level document */
@@ -173,13 +179,6 @@ struct RuntimeState {
     std::vector<CssomRef>* cssomRefs;   /* ref'd CSSOM objects, released at realm teardown */
     std::set<void*>*   cssomSeen;
     AntbValue*         docObj;          /* the JS document object (rooted) */
-    /* The main realm's own document binding. g_document/g_docObj above are
-     * "the realm that is running right now"; when ant switches into a frame
-     * realm they must not stay behind, and when it switches back the main
-     * realm's document must still be here (R130). */
-    WebCore::Document* mainDocument;
-    AntbValue*         mainDocObj;      /* rooted, main realm's document object */
-    AntbRealm*         boundRealm;      /* realm g_document/g_docObj belong to */
     bool               documentBound;
     void*              listeners;       /* std::vector<Listener>* (see below) */
     WebCore::Document* docSlots[AGB_MAX_DOCUMENT_SLOTS];
@@ -198,6 +197,48 @@ struct RuntimeState {
      * the teardown forces to 1 without changing what the host said. */
     int                hidden;
     int                viewHidden;
+    /* The engine's main realm already got its document object, window and
+     * global API. False until the first document binds after beginNewRealm();
+     * a later document in the same realm (a frame in the shared-realm mode)
+     * only needs the per-document objects refreshed. */
+    bool               realmBound;
+    /* iframe realms belong to the view that owns the engine, never to the
+     * process: a process-wide table let a navigation in one tab release the
+     * frame realms of every other tab (S0 of design-context-ownership.md). */
+    std::vector<DocumentRuntime*>* documents;
+    /* window.addEventListener() handlers live on the *realm*, not on the
+     * document object: a reload binds a provisional and then a committed
+     * document in the same realm, and the handler registered by the page's
+     * first inline script must still be there when the load event is
+     * dispatched for the other one. Per-frame realms keep their own table,
+     * which is what isolates a frame's handlers from its parent (R132). */
+    std::map<AntbRealm*, std::vector<Listener>*>* realmListeners;
+    /* Last document activated for this view: `activateState()` restores it when
+     * the engine thread switches views. */
+    DocumentRuntime*   activeDocument;
+    int                nextFrameSlot;
+};
+
+/* ------------------------------------------------------------------------- */
+/* DocumentRuntime: one bound document (== one realm)                        */
+/* ------------------------------------------------------------------------- */
+/* Everything that used to live on RuntimeState but belongs to the document:
+ * the DOM document, its JS object, its listeners, its CSSOM refs and its
+ * realm. The realm handle is the identity used by the (engine, realm) ->
+ * document lookup, so "which document am I" no longer depends on whichever
+ * activate happened last (R130's boundRealm/mainDocObj patch existed for
+ * exactly that). */
+struct DocumentRuntime {
+    RuntimeState*      view;
+    AntbRealm*         realm;     /* this document's realm (NULL before bind) */
+    WebCore::Document* document;
+    AntbValue*         docObj;
+    AntbValue*         keeper;    /* frame realm: pinned closure keeps it alive */
+    bool               documentBound;
+    bool               installed; /* realm's global API installed */
+    int                realmSlot; /* __agbFrameSlot number (0 based), -1 = main */
+    std::vector<CssomRef>* cssomRefs;
+    std::set<void*>*   cssomSeen;
 };
 
 /* Every realm (one document) gets a fresh id. Resources that can outlive
@@ -220,6 +261,49 @@ static std::vector<RuntimeState*>* g_states = NULL;
  * real state exists (isRunning(), teardown paths). */
 static RuntimeState  g_emptyState;
 static RuntimeState* g_currentState = &g_emptyState;
+/* The document the mirrors below point at. Never NULL: code that runs before a
+ * document is bound (startup, teardown) reads the empty document's fields
+ * instead of dereferencing a null pointer. */
+static DocumentRuntime  g_emptyDocument = {
+    &g_emptyState, NULL, NULL, NULL, NULL, false, false, -1, NULL, NULL
+};
+static DocumentRuntime* g_currentDocument = &g_emptyDocument;
+
+/* Last context the engine thread entered (see activateState). Read from other
+ * threads by agb_busy_js_context(). */
+static void* g_busyContext = NULL;
+
+/* AGB_CONTEXT_ASSERT=1: every host->engine entry is expected on the engine
+ * thread. AntRuntime's state is engine-thread-only, and a UI-thread call that
+ * touches it fails *silently* today (it reads whatever document was left
+ * there). This makes that class of bug audible in debug runs. */
+static DWORD g_contextEngineThread = 0;
+static int   g_contextAssert = -1;
+
+static void assertContextThread(const char* where)
+{
+    DWORD self;
+
+    if (g_contextAssert < 0) {
+        const char* value = getenv("AGB_CONTEXT_ASSERT");
+
+        g_contextAssert = (value && value[0] && value[0] != '0') ? 1 : 0;
+    }
+
+    if (!g_contextAssert)
+        return;
+
+    self = GetCurrentThreadId();
+
+    if (!g_contextEngineThread) {
+        g_contextEngineThread = self;
+        return;
+    }
+
+    if (self != g_contextEngineThread)
+        agbLog(AGB_LOG_EVT, "[ctx] %s on non-engine thread %lu (engine thread %lu)",
+               where, (unsigned long)self, (unsigned long)g_contextEngineThread);
+}
 
 /* The generation of the realm that is currently running (0 when there is
  * none). */
@@ -333,15 +417,43 @@ static RuntimeState* stateForEngine(AntbEngine* engine)
     return NULL;
 }
 
-static void activateState(RuntimeState* state)
+static void activateDocument(DocumentRuntime* document)
 {
-    if (state)
-        g_currentState = state;
+    if (!document)
+        document = &g_emptyDocument;
+
+    g_currentDocument = document;
+
+    if (document->view) {
+        g_currentState = document->view;
+        /* Remember it on the view: activateState() restores this document when
+         * the engine thread switches back to the view. */
+        document->view->activeDocument = (document == &g_emptyDocument) ? NULL : document;
+    }
 }
 
-/* The mirrors. Keep these names: 250+ references across this file rely on them. */
+static void activateState(RuntimeState* state)
+{
+    if (!state)
+        return;
+
+    g_currentState = state;
+    /* The view's last document comes back with it: a view switch must not leave
+     * another view's document in the mirrors. */
+    g_currentDocument = state->activeDocument ? state->activeDocument : &g_emptyDocument;
+
+    /* Who the engine thread is in right now. Only the engine thread writes it;
+     * the hang watchdog (UI side) reads it to attribute a stuck script to one
+     * view instead of broadcasting. A plain pointer exchange is enough: the
+     * reader only compares identity. */
+    InterlockedExchangePointer((void* volatile*)&g_busyContext, (void*)state);
+}
+
+/* The mirrors. Keep these names: 250+ references across this file rely on them.
+ * View-scoped fields read through g_currentState, document-scoped ones through
+ * g_currentDocument (design-context-ownership.md §3). */
 #define g_engine        (g_currentState->engine)
-#define g_document      (g_currentState->document)
+#define g_document      (g_currentDocument->document)
 #define g_nodeClass     (g_currentState->nodeClass)
 #define g_canvasCtxClass (g_currentState->canvasCtxClass)
 #define g_windowClass   (g_currentState->windowClass)
@@ -351,10 +463,10 @@ static void activateState(RuntimeState* state)
 #define g_cssRuleListClass    (g_currentState->cssRuleListClass)
 #define g_mediaListClass      (g_currentState->mediaListClass)
 #define g_cssDeclarationClass (g_currentState->cssDeclarationClass)
-#define g_cssomRefs     (g_currentState->cssomRefs)
-#define g_cssomSeen     (g_currentState->cssomSeen)
-#define g_docObj        (g_currentState->docObj)
-#define g_documentBound (g_currentState->documentBound)
+#define g_cssomRefs     (g_currentDocument->cssomRefs)
+#define g_cssomSeen     (g_currentDocument->cssomSeen)
+#define g_docObj        (g_currentDocument->docObj)
+#define g_documentBound (g_currentDocument->documentBound)
 #define g_docSlots      (g_currentState->docSlots)
 #define g_docSlotGeneration (g_currentState->docSlotGeneration)
 #define g_docSlotCount  (g_currentState->docSlotCount)
@@ -418,9 +530,13 @@ static int slotForDocument(WebCore::Document* document)
 
 /* Realms are defined below; activateSlot() needs them first. */
 static bool perFrameRealmEnabled();
+static DocumentRuntime* documentRuntimeFor(RuntimeState* state, WebCore::Document* document);
 
 static void activateSlot(int slot)
 {
+    WebCore::Document* document;
+    DocumentRuntime* runtime;
+
     if (slot < 0 || slot >= g_docSlotCount || !g_docSlots[slot])
         return;
 
@@ -432,11 +548,32 @@ static void activateSlot(int slot)
             && antb_realm_current(g_engine) != g_currentState->mainRealm)
         return;
 
+    document = g_docSlots[slot];
+    runtime = documentRuntimeFor(g_currentState, document);
+
+    if (!runtime)
+        return;
+
     g_currentSlot = slot;
-    g_document = g_docSlots[slot];
+    activateDocument(runtime);
 
     if (g_docObj)
         antb_set_native(g_docObj, g_document, AGB_TAG_NODE);
+
+    /* Shared-realm mode: `document` is one global property for every frame of
+     * the view, so switching the active document must repoint it (each
+     * document has its own object now). With per-frame realms every realm has
+     * its own global and applyRealmBinding() already picked the right one. */
+    if (!perFrameRealmEnabled() && g_engine) {
+        AntbValue* global = antb_global(g_engine);
+
+        if (global) {
+            if (g_docObj)
+                antb_set_prop(g_engine, global, "document", g_docObj);
+            antb_set_native(global, g_document, AGB_TAG_NODE);
+            antb_value_release(global);
+        }
+    }
 }
 
 /* ---- per-frame realms (design-per-frame-realm.md, stages S1/S2) --------- */
@@ -458,26 +595,167 @@ static bool perFrameRealmEnabled()
     return cached == 1;
 }
 
-struct FrameRealmEntry {
-    WebCore::Document* document;
-    AntbRealm*         realm;
-    AntbValue*         keeper;     /* pinned closure: keeps the realm marked */
-    AntbValue*         docObj;     /* pinned document object of this realm */
-    int                slot;       /* stable __agbFrameSlot number (0 based) */
-    bool               installed;
-};
+/* ---- documents and realms (design-context-ownership.md §3) ------------- */
+/* One bound document owns one realm. The table is per view: a realm handle
+ * belongs to the engine that created it, and a navigation may only release the
+ * documents of its own view (it used to be a file-level table, so a navigation
+ * in one tab dropped every other tab's frame realms). */
 
-static std::vector<FrameRealmEntry>* g_frameRealms = NULL;
-/* Frame slot numbers are never reused: __agbBind may hold one across many
- * timers, and a recycled number would silently point at another frame. */
-static int g_nextFrameSlot = 0;
-
-static std::vector<FrameRealmEntry>& frameRealms()
+static std::vector<DocumentRuntime*>* documentsOf(RuntimeState* state)
 {
-    if (!g_frameRealms)
-        g_frameRealms = new std::vector<FrameRealmEntry>();
+    if (!state || state == &g_emptyState)
+        return NULL;
 
-    return *g_frameRealms;
+    return state->documents;
+}
+
+static std::vector<DocumentRuntime*>& documentsFor(RuntimeState* state)
+{
+    static std::vector<DocumentRuntime*> empty;
+
+    if (!state || state == &g_emptyState)
+        return empty;
+
+    if (!state->documents)
+        state->documents = new std::vector<DocumentRuntime*>();
+
+    return *state->documents;
+}
+
+struct Listener;   /* the listener table is per realm (defined below) */
+static void cssomReleaseRefs(DocumentRuntime* document);
+static void releaseAllRealmListeners(RuntimeState* state);
+static void releaseRealmListeners(RuntimeState* state, AntbRealm* realm);
+
+/* Looks a document record up without creating one. */
+static DocumentRuntime* documentRuntimeOf(RuntimeState* state, WebCore::Document* document)
+{
+    std::vector<DocumentRuntime*>* documents = documentsOf(state);
+
+    if (!documents || !document)
+        return NULL;
+
+    for (size_t i = 0; i < documents->size(); ++i) {
+        if ((*documents)[i]->document == document)
+            return (*documents)[i];
+    }
+
+    return NULL;
+}
+
+/* Get-or-create the record for `document` in `state`. */
+static DocumentRuntime* documentRuntimeFor(RuntimeState* state, WebCore::Document* document)
+{
+    std::vector<DocumentRuntime*>& documents = documentsFor(state);
+
+    if (!state || state == &g_emptyState || !document)
+        return NULL;
+
+    for (size_t i = 0; i < documents.size(); ++i) {
+        if (documents[i]->document == document)
+            return documents[i];
+    }
+
+    DocumentRuntime* created = new DocumentRuntime();
+
+    memset(created, 0, sizeof(*created));
+    created->view = state;
+    created->document = document;
+    created->realmSlot = -1;
+    documents.push_back(created);
+
+    return created;
+}
+
+/* The document that owns `realm`: the main realm is the view's top-level
+ * document, a frame realm is the document that created it. NULL when the realm
+ * has no document bound yet. */
+static DocumentRuntime* documentForRealm(RuntimeState* state, AntbRealm* realm)
+{
+    std::vector<DocumentRuntime*>* documents = documentsOf(state);
+
+    if (!realm || !documents)
+        return NULL;
+
+    if (state->mainRealm == realm) {
+        for (size_t i = 0; i < documents->size(); ++i) {
+            DocumentRuntime* document = (*documents)[i];
+
+            if (document->document && !document->document->parentDocument())
+                return document;
+        }
+        return NULL;
+    }
+
+    for (size_t i = 0; i < documents->size(); ++i) {
+        if ((*documents)[i]->realm == realm)
+            return (*documents)[i];
+    }
+
+    return NULL;
+}
+
+/* The view that owns `document`, or NULL when none does. */
+static RuntimeState* stateForDocument(WebCore::Document* document)
+{
+    std::vector<RuntimeState*>& states = runtimeStates();
+
+    for (size_t i = 0; i < states.size(); ++i) {
+        std::vector<DocumentRuntime*>* documents = documentsOf(states[i]);
+
+        if (!documents)
+            continue;
+
+        for (size_t j = 0; j < documents->size(); ++j) {
+            if ((*documents)[j]->document == document)
+                return states[i];
+        }
+    }
+
+    return NULL;
+}
+
+/* Drops a document record and everything it owns. `releaseValues` is false once
+ * the engine is gone: releasing handles of a destroyed VM touches freed memory,
+ * and only the record itself is left to drop then. */
+static void releaseDocumentRuntime(DocumentRuntime* document, bool releaseValues)
+{
+    std::vector<DocumentRuntime*>* documents;
+    RuntimeState* state;
+
+    if (!document || !document->view)
+        return;
+
+    state = document->view;
+    documents = documentsOf(state);
+
+    if (releaseValues) {
+        if (document->keeper) {
+            antb_value_release(document->keeper);
+            document->keeper = NULL;
+        }
+        if (document->docObj) {
+            antb_value_release(document->docObj);
+            document->docObj = NULL;
+        }
+        cssomReleaseRefs(document);
+    }
+
+    if (documents) {
+        for (size_t i = 0; i < documents->size(); ++i) {
+            if ((*documents)[i] == document) {
+                documents->erase(documents->begin() + i);
+                break;
+            }
+        }
+    }
+
+    if (state->activeDocument == document)
+        state->activeDocument = NULL;
+    if (g_currentDocument == document)
+        g_currentDocument = &g_emptyDocument;
+
+    delete document;
 }
 
 /* Looks the realm of a frame document up, creating it on first use. Returns
@@ -485,114 +763,79 @@ static std::vector<FrameRealmEntry>& frameRealms()
  * makes the caller fall back to the shared realm. */
 static AntbRealm* realmForFrameDocument(AntbEngine* engine, WebCore::Document* document)
 {
-    std::vector<FrameRealmEntry>& entries = frameRealms();
+    RuntimeState* state = stateForEngine(engine);
+    DocumentRuntime* runtime = documentRuntimeFor(state, document);
 
-    for (size_t i = 0; i < entries.size(); ++i) {
-        if (entries[i].document == document)
-            return entries[i].realm;
-    }
-
-    if (!engine || !document)
+    if (!engine || !document || !runtime)
         return NULL;
+
+    if (runtime->realm)
+        return runtime->realm;
 
     AntbRealm* realm = antb_realm_create(engine);
 
     if (!realm)
         return NULL;
 
-    FrameRealmEntry entry;
-
-    entry.document = document;
-    entry.realm = realm;
-    entry.keeper = NULL;
-    entry.docObj = NULL;
-    entry.slot = g_nextFrameSlot++;
-    entry.installed = false;
+    runtime->realm = realm;
+    runtime->realmSlot = state->nextFrameSlot++;
+    runtime->installed = false;
 
     /* A realm is only kept alive while something in it is reachable: ant marks
      * a realm when a closure or builtin of it is marked, not when its global
      * object is. Pin an empty closure inside the realm so it cannot be
-     * collected from under FrameRealmEntry (released with the engine). */
+     * collected from under the document record (released with the engine). */
     {
         AntbRealm* prev = antb_realm_enter(engine, realm);
         AntbValue* keeper = antb_eval(engine, "(function(){})", 14, NULL);
 
         if (keeper) {
-            entry.keeper = antb_retain(keeper);
+            runtime->keeper = antb_retain(keeper);
             antb_value_release(keeper);
         }
 
         antb_realm_enter(engine, prev);
     }
 
-    entries.push_back(entry);
-
     agbLog(AGB_LOG_EVT, "frame realm %p for document %p", (void*)realm, (void*)document);
 
     return realm;
 }
 
-static FrameRealmEntry* frameRealmEntry(AntbRealm* realm)
+/* The current view's document record for `realm`. */
+static DocumentRuntime* documentForCurrentRealm(AntbRealm* realm)
 {
-    if (!g_frameRealms || !realm)
+    return documentForRealm(g_currentState, realm);
+}
+
+/* __agbFrameSlot number -> document. 0 is the main realm; frames are slot+1. */
+static DocumentRuntime* documentForFrameSlot(int slotNumber)
+{
+    std::vector<DocumentRuntime*>* documents = documentsOf(g_currentState);
+
+    if (!documents || slotNumber <= 0)
         return NULL;
 
-    for (size_t i = 0; i < g_frameRealms->size(); ++i) {
-        if ((*g_frameRealms)[i].realm == realm)
-            return &(*g_frameRealms)[i];
+    for (size_t i = 0; i < documents->size(); ++i) {
+        if ((*documents)[i]->realmSlot == slotNumber - 1)
+            return (*documents)[i];
     }
 
     return NULL;
 }
 
-/* __agbFrameSlot number -> entry. 0 is the main realm; frames are slot+1. */
-static FrameRealmEntry* frameRealmEntryBySlot(int slotNumber)
-{
-    if (!g_frameRealms || slotNumber <= 0)
-        return NULL;
-
-    for (size_t i = 0; i < g_frameRealms->size(); ++i) {
-        if ((*g_frameRealms)[i].slot == slotNumber - 1)
-            return &(*g_frameRealms)[i];
-    }
-
-    return NULL;
-}
-
-/* Point the host-side "current document" mirrors at `realm`'s binding. This is
- * what makes a frame document independent: a timer or callback of one realm can
- * no longer resolve `document` (or documentOf(self)) to another realm's
- * document. It deliberately does not touch antb_set_native: the document
- * objects belong to their realms and are replaced only when that realm binds a
- * new document (R130). */
+/* Point the host-side "current document" mirrors at `realm`'s document. The
+ * document record is the authority now: no boundRealm comparison, no
+ * mainDocObj bookkeeping (R130's patch existed only because the realm ->
+ * document mapping was missing). */
 static void applyRealmBinding(AntbRealm* realm)
 {
-    WebCore::Document* document = NULL;
-    AntbValue* docObj = NULL;
-
-    if (!realm || !g_currentState || g_currentState == &g_emptyState || !g_engine)
-        return;
-
-    if (realm == g_currentState->mainRealm) {
-        document = g_currentState->mainDocument;
-        docObj = g_currentState->mainDocObj;
-    } else if (FrameRealmEntry* entry = frameRealmEntry(realm)) {
-        document = entry->document;
-        docObj = entry->docObj;
-    }
+    DocumentRuntime* document = documentForCurrentRealm(realm);
 
     if (!document)
         return;   /* realm exists but has no document bound yet */
 
-    g_currentState->document = document;
-    g_currentState->boundRealm = realm;
-
-    if (g_docObj) {
-        antb_value_release(g_docObj);
-        g_docObj = 0;
-    }
-    if (docObj)
-        g_docObj = antb_retain(docObj);
+    activateDocument(document);
 }
 
 /* The realm the engine is in right now. ant switches realm per function call,
@@ -619,27 +862,20 @@ static int currentRealmSlotNumber()
     if (!realm || realm == g_currentState->mainRealm)
         return 0;
 
-    if (FrameRealmEntry* entry = frameRealmEntry(realm))
-        return entry->slot + 1;
+    if (DocumentRuntime* document = documentForCurrentRealm(realm))
+        return document->realmSlot + 1;
 
     return -1;
 }
 
-/* bindDocument() set g_document/g_docObj for the main realm: remember that
- * pair so leaving and re-entering the realm can restore it (R130). */
+/* bindDocument() bound the main document into the engine's main realm. With the
+ * per-document records this is only a debug trace: the binding *is* the record,
+ * and documentForRealm() finds it by its realm. */
 static void noteMainBinding()
 {
-    if (!g_currentState || g_currentState == &g_emptyState)
-        return;
-
-    g_currentState->mainDocument = g_document;
-    if (g_currentState->mainDocObj) {
-        antb_value_release(g_currentState->mainDocObj);
-        g_currentState->mainDocObj = 0;
-    }
-    if (g_docObj)
-        g_currentState->mainDocObj = antb_retain(g_docObj);
-    g_currentState->boundRealm = currentRealm();
+    agbLog(AGB_LOG_EVT, "main binding gen=%lu doc=%p realm=%p",
+           g_currentState ? g_currentState->generation : 0UL,
+           (void*)g_document, (void*)currentRealm());
 }
 
 /* The realm a document runs in: the engine's main realm for a top-level
@@ -657,19 +893,24 @@ static AntbRealm* realmOfDocument(AntbEngine* engine, WebCore::Document* documen
     return realmForFrameDocument(engine, document);
 }
 
-static void forgetFrameRealms()
+/* Drops every document of the view (main + frames). A document owns its realm,
+ * its JS object and its listeners, so this is the one place a view's document
+ * state goes away. `releaseValues` is false when the engine that owns those
+ * values is already gone: releasing handles of a destroyed VM would touch
+ * freed memory, and only the records are left to drop then. */
+static void forgetDocuments(RuntimeState* state, bool releaseValues)
 {
-    if (!g_frameRealms)
+    std::vector<DocumentRuntime*>* documents = documentsOf(state);
+
+    if (!documents)
         return;
 
-    for (size_t i = 0; i < g_frameRealms->size(); ++i) {
-        if ((*g_frameRealms)[i].keeper)
-            antb_value_release((*g_frameRealms)[i].keeper);
-        if ((*g_frameRealms)[i].docObj)
-            antb_value_release((*g_frameRealms)[i].docObj);
-    }
+    /* releaseDocumentRuntime() edits the vector; walk from the back. */
+    while (!documents->empty())
+        releaseDocumentRuntime(documents->back(), releaseValues);
 
-    g_frameRealms->clear();
+    delete state->documents;
+    state->documents = NULL;
 }
 
 /* Which realms already evaluated prelude.js / polyfills.js. Keyed by realm, not
@@ -700,7 +941,7 @@ AntbValue* wrapNode(AntbEngine*, WebCore::Node*);
 int nodeGetter(AntbEngine*, AntbValue*, const char*, AntbValue*, void*);
 enum { CSSOM_LIST, CSSOM_SHEET, CSSOM_RULE, CSSOM_RULELIST, CSSOM_MEDIA, CSSOM_DECL };
 AntbValue* cssomWrap(AntbEngine*, void*, int kind);
-static void cssomReleaseRefs(RuntimeState* state);
+static void cssomReleaseRefs(DocumentRuntime* document);   /* defined below */
 int attrsGetter(AntbEngine*, AntbValue*, const char*, AntbValue*, void*);
 int nodeGetElementsByTagName(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeCloneNode(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
@@ -2231,8 +2472,7 @@ int titleSetter(AntbEngine* engine, AntbValue* self, const char* name, const Ant
     return nodeSetter(engine, self, name, value, NULL);
 }
 
-void dropListenersForOldDocument();
-void dropListenersForDocument(WebCore::Document* document);
+/* (Listener teardown is per realm now: releaseAllRealmListeners().) */
 } /* namespace */
 
 /* -------------------------------------------------------------------------
@@ -2627,39 +2867,31 @@ static void initCookieStorage()
 }
 
 /* Runs before every bridged native callback (see antb_set_context_activate).
- * With a single engine there is nothing to switch; once views get their own
- * engines this becomes: g_current = stateFor(engine) and refresh the g_* mirror. */
+ * The engine names itself; the realm it is in decides which document the
+ * callback belongs to (design-context-ownership.md §4). */
 static void contextActivate(AntbEngine* engine)
 {
     RuntimeState* state;
 
+    assertContextThread("contextActivate");
+
     if (!engine)
         return;
 
-    if (g_currentState && g_currentState->engine == engine) {
-        /* Same view: ant may still have switched into a frame realm behind our
-         * back. A bridged callback must see that realm's document, not the one
-         * whichever frame ran last left in g_document (R130). */
-        if (perFrameRealmEnabled()) {
-            AntbRealm* realm = antb_realm_current(engine);
-
-            if (realm && realm != g_currentState->boundRealm)
-                applyRealmBinding(realm);
-        }
-        return;
-    }
-
     state = stateForEngine(engine);
 
-    if (state) {
+    if (!state)
+        return;
+
+    if (g_currentState != state)
         activateState(state);
 
-        if (perFrameRealmEnabled()) {
-            AntbRealm* realm = antb_realm_current(engine);
+    /* ant switches realms per function call without telling the host: a
+     * callback of one realm must see that realm's document. */
+    if (perFrameRealmEnabled()) {
+        AntbRealm* realm = antb_realm_current(engine);
 
-            if (realm && realm != g_currentState->boundRealm)
-                applyRealmBinding(realm);
-        }
+        applyRealmBinding(realm);
     }
 }
 
@@ -3762,6 +3994,8 @@ void destroyContext(void* context)
 {
     RuntimeState* state = (RuntimeState*)context;
 
+    assertContextThread("destroyContext");
+
     if (!state || state == &g_emptyState)
         return;
 
@@ -3772,6 +4006,11 @@ void destroyContext(void* context)
      * log line, so key it off the VM: a stopped realm has engine == 0. */
     if (state->engine)
         teardownRealm(state);
+
+    /* Safety net: a view torn down without a realm (or a failed teardown) must
+     * not leak its document records or realm handlers. */
+    releaseAllRealmListeners(state);
+    forgetDocuments(state, false);
 
     /* No successor realm will release this generation's pins: the view is
      * gone, so release them now. */
@@ -3790,7 +4029,7 @@ void destroyContext(void* context)
     }
 
     if (g_currentState == state)
-        g_currentState = &g_emptyState;
+        activateState(&g_emptyState);
 
     delete state;
 }
@@ -3839,7 +4078,8 @@ void stop()
     for (size_t i = 0; i < states.size(); ++i) {
         RuntimeState* state = states[i];
 
-        cssomReleaseRefs(state);
+        releaseAllRealmListeners(state);
+        forgetDocuments(state, true);
 
         if (state->engine)
             antb_engine_destroy(state->engine);
@@ -3848,7 +4088,7 @@ void stop()
     }
 
     states.clear();
-    g_currentState = &g_emptyState;
+    activateState(&g_emptyState);
 }
 
 bool isRunning()
@@ -4000,6 +4240,8 @@ static AntbValue* antbEvalPage(const char* src, int len, char** err)
 int evaluate(const char* src, size_t len, char** out, char** err)
 {
     AntbValue* value;
+
+    assertContextThread("evaluate");
     struct DepthGuard {
         int* depth;
         explicit DepthGuard(int* d) : depth(d) { ++*d; }
@@ -4124,6 +4366,8 @@ void pumpAsyncRequests(void)
      * so the culprit is visible on the same timeline as [perf] update js=. */
     static int breakdown = -1;
     LARGE_INTEGER bdFreq, bdT0, bdT1, bdT2, bdT3, bdT4;
+
+    assertContextThread("pumpAsyncRequests");
 
     memset(&bdFreq, 0, sizeof(bdFreq));
     memset(&bdT0, 0, sizeof(bdT0));
@@ -4749,10 +4993,14 @@ static void teardownRealm(RuntimeState* state)
 {
     RuntimeState* outer = g_currentState;
 
+    assertContextThread("teardownRealm");
+
     if (!state || state == &g_emptyState)
         return;
 
-    g_currentState = state;
+    /* Point the mirrors at the state that is going away (its last active
+     * document comes with it), not at whatever the engine thread ran last. */
+    activateState(state);
 
     agbLog(AGB_LOG_EVT, "realm stop gen=%lu url=%s",
            state->generation,
@@ -4762,6 +5010,10 @@ static void teardownRealm(RuntimeState* state)
      * not be delivered into the realm that replaces this one. */
     cancelInFlightResources(state->generation);
 
+    /* The window handlers belong to the realms that are going away (their
+     * closures and AntbValue refs die with the engine). */
+    releaseAllRealmListeners(state);
+
     /* The nodes of the previous realm can be released now (their document
      * was replaced a generation ago). */
     if (state->pinsPendingRelease)
@@ -4769,20 +5021,9 @@ static void teardownRealm(RuntimeState* state)
 
     state->pinsPendingRelease = state->generation;
 
-    /* Values owned by the old engine have to go before the engine does. */
-    if (g_docObj) {
-        antb_value_release(g_docObj);
-        g_docObj = 0;
-    }
-    /* The main realm's binding is another reference to the same engine's
-     * objects; it must be dropped here too, otherwise the next document would
-     * release a handle of the destroyed engine (R130). */
-    if (state->mainDocObj) {
-        antb_value_release(state->mainDocObj);
-        state->mainDocObj = 0;
-    }
-    state->mainDocument = 0;
-    state->boundRealm = 0;
+    /* Values owned by the old engine have to go before the engine does: the
+     * document records own them (docObj/listeners/CSSOM refs) and are dropped
+     * by forgetDocuments() below, while the engine is still alive. */
     /* Location/History objects and their session history values belong to the
      * engine that just died. */
     AntRuntime::RealmDocument::releaseEngine(state->engine);
@@ -4812,16 +5053,13 @@ static void teardownRealm(RuntimeState* state)
         }
     }
 
-    /* The old page's listeners close over its DOM. */
-    dropListenersForOldDocument();
+    /* The old page's listeners close over its DOM; they are released together
+     * with the document records (each document owns its own listeners now). */
 
     /* ...and the JS wrappers of its nodes must not be handed out to the next
      * document (the bridge keeps them in a process wide cache). */
     if (state->engine && g_document)
         antb_release_owner(state->engine, g_document);
-
-    /* The CSSOM wrappers are gone; drop the refs they held on sheets/rules. */
-    cssomReleaseRefs(state);
 
     /* The node class belongs to the old engine. */
     g_nodeClass = 0;
@@ -4834,7 +5072,7 @@ static void teardownRealm(RuntimeState* state)
     g_mediaListClass = 0;
     g_cssDeclarationClass = 0;
     clearExpandoObjects();
-    g_documentBound = false;
+    state->realmBound = false;
 
     /* The slots point at documents that are going away: keeping them would
      * hand out pointers to freed documents. */
@@ -4846,8 +5084,9 @@ static void teardownRealm(RuntimeState* state)
     g_docSlotCount = 0;
     g_currentSlot = -1;
 
-    /* Release the per-frame realms' keepers before the engine goes away. */
-    forgetFrameRealms();
+    /* Drop every document of this view (main + frames) while the engine that
+     * owns their values is still alive. */
+    forgetDocuments(state, true);
 
     if (state->engine) {
         antb_engine_destroy(state->engine);
@@ -4885,6 +5124,8 @@ void beginNewRealm(void)
 {
     RuntimeState* state = g_currentState;
 
+    assertContextThread("beginNewRealm");
+
     if (!state || state == &g_emptyState)
         return;
 
@@ -4906,7 +5147,9 @@ void beginNewRealm(void)
         antb_set_uncaught_nonfatal(state->engine, 1);
 
     state->mainRealm = state->engine ? antb_realm_current(state->engine) : NULL;
-    forgetFrameRealms();
+    /* The old engine (and with it every value of the old documents) is already
+     * destroyed: only the records are dropped here. */
+    forgetDocuments(state, false);
 
     /* The new document starts in whatever state the host last reported: a
      * background tab keeps loading hidden, a foreground one visible. */
@@ -5553,43 +5796,34 @@ static void installChildFrameGlobals(AntbEngine* engine, WebCore::Document* docu
 /* Switches into a frame's realm, installing its global API and shims the first
  * time. Called for every bind: the realm stays, the document object inside it
  * is refreshed. */
-static void bindFrameRealm(AntbEngine* engine, WebCore::Document* document)
+static void bindFrameRealm(AntbEngine* engine, DocumentRuntime* runtime)
 {
-    std::vector<FrameRealmEntry>& entries = frameRealms();
-    FrameRealmEntry* entry = NULL;
     AntbValue* global;
 
-    for (size_t i = 0; i < entries.size(); ++i) {
-        if (entries[i].document == document) {
-            entry = &entries[i];
-            break;
-        }
-    }
-
-    if (!entry || !entry->realm)
+    if (!runtime || !runtime->realm || !runtime->document)
         return;
 
-    antb_realm_enter(engine, entry->realm);
+    antb_realm_enter(engine, runtime->realm);
 
     global = antb_global(engine);
     if (!global)
         return;
 
-    if (!entry->installed) {
+    if (!runtime->installed) {
         installGlobalApi(engine, global);
-        entry->installed = true;
+        runtime->installed = true;
     }
 
-    installChildFrameGlobals(engine, document);
+    installChildFrameGlobals(engine, runtime->document);
 
-    /* Keep this realm's document object pinned here: timers and callbacks of
-     * the realm are restored from it, never rebuilt/repointed (R130). */
-    if (entry->docObj) {
-        antb_value_release(entry->docObj);
-        entry->docObj = 0;
+    /* Keep this realm's document object on its record: timers and callbacks of
+     * the realm are restored from it, never rebuilt/repointed. */
+    if (runtime->docObj) {
+        antb_value_release(runtime->docObj);
+        runtime->docObj = 0;
     }
-    entry->docObj = documentObjectFor(engine, document);
-    applyRealmBinding(entry->realm);
+    runtime->docObj = documentObjectFor(engine, runtime->document);
+    applyRealmBinding(runtime->realm);
 
     antb_value_release(global);
 
@@ -5600,17 +5834,30 @@ static void bindFrameRealm(AntbEngine* engine, WebCore::Document* document)
 void forgetFrameRealm(void* document)
 {
     WebCore::Document* doc = (WebCore::Document*)document;
+    RuntimeState* owner = stateForDocument(doc);
 
-    if (!doc || !g_frameRealms)
+    if (!doc || !owner)
         return;
 
-    std::vector<FrameRealmEntry>& entries = frameRealms();
+    /* The realm belongs to `owner`'s engine; the current view must be that one
+     * to release it (frame teardown always runs inside the owning view). */
+    if (owner != g_currentState) {
+        agbLog(AGB_LOG_EVT, "frame realm drop skipped for document %p (owner %p, current %p)",
+               (void*)doc, (void*)owner, (void*)g_currentState);
+        return;
+    }
 
-    for (size_t i = 0; i < entries.size(); ) {
-        if (entries[i].document == doc) {
+    {
+        std::vector<DocumentRuntime*>* documents = documentsOf(owner);
+
+        for (size_t i = 0; documents && i < documents->size(); ++i) {
+            DocumentRuntime* runtime = (*documents)[i];
+
+            if (runtime->document != doc)
+                continue;
+
             /* Do not leave the host mirrors on a realm that is going away. */
-            if (g_currentState && g_currentState != &g_emptyState
-                    && g_currentState->boundRealm == entries[i].realm)
+            if (g_currentDocument == runtime)
                 applyRealmBinding(g_currentState->mainRealm);
 
             AntRuntime::RealmDocument::forgetDocument(g_engine, doc);
@@ -5618,43 +5865,59 @@ void forgetFrameRealm(void* document)
             /* Wrapper objects created in this realm (and their permanent pins)
              * go first: with the pins left behind the realm could never be
              * collected. */
-            if (entries[i].realm && g_engine)
-                antb_release_realm(g_engine, entries[i].realm);
+            if (runtime->realm && g_engine)
+                antb_release_realm(g_engine, runtime->realm);
 
-            /* Dropping the keeper makes the realm unreachable: ant's collector
-             * frees it on the next GC (no ant unpin exists). */
-            if (entries[i].keeper) {
-                antb_value_release(entries[i].keeper);
-                entries[i].keeper = NULL;
-            }
-            if (entries[i].docObj) {
-                antb_value_release(entries[i].docObj);
-                entries[i].docObj = NULL;
-            }
+            releaseRealmListeners(owner, runtime->realm);
 
-            entries.erase(entries.begin() + i);
             agbLog(AGB_LOG_EVT, "frame realm dropped for document %p", (void*)doc);
-        } else {
-            ++i;
+
+            /* Drops the keeper (making the realm unreachable: ant's collector
+             * frees it on the next GC), the document object, its listeners and
+             * the record itself. */
+            releaseDocumentRuntime(runtime, true);
+            return;
         }
     }
 }
 
 void bindDocument(void* document)
 {
+    WebCore::Document* target = (WebCore::Document*)document;
+    RuntimeState* state = g_currentState;
     WebCore::Document* previous = g_document;
-    /* The Document object is replaced on every navigation, so always refresh
-     * the pointer; only the JS shim objects are created once. */
-    g_document = (WebCore::Document*)document;
+    DocumentRuntime* runtime;
+
+    assertContextThread("bindDocument");
+
+    if (!state || state == &g_emptyState || !target)
+        return;
+
+    runtime = documentRuntimeFor(state, target);
+
+    if (!runtime || !state->engine)
+        return;
+
+    /* The document owns its realm: the engine's main realm for a top-level
+     * document, a realm of its own for a frame (per-frame realms), the main
+     * realm again when frames share it. documentForRealm() answers from these
+     * records - the R130 mainDocument/mainDocObj/boundRealm bookkeeping existed
+     * only because that mapping was missing. */
+    if (perFrameRealmEnabled() && target->parentDocument())
+        runtime->realm = realmForFrameDocument(state->engine, target);
+    else if (!runtime->realm)
+        runtime->realm = state->mainRealm;
+
+    activateDocument(runtime);
 
     ensureRealmDocumentContext();
 
     /* A frame document with its own realm: switch into it and refresh that
      * realm's globals. Nothing below applies (no engine bootstrap, no shared
      * window proxy). */
-    if (perFrameRealmEnabled() && g_engine && g_document && g_document->parentDocument()) {
-        if (realmForFrameDocument(g_engine, g_document)) {
-            bindFrameRealm(g_engine, g_document);
+    if (perFrameRealmEnabled() && target->parentDocument()) {
+        if (runtime->realm) {
+            bindFrameRealm(state->engine, runtime);
             return;
         }
     }
@@ -5663,35 +5926,32 @@ void bindDocument(void* document)
      * whichever frame ran last, and a main-frame evaluation that came after a
      * child frame ran must not execute in the child's realm. This has to happen
      * before the "already bound" early return below. */
-    if (perFrameRealmEnabled() && g_engine && g_document && g_currentState
-            && g_currentState != &g_emptyState && g_currentState->mainRealm)
-        antb_realm_enter(g_engine, g_currentState->mainRealm);
-
-    /* A frame realm may have run last: the mirrors must go back to the main
-     * realm's own document even when this bind is a no-op (R130). */
-    if (perFrameRealmEnabled() && g_currentState && g_currentState != &g_emptyState) {
-        AntbRealm* realm = currentRealm();
-
-        if (realm && realm != g_currentState->boundRealm)
-            applyRealmBinding(realm);
+    if (perFrameRealmEnabled() && state->mainRealm) {
+        antb_realm_enter(state->engine, state->mainRealm);
+        activateDocument(runtime);
     }
 
     /* Binding the document that is already installed is a no-op. A page with
      * async ad scripts gets here 3-6 times for the same document, and the
      * redundant passes make the VM run a closure body once per pass (css3test
-     * ran its whole suite several times over). */
-    if (g_documentBound && previous == (WebCore::Document*)document && g_docObj)
+     * ran its whole suite several times over). The record knows whether this
+     * document was bound; `previous` says whether it is the one the mirrors
+     * (and the realm's `document` property) already point at. Both are needed:
+     * switching back from a frame document must refresh the realm's globals
+     * even though the record itself was bound long ago. */
+    if (runtime->documentBound && runtime->docObj && previous == target)
         return;
 
-    g_currentSlot = slotForDocument(g_document);
+    g_currentSlot = slotForDocument(target);
 
-    agbLog(AGB_LOG_EVT, "bindDocument %p (bound=%d) url=%s", document, (int)g_documentBound,
-           g_document ? g_document->URL().utf8().data() : "?");
+    agbLog(AGB_LOG_EVT, "bindDocument %p (realm-bound=%d prev=%p) url=%s", document,
+           (int)state->realmBound, (void*)previous,
+           target->URL().isEmpty() ? "?" : target->URL().utf8().data());
 
     if (!g_engine || !g_document)
         return;
 
-    if (g_documentBound) {
+    if (state->realmBound) {
         AntbValue* global;
 
         /* Same realm, new document (a frame document created by the parser):
@@ -5715,6 +5975,7 @@ void bindDocument(void* document)
         }
         AntRuntime::RealmDocument::noteDocument(g_engine, g_document);
         installFrameGlobals(g_engine, g_document);
+        runtime->documentBound = true;
         noteMainBinding();
         return;
     }
@@ -5798,10 +6059,10 @@ void bindDocument(void* document)
         /* window/self/top/parent/frames/document/length: per frame, refreshed
          * by the installer below (a child frame reads the same global object). */
         installFrameGlobals(g_engine, g_document);
-        g_docObj = antb_retain(docObj);
+        /* The record owns the document object from here on. */
+        runtime->docObj = docObj;
         noteMainBinding();
 
-        antb_value_release(docObj);
         antb_value_release(global);
     }
 
@@ -5835,7 +6096,8 @@ void bindDocument(void* document)
             fprintf(stderr, "[agave] internal page without internal.js\n");
     }
 
-    g_documentBound = true;
+    runtime->documentBound = true;
+    state->realmBound = true;
 
 }
 
@@ -5858,10 +6120,72 @@ struct Listener {
     bool           handler; /* set through `el.onxxx = fn`, replaced in place */
 };
 
-/* Per-state listener list (see RuntimeState::listeners). */
+/* Releases the handlers a realm registered (a realm's window listeners). */
+static void releaseRealmListeners(RuntimeState* state, AntbRealm* realm)
+{
+    std::vector<Listener>* list;
+
+    if (!state || !realm || !state->realmListeners)
+        return;
+
+    {
+        std::map<AntbRealm*, std::vector<Listener>*>::iterator it =
+            state->realmListeners->find(realm);
+
+        if (it == state->realmListeners->end())
+            return;
+
+        list = it->second;
+        state->realmListeners->erase(it);
+    }
+
+    if (!list)
+        return;
+
+    for (size_t i = 0; i < list->size(); ++i) {
+        if ((*list)[i].fn)
+            antb_value_release((*list)[i].fn);
+    }
+
+    delete list;
+}
+
+/* The view's realm is gone (navigation, tab close): every realm's handlers go,
+ * and a frame's own realm was already released by forgetFrameRealm(). */
+static void releaseAllRealmListeners(RuntimeState* state)
+{
+    if (!state || !state->realmListeners)
+        return;
+
+    while (!state->realmListeners->empty())
+        releaseRealmListeners(state, state->realmListeners->begin()->first);
+
+    delete state->realmListeners;
+    state->realmListeners = NULL;
+}
+
+/* window.addEventListener() belongs to the realm (the window), not to the
+ * document object: a reload binds a provisional and then a committed document
+ * in the same realm, and the handler from the page's first inline script must
+ * still be visible when the load event is dispatched for the other one. */
 static std::vector<Listener>*& listeners()
 {
-    return *(std::vector<Listener>**)&g_currentState->listeners;
+    static std::vector<Listener>* noRealm = NULL;
+    RuntimeState* state = g_currentState;
+    AntbRealm* realm;
+
+    if (!state || state == &g_emptyState)
+        return noRealm;
+
+    realm = currentRealm();
+
+    if (!realm)
+        return noRealm;
+
+    if (!state->realmListeners)
+        state->realmListeners = new std::map<AntbRealm*, std::vector<Listener>*>();
+
+    return (*state->realmListeners)[realm];
 }
 
 #define g_listeners listeners()
@@ -5925,42 +6249,8 @@ static int setNodeEventHandler(WebCore::Node* n, const char* type, const AntbVal
 }
 
 
-/* Navigation dropped the previous document: its listeners reference nodes and
- * closures from that page, so drop them (closing over freed DOM would fire on
- * the wrong elements). Nodes stay pinned, so no stale pointer can be handed
- * out for a recycled address. */
-void dropListenersForOldDocument()
-{
-    if (!g_listeners)
-        return;
-
-    for (size_t i = 0; i < g_listeners->size(); ++i) {
-        if ((*g_listeners)[i].fn)
-            antb_value_release((*g_listeners)[i].fn);
-    }
-    g_listeners->clear();
-}
-
-/* A frame document is going away: drop only its listeners. The parent's and
- * the other frames' handlers must survive (R132). */
-static void dropListenersForDocument(WebCore::Document* document)
-{
-    if (!g_listeners || !document)
-        return;
-
-    for (size_t i = 0; i < g_listeners->size(); ) {
-        Listener& l = (*g_listeners)[i];
-        WebCore::Document* owner = l.node ? l.node->document() : 0;
-
-        if (owner == document) {
-            if (l.fn)
-                antb_value_release(l.fn);
-            g_listeners->erase(g_listeners->begin() + i);
-        } else {
-            ++i;
-        }
-    }
-}
+/* Document-scoped listeners were dropped per document: see
+ * releaseAllRealmListeners()/releaseRealmListeners(). */
 
 /* "div#app" / "img#qr" / "document" for a [gap-jsdom] line. Only called when
  * a gap is reported for the first time, never on the hot path. */
@@ -6126,16 +6416,18 @@ static void cssomTrack(AntbEngine* engine, void* ptr, int kind)
     }
 }
 
-static void cssomReleaseRefs(RuntimeState* state)
+/* Per document: CSSOM wrappers keep their DOM objects alive, so a document's
+ * refs are dropped when the document goes away (not when the view does). */
+static void cssomReleaseRefs(DocumentRuntime* document)
 {
-    if (!state)
+    if (!document)
         return;
 
-    if (state->cssomRefs) {
+    if (document->cssomRefs) {
         size_t i;
 
-        for (i = 0; i < state->cssomRefs->size(); ++i) {
-            CssomRef& ref = (*state->cssomRefs)[i];
+        for (i = 0; i < document->cssomRefs->size(); ++i) {
+            CssomRef& ref = (*document->cssomRefs)[i];
 
             if (ref.kind == CSSOM_LIST)
                 static_cast<WebCore::StyleSheetList*>(ref.ptr)->deref();
@@ -6145,13 +6437,13 @@ static void cssomReleaseRefs(RuntimeState* state)
                 static_cast<WebCore::StyleBase*>(ref.ptr)->deref();
         }
 
-        delete state->cssomRefs;
-        state->cssomRefs = 0;
+        delete document->cssomRefs;
+        document->cssomRefs = 0;
     }
 
-    if (state->cssomSeen) {
-        delete state->cssomSeen;
-        state->cssomSeen = 0;
+    if (document->cssomSeen) {
+        delete document->cssomSeen;
+        document->cssomSeen = 0;
     }
 }
 
@@ -10642,18 +10934,19 @@ int globalActivateSlot(AntbEngine* engine, AntbValue*, AntbValue** args, int arg
         int slot = (int)antb_to_number(args[0]);
 
         if (perFrameRealmEnabled()) {
-            /* Switch realm AND its document binding; never repoint a document
-             * object that belongs to another realm. */
+            /* Switch realm AND its document; the (realm -> document) mapping
+             * decides, so a document object is never repointed at another
+             * realm's document. */
             if (slot == 0 && g_currentState && g_currentState != &g_emptyState
                     && g_currentState->mainRealm) {
                 antb_realm_enter(engine, g_currentState->mainRealm);
                 applyRealmBinding(g_currentState->mainRealm);
             } else if (slot > 0) {
-                FrameRealmEntry* entry = frameRealmEntryBySlot(slot);
+                DocumentRuntime* document = documentForFrameSlot(slot);
 
-                if (entry && entry->realm) {
-                    antb_realm_enter(engine, entry->realm);
-                    applyRealmBinding(entry->realm);
+                if (document && document->realm) {
+                    antb_realm_enter(engine, document->realm);
+                    applyRealmBinding(document->realm);
                 }
             }
         } else if (slot >= 0 && slot < g_docSlotCount) {
@@ -12256,6 +12549,28 @@ void dispatchWindowEvent(const char* type)
     dispatchWindowEventState(type, NULL);
 }
 
+/* Dispatch a window event for a named document. The caller knows which frame
+ * the event belongs to: the main frame's load can fire while a child frame's
+ * document is the context the engine thread was left in, and window listeners
+ * are per document now. Binding the document first puts the mirrors (and the
+ * realm) on the event's own document. */
+void dispatchWindowEventFor(void* document, const char* type)
+{
+    WebCore::Document* doc = (WebCore::Document*)document;
+    DocumentRuntime* runtime;
+
+    if (!doc || !type || !g_engine)
+        return;
+
+    runtime = documentRuntimeOf(g_currentState, doc);
+
+    if (!runtime)
+        return;   /* a document of a torn-down realm: its load is stale */
+
+    activateDocument(runtime);
+    dispatchWindowEventState(type, NULL);
+}
+
 /* A frame document reached DOMContentLoaded / load: with per-frame realms each
  * frame gets its own event on its own window. Bind the frame (which enters its
  * realm), run its deferred modules first for DOMContentLoaded, dispatch, then
@@ -12318,7 +12633,7 @@ void dispatchWindowEventState(const char* type, AntbValue* state)
     if (!g_engine || !g_document || !type)
         return;
 
-    agbLog(AGB_LOG_EVT, "window event %s listeners=%d", type,
+    agbLog(AGB_LOG_EVT, "window event %s doc=%p listeners=%d", type, (void*)g_document,
            g_listeners ? (int)g_listeners->size() : 0);
 
     if (!g_listeners)
@@ -12420,6 +12735,8 @@ void dispatchWindowEventState(const char* type, AntbValue* state)
  * happen in this engine. */
 void documentWillUnload(void)
 {
+    assertContextThread("documentWillUnload");
+
     if (!g_engine || !g_document)
         return;
 
@@ -12450,9 +12767,8 @@ void documentWillUnload(void)
     }
 
     /* The old page's listeners close over its DOM and would fire against the
-     * next document. Only this document's listeners: child frames have their
-     * own realms and keep theirs. */
-    dropListenersForDocument(g_document);
+     * next document. Each document owns its listeners now, so stopRealm()
+     * releases exactly this document's handlers when it drops the records. */
 
     /* Isolation: the old realm goes away with the old document. Its globals,
      * its module registry and its timers must not be visible to the next
@@ -12485,7 +12801,8 @@ void frameDocumentWillUnload(void* document)
         free(pending);
     }
 
-    dropListenersForDocument(doc);
+    /* Each document record owns its listeners: forgetFrameRealm() releases
+     * this frame's handlers together with the record. */
     forgetFrameRealm(doc);
 
     if (doc->parentDocument())
@@ -13041,6 +13358,29 @@ extern "C" unsigned long agb_teardown_started_ms(void)
     return (unsigned long)AntRuntime::g_teardownStart;
 }
 
+/* C entry point: the context (RuntimeState*) the engine thread is in right
+ * now. The hang watchdog (another thread) reads it to attribute a stuck script
+ * to one view instead of notifying every view. NULL before the first context,
+ * and it deliberately stays on the last context: while a script is stuck,
+ * "the last context entered" *is* the stuck one. */
+extern "C" void* agb_busy_js_context(void)
+{
+    return (void*)InterlockedCompareExchangePointer((void* volatile*)&g_busyContext, NULL, NULL);
+}
+
+/* Dumps the live JS stack of `context` to `path` (one file per report; the
+ * caller passes a fresh name). The caller must freeze the engine thread
+ * (SuspendThread) around this call: the VM walk cannot race with a running
+ * script. Returns 1 when a file was written. */
+extern "C" int agb_dump_js_stack_for(void* context, const char* path)
+{
+    RuntimeState* state = (RuntimeState*)context;
+
+    if (!state || state == &g_emptyState || !state->engine || !path || !*path)
+        return 0;
+
+    return antb_dump_js_stack_to_file(state->engine, path);
+}
 
 
 

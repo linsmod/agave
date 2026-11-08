@@ -193,6 +193,21 @@ MACROSS_API MaCrossView* macross_view_create(MC_BYTE* buffer, int width, int hei
 MACROSS_API void* macross_view_additional_data(MaCrossView* view);
 
 /**
+ * \fn void* macross_view_js_context(MaCrossView* view)
+ * \brief Return the view's JS context handle (opaque).
+ *
+ * The handle identifies the view's JavaScript runtime for the life of the view
+ * (a navigation replaces the engine *inside* it, not the handle). Hosts use it
+ * to match a context reported by the engine - e.g. the script that a hang
+ * watchdog found running - to the view it belongs to.
+ *
+ * \param view  Pointer to an existing webview object.
+ *
+ * \return the context handle, or NULL when the view has none.
+ */
+MACROSS_API void* macross_view_js_context(MaCrossView* view);
+
+/**
  * \fn MC_STATUS macross_view_destroy(MaCrossView* view)
  * \brief Destroy a webview object.
  *

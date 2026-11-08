@@ -1117,39 +1117,68 @@ static void agwWatchdogRecord(int kind, unsigned int jsDepth, int headType,
     fclose(f);
 }
 
-/* Hand the verdict to the UI thread(s): postMessage is the only thing the
- * engine thread is allowed to do to a window. Every live view gets it because
- * one engine thread runs every view and the hung script does not say which one
- * it belongs to. */
+/* Hand the verdict to the UI thread: postMessage is the only thing the
+ * engine thread is allowed to do to a window.
+ *
+ * One engine thread runs every view, so the script that is running belongs to
+ * exactly one of them: agb_busy_js_context() names it. Before this existed the
+ * verdict was broadcast, which popped a dialog per view (and the wrong tab
+ * answered it). With no honest owner nothing is posted - the log line still
+ * carries the numbers. */
+static AgaveWebView* agwBusyViewLocked(void)
+{
+    void* context = agb_busy_js_context();
+    int i;
+
+    if (!context)
+        return NULL;
+
+    for (i = 0; i < g_viewCount; ++i) {
+        AgaveWebView* item = g_views[i];
+
+        if (!item || item->destroyed || !item->view)
+            continue;
+
+        if (macross_view_js_context(item->view) != context)
+            continue;
+
+        if (!item->hwnd || !item->callbacks.on_unresponsive)
+            continue;
+
+        return item;
+    }
+
+    return NULL;
+}
+
 static void agwNotifyHang(int kind, unsigned int jsDepth, int headType,
                           DWORD busyMs, DWORD queueMs)
 {
-    AgaveWebView* views[AGW_MAX_VIEWS];
-    int count = 0;
-    int i;
+    AgaveWebView* target;
+    AgwHangPayload* payload;
 
     agwLock();
-    for (i = 0; i < g_viewCount; ++i) {
-        if (g_views[i] && !g_views[i]->destroyed && g_views[i]->hwnd && g_views[i]->callbacks.on_unresponsive)
-            views[count++] = g_views[i];
-    }
+    target = agwBusyViewLocked();
     agwUnlock();
 
-    for (i = 0; i < count; ++i) {
-        AgwHangPayload* payload = (AgwHangPayload*)malloc(sizeof(AgwHangPayload));
-
-        if (!payload)
-            continue;
-
-        payload->kind = kind;
-        payload->jsDepth = jsDepth;
-        payload->headType = headType;
-        payload->busyMs = (unsigned int)busyMs;
-        payload->queueMs = (unsigned int)queueMs;
-
-        if (!PostMessageA(views[i]->hwnd, AGW_MSG_UNRESPONSIVE, 0, (LPARAM)payload))
-            free(payload);
+    if (!target) {
+        agbLog(AGB_LOG_EVT, "watchdog: no view owns the running JS context; notice dropped");
+        return;
     }
+
+    payload = (AgwHangPayload*)malloc(sizeof(AgwHangPayload));
+
+    if (!payload)
+        return;
+
+    payload->kind = kind;
+    payload->jsDepth = jsDepth;
+    payload->headType = headType;
+    payload->busyMs = (unsigned int)busyMs;
+    payload->queueMs = (unsigned int)queueMs;
+
+    if (!PostMessageA(target->hwnd, AGW_MSG_UNRESPONSIVE, 0, (LPARAM)payload))
+        free(payload);
 }
 
 static DWORD WINAPI agwWatchdogThread(LPVOID param)
@@ -1234,7 +1263,7 @@ static DWORD WINAPI agwWatchdogThread(LPVOID param)
         lastReport = now;
 
         agbLog(AGB_LOG_EVT,
-               "watchdog: %s (jsdepth=%u head=%d busy=%lums queue=%lums teardown=%lums)",
+               "watchdog: %s (jsdepth=%u head=%d busy=%lums queue=%lums teardown=%lums ctx=%p)",
                kind == AGW_HANG_TEARDOWN ? "aborting a teardown handler that does not return"
                : kind == AGW_HANG_USER_ACTION
                    ? (agwCommandIsNavigation(headType) ? "aborting a script that blocks a navigation"
@@ -1242,7 +1271,7 @@ static DWORD WINAPI agwWatchdogThread(LPVOID param)
                : kind == AGW_HANG_UNRESPONSIVE ? "aborting an unresponsive page script"
                : "engine stalled outside JS",
                jsDepth, headType, (unsigned long)busyMs, (unsigned long)queueMs,
-               (unsigned long)teardownMs);
+               (unsigned long)teardownMs, agb_busy_js_context());
         agwWatchdogRecord(kind, jsDepth, headType, busyMs, queueMs);
         /* Only a verdict that changed something is worth a dialog. The stall
          * verdict kills nothing and is the one a merely slow (big layout, slow

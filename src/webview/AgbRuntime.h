@@ -20,6 +20,16 @@ extern "C" {
  * keep a navigation waiting. */
 unsigned long agb_teardown_started_ms(void);
 
+/* The JS context the engine thread is in right now, as an opaque handle
+ * (AntRuntime's RuntimeState*). Compare it with macross_view_js_context() to
+ * find the view whose script is running; NULL before the first context. */
+void* agb_busy_js_context(void);
+
+/* Writes the live JS stack of `context` to `path` (one file, truncated).
+ * Returns 1 on success. The caller must have frozen the engine thread
+ * (SuspendThread) first: the VM walk cannot race with the running script. */
+int agb_dump_js_stack_for(void* context, const char* path);
+
 #ifdef __cplusplus
 }
 #endif

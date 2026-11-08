@@ -352,7 +352,8 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
 | `AGB_USER_ABORT_MS=<ms>` | 同上 | 不换文档的用户动作（停止 / 查找）被页面脚本挡住的容忍时间，默认 1500（导航走上面的 100） | 看门狗启动时读一次 |
 | `AGB_UNRESPONSIVE_MS=<ms>` | 同上 | JS 连续在跑多久算"页面无响应"，默认 12000（`AGB_STUCK_EXEC_MS` 是它的旧名，仍然认） | 调小可复现：`AGB_UNRESPONSIVE_MS=2000` + 20 s 死循环 → `[evt] watchdog: aborting an unresponsive page script` |
 | `AGB_NATIVE_STALL_MS=<ms>` | 同上 | 没有 JS、命令却多久不 drain 算"引擎在 JS 之外卡住"，默认 10000；这一档**不中断**，只记日志 | — |
-| `AGB_WD_DEBUG=1` | 同上 | 每个 tick 打印 `wd js=… jsbusy=… busy=… queue=… head=…` | 调阈值、判断"真卡/慢"的第一手数据 |
+| `AGB_WD_DEBUG=1` | 同上 | 每个 tick 打印 `wd js=… jsbusy=… busy=… queue=… head=…`；判定行尾部带 `ctx=<RuntimeState*>` | 调阈值、判断"真卡/慢"的第一手数据 |
+| `AGB_CONTEXT_ASSERT=1` | `src/javascript/ant_backend/AntRuntime.cpp`（`assertContextThread`） | 每个宿主→引擎入口核对"是否在引擎线程"；跨线程时打印 `[ctx] <entry> on non-engine thread …`。AntRuntime 的上下文只允许引擎线程碰，UI 线程误用过去是**静默**读错文档 | 定位"页面行为莫名跟着上一个 tab/文档走" |
 | `AGB_PARSE_LOG=1` | `src/webcore/html/HTMLTokenizer.cpp` / `HTMLScriptElement.cpp` / `AntRuntime.cpp` | HTML 解析轨迹（默认关）：`tag` 行=解析器在每个 `<script>`/`<style>`/`<link>` 起标签被 tokenize 处打一行（**全部属性**按作者写法原样打印，空值属性只打名字，超长值截断 `(N bytes)`；`src=`/`href=` 后跟 `url=<解析后的绝对地址>`，和作者写的不同才打）；执行行=脚本真正的时刻与形态（inline/external、classic/module、flush 封口**前后**分别打 `queued for parse end` / `running now (parse already finished)`）。排查"脚本为什么在这个时机跑"从这里开始 | 见下例 |
 | `AGB_CSS_PROFILE=1` | `src/webcore/css/CSSParser.cpp`（`parseSheet`） | 每张样式表解析前打印 8 个改写 pass（`hoistPageRules`/`rewriteViewportUnits`/`foldCalc*`…）与 `cssyyparse` 的耗时（默认关）。大样式表排版卡顿时先看这里：先确认哪个 pass 慢，再怀疑语法解析 | 页面带大 `<style>`：用 `debug/stall_baidu_css.html`（百度全部内联 CSS 的本地复现页，~316KB） |
 | `AGB_HANG_POPUP=0` | `examples/browser_shell/main.c`（`onUnresponsive`） | 关掉"页面无响应"提示框（无人值守/自动化时用） | — |

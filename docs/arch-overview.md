@@ -86,11 +86,17 @@ WebCore 内部的渲染管线（DOM → 样式 → 渲染树 → 布局 → 绘�
 
 - **每个 view 一个 `RuntimeState`**（`AntRuntime::createContext()`，在 `macross_view_create` 时建；
   从 C API 进入引擎线程时 `activateContext()` 切回自己的状态）。
+- **每个文档一个 `DocumentRuntime`**（S1，[design-context-ownership.md](design-context-ownership.md)）：
+  文档对象、`docObj`、CSSOM refs、它自己的 realm 都在这里；`RuntimeState::documents` 是该 view
+  的文档表，`activeDocument` 是"切回这个 view 时要恢复的文档"。`g_*` 宏按归属分流：view 级读
+  `g_currentState`，文档级读 `g_currentDocument`；`activateDocument()` 是唯一写入口。
+  这取代了 R130 的 `mainDocument`/`mainDocObj`/`boundRealm` 补丁：realm→document 是查表。
 - **每个 frame 文档一个 realm**（`docs/design-per-frame-realm.md`，默认开启）：主 frame 的文档用
   engine 创建时的主 realm，**每个 iframe 文档首次 bind 时建自己的 realm**（独立全局、独立 intrinsics、
   独立 wrapper），`AGB_PER_FRAME_REALM=0` 回退到"共享 realm + per-frame window 代理"的旧模型。
   顶层文档换文档时 `beginNewRealm()` 新建 `AntbEngine`（新 realm）；iframe 掉帧时
   `detachedFromParent3` → `forgetFrameRealm()` 释放该 realm 的 wrapper 并让 GC 回收。
+  frame realm 表属于 view（`RuntimeState::documents` 里 `realm != NULL` 的记录），不再进程级共享。
 - **document-scoped window 对象**（`RealmDocument.cpp`，R132）：`location`/`history` 各自带
   document/Frame，getter 从 receiver 解析文档，不再读 per-view 的 `g_document`；
   `document.location === window.location`，子 frame 读自己的 URL/历史，`parent.location` 读父文档。
@@ -98,6 +104,11 @@ WebCore 内部的渲染管线（DOM → 样式 → 渲染树 → 布局 → 绘�
   DOM pin、文档 slot）都带它；卸载时按它精确取消。realm 与 generation 目前不是一一对应：
   一个 view 的 generation 对应顶层文档，iframe 的 realm 共用 view 的 generation（S3 待细化）。
 - **owner**：桥接 wrapper 的归属文档。文档卸载时按 owner 释放（`antb_release_owner`），避免下一个文档拿到旧节点。
+- **监听器按 realm**：`window.addEventListener` / `onxxx` 存在 `RuntimeState::realmListeners`
+  （`map<realm, vector>`）。一次 reload 会先 bind 临时文档、再 bind 提交文档（同一 realm），页面第一段
+  inline script 注册的 load 监听器必须对两者都可见；iframe 的 realm 各自一份，天然隔离（R132）。
+- **"谁在跑"可读**：`agb_busy_js_context()` 返回引擎线程最后进入的 `RuntimeState*`（跨线程原子读），
+  看门狗据此把"页面无响应"归属到具体 view（`macross_view_js_context()` 对拍），不再广播给所有 view。
 - **slot**：同一 engine 内多个文档（iframe）的 DOM 上下文编号；从定时器/XHR/事件回调进入前
   `activateSlot()` 切回对应文档。
 - **frame 与 window**：每个 realm 的 `window`/`self` 就是该 realm 的全局对象；`parent`/`top` 是

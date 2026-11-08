@@ -96,6 +96,17 @@ void* macross_view_additional_data(MaCrossView* view)
 	return view->data;
 }
 
+/* The view's JS context (AntRuntime's RuntimeState*), opaque to the caller.
+ * The control uses it to attribute a stuck script to one view; the pointer is
+ * stable for the life of the view (navigations swap the engine inside it). */
+void* macross_view_js_context(MaCrossView* view)
+{
+	if (!view)
+		return 0;
+
+	return view->jscontext;
+}
+
 MC_STATUS macross_view_destroy(MaCrossView* view)
 {
 	if (!view)

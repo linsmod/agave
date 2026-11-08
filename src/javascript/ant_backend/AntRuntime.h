@@ -122,6 +122,11 @@ void dispatchEvent(void* node, void* event);
  * document's listeners. */
 void dispatchWindowEvent(const char* type);
 
+/* Same, for a known document: binds it first, so the event reaches that
+ * document's own listeners and realm (the main frame's load can arrive while
+ * the engine thread was left in a child frame's document). */
+void dispatchWindowEventFor(void* document, const char* type);
+
 /* Frame documents only: runs the frame's deferred modules and dispatches the
  * event on the frame's own window (per-frame realms), then restores the parent
  * binding. No-op for the main frame or when realms are disabled. */

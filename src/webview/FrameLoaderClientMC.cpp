@@ -838,8 +838,8 @@ void FrameLoaderClientMC::dispatchDidFinishLoad()
      * pageshow for "restored from cache" bookkeeping and for the counterpart of
      * their pagehide cleanup, so it has to exist even without a bfcache. */
     if (isMainFrameClient(m_frame)) {
-        AntRuntime::dispatchWindowEvent("load");
-        AntRuntime::dispatchWindowEvent("pageshow");
+        AntRuntime::dispatchWindowEventFor(m_frame ? m_frame->document() : 0, "load");
+        AntRuntime::dispatchWindowEventFor(m_frame ? m_frame->document() : 0, "pageshow");
     } else {
         AntRuntime::dispatchFrameDocumentEvent(m_frame ? m_frame->document() : 0, "load");
         AntRuntime::dispatchFrameDocumentEvent(m_frame ? m_frame->document() : 0, "pageshow");
