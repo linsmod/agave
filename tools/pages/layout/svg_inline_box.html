@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>inline svg box</title>
+<style>
+  html, body { margin: 0; padding: 0; }
+  #stage { display: -webkit-box; -webkit-box-orient: vertical; -webkit-box-align: center; width: 600px; background: #eee; }
+  .icon { -webkit-box-pack: center; -webkit-box-align: center; margin: 0 auto 10px; line-height: 0; display: -webkit-box; }
+  .icon svg { height: 28px; }
+</style>
+</head>
+<body>
+<!-- The DeepSeek sign-in logo structure: a JS-created <svg> (React never goes
+     through the HTML parser) inside `.icon { display:-webkit-box; margin:0 auto }`
+     inside a column -webkit-box. The wrapper only gets a width if the SVG root
+     contributes a preferred width; with 0 it was centred as a 0x0 box and the
+     182px logo overflowed to the right, so its box and the paint disagreed. -->
+<div id="stage">
+  <div class="icon" data-case="icon"><div data-case="wrap" id="wrap"></div></div>
+</div>
+<script>
+  var NS = 'http://www.w3.org/2000/svg';
+  function makeSvg() {
+    var svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('width', '182');
+    svg.setAttribute('height', '29');
+    svg.setAttribute('viewBox', '0 0 182 29');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('style', 'color: #3964fe');
+    var p = document.createElementNS(NS, 'path');
+    p.setAttribute('d', 'M0 0H182V29H0V0Z');
+    p.setAttribute('fill', 'currentColor');
+    svg.appendChild(p);
+    return svg;
+  }
+  var flexSvg = makeSvg();
+  flexSvg.setAttribute('data-case', 'svg');
+  document.getElementById('wrap').appendChild(flexSvg);
+</script>
+</body>
+</html>

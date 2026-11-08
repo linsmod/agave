@@ -269,6 +269,11 @@
   给 SVG 根自己的图层后由 layer 树独立绘制；同时把 overflow 裁剪改成按**渲染盒**（布局 px，含页面缩放）
   而不是按 SVG 用户单位 `viewport()`。回归：`debug/svg_shapes.svg` 红 4800/绿 2804/蓝 1200/黑 420 不变，
   `debug/svg_inline_js.html` 红 3200，`imgbox_160` 深色 37.8%。
+- 已完成 B1 补丁（2026-11-08）：`RenderSVGRoot::calcPrefWidths()`（SVG 根原先沿用 `RenderContainer`
+  的空实现，min/max 首选宽恒 0，flex/shrink-to-fit 容器跟着塌成 0 宽 —— logo 比 Chrome 右移 91px）；
+  `RenderSVGRoot::nodeAtPoint()` 在空白处也返回 `<svg>` 自身（inspector 能选中根）；`RenderPath::absoluteRects()`
+  改用紧包围盒（原先借用重绘矩形，没 stroke 也膨胀 3–4px）。回归页
+  `tools/pages/layout/svg_inline_box.html`（几何组：agave/Chrome 都是 `icon 209,0,182,28`）。
 - 待办（按顺序）：
   1. 阶段 B2：HTMLParser 外来内容（HTML **静态标记**里的 `<svg>`，React 动态建树已可用）。
      验收：`debug/svg_inline.html` 渲染出红矩形（当前 0 像素，解析器把它当普通未知元素）。
@@ -276,6 +281,9 @@
      （当前 0 像素）。可复用新增的 picasso `ImageBuffer`。
   3. 页面缩放（≠100%）下 inline SVG 的偏移：125% 时 SVG 内容相对盒子整体偏移/被裁（盒子 rect 227×35，
      内容仍按 182×29 的用户单位变换）。需要把 zoom 统一到 SVG 的 viewport/CTM 计算里。
+  4. DeepSeek 登录页最后两个字形的 path 画在其 bbox 左侧约 16px（合成 H/V/L 路径页面正常）：
+     先查 React 在 layout 后改写 `d` 时 RenderPath 的 path 是否重建（`RenderPath::setPath` 只在
+     `layout()` 里调）。
   3. 渐变真渲染：`SVGPaintServerGradient::draw` 接 `ps_gradient_create_linear/radial`（含
      objectBoundingBox 变换），替换现在的“首停靠色”降级。
   4. marker / clipPath / mask / pattern / filter：marker 不画、mask 不应用、clipPath 只逐子路径

@@ -99,6 +99,29 @@ void RenderSVGRoot::layout()
     setNeedsLayout(false);
 }
 
+void RenderSVGRoot::calcPrefWidths()
+{
+    // RenderContainer's default (inherited by this class until now) is a no-op,
+    // so the root <svg> reported a preferred width of 0. Every shrink-to-fit
+    // ancestor then collapsed around it: on chat.deepseek.com/sign_in the logo
+    // sits in `.ds-sign-in-form__icon { display: -webkit-box; margin: 0 auto }`,
+    // so that flex item became 0x0, the centring placed its *left* edge on the
+    // container's centre, and the 182px <svg> overflowed to the right - the
+    // logo painted 91px right of where Chrome puts it (Chrome: 451..633,
+    // agave: 542..724). Treat the root like the replaced box it is.
+    ASSERT(prefWidthsDirty());
+
+    int width = calcReplacedWidth() + paddingLeft() + paddingRight() + borderLeft() + borderRight();
+
+    if (style()->width().isPercent() || (style()->width().isAuto() && style()->height().isPercent())) {
+        m_minPrefWidth = 0;
+        m_maxPrefWidth = width;
+    } else
+        m_minPrefWidth = m_maxPrefWidth = width;
+
+    setPrefWidthsDirty(false);
+}
+
 void RenderSVGRoot::applyContentTransforms(PaintInfo& paintInfo, int parentX, int parentY)
 {
     // Translate from parent offsets (html renderers) to a relative transform (svg renderers)
@@ -298,6 +321,20 @@ bool RenderSVGRoot::nodeAtPoint(const HitTestRequest& request, HitTestResult& re
         }
     }
     
+    // The root <svg> is a hit target of its own: browsers return the svg
+    // element for a point inside its box even where no child paints (e.g. the
+    // gaps between the letters of a wordmark). Forwarding only to children
+    // made the element unreachable - hovering the logo's box reported the
+    // <div> behind it, and the inspector could never select the svg itself.
+    if (hitTestAction == HitTestForeground) {
+        int ax, ay;
+        absolutePosition(ax, ay);
+        if (IntRect(ax, ay, width(), height()).contains(_x, _y)) {
+            updateHitTestResult(result, IntPoint(_x - ax, _y - ay));
+            return true;
+        }
+    }
+
     // Spec: Only graphical elements can be targeted by the mouse, period.
     // 16.4: "If there are no graphics elements whose relevant graphics content is under the pointer (i.e., there is no target element), the event is not dispatched."
     return false;

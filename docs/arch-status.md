@@ -44,6 +44,11 @@ ant 的反直觉行为（字面量属性名、`typeof`、`delete` 等）见 [ref
   CSS Color 4 色彩函数（`hsl(200 60% 20%)`、`rgb(1 2 3 / 50%)`、百分比分量、`deg` hue）已支持（R83），
   `::-webkit-scrollbar{display:none}` 会在解析期改写成 `scrollbar-width:none`（R56）。
   完整实测值与复测命令见 [arch-capability-gaps.md](arch-capability-gaps.md) §2。
+- **SVG**：只有 **JS 建树**的 inline `<svg>`（`createElementNS`）会走 ksvg2 渲染；HTML 静态标记里的
+  `<svg>` 仍被当成普通未知元素（HTMLParser 没有外来内容分支，B2）。SVG 根现在参与布局首选宽（R119，
+  flex/shrink-to-fit 容器不再塌成 0 宽），但页面缩放 ≠100% 时内容相对盒子仍有偏移；
+  `<img src=*.svg>` / CSS `url(*.svg)` 背景仍不渲染（阶段 C）。细节见
+  [design-ksvg2-revival.md](design-ksvg2-revival.md)。
 - **wasm 是解释执行**：导出函数跨界约 3.9µs/次，适合"一次调用跑大循环"（R19）。
 - **worker 无网络 / 无 `SharedWorker`/`ServiceWorker`**：worker 里 `fetch`/`XHR` 不可用，
   动态 `importScripts` 只能父侧预取 + 查表（R22）。

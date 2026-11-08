@@ -45,6 +45,11 @@ public:
     
     virtual void layout();
     virtual void paint(PaintInfo&, int parentX, int parentY);
+
+    // The root <svg> is a replaced box: it must contribute a preferred width,
+    // otherwise shrink-to-fit ancestors (flex items, floats, inline-blocks,
+    // table cells) collapse around it.
+    virtual void calcPrefWidths();
     
     virtual IntRect absoluteClippedOverflowRect();
     virtual void absoluteRects(Vector<IntRect>& rects, int tx, int ty);

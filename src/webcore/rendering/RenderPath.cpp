@@ -258,7 +258,15 @@ void RenderPath::addFocusRingRects(GraphicsContext* graphicsContext, int, int)
 
 void RenderPath::absoluteRects(Vector<IntRect>& rects, int, int, bool)
 {
-    rects.append(absoluteClippedOverflowRect());
+    /* Geometry (getBoundingClientRect) has to describe what is painted, so use
+     * the tight path box mapped by the same CTM the painter uses.
+     * absoluteClippedOverflowRect() is a *repaint* rect: it inflates 1px for
+     * antialiasing and (through strokeBBox) always assumed a stroke, so every
+     * SVG shape reported a box 3-4px wider/taller than its ink and the
+     * inspector highlight drifted right of the glyphs. Chrome reports the
+     * tight box when the element has no stroke. */
+    bool includesStroke = style()->svgStyle()->hasStroke();
+    rects.append(enclosingIntRect(absoluteTransform().mapRect(relativeBBox(includesStroke))));
 }
 
 bool RenderPath::nodeAtPoint(const HitTestRequest& request, HitTestResult& result, int _x, int _y, int, int, HitTestAction hitTestAction)
