@@ -1,0 +1,41 @@
+# Line-ending policy.
+#
+# Git stores text as LF in the index and lets each platform check out the form
+# it wants. Explicit `eol` entries tell Git the working-tree form up front, so
+# `git add` does not warn about "CRLF will be replaced by LF".
+* text=auto eol=lf
+
+# Windows-facing docs and scripts stay CRLF in the working tree.
+*.md    text eol=crlf
+*.ps1   text eol=crlf
+*.cmd   text eol=crlf
+*.bat   text eol=crlf
+
+# Source and web assets stay LF.
+*.c     text eol=lf
+*.h     text eol=lf
+*.cpp   text eol=lf
+*.hpp   text eol=lf
+*.js    text eol=lf
+*.css   text eol=lf
+*.html  text eol=lf
+*.json  text eol=lf
+
+# Binary assets must never be converted.
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.bmp   binary
+*.ico   binary
+*.ttf   binary
+*.otf   binary
+*.woff  binary
+*.woff2 binary
+*.dll   binary
+*.dll.a binary
+*.exe   binary
+*.lib   binary
+*.a     binary
+*.obj   binary
+*.pdb   binary
