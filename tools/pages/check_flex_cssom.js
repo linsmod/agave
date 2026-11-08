@@ -18,6 +18,10 @@
 
     out.push('f.basis=' + cs('f').flexBasis);
     out.push('g.basis=' + cs('g').flexBasis);
+    /* calc() inside the `flex` shorthand: the sheet rewriter encodes it as a
+     * token, so the shorthand loop must decode it as well. */
+    out.push('i.flex=' + cs('i').flex);
+    out.push('j.flex=' + cs('j').flex);
     /* 33.333% is stored as 1/128 of a percent (Length), so it reads back as
      * 33.3281%; Chrome keeps the authored precision. Locks in current
      * behaviour, not the ideal one. */

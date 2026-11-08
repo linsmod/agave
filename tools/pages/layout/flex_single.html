@@ -85,6 +85,21 @@
   <div class="item" data-case="s11b" style="flex: 1; height: 40px"></div>
 </div>
 
+<!-- s12: calc() basis inside the `flex` shorthand. The sheet rewriter turns
+     calc(30% - 10px) into an encoded dimension token, so the shorthand parser
+     has to decode it into Length(Calculated) like the longhand path does. -->
+<div class="box" style="gap: 10px">
+  <div class="item" data-case="s12a" style="flex: 1 1 calc(30% - 10px)"></div>
+  <div class="item" data-case="s12b" style="flex: 1 1 calc(30% - 10px)"></div>
+  <div class="item" data-case="s12c" style="flex: 0 0 calc(40% - 20px)"></div>
+</div>
+
+<!-- s13: calc() basis as the longhand, with shrink-weighted overflow -->
+<div class="box" style="width: 500px">
+  <div class="item" data-case="s13a" style="flex-basis: calc(60% - 10px); flex-shrink: 1"></div>
+  <div class="item" data-case="s13b" style="flex-basis: calc(60% - 10px); flex-shrink: 2"></div>
+</div>
+
 <div id="spacer"></div>
 </body>
 </html>

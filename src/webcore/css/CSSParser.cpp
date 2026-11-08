@@ -4324,6 +4324,20 @@ bool CSSParser::parseFlexShorthand(bool important)
         } else if (v->unit == CSSPrimitiveValue::CSS_PERCENTAGE) {
             basis = Length(v->fValue, Percent);
             gotBasis = true;
+        } else if (v->unit == CSSPrimitiveValue::CSS_DIMENSION) {
+            /* `flex: 1 1 calc(50% - 4px)`: the stylesheet rewriter turned the
+             * calc() into an encoded dimension token (0agbcalcP…), which the
+             * longhand path decodes right before parseValue(). The shorthand
+             * has its own loop, so decode it here into Length(Calculated);
+             * RenderFlexibleBox already resolves that with calcValue(). */
+            double percent = 0;
+            int px = 0;
+
+            if (!calcFromDimensionToken(v->string, percent, px))
+                return false;
+
+            basis = Length(percent, px);
+            gotBasis = true;
         } else {
             return false;
         }
@@ -4346,6 +4360,8 @@ bool CSSParser::parseFlexShorthand(bool important)
         addProperty(CSS_PROP_FLEX_BASIS, new CSSPrimitiveValue(CSS_VAL_AUTO), important);
     else if (basis.isPercent())
         addProperty(CSS_PROP_FLEX_BASIS, new CSSPrimitiveValue(basis.percent(), CSSPrimitiveValue::CSS_PERCENTAGE), important);
+    else if (basis.type() == Calculated)
+        addProperty(CSS_PROP_FLEX_BASIS, new CSSPrimitiveValue(basis.calcPercent(), basis.calcPx()), important);
     else
         addProperty(CSS_PROP_FLEX_BASIS, new CSSPrimitiveValue(basis.value(), CSSPrimitiveValue::CSS_PX), important);
     return true;
