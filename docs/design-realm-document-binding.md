@@ -1,8 +1,9 @@
 # realm 级 document 绑定：从“环境文档”改成“按对象解析”（设计）
 
-> 状态：**设计记录，未实施**。它是 [design-per-frame-realm.md](design-per-frame-realm.md)
-> S3 的收尾部分；当前实现见 [arch-overview.md](arch-overview.md) §3，已知实例见
-> [hist-lessons.md](hist-lessons.md) R130。
+> 状态：**已实施（B0–B3 完成，B4 除 `AGB_PER_FRAME_REALM=0` 取舍外完成）**，见
+> [plan-realm-document-binding.md](plan-realm-document-binding.md) 与
+> [hist-lessons.md](hist-lessons.md) R132。它是 [design-per-frame-realm.md](design-per-frame-realm.md)
+> S3 的收尾部分；当前实现见 [arch-overview.md](arch-overview.md) §3。
 
 ## 1. 为什么还要再做一层
 
@@ -122,7 +123,7 @@ Engine (one VM)
 - `AGB_TAG_HISTORY` + session history 挂到 realm，`history.length/pushState/back` 只动本 realm。
 - 验收：wx 页 `stylelite=1` 被读到 → `#tpl_iframe` 显示、QR 160×160、iframe
   `clientWidth == innerWidth`（无滚动条）；与 Chrome 截图/几何对拍。
-- 预期编号：R131。
+- 预期编号：R132。
 
 ### B2 getter / method self 化
 

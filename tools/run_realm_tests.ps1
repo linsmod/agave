@@ -70,8 +70,11 @@ function Invoke-Probe {
     $stdout = Join-Path $tmp 'out.txt'
     $stderr = Join-Path $tmp 'err.txt'
     $old = $env:AGB_PER_FRAME_REALM
+    $oldCheck = $env:AGB_REALM_CHECK
     if ($null -eq $PageEval) { Remove-Item Env:AGB_PER_FRAME_REALM -ErrorAction SilentlyContinue }
     else { $env:AGB_PER_FRAME_REALM = $PageEval }
+    # Every realm test also runs the mismatch guard (R132).
+    $env:AGB_REALM_CHECK = '1'
 
     try {
         $p = Start-Process -FilePath $exe -NoNewWindow -PassThru -Wait -ArgumentList @(
@@ -80,12 +83,15 @@ function Invoke-Probe {
         ) -RedirectStandardOutput $stdout -RedirectStandardError $stderr
 
         [pscustomobject]@{
-            Code   = $p.ExitCode
-            Stdout = (Get-Content $stdout -Raw) -as [string]
+            Code     = $p.ExitCode
+            Stdout   = (Get-Content $stdout -Raw) -as [string]
+            Mismatch = if (Test-Path $stderr) { (Select-String -Path $stderr -Pattern 'realm-mismatch').Count } else { 0 }
         }
     } finally {
         if ($null -eq $old) { Remove-Item Env:AGB_PER_FRAME_REALM -ErrorAction SilentlyContinue }
         else { $env:AGB_PER_FRAME_REALM = $old }
+        if ($null -eq $oldCheck) { Remove-Item Env:AGB_REALM_CHECK -ErrorAction SilentlyContinue }
+        else { $env:AGB_REALM_CHECK = $oldCheck }
     }
 }
 
@@ -123,9 +129,11 @@ if ($shared.Code -ne 0) {
           $sharedText -notmatch 'childReachable=string' -or
           $sharedText -notmatch 'parentFn=PF-ok' -or
           $sharedText -notmatch 'childTimerUrl=own' -or
-          $sharedText -notmatch 'childTimerMarker=found') {
+          $sharedText -notmatch 'childTimerMarker=found' -or
+          $shared.Mismatch -gt 0) {
     $failures++
     Write-Host "FAIL  shared realm baseline: cross-frame access broken"
+    if ($shared.Mismatch -gt 0) { Write-Host ("      realm-mismatch lines: {0}" -f $shared.Mismatch) }
     Write-Host (($sharedText -split "`n" | Select-Object -Last 2) -join "`n")
 } else {
     Write-Host "PASS  shared realm baseline (parent.foo / contentWindow)"
@@ -139,6 +147,12 @@ if ($perFrame.Code -ne 0) {
     $failures++
     Write-Host ("FAIL  per-frame realm: exit {0}" -f $perFrame.Code)
 } else {
+    if ($perFrame.Mismatch -gt 0) {
+        $failures++
+        Write-Host ("FAIL  per-frame realm: realm-mismatch guard ({0} lines)" -f $perFrame.Mismatch)
+    } else {
+        Write-Host "PASS  per-frame realm: no document mismatch on the write path"
+    }
     $checks = @(
         @{ Name = 'child var does not leak';  Want = 'childVarLeak=undefined';   Ok = ($perFrameText -match 'childVarLeak=undefined') },
         @{ Name = 'child has own Array';      Want = 'topArraySame=false';       Ok = ($perFrameText -match 'topArraySame=false') },
@@ -167,7 +181,93 @@ if ($perFrame.Code -ne 0) {
     }
 }
 
-# 4. A frame realm must have the host API. A child page that calls fetch while
+# 4. Document-scoped window objects (R131): location/history must answer for
+#    the document they belong to, in both per-frame and shared-realm modes.
+$crossPage = Join-Path $root 'tools/pages/cap_realm_cross.html'
+
+if (Test-Path $crossPage) {
+    $crossJs = Join-Path $tmp 'cross_check.js'
+    @'
+var f = document.getElementById('fr');
+var w = f ? f.contentWindow : null;
+var d = f ? f.contentDocument : null;
+var x = w ? w.__x : null;
+probeExit([
+  'childSearch=' + (x ? x.search : 'n/a'),
+  'childLocAfter=' + (x ? x.locAfter : 'n/a'),
+  'childDocLocHref=' + (x ? x.docLocHref : 'n/a'),
+  'locIsWinLoc=' + (x ? x.locIsWinLoc : 'n/a'),
+  'imgDoc=' + (x ? x.imgDoc : 'n/a'),
+  'parentHref=' + (x ? x.parentHref : 'n/a'),
+  'childTitle=' + (x ? x.title : 'n/a'),
+  'parentTitle=' + document.title,
+  'histBefore=' + (x ? x.histBefore : 'n/a'),
+  'histAfter=' + (x ? x.histAfter : 'n/a'),
+  'parentHist=' + window.__parentHist,
+  'childParentHist=' + (x ? x.parentHist : 'n/a'),
+  'contentDoc=' + (d && d.URL.indexOf('cap_realm_cross_child') >= 0)
+].join('|'));
+'@ | Set-Content -Path $crossJs -Encoding ascii
+
+    foreach ($mode in @('1', '0')) {
+        $stdout = Join-Path $tmp "cross_$mode.txt"
+        $stderr = Join-Path $tmp "cross_$mode.err"
+        $old = $env:AGB_PER_FRAME_REALM
+        $oldCheck = $env:AGB_REALM_CHECK
+        if ($mode -eq '0') { $env:AGB_PER_FRAME_REALM = '0' }
+        else { Remove-Item Env:AGB_PER_FRAME_REALM -ErrorAction SilentlyContinue }
+        $env:AGB_REALM_CHECK = '1'
+
+        try {
+            $p = Start-Process -FilePath $exe -NoNewWindow -PassThru -Wait -ArgumentList @(
+                '--probe', $crossPage, '--eval-file', $crossJs,
+                '--wait', '1500', '--settle', '500', '--timeout', '60000'
+            ) -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+        } finally {
+            if ($null -eq $old) { Remove-Item Env:AGB_PER_FRAME_REALM -ErrorAction SilentlyContinue }
+            else { $env:AGB_PER_FRAME_REALM = $old }
+            if ($null -eq $oldCheck) { Remove-Item Env:AGB_REALM_CHECK -ErrorAction SilentlyContinue }
+            else { $env:AGB_REALM_CHECK = $oldCheck }
+        }
+
+        $text = (Get-Content $stdout -Raw) -as [string]
+        $mismatch = if (Test-Path $stderr) { (Select-String -Path $stderr -Pattern 'realm-mismatch').Count } else { 0 }
+        $label = if ($mode -eq '0') { 'shared realm' } else { 'per-frame realm' }
+        $ok = $p.ExitCode -eq 0 -and $mismatch -eq 0
+        $checks = @(
+            @{ Name = 'child location.search';   Want = 'childSearch=?x=1';            Ok = ($text -match 'childSearch=\?x=1') },
+            @{ Name = 'pushState updates URL';   Want = 'childLocAfter=...pushed=1';   Ok = ($text -match 'childLocAfter=[^\|]*\?pushed=1') },
+            @{ Name = 'document.location';       Want = 'childDocLocHref=...?x=1';     Ok = ($text -match 'childDocLocHref=[^\|]*\?x=1') },
+            @{ Name = 'location identity';       Want = 'locIsWinLoc=true';            Ok = ($text -match 'locIsWinLoc=true') },
+            @{ Name = 'new Image() document';    Want = 'imgDoc=true';                Ok = ($text -match 'imgDoc=true') },
+            @{ Name = 'parent.location';         Want = 'parentHref=...cap_realm_cross.html'; Ok = ($text -match 'parentHref=[^\|]*cap_realm_cross\.html') },
+            @{ Name = 'child title isolated';    Want = 'childTitle=cross child';      Ok = ($text -match 'childTitle=cross child') },
+            @{ Name = 'parent title isolated';   Want = 'parentTitle=cross parent';    Ok = ($text -match 'parentTitle=cross parent') },
+            @{ Name = 'child history length';    Want = 'histBefore=1 histAfter=2';   Ok = ($text -match 'histBefore=1' -and $text -match 'histAfter=2') },
+            @{ Name = 'parent history untouched'; Want = 'parentHist=1';              Ok = ($text -match 'parentHist=1') },
+            @{ Name = 'contentDocument URL';     Want = 'contentDoc=true';            Ok = ($text -match 'contentDoc=true') }
+        )
+
+        if (-not $ok) {
+            $failures++
+            Write-Host ("FAIL  {0}: document-scoped objects (exit {1}, mismatch {2})" -f $label, $p.ExitCode, $mismatch)
+            Write-Host (($text -split "`n" | Select-Object -Last 2) -join "`n")
+        } else {
+            Write-Host ("PASS  {0}: no document mismatch (AGB_REALM_CHECK=1)" -f $label)
+            foreach ($c in $checks) {
+                if ($c.Ok) {
+                    Write-Host ("PASS  {0}: {1}" -f $label, $c.Name)
+                } else {
+                    $failures++
+                    Write-Host ("FAIL  {0}: {1} (wanted) {2}" -f $label, $c.Name, $c.Want)
+                    Write-Host (($text -split "`n" | Select-Object -Last 2) -join "`n")
+                }
+            }
+        }
+    }
+}
+
+# 5. A frame realm must have the host API. A child page that calls fetch while
 #    parsing used to hit "ReferenceError: __agbHttpRequestEx is not defined"
 #    inside prelude's fetch when a realm ran prelude code without the API.
 $fetchPage = Join-Path $root 'tools/pages/realm_parent_fetch.html'

@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>cross child</title></head>
+<body><div id="c">child</div>
+<script>
+  /* R132: every document-scoped object must answer for THIS document, even
+     when the parent or another frame is the ambient binding. */
+  window.__x = {
+    href: location.href,
+    search: location.search,
+    docLocHref: document.location.href,
+    locIsWinLoc: (document.location === window.location),
+    imgDoc: (new Image()).ownerDocument === document,
+    title: document.title,
+    histBefore: history.length,
+    parentHref: parent.location.href,
+    parentHist: parent.history.length
+  };
+
+  document.title = 'child-title';
+  history.pushState({n: 1}, '', '?pushed=1');
+
+  window.__x.histAfter = history.length;
+  window.__x.searchAfter = location.search;
+  window.__x.locAfter = location.href;
+  window.__x.docLocAfter = document.location.href;
+</script>
+</body></html>

@@ -69,7 +69,7 @@ qsChild=3 qsDesc=3 qsAdj=1 qsSib=2 qsNth=1 qsOdd=2 qsNot=2 qsFirst=1 qsList2=4 q
 | `localStorage` 跨文档 | A 页写入 → 导航到 B → `null`；同一跑的 cookie 正常（`cookie=true`） | 用 localStorage 存 token/购物车的多页流程会丢状态；测试也不能拿它当跨页标记（用 cookie） | 缺口，P1 |
 | `window.postMessage` / `message` 事件 | **已支持**：同窗口/跨 frame 都能投递（`{data, origin, source}`，`origin` 取发送方文档的 scheme://host[:port]）；`cap_postmessage.html` → `postMessage=function sent=yes got=1` | —— | 已支持 |
 | iframe 的 `contentWindow` / `contentDocument` | **已支持（R34）**：`iframeCw=yes`，`contentWindow.document === contentDocument` 成立；子文档还没建好时是 `null` | —— | 已支持 |
-| 每个 frame 的 `window` 身份（`parent`/`top`/`self`/`frames`/`length`/`name`/`frameElement`） | **已支持**：每个 frame 文档有自己的 **realm**（默认开启，`AGB_PER_FRAME_REALM=0` 回退旧模型），`window`/`self` 就是该 realm 的全局对象，`parent !== self`、`parent.document` 是父 realm 的 document 对象、`top.Array !== Array`、`frames.length`/`name`/`frameElement` 按 frame tree 回答。旧模型（回退时）是 `Window` 代理 + 共享全局（R31） | `parent.location` 这类 getter 在子 realm 执行时仍读当前 `g_document`（S4 WindowProxy 未做） | 已支持（`design-per-frame-realm.md`） |
+| 每个 frame 的 `window` 身份（`parent`/`top`/`self`/`frames`/`length`/`name`/`frameElement`） | **已支持**：每个 frame 文档有自己的 **realm**（默认开启，`AGB_PER_FRAME_REALM=0` 回退旧模型），`window`/`self` 就是该 realm 的全局对象，`parent !== self`、`parent.document` 是父 realm 的 document 对象、`top.Array !== Array`、`frames.length`/`name`/`frameElement` 按 frame tree 回答。旧模型（回退时）是 `Window` 代理 + 共享全局（R31） | 已修（R132）：`location`/`history` 按自身 document/Frame 回答，`parent.location` 读父文档；剩余 S4 的 WindowProxy 转发语义（目前 `parent` 是父 realm 的 global） | 已支持（`design-realm-document-binding.md`） |
 | 子 frame 的顶层 `var` 污染父页 | **已隔离**：每个 frame 一个 realm，子 frame 的 `var x = 1` 父页读不到；跨帧调用 `parent.fn()`、读 `parent.someVar` 仍可用（同 VM 跨 realm 引用，不序列化） | ES module map 仍按引擎共享（两个 frame import 同一模块会拿到同一实例，S3 待做） | 已支持（`run_realm_tests.ps1` → `childVarLeak=undefined`） |
 | `HTMLImageElement.complete` / `naturalWidth` / `naturalHeight` / `width` / `height` / `decode()` | **已支持（R34）**：`imgComplete=0 imgNatural=0 imgWidth=1 imgDecode=function`（`decode()` 立即 resolve） | —— | 已支持 |
 | `document.querySelector(All)` 的选择器引擎 | **已支持（R35）**：选择器列表、组合器（后代/`>`/`+`/`~`）、属性选择器六个操作符、常用伪类（`nth-child`/`not`/`first-child`/`checked`/…）。实现是 `src/javascript/ant_backend/AgbSelector.h`（WebCore 2008 没有 `Node::querySelectorAll`） | —— | 已支持（`cap_selectors.html`） |
@@ -284,9 +284,10 @@ DeepSeek 登录页的对照组：开 polyfills `inputs=2 all=124`；关掉后 `i
      白底上只剩轮廓、深色底上"看着像二维码"，扫码器读不出来。
    - **iframe 视口取了父页的**（R30）：`outerWidth` 是 prelude 执行时复制的 1100，微信页按它排版，
      塞进 200×200 的 iframe 就溢出。
-5. 仍未完成：二维码在 200×200 的 iframe 里**右侧/底部被裁掉**（内容宽于视口，出现滚动条）。
-   下一步是 per-frame `window` 代理（`window.parent`/`top`/`frames` 现在都指向自身），
-   然后再看子文档布局；`__agbActivateSlot(1)` 可以直接读子 frame 文档来量。
+5. 滚动条（R132）：根因不是布局，而是子 frame 的 `location.href` 读到了父页，微信页拿不到
+   `stylelite=1`，回退到 280px 旧 UI；修好后选 160px 新 UI，`clientWidth == scrollWidth == 200`。
+   仍未完成：子 frame 的跨文档 `history.back/forward` 仍是 no-op（只保证 `length`/`state`/
+   `pushState` 独立）；`parent` 仍转发到父 realm 的 global，不是完整 WindowProxy（S4）。
 
 
 

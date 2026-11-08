@@ -1,21 +1,22 @@
 # realm document 绑定：实施计划与断点续做（B0–B4）
 
-> 状态：**实施计划，进行中**。设计见
-> [design-realm-document-binding.md](design-realm-document-binding.md)；
-> 背景缺陷见 [hist-lessons.md](hist-lessons.md) R130。
+> 状态：**B0–B3 已完成，B4 除 `AGB_PER_FRAME_REALM=0` 评估外已完成**（R132，2026-11-08）。
+> 设计见 [design-realm-document-binding.md](design-realm-document-binding.md)；
+> 背景缺陷见 [hist-lessons.md](hist-lessons.md) R130 / R132。
 > 这份文档是**断点续做**用的：每批完成后勾掉对应项并写一行结果。
 >
-> 最后更新：2026-11-08（B0 尚未开始）
+> 最后更新：2026-11-08（R132 已提交）
 
 ## 0. 当前事实（不要重新推导）
 
 - R130 已修：子 frame 的 document 对象不再被父文档覆盖；二维码能画。
-- 仍未修：子 frame 里 `location.href` / `document.location.href` 是**父页** URL。
-  证据（真站 `chat.deepseek.com/sign_in`）：
+- R132 已修：`location`/`history` 按自身 document/Frame 解析；子页读得到
+  `stylelite=1`，选 160px 新 UI，`clientWidth == scrollWidth`（无滚动条）。
+  修复前的证据（保留供回归对照）：
   ```
   w.eval('document.URL')           -> open.weixin.qq.com/connect/qrconnect?...stylelite=1...
-  w.eval('location.href')          -> https://chat.deepseek.com/sign_in
-  w.eval('document.location.href') -> https://chat.deepseek.com/sign_in
+  w.eval('location.href')          -> https://chat.deepseek.com/sign_in   (修前)
+  w.eval('document.location.href') -> https://chat.deepseek.com/sign_in   (修前)
   ```
   后果：wx 页 `t("stylelite")` 读不到 1，不显示 160px 新 UI，保留 280px 旧 UI，
   184px 视口出现滚动条（Chrome 是 160px 新 UI、无滚动条）。
@@ -83,26 +84,26 @@ per-frame 模式开关：`perFrameRealmEnabled()` 在 AntRuntime 内部；初始
 
 ### B0 护栏 + fixture（先做，能独立验收）
 
-- [ ] `RealmTags.h`：把 `AGB_TAG_NODE` / `AGB_TAG_WINDOW` 从 AntRuntime 挪进来；
+- [x] `RealmTags.h`：把 `AGB_TAG_NODE` / `AGB_TAG_WINDOW` 从 AntRuntime 挪进来；
       新增 `AGB_TAG_LOCATION ('LOC1')`、`AGB_TAG_HISTORY ('HIS1')`。
-- [ ] `RealmDocument.cpp` 先落 `checkMismatch` + `documentOfReceiver` 骨架。
-- [ ] `AGB_REALM_CHECK=1`：在 `titleSetter`、`docWrite`/`docWriteln`、
+- [x] `RealmDocument.cpp` 先落 `checkMismatch` + `documentOfReceiver` 骨架。
+- [x] `AGB_REALM_CHECK=1`：在 `titleSetter`、`docWrite`/`docWriteln`、
       `historyPushState`、location 写入路径调用 `checkMismatch`（先只覆盖写入，
       避免跨 realm 读取误报）。
-- [ ] 新增 `tools/pages/cap_realm_cross.html` + `cap_realm_cross_child.html`：
+- [x] 新增 `tools/pages/cap_realm_cross.html` + `cap_realm_cross_child.html`：
       子页记录 `location.href/search`、`document.location.href`、
       `(new Image()).ownerDocument === document`、`history.length`；
       父页读 `f.contentWindow.location.href`、`f.contentDocument.URL`、
       `parent.location.href`（在子页侧读）、`document.title` 隔离、
       子 `history.pushState` 后父子 `history.length` 各自不变。
-- [ ] 接进 `tools/run_realm_tests.ps1`：per-frame 必须全过；共享模式至少不退化
+- [x] 接进 `tools/run_realm_tests.ps1`：per-frame 必须全过；共享模式至少不退化
       （location 身份类断言只在 per-frame 下要求，先注释说明）。
 - 验收：`pwsh -File tools/run_realm_tests.ps1` → `ALL REALM CHECKS PASSED`；
   `AGB_REALM_CHECK=1` 下无 `[realm-mismatch]`（真站 + fixture）。
 
-### B1 location / history 对象化（修滚动条，预期 R131）
+### B1 location / history 对象化（修滚动条，预期 R132）
 
-- [ ] location：
+- [x] location：
   - `locationObjectFor`（每 document 缓存）在 `RealmDocument.cpp` 实现：
     href getter/setter、assign/replace/reload/toString/valueOf；
     `antb_set_native(obj, doc, AGB_TAG_LOCATION)`（per-frame 模式）。
@@ -112,7 +113,7 @@ per-frame 模式开关：`perFrameRealmEnabled()` 在 AntRuntime 内部；初始
   - `titleGetter` 的 `"location"` 分支改 `RealmDocument::locationObject(engine, d)`。
   - `windowSetter` 的 `location/href` 改 `RealmDocument::setLocation(self, value)`。
   - `document.location === window.location` 必须成立（同一缓存对象）。
-- [ ] history：
+- [x] history：
   - `FrameHistory { Frame*; vector<Entry>; int index; }`，按 Frame* 缓存；
     `Entry { url, state(retained), document }`。
   - `historyObjectFor` 每 document 一个 JS 对象（native = FrameHistory*）；
@@ -134,43 +135,43 @@ per-frame 模式开关：`perFrameRealmEnabled()` 在 AntRuntime 内部；初始
 
 ### B2 getter / method self 化
 
-- [ ] `titleSetter`：`title` 用 `documentOf(self)`；`cookie` 把 doc 传给
+- [x] `titleSetter`：`title` 用 `documentOf(self)`；`cookie` 把 doc 传给
       `setCookieForCurrentDocument(doc, text)`（改签名）。
-- [ ] `docWrite` / `docWriteln`：`documentOf(self)`。
-- [ ] `imageConstructor`：用当前 realm 的 document（`g_document` 在入口已同步，
+- [x] `docWrite` / `docWriteln`：`documentOf(self)`。
+- [x] `imageConstructor`：用当前 realm 的 document（`g_document` 在入口已同步，
       加 `checkMismatch`）。
-- [ ] `globalViewportSize`：优先用 `args[0]` 的 document（prelude 已传 `g.document`）。
-- [ ] `domainMatches`：cookie 安全判断用调用方传入的 document。
-- [ ] `nodeGetter("defaultView")`：返回 `n->document()` 所属 realm 的 global，
+- [x] `globalViewportSize`：优先用 `args[0]` 的 document（prelude 已传 `g.document`）。
+- [x] `domainMatches`：cookie 安全判断用调用方传入的 document。
+- [x] `nodeGetter("defaultView")`：返回 `n->document()` 所属 realm 的 global，
       不是当前 global。
-- [ ] `wrapNode` / `cssomWrap` / `mediaWrapObject` 的 owner：用节点的 document。
-- [ ] `docCreateHTMLDocument`：保留 `documentOf(NULL)` 作为 implementation 对象的
+- [x] `wrapNode` / `cssomWrap` / `mediaWrapObject` 的 owner：用节点的 document。
+- [x] `docCreateHTMLDocument`：保留 `documentOf(NULL)` 作为 implementation 对象的
       显式 fallback，并在注释里写明原因。
 - 验收：`AGB_REALM_CHECK=1` 下 fixture + deepseek/baidu 无 mismatch；
   `cap_realm_cross` 的 `new Image().ownerDocument`、`document.title` 全过。
 
 ### B3 事件 / 监听 / 队列按 realm
 
-- [ ] `Listener` 加 `AntbRealm* realm`；`nodeAddEventListener` /
+- [x] `Listener` 加 `AntbRealm* realm`；`nodeAddEventListener` /
       `setNodeEventHandler` 记录 `currentRealm()`。
-- [ ] `runListenersFor`：调用前 `antb_realm_enter(l.realm)` + `applyRealmBinding(l.realm)`，
+- [x] `runListenersFor`：调用前 `antb_realm_enter(l.realm)` + `applyRealmBinding(l.realm)`，
       调用后恢复 previous realm + binding（同一 listener 列表可跨 realm）。
-- [ ] `dropListenersForDocument(doc)`：只摘掉该 document 的 listener；
+- [x] `dropListenersForDocument(doc)`：只摘掉该 document 的 listener；
       `documentWillUnload` 用它（替换 blanket clear），`frameDocumentWillUnload`
       在 `forgetFrameRealm` 前调用。
-- [ ] `frameDocumentWillUnload` 的 pagehide/unload 已在子 realm，确认 unload 后
+- [x] `frameDocumentWillUnload` 的 pagehide/unload 已在子 realm，确认 unload 后
       listener/定时器不再引用该 realm。
 - 验收：fixture 里父/子各注册 click/自定义事件，互不串；子 frame 卸载后父的
   listener 仍在；`run_typing_tests` / `run_worker_tests` 不退化。
 
 ### B4 强制与收尾
 
-- [ ] `AGB_REALM_CHECK=1` 加进 `run_realm_tests.ps1` 的两条路径。
-- [ ] 删除 per-view `g_locationObj`、`sessionHistory` 字段（`RuntimeState` 只剩
+- [x] `AGB_REALM_CHECK=1` 加进 `run_realm_tests.ps1` 的两条路径（stderr 出现 `realm-mismatch` 即失败）。
+- [x] 删除 per-view `g_locationObj`、`sessionHistory` 字段（`RuntimeState` 只剩
       engine/mainRealm/currentSlot 之外的通用字段）。
-- [ ] 更新 `docs/arch-status.md`（iframe location/history）、
+- [x] 更新 `docs/arch-status.md`（iframe location/history）、
       `docs/arch-capability-gaps.md` §6.5（滚动条已修）、`docs/dev-debugging.md`
-      （AGB_REALM_CHECK）、`docs/hist-lessons.md` 追加 R131。
+      （AGB_REALM_CHECK）、`docs/hist-lessons.md` 追加 R132。
 - [ ] 评估 `AGB_PER_FRAME_REALM=0`：保留一个周期，文档标“仅 A/B”。
 - 验收：全套 `run_realm_tests`、`run_nav_tests`、`run_script_mode_tests`、
   `run_xhr_tests`、`run_jit_loop_tests`、真站 10 次二维码 + 无滚动条。
@@ -211,12 +212,12 @@ Chrome 对照（不依赖 websockets）：
 
 | 日期 | 批次 | 结果 | 提交 |
 |---|---|---|---|
-| 2026-11-08 | 设计 / R130 | 已完成 | `c50d022` / `932abc5` |
-|  | B0 |  |  |
-|  | B1 |  |  |
-|  | B2 |  |  |
-|  | B3 |  |  |
-|  | B4 |  |  |
+| 2026-11-08 | 设计 / R130 | 已完成 | `c50d022` / `932abc5` / `2222411` |
+| 2026-11-08 | B0 | `AGB_REALM_CHECK=1` + `cap_realm_cross.html`；per-frame/共享两种模式都进 `run_realm_tests` | 随 R132 |
+| 2026-11-08 | B1 | `RealmTags.h` + `RealmDocument.cpp`：location 每 document、history 每 Frame；子页 `stylelite=1`、160px 新 UI、`clientWidth==scrollWidth==200`（无滚动条） | 随 R132 |
+| 2026-11-08 | B2 | title/write/cookie/Image/defaultView 按 self；`new Image().ownerDocument===document` | 随 R132 |
+| 2026-11-08 | B3 | listener 元素带 realm、派发前 enter；frame 卸载只删本 document 的监听 | 随 R132 |
+| 2026-11-08 | B4 | guard 进两条测试路径；`arch-status`/`capability-gaps`/`dev-debugging`/`hist-lessons` 已更新；剩余：`AGB_PER_FRAME_REALM=0` 的取舍 | 随 R132 |
 
 ## 6. 风险 / 待定
 

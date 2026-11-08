@@ -91,6 +91,9 @@ WebCore 内部的渲染管线（DOM → 样式 → 渲染树 → 布局 → 绘�
   独立 wrapper），`AGB_PER_FRAME_REALM=0` 回退到"共享 realm + per-frame window 代理"的旧模型。
   顶层文档换文档时 `beginNewRealm()` 新建 `AntbEngine`（新 realm）；iframe 掉帧时
   `detachedFromParent3` → `forgetFrameRealm()` 释放该 realm 的 wrapper 并让 GC 回收。
+- **document-scoped window 对象**（`RealmDocument.cpp`，R132）：`location`/`history` 各自带
+  document/Frame，getter 从 receiver 解析文档，不再读 per-view 的 `g_document`；
+  `document.location === window.location`，子 frame 读自己的 URL/历史，`parent.location` 读父文档。
 - **generation**：进程级递增的资源 id。所有可能活过文档的资源（XHR、模块下载、待执行模块、
   DOM pin、文档 slot）都带它；卸载时按它精确取消。realm 与 generation 目前不是一一对应：
   一个 view 的 generation 对应顶层文档，iframe 的 realm 共用 view 的 generation（S3 待细化）。

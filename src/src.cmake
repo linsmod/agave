@@ -99,7 +99,9 @@ add_library(${LIB_NAME} ${SOURCES})
 # Ant engine runtime (task 1-2): the JS engine and its bridge live in
 # antjsb.dll, built from 3rdparty/ant. Enabled with -DOPT_JS_ANT=ON.
 if (OPT_JS_ANT)
-    target_sources(${LIB_NAME} PRIVATE ${PROJ_ROOT}/src/javascript/ant_backend/AntRuntime.cpp)
+    target_sources(${LIB_NAME} PRIVATE
+        ${PROJ_ROOT}/src/javascript/ant_backend/AntRuntime.cpp
+        ${PROJ_ROOT}/src/javascript/ant_backend/RealmDocument.cpp)
     target_include_directories(${LIB_NAME} PRIVATE
         ${PROJ_ROOT}/src/javascript/ant_backend
         ${PROJ_ROOT}/3rdparty/ant/include)

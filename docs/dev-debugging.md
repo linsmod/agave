@@ -208,6 +208,7 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
 | 页面脚本 | `AGB_PAGE_EVAL=eval` | 页面脚本回到 direct-eval 语义（**默认 classic script**，顶层 `var`/`function` 进 `window`，R66）；A/B 与 `run_script_mode_tests.ps1` 用 |
 | GC | `AGB_GC_OFF=1` | 关掉引擎 GC；"关掉就好"是"对象被提前回收"的决定性判据（R60/R63/R67） |
 | Realm | `AGB_PER_FRAME_REALM=0` | 关掉"每 frame 一个 realm"（[design-per-frame-realm.md](design-per-frame-realm.md) S1/S2，**默认开启**）：回到一 view 一 realm + per-frame window 代理的旧模型，用于 A/B。`run_realm_tests.ps1` 覆盖两条路径 |
+| Realm 绑定 | `AGB_REALM_CHECK=1` | 写入类 API（`document.title`/`document.write`/`location`/`history.pushState` 等）的 self 文档与当前 binding 不一致时打一行 `[evt] realm-mismatch <api> self=<url> current=<url>`（每个 api 一次）。正常应为 0；`run_realm_tests.ps1` 已强制开启并把它当作失败 |
 | 脚本编码 | `AGB_SCRIPT_CHARSET=1` | 每个脚本打印 `[script-charset] <编码> doc=<文档编码>`（排查乱码/重复日志） |
 | 绘制诊断 | `AGB_PAINT_FULL=1` | 每帧整屏重绘（忽略脏矩形）；用来区分"失效/裁剪错"和"布局错"（见 §4） |
 | 页面 | `AGB_TITLE_DEBUG=1` / `AGB_SCRIPT_DEBUG=1` | `document.title` 轮询 / tokenizer 脚本加载 |

@@ -29,6 +29,8 @@ namespace WebCore { bool prefersDarkColorScheme(); }
 #include "AgbSelector.h"
 #include "AgbTextCodec.h"
 #include "AntBridge.h"
+#include "RealmDocument.h"
+#include "RealmTags.h"
 #include "../../webcore/platform/network/native/NetworkSession.h"
 #include "../platform/network/native/NetLog.h"
 
@@ -121,8 +123,8 @@ int windowSetter(AntbEngine*, AntbValue*, const char*, const AntbValue*, void*);
 }
 
 namespace {
-static std::string cookieHeaderForCurrentDocument();
-static void setCookieForCurrentDocument(const std::string& text);
+static std::string cookieHeaderForDocument(WebCore::Document* document);
+static void setCookieForDocument(WebCore::Document* document, const std::string& text);
 
 /* Defined with the other internal-page bindings; bindDocument installs it as
  * the download manager's change hook. */
@@ -133,7 +135,7 @@ int globalDownloadCancel(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, 
 int globalDownloadOpen(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 
 
-#define AGB_TAG_NODE 0x4E4F4431u   /* 'NOD1' */
+/* Native tags shared with RealmDocument.h live in RealmTags.h. */
 
 /* ------------------------------------------------------------------------- */
 /* Per-view runtime state                                                     */
@@ -167,9 +169,6 @@ struct RuntimeState {
     AntbClass*         cssDeclarationClass;
     std::vector<CssomRef>* cssomRefs;   /* ref'd CSSOM objects, released at realm teardown */
     std::set<void*>*   cssomSeen;
-    void*              sessionHistory;  /* std::vector<SessionHistoryEntry>*   */
-    int                sessionHistoryIndex;
-    AntbValue*         locationObj;
     AntbValue*         docObj;          /* the JS document object (rooted) */
     /* The main realm's own document binding. g_document/g_docObj above are
      * "the realm that is running right now"; when ant switches into a frame
@@ -344,8 +343,6 @@ static void activateState(RuntimeState* state)
 #define g_cssDeclarationClass (g_currentState->cssDeclarationClass)
 #define g_cssomRefs     (g_currentState->cssomRefs)
 #define g_cssomSeen     (g_currentState->cssomSeen)
-#define g_sessionHistoryIndex (g_currentState->sessionHistoryIndex)
-#define g_locationObj   (g_currentState->locationObj)
 #define g_docObj        (g_currentState->docObj)
 #define g_documentBound (g_currentState->documentBound)
 #define g_docSlots      (g_currentState->docSlots)
@@ -685,21 +682,10 @@ int nodeRemoveEventListener(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue
 WebCore::Document* documentOf(AntbValue* self);
 int docGetElementById(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeDispatchEvent(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
-int locationGetter(AntbEngine*, AntbValue*, const char*, AntbValue*, void*);
-int locationSetter(AntbEngine*, AntbValue*, const char*, const AntbValue*, void*);
-int locationAssign(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
-int locationReplace(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
-int locationReload(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
-int locationToString(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int docWrite(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int docCreateHTMLDocument(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int docHasFeature(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int docWriteln(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
-int historyBack(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
-int historyForward(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
-int historyGo(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
-int historyPushState(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
-int historyStateGetter(AntbEngine*, AntbValue*, const char*, AntbValue*, void*);
 AntbValue* wrapNode(AntbEngine*, WebCore::Node*);
 int nodeGetter(AntbEngine*, AntbValue*, const char*, AntbValue*, void*);
 enum { CSSOM_LIST, CSSOM_SHEET, CSSOM_RULE, CSSOM_RULELIST, CSSOM_MEDIA, CSSOM_DECL };
@@ -899,7 +885,7 @@ struct XhrJob : public WebCore::ResourceHandleClient {
 
         WebCore::KURL kurl((const char*)url);
         WebCore::ResourceRequest request(kurl);
-        std::string cookies = cookieHeaderForCurrentDocument();
+        std::string cookies = cookieHeaderForDocument(g_document);
 
         /* Page code posts JSON everywhere (device fingerprinting, auth, RPC):
          * sending GET without a body made those endpoints fail and the SDKs
@@ -970,7 +956,7 @@ struct XhrJob : public WebCore::ResourceHandleClient {
             WebCore::String setCookie = response.httpHeaderField("Set-Cookie");
 
             if (!setCookie.isEmpty())
-                setCookieForCurrentDocument(std::string(setCookie.utf8().data()));
+                setCookieForDocument(g_document, std::string(setCookie.utf8().data()));
         }
     }
 
@@ -1746,12 +1732,12 @@ static std::vector<CookieEntry>& cookieJar()
         g_cookies = new std::vector<CookieEntry>();
     return *g_cookies;
 }
-static std::string hostOfCurrentDocument()
+static std::string hostOfDocument(WebCore::Document* document)
 {
-    if (!g_document)
+    if (!document)
         return std::string();
     {
-        WebCore::KURL url(g_document->URL());
+        WebCore::KURL url(document->URL());
         WebCore::String host = url.host();
         return std::string(host.utf8().data());
     }
@@ -1770,15 +1756,15 @@ static bool domainMatches(const std::string& cookieDomain, const std::string& ho
         && host[host.size() - cookieDomain.size() - 1] == '.'
         && host.compare(host.size() - cookieDomain.size(), cookieDomain.size(), cookieDomain) == 0;
 }
-static std::string cookieHeaderForCurrentDocument()
+static std::string cookieHeaderForDocument(WebCore::Document* document)
 {
     std::string out;
-    std::string host = hostOfCurrentDocument();
+    std::string host = hostOfDocument(document);
     std::vector<CookieEntry>& jar = cookieJar();
     for (size_t i = 0; i < jar.size(); ++i) {
         if (!domainMatches(jar[i].domain, host))
             continue;
-        if (jar[i].secure && g_document && !WebCore::KURL(g_document->URL()).protocol().startsWith("https"))
+        if (jar[i].secure && document && !WebCore::KURL(document->URL()).protocol().startsWith("https"))
             continue;
         if (!out.empty())
             out += "; ";
@@ -1786,9 +1772,9 @@ static std::string cookieHeaderForCurrentDocument()
     }
     return out;
 }
-static void setCookieForCurrentDocument(const std::string& text)
+static void setCookieForDocument(WebCore::Document* document, const std::string& text)
 {
-    std::string host = hostOfCurrentDocument();
+    std::string host = hostOfDocument(document);
     CookieEntry entry;
     std::string expires;
     bool expired = false;
@@ -2042,7 +2028,7 @@ int titleGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue
 
 
     if (!strcmp(name, "cookie")) {
-        std::string jar = cookieHeaderForCurrentDocument();
+        std::string jar = cookieHeaderForDocument(d);
         AntbValue* v = antb_make_string(engine, jar.c_str());
         if (!v)
             return 0;
@@ -2096,17 +2082,12 @@ int titleGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue
     }
 
     if (!strcmp(name, "location")) {
-        if (!g_locationObj) {
-            AntbValue* obj = antb_make_object(engine);
-            if (!obj)
-                return 0;
-            antb_define_property_rw(engine, obj, "href", locationGetter, NULL, NULL);
-            antb_define_method(engine, obj, "toString", locationToString, NULL);
-            antb_define_method(engine, obj, "valueOf", locationToString, NULL);
-            g_locationObj = antb_retain(obj);   /* keep it alive across GC */
-            antb_value_release(obj);
-        }
-        antb_value_assign(out, g_locationObj);
+        AntbValue* loc = AntRuntime::RealmDocument::locationObject(engine, d);
+
+        if (!loc)
+            return 0;
+        antb_value_assign(out, loc);
+        antb_value_release(loc);
         return 1;
     }
 
@@ -2117,59 +2098,6 @@ int titleGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue
     return nodeGetter(engine, self, name, out, NULL);
 }
 
-/* document.location.<field> */
-/* Resolves `text` against the current document and navigates the frame. */
-static void navigateTo(const char* text)
-{
-    WebCore::Frame* frame;
-    if (!g_document || !text)
-        return;
-    frame = g_document->frame();
-    if (!frame)
-        return;
-    {
-        WebCore::KURL base(g_document->URL());
-        WebCore::KURL target(base, WebCore::DeprecatedString(text));
-        if (!target.isValid())
-            return;
-        frame->loader()->load(target, 0);
-    }
-}
-int locationSetter(AntbEngine*, AntbValue*, const char* name, const AntbValue* value, void*)
-{
-    char* text;
-    if (!name || strcmp(name, "href") != 0 || !value)
-        return 0;
-    text = antb_to_utf8(value);
-    if (!text)
-        return 0;
-    navigateTo(text);
-    antb_free(text);
-    return 1;
-}
-int locationAssign(AntbEngine*, AntbValue*, AntbValue** args, int argc, AntbValue*, void*)
-{
-    char* text;
-    if (argc < 1)
-        return 1;
-    text = antb_to_utf8(args[0]);
-    if (!text)
-        return 1;
-    navigateTo(text);
-    antb_free(text);
-    return 1;
-}
-int locationReplace(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
-                    AntbValue* out, void* user)
-{
-    return locationAssign(engine, self, args, argc, out, user);
-}
-int locationReload(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*)
-{
-    if (g_document && g_document->frame())
-        g_document->frame()->loader()->reload();
-    return 1;
-}
 /* window.close(): the engine asks the host to close the view (ChromeClientMC
  * -> cb_close_window), which the shell maps to closing the tab. */
 int globalCloseWindow(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*)
@@ -2226,388 +2154,52 @@ int docCreateHTMLDocument(AntbEngine* engine, AntbValue*, AntbValue** args, int 
     return 1;
 }
 /* document.write / writeln feed the parser, as the spec does. */
-int docWrite(AntbEngine*, AntbValue*, AntbValue** args, int argc, AntbValue*, void*)
+int docWrite(AntbEngine*, AntbValue* self, AntbValue** args, int argc, AntbValue*, void*)
 {
     char* text;
-    if (!g_document || argc < 1)
+    WebCore::Document* document = documentOf(self);
+
+    if (!document || argc < 1)
         return 1;
     text = antb_to_utf8(args[0]);
     if (!text)
         return 1;
-    g_document->write(WebCore::String::fromUTF8(text));
+    AntRuntime::RealmDocument::checkMismatch("document.write", document);
+    document->write(WebCore::String::fromUTF8(text));
     antb_free(text);
     return 1;
 }
-int docWriteln(AntbEngine*, AntbValue*, AntbValue** args, int argc, AntbValue*, void*)
+int docWriteln(AntbEngine*, AntbValue* self, AntbValue** args, int argc, AntbValue*, void*)
 {
     char* text;
-    if (!g_document || argc < 1)
+    WebCore::Document* document = documentOf(self);
+
+    if (!document || argc < 1)
         return 1;
     text = antb_to_utf8(args[0]);
     if (!text)
         return 1;
-    g_document->writeln(WebCore::String::fromUTF8(text));
+    AntRuntime::RealmDocument::checkMismatch("document.writeln", document);
+    document->writeln(WebCore::String::fromUTF8(text));
     antb_free(text);
     return 1;
 }
-/* ---- session history ----------------------------------------------------- *
- * The DOM side of History: state objects, length and popstate. WebCore 2008's
- * History only forwards back/forward/go to the FrameLoader, and its
- * HistoryItem has no state object at all, so the state lives here: one entry
- * per session history entry of the main frame, and pushState/replaceState
- * entries are marked as same-document (going back to them only rewrites the
- * URL and fires popstate, exactly what SPA routers expect). */
-
-struct SessionHistoryEntry {
-    std::string        url;
-    AntbValue*         state;      /* retained; NULL means null       */
-    WebCore::Document* document;   /* document that created the entry */
-};
-
-static std::vector<SessionHistoryEntry>& sessionHistoryEntries()
-{
-    /* The state field is a void* (RuntimeState is memset to zero). */
-    if (!g_currentState->sessionHistory)
-        g_currentState->sessionHistory = new std::vector<SessionHistoryEntry>();
-
-    return *(std::vector<SessionHistoryEntry>*)g_currentState->sessionHistory;
-}
-
-static void sessionHistoryClear()
-{
-    std::vector<SessionHistoryEntry>& entries = sessionHistoryEntries();
-
-    for (size_t i = 0; i < entries.size(); ++i) {
-        if (entries[i].state) {
-            antb_value_release(entries[i].state);
-            entries[i].state = NULL;
-        }
-    }
-
-    entries.clear();
-    g_sessionHistoryIndex = -1;
-}
-
-static void sessionHistoryReset(const std::string& url)
-{
-    std::vector<SessionHistoryEntry>& entries = sessionHistoryEntries();
-
-    sessionHistoryClear();
-
-    {
-        SessionHistoryEntry entry;
-
-        entry.url = url;
-        entry.state = NULL;
-        entry.document = g_document;
-        entries.push_back(entry);
-        g_sessionHistoryIndex = 0;
-    }
-}
-
-/* Called from bindDocument: a new main-frame document is a new session history
- * entry (frames share the main frame's model, like the browser does). */
-static void sessionHistoryNoteDocument(WebCore::Document* document)
-{
-    std::vector<SessionHistoryEntry>& entries = sessionHistoryEntries();
-    std::string url;
-
-    if (!document)
-        return;
-
-    if (document->parentDocument())
-        return;
-
-    url = document->URL().utf8().data();
-
-    /* The view starts on about:blank; that is not a history entry. */
-    if (url == "about:blank")
-        return;
-
-    if (!entries.empty() && g_sessionHistoryIndex >= 0
-            && entries[g_sessionHistoryIndex].url == url)
-        return;   /* the same document bound again */
-
-    if (entries.empty()) {
-        sessionHistoryReset(url);
-        return;
-    }
-
-    /* Re-entering a URL we already have is a traversal (the frame loader is
-     * loading that history item), not a new entry. */
-    for (size_t i = 0; i < entries.size(); ++i) {
-        if (entries[i].url == url) {
-            g_sessionHistoryIndex = (int)i;
-            return;
-        }
-    }
-
-    /* A real navigation: forward entries are gone. */
-    if (g_sessionHistoryIndex + 1 < (int)entries.size()) {
-        for (size_t i = g_sessionHistoryIndex + 1; i < entries.size(); ++i) {
-            if (entries[i].state)
-                antb_value_release(entries[i].state);
-        }
-        entries.resize(g_sessionHistoryIndex + 1);
-    }
-
-    {
-        SessionHistoryEntry entry;
-
-        entry.url = url;
-        entry.state = NULL;
-        entry.document = g_document;
-        entries.push_back(entry);
-        g_sessionHistoryIndex = (int)entries.size() - 1;
-    }
-}
-
-static void sessionHistoryApplyURL(const std::string& url)
-{
-    if (!g_document || url.empty())
-        return;
-
-    g_document->setURL(WebCore::DeprecatedString(url.c_str()));
-}
-
-/* Walks the same-document entries; anything outside them is the FrameLoader's
- * business (real page loads), so those fall through to it. */
-static void sessionHistoryGo(int delta)
-{
-    std::vector<SessionHistoryEntry>& entries = sessionHistoryEntries();
-    int target = g_sessionHistoryIndex + delta;
-
-    agbLog(AGB_LOG_NAV, "history go delta=%d index=%d entries=%d url=%s",
-           delta, g_sessionHistoryIndex, (int)entries.size(),
-           g_document ? g_document->URL().utf8().data() : "?");
-
-    if (delta != 0 && g_sessionHistoryIndex >= 0
-            && target >= 0 && target < (int)entries.size()
-            && entries[target].document == g_document) {
-        g_sessionHistoryIndex = target;
-        sessionHistoryApplyURL(entries[target].url);
-        AntRuntime::dispatchWindowEventState("popstate", entries[target].state);
-        return;
-    }
-
-    if (g_document && g_document->frame() && g_document->frame()->page()) {
-        if (delta < 0)
-            g_document->frame()->page()->goBack();
-        else if (delta > 0)
-            g_document->frame()->page()->goForward();
-    }
-}
-
-int historyBack(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*)
-{
-    sessionHistoryGo(-1);
-    return 1;
-}
-
-int historyForward(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*)
-{
-    sessionHistoryGo(1);
-    return 1;
-}
-
-int historyGo(AntbEngine*, AntbValue*, AntbValue** args, int argc, AntbValue*, void*)
-{
-    sessionHistoryGo(argc > 0 && args[0] ? (int)antb_to_number(args[0]) : 0);
-    return 1;
-}
-
-/* history.state / history.length. */
-int historyStateGetter(AntbEngine* engine, AntbValue*, const char* name, AntbValue* out, void*)
-{
-    std::vector<SessionHistoryEntry>& entries = sessionHistoryEntries();
-    AntbValue* value = NULL;
-
-    if (!name)
-        return 0;
-
-    if (!strcmp(name, "state")) {
-        if (g_sessionHistoryIndex >= 0 && g_sessionHistoryIndex < (int)entries.size()
-                && entries[g_sessionHistoryIndex].state)
-            value = antb_retain(entries[g_sessionHistoryIndex].state);
-        if (!value)
-            value = antb_make_null(engine);
-    } else if (!strcmp(name, "length")) {
-        /* Entries of this document (the document itself + pushState calls).
-         * Cross-document entries live in the frame loader's back/forward list
-         * and are not reflected here - see docs/arch-capability-gaps.md. */
-        int length = (int)entries.size();
-
-        if (length < 1)
-            length = 1;
-
-        value = antb_make_number(engine, (double)length);
-    } else {
-        return 0;
-    }
-
-    if (!value)
-        return 0;
-
-    antb_value_assign(out, value);
-    antb_value_release(value);
-    return 1;
-}
-
-/* pushState(state, title, url) / replaceState(state, title, url): the `user`
- * pointer tells the two apart. */
-int historyPushState(AntbEngine*, AntbValue*, AntbValue** args, int argc, AntbValue*, void* user)
-{
-    bool replace = user != NULL;
-    std::vector<SessionHistoryEntry>& entries = sessionHistoryEntries();
-    std::string url;
-
-    if (g_document && argc > 2 && args[2]) {
-        char* urlText = antb_to_utf8(args[2]);
-
-        if (urlText && urlText[0]) {
-            WebCore::KURL base(g_document->URL());
-            WebCore::KURL target(base, WebCore::DeprecatedString(urlText));
-
-            if (target.isValid())
-                url = target.url().utf8().data();
-        }
-        antb_free(urlText);
-    }
-
-    if (url.empty() && g_document)
-        url = g_document->URL().utf8().data();
-
-    if (entries.empty())
-        sessionHistoryReset(url);
-
-    {
-        SessionHistoryEntry entry;
-
-        entry.url = url;
-        entry.state = (argc > 0 && args[0]) ? antb_retain(args[0]) : NULL;
-        entry.document = g_document;
-
-        if (replace) {
-            if (g_sessionHistoryIndex >= 0 && g_sessionHistoryIndex < (int)entries.size()) {
-                if (entries[g_sessionHistoryIndex].state)
-                    antb_value_release(entries[g_sessionHistoryIndex].state);
-                entries[g_sessionHistoryIndex] = entry;
-            } else {
-                entries.push_back(entry);
-                g_sessionHistoryIndex = (int)entries.size() - 1;
-            }
-        } else {
-            /* Drop the forward entries, then append. */
-            if (g_sessionHistoryIndex + 1 < (int)entries.size()) {
-                for (size_t i = g_sessionHistoryIndex + 1; i < entries.size(); ++i) {
-                    if (entries[i].state)
-                        antb_value_release(entries[i].state);
-                }
-                entries.resize(g_sessionHistoryIndex + 1);
-            }
-            entries.push_back(entry);
-            g_sessionHistoryIndex = (int)entries.size() - 1;
-        }
-    }
-
-    sessionHistoryApplyURL(url);
-    return 1;
-}
-
-int locationGetter(AntbEngine* engine, AntbValue*, const char* name, AntbValue* out, void*)
-{
-    WebCore::KURL url;
-
-    if (!g_document || !name)
-        return 0;
-
-    url = WebCore::KURL(g_document->URL());
-
-    {
-        WebCore::String value;
-        WebCore::DeprecatedString deprecated = url.url();
-
-        /* CSSOM semantics: protocol keeps its colon, host keeps the port and
-         * hostname does not. Pages compare these strings literally (163.com
-         * redirects forever when `protocol` comes back without the colon). */
-        if (!strcmp(name, "href"))
-            value = WebCore::String(deprecated);
-        else if (!strcmp(name, "protocol")) {
-            value = url.protocol();
-            if (!value.endsWith(WebCore::String(":")))
-                value = value + WebCore::String(":");
-        } else if (!strcmp(name, "host")) {
-            value = url.host();
-            if (url.port()) {
-                value = value + WebCore::String(":") + WebCore::String::number(url.port());
-            }
-        } else if (!strcmp(name, "hostname"))
-            value = url.host();
-        else if (!strcmp(name, "port")) {
-            value = url.port() ? WebCore::String::number(url.port()) : WebCore::String();
-        } else if (!strcmp(name, "origin")) {
-            WebCore::String protocol = url.protocol();
-            if (!protocol.endsWith(WebCore::String(":")))
-                protocol = protocol + WebCore::String(":");
-            value = protocol + WebCore::String("//") + url.host();
-            if (url.port())
-                value = value + WebCore::String(":") + WebCore::String::number(url.port());
-        } else if (!strcmp(name, "pathname"))
-            value = url.path();
-        else if (!strcmp(name, "search"))
-            value = url.query();
-        else if (!strcmp(name, "hash"))
-            value = url.ref();
-        else
-            return 0;
-
-        {
-            AntbValue* v = antb_make_string(engine, value.utf8().data());
-            if (!v)
-                return 0;
-            antb_value_assign(out, v);
-            antb_value_release(v);
-        }
-    }
-    return 1;
-}
-
-/* location.toString() / valueOf(): `String(location)` and
- * `location.toString()` return the href. carbon.js builds its request headers
- * from window.location.toString() and dies with "undefined is not a function"
- * without them. */
-int locationToString(AntbEngine* engine, AntbValue*, AntbValue**, int, AntbValue* out, void*)
-{
-    WebCore::String href;
-
-    if (!g_document)
-        return 0;
-
-    href = WebCore::String(WebCore::KURL(g_document->URL()).url());
-
-    {
-        AntbValue* v = antb_make_string(engine, href.utf8().data());
-        if (!v)
-            return 0;
-        antb_value_assign(out, v);
-        antb_value_release(v);
-    }
-    return 1;
-}
-
 int titleSetter(AntbEngine* engine, AntbValue* self, const char* name, const AntbValue* value, void*)
 {
     if (!name)
         return 0;
 
     if (!strcmp(name, "title")) {
-        if (!g_document || !value)
+        WebCore::Document* document = documentOf(self);
+
+        if (!document || !value)
             return 0;
         {
             char* text = antb_to_utf8(value);
             if (!text)
                 return 0;
-            g_document->setTitle(WebCore::String::fromUTF8(text));
+            AntRuntime::RealmDocument::checkMismatch("document.title", document);
+            document->setTitle(WebCore::String::fromUTF8(text));
             antb_free(text);
         }
         return 1;
@@ -2622,7 +2214,7 @@ int titleSetter(AntbEngine* engine, AntbValue* self, const char* name, const Ant
         if (!text)
             return 0;
 
-        setCookieForCurrentDocument(std::string(text));
+        setCookieForDocument(documentOf(self), std::string(text));
         antb_free(text);
         return 1;
     }
@@ -2632,6 +2224,7 @@ int titleSetter(AntbEngine* engine, AntbValue* self, const char* name, const Ant
 }
 
 void dropListenersForOldDocument();
+void dropListenersForDocument(WebCore::Document* document);
 } /* namespace */
 
 /* -------------------------------------------------------------------------
@@ -5167,8 +4760,9 @@ static void stopRealm(void)
     }
     state->mainDocument = 0;
     state->boundRealm = 0;
-    /* Session history states are JS values of the realm that just died. */
-    sessionHistoryClear();
+    /* Location/History objects and their session history values belong to the
+     * engine that just died. */
+    AntRuntime::RealmDocument::releaseEngine(state->engine);
 
     /* The per-window proxies of this realm die with it too. */
     if (g_windowCache) {
@@ -5193,10 +4787,6 @@ static void stopRealm(void)
                 ++i;
             }
         }
-    }
-    if (g_locationObj) {
-        antb_value_release(g_locationObj);
-        g_locationObj = 0;
     }
 
     /* The old page's listeners close over its DOM. */
@@ -5384,7 +4974,7 @@ AntbValue* documentObjectFor(AntbEngine* engine, WebCore::Document* document)
  * delegated to the shared global object, so `parent.jQuery`, polyfill hooks and
  * cross-frame calls keep working (see docs/design-frame-window.md). */
 
-#define AGB_TAG_WINDOW 0x574E4431u   /* 'WND1' */
+/* AGB_TAG_WINDOW lives in RealmTags.h (shared with RealmDocument). */
 
 static WebCore::Frame* frameOfDocument(WebCore::Document* document)
 {
@@ -5501,6 +5091,10 @@ int windowGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValu
         v = windowObjectFor(engine, other);
     } else if (!strcmp(name, "document")) {
         v = documentObjectFor(engine, d);
+    } else if (!strcmp(name, "location")) {
+        v = AntRuntime::RealmDocument::locationObject(engine, d);
+    } else if (!strcmp(name, "history")) {
+        v = AntRuntime::RealmDocument::historyObject(engine, d);
     } else if (!strcmp(name, "length")) {
         v = antb_make_number(engine, (double)childFrameCount(d));
     } else if (!strcmp(name, "name")) {
@@ -5580,7 +5174,7 @@ int windowSetter(AntbEngine* engine, AntbValue* self, const char* name, const An
     }
 
     if (!strcmp(name, "location") || !strcmp(name, "href"))
-        return locationSetter(engine, self, "href", value, NULL);
+        return AntRuntime::RealmDocument::setLocation(self, value);
 
     /* Everything else is a property of the shared global. */
     {
@@ -5598,6 +5192,26 @@ int windowSetter(AntbEngine* engine, AntbValue* self, const char* name, const An
  * lookup, which does not run an exotic getter on the global object; they have
  * to be real properties. So the frame-specific ones are refreshed whenever a
  * document becomes the bound one (bindDocument / slot activation). */
+/* RealmDocument needs the current-document provider once. It is also where the
+ * Location/History objects get their per-document binding (R132). */
+static WebCore::Document* boundDocumentForRealmDocument()
+{
+    return g_document;
+}
+
+static void ensureRealmDocumentContext()
+{
+    static bool done = false;
+
+    if (done)
+        return;
+    done = true;
+
+    AntRuntime::RealmDocument::setContext(perFrameRealmEnabled(),
+                                          boundDocumentForRealmDocument);
+    AntRuntime::RealmDocument::setPopstateDispatcher(dispatchWindowEventState);
+}
+
 /* Installs the JS-side global API on the *current realm's* global object:
  * canvas class, window methods, the __agb* host functions and the history /
  * location / navigator / screen objects. Called once per realm (the main
@@ -5609,6 +5223,8 @@ static void installGlobalApi(AntbEngine* engine, AntbValue* global)
     AntbValue* window = global;   /* window IS the global object */
 
     (void)engine;
+
+    ensureRealmDocumentContext();
 
         if (!g_canvasCtxClass) {
             g_canvasCtxClass = antb_class_create(g_engine, "CanvasRenderingContext2D");
@@ -5697,34 +5313,20 @@ static void installGlobalApi(AntbEngine* engine, AntbValue* global)
         /* Direct value access for the prototype-level value accessor (React tracker). */
         antb_define_method(g_engine, global, "__agbInputValue", globalInputValue, NULL);
 
-        /* history: SPA routers and "go back" links use it. */
+        /* history/location: document-scoped objects live in RealmDocument so
+         * their getters resolve the receiver's document, not the ambient one
+         * (R132). */
         {
-            AntbValue* hist = antb_make_object(g_engine);
+            AntbValue* hist = AntRuntime::RealmDocument::historyObject(g_engine, g_document);
             if (hist) {
-                antb_define_method(g_engine, hist, "back", historyBack, NULL);
-                antb_define_method(g_engine, hist, "forward", historyForward, NULL);
-                antb_define_method(g_engine, hist, "go", historyGo, NULL);
-                /* pushState and replaceState share one implementation; the
-                 * `user` pointer tells them apart. */
-                antb_define_method(g_engine, hist, "pushState", historyPushState, NULL);
-                antb_define_method(g_engine, hist, "replaceState", historyPushState, (void*)1);
-                antb_define_property_rw(g_engine, hist, "state", historyStateGetter, NULL, NULL);
-                antb_define_property_rw(g_engine, hist, "length", historyStateGetter, NULL, NULL);
-
                 antb_set_prop(g_engine, global, "history", hist);
                 antb_value_release(hist);
             }
         }
         /* Web pages read bare globals like `location` and `navigator`. */
         {
-            AntbValue* loc = antb_make_object(g_engine);
+            AntbValue* loc = AntRuntime::RealmDocument::locationObject(g_engine, g_document);
             if (loc) {
-                antb_define_property_rw(g_engine, loc, "href", locationGetter, locationSetter, NULL);
-                antb_define_method(g_engine, loc, "assign", locationAssign, NULL);
-                antb_define_method(g_engine, loc, "replace", locationReplace, NULL);
-                antb_define_method(g_engine, loc, "reload", locationReload, NULL);
-                antb_define_method(g_engine, loc, "toString", locationToString, NULL);
-                antb_define_method(g_engine, loc, "valueOf", locationToString, NULL);
                 antb_set_prop(g_engine, global, "location", loc);
                 antb_value_release(loc);
             }
@@ -5767,6 +5369,26 @@ static void installGlobalApi(AntbEngine* engine, AntbValue* global)
         }
     }
 }
+/* location/history follow the document that is being bound into this global.
+ * They are re-published on every bind because shared-realm mode reuses one
+ * global for parent and child documents (R132). */
+static void installDocumentScopedGlobals(AntbEngine* engine, AntbValue* global,
+                                         WebCore::Document* document)
+{
+    AntbValue* v = AntRuntime::RealmDocument::locationObject(engine, document);
+
+    if (v) {
+        antb_set_prop(engine, global, "location", v);
+        antb_value_release(v);
+    }
+
+    v = AntRuntime::RealmDocument::historyObject(engine, document);
+    if (v) {
+        antb_set_prop(engine, global, "history", v);
+        antb_value_release(v);
+    }
+}
+
 void installFrameGlobals(AntbEngine* engine, WebCore::Document* document)
 {
     AntbValue* global;
@@ -5798,6 +5420,7 @@ void installFrameGlobals(AntbEngine* engine, WebCore::Document* document)
     }
     if (docObj)
         antb_set_prop(engine, global, "document", docObj);
+    installDocumentScopedGlobals(engine, global, document);
 
     v = topWindow ? topWindow : selfWindow;
     if (v)
@@ -5861,6 +5484,7 @@ static void installChildFrameGlobals(AntbEngine* engine, WebCore::Document* docu
     antb_set_prop(engine, global, "frames", global);
     if (docObj)
         antb_set_prop(engine, global, "document", docObj);
+    installDocumentScopedGlobals(engine, global, document);
     if (parentGlobal)
         antb_set_prop(engine, global, "parent", parentGlobal);
     if (topGlobal)
@@ -5953,6 +5577,8 @@ void forgetFrameRealm(void* document)
                     && g_currentState->boundRealm == entries[i].realm)
                 applyRealmBinding(g_currentState->mainRealm);
 
+            AntRuntime::RealmDocument::forgetDocument(g_engine, doc);
+
             /* Wrapper objects created in this realm (and their permanent pins)
              * go first: with the pins left behind the realm could never be
              * collected. */
@@ -5984,6 +5610,8 @@ void bindDocument(void* document)
     /* The Document object is replaced on every navigation, so always refresh
      * the pointer; only the JS shim objects are created once. */
     g_document = (WebCore::Document*)document;
+
+    ensureRealmDocumentContext();
 
     /* A frame document with its own realm: switch into it and refresh that
      * realm's globals. Nothing below applies (no engine bootstrap, no shared
@@ -6049,7 +5677,7 @@ void bindDocument(void* document)
             antb_set_native(global, g_document, AGB_TAG_NODE);
             antb_value_release(global);
         }
-        sessionHistoryNoteDocument(g_document);
+        AntRuntime::RealmDocument::noteDocument(g_engine, g_document);
         installFrameGlobals(g_engine, g_document);
         noteMainBinding();
         return;
@@ -6130,7 +5758,7 @@ void bindDocument(void* document)
         installGlobalApi(g_engine, global);
 
         /* A new main frame document is a new session history entry. */
-        sessionHistoryNoteDocument(g_document);
+        AntRuntime::RealmDocument::noteDocument(g_engine, g_document);
         /* window/self/top/parent/frames/document/length: per frame, refreshed
          * by the installer below (a child frame reads the same global object). */
         installFrameGlobals(g_engine, g_document);
@@ -6189,6 +5817,7 @@ struct Listener {
     WebCore::Node* node;
     std::string    type;
     AntbValue*     fn;      /* rooted */
+    AntbRealm*     realm;   /* realm the handler was registered in (R132) */
     bool           once;    /* remove after the first dispatch */
     bool           handler; /* set through `el.onxxx = fn`, replaced in place */
 };
@@ -6247,6 +5876,7 @@ static int setNodeEventHandler(WebCore::Node* n, const char* type, const AntbVal
         l.node = n;
         l.type = type;
         l.fn = antb_retain(value);
+        l.realm = currentRealm();
         l.once = false;
         l.handler = true;
         g_listeners->push_back(l);
@@ -6273,6 +5903,27 @@ void dropListenersForOldDocument()
             antb_value_release((*g_listeners)[i].fn);
     }
     g_listeners->clear();
+}
+
+/* A frame document is going away: drop only its listeners. The parent's and
+ * the other frames' handlers must survive (R132). */
+static void dropListenersForDocument(WebCore::Document* document)
+{
+    if (!g_listeners || !document)
+        return;
+
+    for (size_t i = 0; i < g_listeners->size(); ) {
+        Listener& l = (*g_listeners)[i];
+        WebCore::Document* owner = l.node ? l.node->document() : 0;
+
+        if (owner == document) {
+            if (l.fn)
+                antb_value_release(l.fn);
+            g_listeners->erase(g_listeners->begin() + i);
+        } else {
+            ++i;
+        }
+    }
 }
 
 /* "div#app" / "img#qr" / "document" for a [gap-jsdom] line. Only called when
@@ -8006,9 +7657,15 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
     /* document.defaultView: React Router's data router reads
      * `document.defaultView.history` before anything else, and the property
      * set on the shared document object does not reach wrappers handed out
-     * for the same Document, so answer it here for every node. */
+     * for the same Document, so answer it here for every node.
+     * With per-frame realms the view belongs to the node's document, not to
+     * whichever realm happens to be current (R132). */
     if (!strcmp(name, "defaultView")) {
-        AntbValue* global = antb_global(engine);
+        WebCore::Document* document = n->document();
+        AntbRealm* realm = (document && perFrameRealmEnabled())
+                         ? realmOfDocument(engine, document) : NULL;
+        AntbValue* global = realm ? antb_realm_global(engine, realm)
+                                  : antb_global(engine);
 
         if (global) {
             antb_value_assign(out, global);
@@ -9025,6 +8682,7 @@ int nodeAddEventListener(AntbEngine* engine, AntbValue* self, AntbValue** args, 
         /* Only functions are callable later: pages happily pass null or objects
          * as the listener, and dispatching those crashed the process. */
         l.fn = antb_is_function(args[1]) ? antb_retain(args[1]) : NULL;
+        l.realm = currentRealm();
         l.handler = false;
 
         /* options.once: remove the listener after its first dispatch. The third
@@ -12645,8 +12303,9 @@ void documentWillUnload(void)
     }
 
     /* The old page's listeners close over its DOM and would fire against the
-     * next document. */
-    dropListenersForOldDocument();
+     * next document. Only this document's listeners: child frames have their
+     * own realms and keep theirs. */
+    dropListenersForDocument(g_document);
 
     /* Isolation: the old realm goes away with the old document. Its globals,
      * its module registry and its timers must not be visible to the next
@@ -12679,6 +12338,7 @@ void frameDocumentWillUnload(void* document)
         free(pending);
     }
 
+    dropListenersForDocument(doc);
     forgetFrameRealm(doc);
 
     if (doc->parentDocument())
@@ -12971,12 +12631,29 @@ static void runListenersFor(WebCore::Node* node, const std::string& type, AntbVa
         return;
     for (size_t i = 0; i < g_listeners->size(); ++i) {
         Listener& l = (*g_listeners)[i];
+        AntbRealm* previousRealm = NULL;
+        bool switched = false;
+
         if (l.node != node || l.type != type)
             continue;
+
+        /* Run the handler in the realm it was registered in: a parent event
+         * bubbling into a child's handler (or vice versa) must see its own
+         * document, not whatever realm was current (R132). */
+        if (g_engine && l.realm && l.realm != currentRealm()) {
+            previousRealm = currentRealm();
+            antb_realm_enter(g_engine, l.realm);
+            applyRealmBinding(l.realm);
+            switched = true;
+        }
         {
             AntbValue* args[1];
             args[0] = evt;
             value = antb_call(g_engine, l.fn, currentTarget, args, evt ? 1 : 0, NULL);
+        }
+        if (switched && previousRealm) {
+            antb_realm_enter(g_engine, previousRealm);
+            applyRealmBinding(previousRealm);
         }
         if (!value) {
             char* pending = antb_take_pending_error(g_engine);
