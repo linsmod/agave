@@ -1,6 +1,9 @@
 <!DOCTYPE html><html><head><meta charset="utf-8"><title>calc variants</title><style>
   html, body { margin: 0; padding: 0; }
-  .box { width: 300px; font-size: 12px; }
+  /* line-height is pinned: the default font differs between engines (agave's
+     Arial vs Chrome's platform default), which changes every line box by 1px
+     at 12px and would drown the calc() widths this page actually tests. */
+  .box { width: 300px; font-size: 12px; line-height: 16px; }
   #a { max-width: calc(100% - 142px); }
   #b { max-width: calc(100% - 130px - 12px); }
   #c { max-width: calc(100% - 130px - 1em); }
