@@ -234,7 +234,10 @@ try {
                               'supports.sel-attr=true', 'supports.sel-bad=false',
                               # @page is a PAGE_RULE with its declaration block.
                               'page.count=2', 'page.type=6', 'page.selector=:left',
-                              'page.styleLen=4', 'page.margin=2cm')) {
+                              'page.styleLen=4', 'page.margin=2cm',
+                              # width:33.333% and width:calc(33.333%) must
+                              # round the same way (267 = round(33.333% * 800)).
+                              'pct.plain=267', 'pct.calc=267')) {
             if ($text -notmatch [regex]::Escape($needle)) {
                 Write-Host ('cssom: missing ' + $needle)
                 $missing++

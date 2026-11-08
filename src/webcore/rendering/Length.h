@@ -132,11 +132,16 @@ namespace WebCore {
                 case Fixed:
                     return value();
                 case Percent:
-                    return maxValue * rawValue() / (100 * percentScaleFactor);
                 case Calculated: {
-                    /* Chrome rounds a percentage resize to the nearest pixel;
-                     * 33.333% of 600 must land on 200, not 199. */
-                    double v = maxValue * (double)rawValue() / (100.0 * percentScaleFactor) + m_calcPx;
+                    /* Both percentage forms resolve through the same double and
+                     * the same rounding: `width: 33.333%` and
+                     * `width: calc(33.333%)` must agree (Percent used to be
+                     * integer-truncated while Calculated rounded, so the same
+                     * authored value gave 266px and 267px). Chrome rounds a
+                     * percentage resize to the nearest pixel: 33.333% of 600
+                     * must land on 200, not 199. */
+                    double v = maxValue * (double)rawValue() / (100.0 * percentScaleFactor)
+                             + (type() == Calculated ? m_calcPx : 0);
                     return v < 0 ? (int)(v - 0.5) : (int)(v + 0.5);
                 }
                 case Auto:

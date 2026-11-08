@@ -136,5 +136,21 @@
     out.push('dynamic.sheets=' + ds.length);
     out.push('dynamic.rules=' + dynRules);
 
+    /* Percentages must resolve through one rounding path: width:33.333% and
+     * width:calc(33.333%) used to differ by one pixel (Percent truncated,
+     * Calculated rounded, R117). 33.333% of 800 rounds to 267. */
+    var pctBox = document.createElement('div');
+    pctBox.style.width = '800px';
+    var pctPlain = document.createElement('div');
+    pctPlain.style.cssText = 'width:33.333%;height:0';
+    var pctCalc = document.createElement('div');
+    pctCalc.style.cssText = 'width:calc(33.333%);height:0';
+    pctBox.appendChild(pctPlain);
+    pctBox.appendChild(pctCalc);
+    document.body.appendChild(pctBox);
+    out.push('pct.plain=' + pctPlain.getBoundingClientRect().width);
+    out.push('pct.calc=' + pctCalc.getBoundingClientRect().width);
+    document.body.removeChild(pctBox);
+
     probeExit(out.join('\n'));
 })();
