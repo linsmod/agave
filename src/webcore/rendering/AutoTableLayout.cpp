@@ -90,8 +90,17 @@ void AutoTableLayout::recalcColumn(int effCol)
 
                     Length w = cell->styleOrColWidth();
                     // FIXME: What is this arbitrary value?
-                    if (w.rawValue() > 32760)
+                    /* rawValue() is a px count for Fixed but `percent * percentScaleFactor`
+                     * for Percent/Calculated, so the cap has to be per unit. The bare
+                     * 32760 was written when percentScaleFactor was 128, where it meant
+                     * 255.9% for percentages; keep that meaning (~256%) instead of
+                     * clamping every ordinary percentage to 3.3%. */
+                    if (w.isPercent() || w.isCalculated()) {
+                        if (w.rawValue() > 256 * percentScaleFactor)
+                            w.setRawValue(256 * percentScaleFactor);
+                    } else if (w.rawValue() > 32760) {
                         w.setRawValue(32760);
+                    }
                     if (w.isNegative())
                         w.setValue(0);
                     switch(w.type()) {
@@ -589,7 +598,9 @@ void AutoTableLayout::layout()
         }
         if (totalPercent > 100 * percentScaleFactor) {
             // remove overallocated space from the last columns
-            int excess = tableWidth*(totalPercent - 100 * percentScaleFactor) / (100 * percentScaleFactor);
+            // 64-bit: tableWidth * percentDelta overflows int at 1/10000 %.
+            int excess = (int)((long long)tableWidth * (totalPercent - 100 * percentScaleFactor)
+                               / (100 * percentScaleFactor));
             for (int i = nEffCols-1; i >= 0; i--) {
                 if (m_layoutStruct[i].effWidth.isPercent()) {
                     int w = m_layoutStruct[i].calcWidth;
@@ -675,7 +686,8 @@ void AutoTableLayout::layout()
         for (int i = 0; i < nEffCols; i++) {
             Length &width = m_layoutStruct[i].effWidth;
             if (width.isPercent()) {
-                int w = available * width.rawValue() / totalPercent;
+                // 64-bit: available * rawValue() overflows int at 1/10000 %.
+                int w = (int)((long long)available * width.rawValue() / totalPercent);
                 available -= w;
                 totalPercent -= width.rawValue();
                 m_layoutStruct[i].calcWidth += w;

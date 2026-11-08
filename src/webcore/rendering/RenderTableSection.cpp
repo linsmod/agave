@@ -426,7 +426,9 @@ int RenderTableSection::layoutRows(int toAdd)
             int rh = m_rowPos[1] - m_rowPos[0];
             for (int r = 0; r < totalRows; r++) {
                 if (totalPercent > 0 && m_grid[r].height.isPercent()) {
-                    int toAdd = min(dh, (totalHeight * m_grid[r].height.rawValue() / (100 * percentScaleFactor)) - rh);
+                    // 64-bit: totalHeight * rawValue() overflows int at 1/10000 %.
+                    int toAdd = min(dh, (int)((long long)totalHeight * m_grid[r].height.rawValue()
+                                              / (100 * percentScaleFactor)) - rh);
                     // If toAdd is negative, then we don't want to shrink the row (this bug
                     // affected Outlook Web Access).
                     toAdd = max(0, toAdd);

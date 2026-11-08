@@ -28,7 +28,26 @@
 namespace WebCore {
 
     const int undefinedLength = -1;
-    const int percentScaleFactor = 128;
+
+    /* Percentages live in the same packed integer as fixed lengths (see the
+     * constructors below): `percent * percentScaleFactor` is stored in the
+     * 28-bit value field, so the quantum is 1/percentScaleFactor of a percent.
+     * The original WebKit 2008 value was 128 (1/128 %, a power of two), which
+     * quantised authored decimals: 33.333% was stored as 33.328125% and read
+     * back as "33.3281%". 10000 keeps the decimals authors actually write
+     * exact (33.333%, 12.5%, 0.1%) at 1/10000 % resolution. The price is range:
+     * `percent * 10000 * 16` must stay inside int, i.e. percentages up to
+     * ~13400% (the pre-existing FIXME on `Length(int, LengthType)` applies). */
+    const int percentScaleFactor = 10000;
+
+    /* `percent * percentScaleFactor`, rounded instead of truncated: the CSS
+     * tokenizer keeps numbers in a float (33.336f is 33.335998…), so a plain
+     * cast would store 333359/10000 = 33.3359% for an authored 33.336%. */
+    inline int scaledPercent(double v)
+    {
+        double scaled = v * percentScaleFactor;
+        return scaled < 0 ? (int)(scaled - 0.5) : (int)(scaled + 0.5);
+    }
 
     /* Calculated holds `percent + px` (CSS calc() with a percentage term).
      * The percentage lives in m_value exactly like Percent; the pixel part is
@@ -57,14 +76,14 @@ namespace WebCore {
         }
 
         Length(double v, LengthType t, bool q = false)
-            : m_value(static_cast<int>(v * percentScaleFactor) * 16 | (q << 3) | t), m_calcPx(0)
+            : m_value(scaledPercent(v) * 16 | (q << 3) | t), m_calcPx(0)
         {
             ASSERT(t == Percent);
         }
 
         /* calc(): percentage plus a pixel offset. */
         Length(double percent, int px)
-            : m_value(static_cast<int>(percent * percentScaleFactor) * 16 | Calculated)
+            : m_value(scaledPercent(percent) * 16 | Calculated)
             , m_calcPx(px)
         {
         }
@@ -116,13 +135,13 @@ namespace WebCore {
         void setValue(LengthType t, double value)
         {
             ASSERT(t == Percent);
-            m_value = static_cast<int>(value * percentScaleFactor) * 16 | (m_value & 0x8) | t;
+            m_value = scaledPercent(value) * 16 | (m_value & 0x8) | t;
         }
 
         void setValue(double value)
         {
             ASSERT(type() == Percent);
-            m_value = static_cast<int>(value * percentScaleFactor) * 16 | (m_value & 0xF);
+            m_value = scaledPercent(value) * 16 | (m_value & 0xF);
         }
 
         // note: works only for certain types, returns undefinedLength otherwise
@@ -156,10 +175,13 @@ namespace WebCore {
             switch (type()) {
                 case Fixed:
                     return value();
+                /* Still truncating (unlike calcValue(), min/max constraints are
+                 * clamped later anyway), but in 64 bits: maxValue * rawValue()
+                 * overflows int once percentages are stored at 1/10000 %. */
                 case Percent:
-                    return maxValue * rawValue() / (100 * percentScaleFactor);
+                    return (int)((long long)maxValue * rawValue() / (100 * percentScaleFactor));
                 case Calculated:
-                    return maxValue * rawValue() / (100 * percentScaleFactor) + m_calcPx;
+                    return (int)((long long)maxValue * rawValue() / (100 * percentScaleFactor)) + m_calcPx;
                 case Auto:
                 default:
                     return 0;

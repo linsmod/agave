@@ -265,7 +265,7 @@ try {
                               'b.flex=1 1 0%', 'c.flex=1 1 auto',
                               'd.flex=0 0 auto', 'e.flex=4 0.5 25%',
                               'f.basis=0px', 'g.basis=calc(50% - 4px)',
-                              'h.basis=33.3281%',
+                              'h.basis=33.333%',
                               # calc() inside the `flex` shorthand (the encoded
                               # dimension token the sheet rewriter emits).
                               'i.flex=1 1 calc(50% - 4px)',

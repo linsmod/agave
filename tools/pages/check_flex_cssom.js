@@ -22,9 +22,8 @@
      * token, so the shorthand loop must decode it as well. */
     out.push('i.flex=' + cs('i').flex);
     out.push('j.flex=' + cs('j').flex);
-    /* 33.333% is stored as 1/128 of a percent (Length), so it reads back as
-     * 33.3281%; Chrome keeps the authored precision. Locks in current
-     * behaviour, not the ideal one. */
+    /* Percentages are stored at 1/10000 of a percent since R118, so the
+     * authored 33.333% reads back exactly like Chrome reports it. */
     out.push('h.basis=' + cs('h').flexBasis);
 
     var t = document.getElementById('t');
