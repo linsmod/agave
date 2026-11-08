@@ -540,6 +540,9 @@ ant 自身 CLI / 基础设施的开关（`ANT_MANIFEST_URL`、`ANT_SANDBOX_*`、
 
 ## 7. 验证闭环：回归清单 + A/B
 
+> 全套件清单（15 个 `run_*.ps1` 的覆盖/依赖/判据、改动→该跑哪些、加回归页的写法、fixture 在哪）：
+> [dev-tests.md](dev-tests.md)。下面只列几组最常用的判据。
+
 - 一条命令级回归：`tools/run_worker_tests.ps1`（Worker 九项）；`tools/run_xhr_tests.ps1`
   （XHR 五项：投递重入 R94 + `responseText` UTF-8 解码 R96 + 响应头/`statusText`/
   `readyState`/`overrideMimeType` 与 Chrome 对拍 R97）；`tools/run_nav_tests.ps1`

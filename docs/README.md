@@ -33,7 +33,8 @@
 | [design-elem-fastpath.md](design-elem-fastpath.md) | **元素访问快路径**（设计记录）：稀疏下标/字符串键 140–200 ns 实测、shape 索引表与站点 IC、验收阈值 | 改 `obj[key]` 性能 / VM 卡死 / P1-g |
 | [dev-onboarding.md](dev-onboarding.md) | 代码在哪、**我要改 X 去哪**、症状→先查哪 | 第一次改代码，或换子系统 |
 | [dev-build-and-run.md](dev-build-and-run.md) | 工具链、构建路径、改什么重编什么、产物拓扑、环境坑 | 编不动 / 跑不起来 |
-| [dev-debugging.md](dev-debugging.md) | 无头探针、日志、环境变量全表、cdb、噪音对照、回归清单、A/B | 页面不对、崩了、卡住 |
+| [dev-debugging.md](dev-debugging.md) | 无头探针、日志、环境变量全表、cdb、噪音对照、A/B、Chrome 对拍 | 页面不对、崩了、卡住、想查 Chrome 怎么算 |
+| [dev-tests.md](dev-tests.md) | **测试清单**：15 个 `run_*.ps1` 套件的覆盖/依赖/判据、改动→该跑哪些、加回归页的写法、fixture 在哪 | 改完代码要验证 / 想知道有没有现成测试 |
 | [dev-conventions.md](dev-conventions.md) | 提交信息、回归页、文档更新、代码风格 | 提交前 |
 | [hist-lessons.md](hist-lessons.md) | R 系列经验库：现象 → 根因 → 修法 → 验证 | 遇到眼熟的 bug、想推翻旧结论 |
 | [plan-roadmap.md](plan-roadmap.md) | 待办与验收标准（P0/P1/P2） | 想知道"接下来做什么" |
@@ -45,6 +46,7 @@
 - **新人**：`AGENTS.md` → [arch-overview.md](arch-overview.md) → [dev-onboarding.md](dev-onboarding.md) → [arch-status.md](arch-status.md)。
 - **改代码**：[dev-onboarding.md](dev-onboarding.md) §3 → [arch-rendering.md](arch-rendering.md)（布局/绘制）→ [ref-code-index.md](ref-code-index.md) → [dev-build-and-run.md](dev-build-and-run.md)。
 - **查 bug**：[dev-debugging.md](dev-debugging.md) → [arch-capability-gaps.md](arch-capability-gaps.md) → [hist-lessons.md](hist-lessons.md)（布局问题先看 [arch-rendering.md](arch-rendering.md) §7）。
+- **验证改动**：[dev-tests.md](dev-tests.md)（该跑哪个套件 + 怎么加回归页）→ [dev-debugging.md](dev-debugging.md) §4（Chrome 对拍）。
 - **做设计**：[design-frame-window.md](design-frame-window.md) / [design-per-view-js-context.md](design-per-view-js-context.md) → [hist-lessons.md](hist-lessons.md)。
 
 ## 维护规则

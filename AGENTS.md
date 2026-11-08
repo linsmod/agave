@@ -16,6 +16,7 @@ agave 是**从零移植的浏览器**：WebKit 2008 的 WebCore（解析/布局/
 | 待办与验收标准 | [docs/plan-roadmap.md](docs/plan-roadmap.md) |
 | 代码在哪、**我要改 X 去哪**、症状→先查哪 | [docs/dev-onboarding.md](docs/dev-onboarding.md) |
 | 构建/运行 / 调试、日志、回归、**Chrome 对拍** | [docs/dev-build-and-run.md](docs/dev-build-and-run.md)、[docs/dev-debugging.md](docs/dev-debugging.md)（`tools/chrome_probe.py`：同一段 JS 两边跑 / 查命中的 CSS 规则 / 查真实字体 / 参考截图） |
+| **项目里有哪些测试、改动后跑哪些** | [docs/dev-tests.md](docs/dev-tests.md)（15 个 `run_*.ps1` 套件 + 对拍工具 + fixture 约定） |
 | JS/DOM/CSS **能力缺口**（不支持清单 + 一条命令复测） | [docs/arch-capability-gaps.md](docs/arch-capability-gaps.md) |
 | `video`/`audio` 媒体元素（尺寸、播放状态机、元数据、抽帧） | [docs/arch-media.md](docs/arch-media.md) |
 | ant/桥接哪份是真的、函数/机制锚点 | [docs/ref-ant-engine.md](docs/ref-ant-engine.md)、[docs/ref-code-index.md](docs/ref-code-index.md) |
