@@ -128,10 +128,30 @@ try {
     } else {
         # #overflow is a 200x48 pill at (20,20): the corner pixel inside the
         # border box must stay white (a square border painted it grey), the
-        # centre keeps the fill. (20,90) is the control box's corner and must
-        # be the black border.
+        # centre keeps the fill. #odd is 200x47 with the same 28px radii (factor
+        # 47/56 = 23.5 per radius, so the rounded corner must still be clipped
+        # and, before R131, rounding it up to 24+24 > 47 aborted the browser):
+        # its corner stays white, its left border still paints. (20,180) is the
+        # control box's corner and must be the black border.
         & python tools/pixel_check.py $bmp `
-            21,21,ffffff 120,44,f9fafb 20,90,000000 120,112,3964fe
+            21,21,ffffff 120,44,f9fafb 21,89,ffffff 120,111,f9fafb 20,111,d0d5dd 20,180,000000 120,180,3964fe
+        if ($LASTEXITCODE -ne 0) { $failed++ }
+    }
+
+    Write-Host '== paint: fieldset border minus legend (legend taller than the box)'
+    $bmp = Join-Path $root 'build-zig-native\layout_fieldset.bmp'
+    $url = 'file:///' + (Join-Path $root 'tools/pages/layout/fieldset_legend.html').Replace('\', '/')
+    & (Join-Path $root 'build-zig-native\agave_shell.exe') --probe $url `
+        --wait 1000 --settle 100 --timeout 30000 --shot $bmp | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host 'fieldset_legend: probe failed'
+        $failed++
+    } else {
+        # The border box collapses to its two horizontal rules at y=28/29; the
+        # 40px glyph overflows them. A negative h used to abort the process, and
+        # anything below the rules must stay white.
+        & python tools/pixel_check.py $bmp `
+            500,28,000000 500,29,000000 500,40,ffffff 500,10,ffffff
         if ($LASTEXITCODE -ne 0) { $failed++ }
     }
 

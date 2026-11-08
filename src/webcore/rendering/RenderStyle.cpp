@@ -1630,36 +1630,53 @@ const Vector<StyleDashboardRegion>& RenderStyle::noneDashboardRegions()
  * that makes them fit). Painting must clamp here instead of dropping the
  * rounding: with 28px radii in a 48px-tall box the border used to be drawn
  * square while the background was clipped round. */
+static int scaledBorderRadius(int radius, long long num, long long den)
+{
+    if (radius <= 0)
+        return 0;
+    return static_cast<int>(radius * num / den); // floor: radius >= 0
+}
+
 void RenderStyle::scaledBorderRadii(int w, int h, IntSize& topLeft, IntSize& topRight,
                                     IntSize& bottomLeft, IntSize& bottomRight) const
 {
-    float factor = 1.0f;
-    int sum;
+    /* The factor is carried as the exact rational num/den and every radius is
+     * floored, because rounding a scaled radius up can push a pair back over
+     * its side: a 47px-tall box with two 28px radii scales by 47/56, i.e.
+     * 23.5 each, rounds to 24 + 24 > 47, and paintBorder() then hands
+     * drawBorder() a y2 < y1 - the ASSERT(y2 >= y1) there killed the process
+     * (design.dev / any odd-sized rounded element). Flooring keeps every
+     * side's sum <= that side by construction:
+     *     floor(a*f) + floor(b*f) <= (a + b)*f <= side. */
+    const int sums[4] = { topLeft.width() + topRight.width(),
+                          bottomLeft.width() + bottomRight.width(),
+                          topLeft.height() + bottomLeft.height(),
+                          topRight.height() + bottomRight.height() };
+    const int sides[4] = { w, w, h, h };
+    long long num = 1;
+    long long den = 1;
 
-    sum = topLeft.width() + topRight.width();
-    if (sum > 0 && sum > w)
-        factor = min(factor, (float)w / sum);
-    sum = bottomLeft.width() + bottomRight.width();
-    if (sum > 0 && sum > w)
-        factor = min(factor, (float)w / sum);
-    sum = topLeft.height() + bottomLeft.height();
-    if (sum > 0 && sum > h)
-        factor = min(factor, (float)h / sum);
-    sum = topRight.height() + bottomRight.height();
-    if (sum > 0 && sum > h)
-        factor = min(factor, (float)h / sum);
+    for (int i = 0; i < 4; ++i) {
+        if (sums[i] <= 0 || sums[i] <= sides[i])
+            continue;
+        // num/den = min(num/den, sides[i]/sums[i])
+        if (static_cast<long long>(sides[i]) * den < num * sums[i]) {
+            num = sides[i];
+            den = sums[i];
+        }
+    }
 
-    if (factor >= 1.0f)
-        return;
+    if (num == den)
+        return; // factor 1: the radii already fit
 
-    topLeft = IntSize(static_cast<int>(topLeft.width() * factor + 0.5f),
-                      static_cast<int>(topLeft.height() * factor + 0.5f));
-    topRight = IntSize(static_cast<int>(topRight.width() * factor + 0.5f),
-                       static_cast<int>(topRight.height() * factor + 0.5f));
-    bottomLeft = IntSize(static_cast<int>(bottomLeft.width() * factor + 0.5f),
-                         static_cast<int>(bottomLeft.height() * factor + 0.5f));
-    bottomRight = IntSize(static_cast<int>(bottomRight.width() * factor + 0.5f),
-                          static_cast<int>(bottomRight.height() * factor + 0.5f));
+    topLeft = IntSize(scaledBorderRadius(topLeft.width(), num, den),
+                      scaledBorderRadius(topLeft.height(), num, den));
+    topRight = IntSize(scaledBorderRadius(topRight.width(), num, den),
+                       scaledBorderRadius(topRight.height(), num, den));
+    bottomLeft = IntSize(scaledBorderRadius(bottomLeft.width(), num, den),
+                         scaledBorderRadius(bottomLeft.height(), num, den));
+    bottomRight = IntSize(scaledBorderRadius(bottomRight.width(), num, den),
+                          scaledBorderRadius(bottomRight.height(), num, den));
 }
 
 }

@@ -584,6 +584,25 @@
   页面是卡在**解析/定时器回调**里，所以用**引擎线程心跳**（`g_enginePumpTick`，控件消息泵每 ~10 ms 更新）
   —— 超过 500 ms 没泵消息即视为卡死，与命令无关。
 
+### P0-m 页面数据能碰到的 ASSERT = 进程退出（发布壳是 Debug 构建）
+
+- 现状：`tools/build_project.ps1` 写死 `-DCMAKE_BUILD_TYPE=Debug`，所以 `src/wtf/Assertions.h` 的
+  `ASSERT` 全部生效，失败即 `CRASH()`（写 `0xbbadbeef`，随后 OS 杀进程）。GUI 壳就是用户实际在用的
+  那个二进制，于是**任何**一条页面样式/脚本能碰到的断言都会让浏览器直接消失 —— R131 的两条
+  （圆角缩放四舍五入、legend 比 fieldset 高）都只要几行 CSS。
+- 已做（2026-11-08，R131）：两条已知路径按 bug 修掉（`RenderStyle::scaledBorderRadii()` 改成精确
+  有理数因子 + 向下取整；`RenderFieldset::paintBoxDecorations()` 把负的边框盒高度夹成 0、
+  `paintBorderMinusLegend()` 把 startY 夹进 `[ty, ty+h]`），各留一个回归页。
+- 要决定的事（二选一或都做）：
+  1. **发布壳用 NDEBUG**：`build_project.ps1` 拆 debug（带断言，开发/测试用）与 release
+     （`-DCMAKE_BUILD_TYPE=Release`，`ASSERT_DISABLED` 随 `NDEBUG` 打开）两个构建目录，断言只在
+     debug 里致命。风险：断言现在也当着"半成品路径的哨兵"，关掉后那些路径会静默画错/少画，
+     要先跑一遍测试矩阵确认没有只靠断言暴露的路径。
+  2. **按输入来源分级**：给完全由 CSS/DOM 数据决定的几何断言加一个 `PAGE_ASSERT`（记录 + 继续，
+     不进 `CRASH()`），只在真的"引擎自己不变量"上用 `ASSERT`。
+- 判据：一批"故意恶心"的页面（0 高度盒、超大圆角、负 margin、legend 溢出、table 塌陷、百分比圆角）
+  连续跑 10 分钟不产生新的 `agb_crash.txt`；`run_layout_tests.ps1` 仍全绿。
+
 ### P2 多 tab 并行
 
 - 现状：一条引擎线程串行跑所有 view（[arch-overview.md](arch-overview.md) §1），所以 tab 之间既不并行，

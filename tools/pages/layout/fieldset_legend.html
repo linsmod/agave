@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>fieldset border minus legend</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #fff; }
+  /* A legend taller than the fieldset: RenderFieldset::paintBoxDecorations()
+     subtracts the legend's vertical offset from the border box height, so h
+     goes negative and the left/right borders ended above where they started -
+     drawBorder()'s ASSERT(y2 >= y1) aborted the browser (R131). The border box
+     collapses to its two horizontal rules; the glyph overflows them. */
+  fieldset { margin: 10px; height: 0; padding: 0; border: 1px solid #000; }
+  legend { font-size: 40px; line-height: 40px; padding: 0; }
+</style>
+</head>
+<body>
+  <fieldset><legend>X</legend></fieldset>
+</body>
+</html>

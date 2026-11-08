@@ -121,6 +121,12 @@ void RenderFieldset::paintBoxDecorations(PaintInfo& paintInfo, int tx, int ty)
     int yOff = (legend->yPos() > 0) ? 0 : (legend->height() - borderTop()) / 2;
     int legendBottom = ty + legend->yPos() + legend->height();
     h -= yOff;
+    /* A legend taller than the fieldset (height:0 with a 40px legend) makes
+     * yOff eat the whole box: h goes negative, the left/right border calls then
+     * end above where they start and drawBorder()'s ASSERT(y2 >= y1) aborted
+     * the browser (R131). A negative border box paints nothing. */
+    if (h < 0)
+        h = 0;
     ty += yOff - borderTopExtra();
 
     int my = max(ty, paintInfo.rect.y());
@@ -188,7 +194,10 @@ void RenderFieldset::paintBorderMinusLegend(GraphicsContext* graphicsContext, in
         if (lx < borderLeftWidth && lx + lw > 0) {
             // The legend intersects the border.
             ignore_top = true;
-            startY = lb;
+            // A legend taller than the fieldset (height:0 + a large font) puts
+            // its bottom edge below the fieldset's: clamp so drawBorder() never
+            // gets y2 < y1 (that assertion aborted the browser, R131).
+            startY = min(max(lb, ty), ty + h);
         }
 
         drawBorder(graphicsContext, tx, startY, tx + borderLeftWidth, ty + h, BSLeft, lc, style->color(), ls,
@@ -212,7 +221,9 @@ void RenderFieldset::paintBorderMinusLegend(GraphicsContext* graphicsContext, in
         if (lx < w && lx + lw > w - borderRightWidth) {
             // The legend intersects the border.
             ignore_top = true;
-            startY = lb;
+            // See the left border: keep the clamped legend bottom inside the
+            // fieldset so y2 >= y1 holds in drawBorder().
+            startY = min(max(lb, ty), ty + h);
         }
 
         drawBorder(graphicsContext, tx + w - borderRightWidth, startY, tx + w, ty + h, BSRight, rc, style->color(), rs,

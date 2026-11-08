@@ -11,12 +11,17 @@
      the square border corners showed outside a pill-shaped fill (DeepSeek's
      phone input). */
   #overflow { border-radius: 28px; }
+  /* 47px tall with two 28px radii: the factor is 47/56, i.e. 23.5 per radius.
+     Rounding that up (24 + 24 > 47) made paintBorder() hand drawBorder() a
+     y2 < y1 and the ASSERT(y2 >= y1) there aborted the browser (R131). */
+  #odd { height: 47px; border-radius: 28px; }
   /* control: no radius, square black border */
   #square { background: #3964fe; border: 1px solid #000; }
 </style>
 </head>
 <body>
   <div class="box" id="overflow"></div>
+  <div class="box" id="odd"></div>
   <div class="box" id="square"></div>
 </body>
 </html>

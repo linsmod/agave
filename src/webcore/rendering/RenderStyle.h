@@ -1427,6 +1427,9 @@ public:
     // background (which has no such check) still gets a rounded clip - a pill
     // shape with square border corners (DeepSeek's phone input, 28px radii in
     // a 48px-tall box).
+    // The returned radii always fit (sum on every side <= that side), so
+    // callers may offset by them without re-checking: they are floored, not
+    // rounded, precisely so the guarantee survives integer truncation.
     void scaledBorderRadii(int w, int h, IntSize& topLeft, IntSize& topRight,
                            IntSize& bottomLeft, IntSize& bottomRight) const;
 
