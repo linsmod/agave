@@ -762,6 +762,24 @@ void RenderFlexibleBox::layoutFlexLines(bool wrap, bool relayoutChildren)
         }
     }
 
+    /* A single-line flex container with a definite height: the flex line's
+     * cross size is the container's inner height (CSS Flexbox §9.4), not the
+     * tallest item. The difference only shows when the items overflow the box:
+     * Chrome then centres them *inside* that line, so they stick out by the
+     * same amount top and bottom. Sizing the line to the tallest item put
+     * everything at the content top instead (DeepSeek's login input:
+     * `.ds-input{display:flex;align-items:center;height:48px}` holds a 48px
+     * prefix with 5px margins, so with the line at the inner 46px the prefix
+     * lands at y=-6 in line space instead of y=0 - the last 6px of the row). */
+    if (lineCount == 1 && definiteHeight) {
+        int innerCross = m_preFlexHeight > 0
+            ? m_preFlexHeight - borderTop() - borderBottom() - paddingTop() - paddingBottom()
+            : containerHeight;
+
+        if (innerCross >= 0)
+            lineHeights[0] = innerCross;
+    }
+
     int yPos = contentTop + alignOffset;
     int overflowRight = contentLeft;
 

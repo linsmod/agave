@@ -1021,28 +1021,6 @@ RenderStyle* CSSStyleSelector::pseudoStyleForElement(RenderStyle::PseudoId pseud
     return style;
 }
 
-static void addIntrinsicMargins(RenderStyle* style)
-{
-    // Intrinsic margin value.
-    const int intrinsicMargin = 2 * style->effectiveZoom();
-    
-    // FIXME: Using width/height alone and not also dealing with min-width/max-width is flawed.
-    // FIXME: Using "quirk" to decide the margin wasn't set is kind of lame.
-    if (style->width().isIntrinsicOrAuto()) {
-        if (style->marginLeft().quirk())
-            style->setMarginLeft(Length(intrinsicMargin, Fixed));
-        if (style->marginRight().quirk())
-            style->setMarginRight(Length(intrinsicMargin, Fixed));
-    }
-
-    if (style->height().isAuto()) {
-        if (style->marginTop().quirk())
-            style->setMarginTop(Length(intrinsicMargin, Fixed));
-        if (style->marginBottom().quirk())
-            style->setMarginBottom(Length(intrinsicMargin, Fixed));
-    }
-}
-
 void CSSStyleSelector::adjustSmallRenderStyle(RenderStyle* style, Element *e)
 {
     // These rules are refer from minimo implements.
@@ -1236,14 +1214,12 @@ void CSSStyleSelector::adjustRenderStyle(RenderStyle* style, Element *e)
     // Cull out any useless layers and also repeat patterns into additional layers.
     style->adjustBackgroundLayers();
 
-    // Important: Intrinsic margins get added to controls before the theme has adjusted the style, since the theme will
-    // alter fonts and heights/widths.
-    if (e && e->isControl() && style->fontSize() >= 11) {
-        // Don't apply intrinsic margins to image buttons.  The designer knows how big the images are,
-        // so we have to treat all image buttons as though they were explicitly sized.
-        if (!e->hasTagName(inputTag) || static_cast<HTMLInputElement*>(e)->inputType() != HTMLInputElement::IMAGE)
-            addIntrinsicMargins(style);
-    }
+    // No intrinsic margins on form controls. The 2008 engine added 2px around
+    // every control whose UA margin was the `margin: 0__qem` quirk marker, so
+    // a plain <input> carried `margin: 2px` while Chrome (Blink dropped this
+    // in 2013) reports 0. Sites size inputs exactly (`width: 100%` in a flex
+    // row), so the 2px shifted the control and ate 4px of its width - the
+    // DeepSeek login input was 274px wide where Chrome has 277.4px.
 
     // Let the theme also have a crack at adjusting the style.
     if (style->hasAppearance())

@@ -20,7 +20,7 @@
 
 | 脚本 | 覆盖 | 依赖 | 判据 / 输出 |
 |---|---|---|---|
-| `run_layout_tests.ps1` | **主回归**：`tools/pages/layout/*.html` 全部与 headless Chrome 比几何（`data-case`）、几组像素断言（变换重绘、变换文字、背景、圆角、滚动条隐藏、vw/vh/resize、CSSOM、flex computed、DOM 生命周期） | Chrome、python `websockets` | 每组打印 `N/N checks ok`，最后 `LAYOUT=PASS`；失败打印 `LAYOUT=FAIL (n)` |
+| `run_layout_tests.ps1` | **主回归**：`tools/pages/layout/*.html` 全部与 headless Chrome 比几何（`data-case`）、几组像素断言（变换重绘、变换文字、背景、圆角、滚动条隐藏、vw/vh/resize、CSSOM、computed 简写序列化、flex computed、DOM 生命周期） | Chrome、python `websockets` | 每组打印 `N/N checks ok`，最后 `LAYOUT=PASS`；失败打印 `LAYOUT=FAIL (n)` |
 | `run_inspector_tests.ps1` | 注入 `inspector.js`：菜单项、行命中、元素信息 JSON、剪贴板；真实 `WM_RBUTTONDOWN/UP`（页面 contextmenu 必须被取消、壳的原生菜单不弹）与真实左键点击 | 无 | `inspector: 26/26 checks passed` |
 | `run_nav_tests.ps1` | `[nav]` 通道八项：链接点击 / 脚本跳转 / 历史后退 / meta refresh / `window.open` / 表单提交 / 302 / `AGB_NAV_LOG=0` 静音 | 自起 python http.server（8973） | `ALL NAV CHECKS PASSED (n cases)` |
 | `run_xhr_tests.ps1` | XHR 投递重入（R94）、`responseText` UTF-8 解码（R96）、响应头/`statusText`/`readyState`/`overrideMimeType` 与 Chrome 对拍（R97） | 自起静态服务（8991） | `ALL XHR CHECKS PASSED` |

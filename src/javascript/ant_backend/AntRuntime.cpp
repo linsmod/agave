@@ -42,6 +42,7 @@ namespace WebCore { bool prefersDarkColorScheme(); }
 #include "CSSParser.h"
 #include "CSSMutableStyleDeclaration.h"
 #include "CSSStyleDeclaration.h"
+#include "StylePropertyNames.h"
 #include "CSSStyleSheet.h"
 #include "CSSRule.h"
 #include "CSSRuleList.h"
@@ -656,6 +657,7 @@ int globalStorageClear(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, vo
 int globalStorageKey(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalStorageCount(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalComputedStyle(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int globalStylePropertyNames(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalPrefersDark(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalViewportSize(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalInputValue(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
@@ -5523,6 +5525,7 @@ static void installGlobalApi(AntbEngine* engine, AntbValue* global)
         antb_define_method(g_engine, global, "__agbStorageKey", globalStorageKey, NULL);
         antb_define_method(g_engine, global, "__agbStorageCount", globalStorageCount, NULL);
         antb_define_method(g_engine, global, "__agbComputedStyle", globalComputedStyle, NULL);
+        antb_define_method(g_engine, global, "__agbStylePropertyNames", globalStylePropertyNames, NULL);
         antb_define_method(g_engine, global, "__agbPrefersDark", globalPrefersDark, NULL);
         antb_define_method(g_engine, global, "__agbViewportWidth", globalViewportSize, (void*)0);
         antb_define_method(g_engine, global, "__agbViewportHeight", globalViewportSize, (void*)1);
@@ -10565,6 +10568,35 @@ int globalComputedStyle(AntbEngine* engine, AntbValue*, AntbValue** args, int ar
     antb_free(property);
     antb_free(pseudo);
     return makeStringResult(engine, out, value.c_str()) ? 1 : 0;
+}
+
+/* __agbStylePropertyNames(): camelCase DOM name of every CSS property the
+ * engine knows (generated from CSSPropertyNames.in into StylePropertyNames.h).
+ * The prelude builds the getComputedStyle() accessors from this instead of a
+ * hand-maintained list: that list had drifted, so `cs.margin`, `cs.padding`,
+ * `cs.border`, `cs.minWidth` and `cs.alignSelf` simply did not exist (a
+ * `getComputedStyle()` property read returned undefined while Chrome answers
+ * with the computed value). */
+int globalStylePropertyNames(AntbEngine* engine, AntbValue*, AntbValue**, int, AntbValue* out, void*)
+{
+    AntbValue* list = antb_make_array(engine);
+
+    if (!list)
+        return 0;
+
+    for (int i = 0; i < kStylePropertyNameCount; ++i) {
+        AntbValue* name = antb_make_string(engine, kStylePropertyNames[i]);
+
+        if (!name)
+            continue;
+
+        antb_array_push(engine, list, name);
+        antb_value_release(name);
+    }
+
+    antb_value_assign(out, list);
+    antb_value_release(list);
+    return 1;
 }
 
 int globalOpenWindow(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,

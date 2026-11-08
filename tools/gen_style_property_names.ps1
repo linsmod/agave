@@ -33,13 +33,35 @@ foreach ($line in Get-Content $input) {
     if ($camel -and -not $names.Contains($camel)) { $names.Add($camel) }
 }
 
-# Names the CSS parser accepts as aliases of the -webkit- spellings (see the
-# alias table in CSSGrammar.y), plus the classic cssFloat spelling of `float`.
+# Modern spellings the CSS parser aliases onto the -webkit- vocabulary
+# (`flex-grow` -> `-webkit-box-flex`, `align-items` -> `-webkit-box-align`, ...).
+# Chrome exposes both spellings on computed style, so both need an accessor.
+# The table is read from CSSGrammar.y itself: a hand-maintained copy drifted
+# and cost getComputedStyle().flexGrow (and flexDirection/flexWrap/transform).
+$grammar = Join-Path $root 'src\webcore\css\CSSGrammar.y'
+if (Test-Path $grammar) {
+    $text = [IO.File]::ReadAllText($grammar)
+    $start = $text.IndexOf('aliases[] = {')
+    if ($start -ge 0) {
+        $end = $text.IndexOf('};', $start)
+        if ($end -gt $start) {
+            $block = $text.Substring($start, $end - $start)
+            foreach ($m in [regex]::Matches($block, '\{\s*"([^"]+)"\s*,\s*"([^"]+)"\s*\}')) {
+                $name = $m.Groups[1].Value
+                if ($name.StartsWith('-')) { continue }   # vendor-prefixed source alias
+                $alias = [regex]::Replace($name, '-([a-z0-9])', $evaluator)
+                if ($alias -and -not $names.Contains($alias)) { $names.Add($alias) }
+            }
+        }
+    }
+}
+
+# Names Chrome has on computed style that the engine has no property id for
+# yet: they answer "" (present but empty), see docs/arch-capability-gaps.md.
 $extras = @(
-    'backgroundSize', 'backgroundClip', 'backgroundOrigin',
-    'borderRadius', 'borderTopLeftRadius', 'borderTopRightRadius',
-    'borderBottomLeftRadius', 'borderBottomRightRadius',
-    'cssFloat'
+    'cssFloat',
+    'alignSelf', 'justifyItems', 'justifySelf', 'placeItems', 'placeContent',
+    'placeSelf', 'inset'
 )
 
 foreach ($extra in $extras) {

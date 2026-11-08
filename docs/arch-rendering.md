@@ -128,6 +128,12 @@ DOM attach（Element::attach / Text::attach）
   ③行高、`align-items`/`align-content`/`justify-content` 摆放（`placeChild`），
   `align-items: stretch` 在这里把 auto 高的子项撑到行高（先定 `m_height` 再重排子项，
   期间必须保持 `m_flexingChildren`，否则子项会被当成普通块重排回容器宽）。
+- **单行 + 定高容器：行高 = 容器内高**（Flexbox §9.4），不是「最高子项」。子项比容器高时
+  Chrome 让它在行盒里按 `align-items` 对齐（`center` 就是上下等量溢出）；按子项定行高会把
+  内容顶到内容区上沿（DeepSeek 登录输入框：48px 前缀 + 5px margin 放进 48px 盒，矮 6px）。
+- **表单控件没有内在 margin**：2008 的 `addIntrinsicMargins()`（UA 的 `margin: 0__qem` 被
+  当成 quirk → 2px）已删除；Chrome 的 `<input>`/`<button>` 默认 margin 就是 0，保留它会让
+  控件右移 2px、可用宽度少 4px。
 - 仍然缺：`align-self`、`order`（仍是 `box-ordinal-group` 的整数分组语义）、
   `flex-basis` 的百分比/`calc()`、RTL 单行（仍走 2008 放置代码）。
 - `AGB_FLEX_DEBUG=1` 打印每行的 base/floor/ceiling/final 与 `block-end` 的 `w=/over=`。

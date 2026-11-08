@@ -305,6 +305,46 @@ try {
         if ($missing) { $failed++ } else { Write-Host 'cssom: ok' }
     }
 
+    Write-Host '== computed style (shorthand serialisation + named properties)'
+    $url = 'file:///' + (Join-Path $root 'tools/pages/cap_computed.html').Replace('\', '/')
+    $out = & (Join-Path $root 'build-zig-native\agave_shell.exe') --probe $url `
+        --eval-file (Join-Path $root 'tools/pages/check_computed.js') `
+        --wait 500 --settle 200 --timeout 30000 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host 'computed: probe failed'
+        $failed++
+    } else {
+        $text = $out -join "`n"
+        $missing = 0
+        foreach ($needle in @(
+                              # Expected strings are headless Chrome's answer on
+                              # the same page (see check_computed.js).
+                              'a.margin=ok', 'a.padding=ok', 'a.border=ok',
+                              'a.borderWidth=ok', 'a.borderTop=ok', 'a.camel=ok',
+                              'a.styleCamel=ok',
+                              # four different sides -> `border` cannot
+                              # represent them, CSSOM says "" (Chrome too)
+                              'b.borderEmpty=ok', 'b.borderWidth=ok',
+                              'b.borderStyle=ok', 'b.borderColor=ok',
+                              'c.radius=ok', 'c.background=ok',
+                              'd.font=ok', 'd.lineHeight=ok',
+                              'e.listStyle=ok', 'e.overflow=ok', 'e.flex=ok',
+                              'f.radius=ok', 'g.margin=ok', 'h.overflowXY=ok',
+                              'i.radius=ok', 'i.tl=ok', 'i.tr=ok',
+                              'j.outline=ok', 'j.outlineWidth=ok', 'a.outline=ok',
+                              'l.background=ok', 'l.origin=ok', 'l.clip=ok',
+                              # every property the engine knows has an accessor
+                              'named.missing=ok', 'named.minWidth=ok',
+                              'named.webkitAppearance=ok', 'named.length=ok',
+                              'named.item=ok', 'spelling.camelEmpty=ok')) {
+            if ($text -notmatch [regex]::Escape($needle)) {
+                Write-Host ('computed: missing ' + $needle)
+                $missing++
+            }
+        }
+        if ($missing) { $failed++ } else { Write-Host 'computed: ok' }
+    }
+
     Write-Host '== flex computed values (flex / flex-grow / flex-shrink / flex-basis)'
     $url = 'file:///' + (Join-Path $root 'tools/pages/cap_flex_cssom.html').Replace('\', '/')
     $out = & (Join-Path $root 'build-zig-native\agave_shell.exe') --probe $url `

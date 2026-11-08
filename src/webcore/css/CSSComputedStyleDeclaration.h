@@ -66,6 +66,11 @@ public:
     static void removeComputedInheritablePropertiesFrom(CSSMutableStyleDeclaration*);
 
 private:
+    /* Shorthand serialisation (margin, border, background, font, ...):
+     * recomputes the shorthand from its longhands the way CSSOM asks for.
+     * Returns a null String for properties that are not shorthands. */
+    String shorthandValue(int propertyID) const;
+
     virtual void setCssText(const String&, ExceptionCode&);
 
     virtual String removeProperty(int propertyID, ExceptionCode&);

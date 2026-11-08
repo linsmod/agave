@@ -1454,6 +1454,10 @@ public:
         return background->m_outline.width;
     }
     bool hasOutline() const { return outlineWidth() > 0 && outlineStyle() > BHIDDEN; }
+    /* The specified width, whether or not a style makes it paint. Chrome's
+     * getComputedStyle().outlineWidth reports 3px (medium) on a plain div;
+     * outlineWidth() answers 0 there because it drives painting. */
+    unsigned short outlineWidthForComputedStyle() const { return background->m_outline.width; }
     EBorderStyle   outlineStyle() const {  return background->m_outline.style(); }
     bool outlineStyleIsAuto() const { return background->m_outline._auto; }
     const Color &  outlineColor() const {  return background->m_outline.color; }

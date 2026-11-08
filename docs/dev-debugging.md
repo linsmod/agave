@@ -446,6 +446,10 @@ ant 自身 CLI / 基础设施的开关（`ANT_MANIFEST_URL`、`ANT_SANDBOX_*`、
   ⚠ 字体：Chrome 本机（zh-CN）默认字体是 **Noto Sans SC**，agave 默认 Times 且会把
   arial/times/segoe ui 整族替换成 Microsoft YaHei（R123，`AGB_FONT_NO_SUBST=1` 可对照），
   字体相关的差异先看这一条再怀疑布局。
+  ⚠ **agave 侧的 `RESULT` 会被截断**：`[con-log]` 单行大约 2 KiB 封顶，一次
+  `JSON.stringify` 整页元素的长结果会腰斩（Chrome 侧完整，看着像 agave 少了一半字段）。
+  只打关心的字段（`{left,top,width,height}` 通常就够），或按 800 字符分段打 `R0:`/`R1:` 再拼；
+  回归脚本里更稳的是每条断言打一行短文本（`a.margin=ok`），见 `tools/pages/check_computed.js`。
 - **布局对拍 Chrome**：`python tools/layout_diff.py tools/pages/layout/<page>.html [--tol 1]`
   —— 同一份 `tools/pages/layout/lib_measure.js` 在 agave 探针和 headless Chrome 里各跑一遍，
   两边视口都固定成 1084×800（agave = 1100 窗口减 16px 经典滚动条；Chrome = `--hide-scrollbars`

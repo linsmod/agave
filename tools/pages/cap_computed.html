@@ -1,0 +1,39 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>computed</title>
+<style>
+html, body { margin: 0 }
+body { font: 16px Arial }
+#a { margin: 1px 2px 3px 4px; padding: 5px 6px; border: 2px solid rgb(10, 20, 30) }
+#b { border-top: 3px dashed rgb(255, 0, 0); border-right: 1px dotted rgb(0, 0, 255); border-left: 4px solid rgb(0, 128, 0) }
+#c { border-radius: 4px 6px 8px 10px / 1px 2px 3px 4px; background: rgb(255, 0, 0) no-repeat scroll 1px 2px }
+#d { font: italic bold 13px/1.5 Arial }
+#e { list-style: square inside; overflow: auto; flex: 1 2 30px }
+#f { border-radius: 4px }
+#g { margin: 7px }
+#h { overflow-x: hidden; overflow-y: auto }
+#i { border-radius: 4px 6px }
+#j { outline: 2px dotted rgb(0, 0, 255) }
+#l { background: rgb(1, 2, 3); background-origin: padding-box; background-clip: content-box }
+</style>
+</head>
+<body>
+<!-- Expected strings are what headless Chrome reports for this page
+     (`python tools/chrome_probe.py --url file:///.../cap_computed.html
+      --js-file tools/pages/check_computed.js`); they are the CSSOM
+     serialisation of shorthands, see docs/arch-capabilities? -> arch-rendering. -->
+<div id="a">a</div>
+<div id="b">b</div>
+<div id="c">c</div>
+<div id="d">d</div>
+<div id="e">e</div>
+<div id="f">f</div>
+<div id="g">g</div>
+<div id="h">h</div>
+<div id="i">i</div>
+<div id="j">j</div>
+<div id="l">l</div>
+</body>
+</html>

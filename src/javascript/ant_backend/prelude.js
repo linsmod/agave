@@ -249,19 +249,34 @@
     try { if (typeof g.name === 'undefined') g.name = ''; } catch (e) {}
   }
   if (!g.getComputedStyle) {
-    g.__computedCamel = ['backgroundColor','backgroundImage','backgroundRepeat','backgroundPosition',
-      'backgroundSize','backgroundAttachment','backgroundClip','backgroundOrigin','color','width',
-      'height','display','position','top','left','right','bottom','marginTop','marginLeft','marginRight',
-      'marginBottom','paddingTop','paddingLeft','paddingRight','paddingBottom','borderTopWidth',
-      'borderLeftWidth','borderTopColor','borderColor','font','fontStyle','fontVariant','fontStretch',
-      'fontSize','fontFamily','fontWeight','lineHeight',
-      'opacity','visibility','overflow','zIndex','textAlign','verticalAlign','float','clear','cursor',
-      'whiteSpace','textDecoration','borderRadius','boxShadow','transform','boxSizing',
-      'gap','rowGap','columnGap','aspectRatio',
-      'flex','flexGrow','flexShrink','flexBasis'];
-    /* Accessors live on one shared prototype: defining 40 properties per call
-     * made every getComputedStyle() cost ~0.57ms; css3test calls it thousands
-     * of times, which is what pinned a core. The raw bridge is ~0.003ms. */
+    /* The names come from the generated table the CSS parser is built from
+     * (StylePropertyNames.h via __agbStylePropertyNames), so every property the
+     * engine knows has an accessor: shorthands (`cs.margin`, `cs.padding`,
+     * `cs.border`, `cs.background`) and longhands the old hand-written list of
+     * 40 omitted (`cs.minWidth`, `cs.alignSelf`, `cs.webkitAppearance`) used to
+     * read back as undefined while Chrome answers with a value. */
+    var __computedNames = null;
+    try {
+      if (typeof g.__agbStylePropertyNames === 'function') __computedNames = g.__agbStylePropertyNames();
+    } catch (e) {}
+    if (!__computedNames || !__computedNames.length) {
+      __computedNames = ['backgroundColor','backgroundImage','backgroundRepeat','backgroundPosition',
+        'backgroundSize','backgroundAttachment','backgroundClip','backgroundOrigin','color','width',
+        'height','display','position','top','left','right','bottom','marginTop','marginLeft','marginRight',
+        'marginBottom','paddingTop','paddingLeft','paddingRight','paddingBottom','borderTopWidth',
+        'borderLeftWidth','borderTopColor','borderColor','font','fontStyle','fontVariant','fontStretch',
+        'fontSize','fontFamily','fontWeight','lineHeight',
+        'opacity','visibility','overflow','zIndex','textAlign','verticalAlign','float','clear','cursor',
+        'whiteSpace','textDecoration','borderRadius','boxShadow','transform','boxSizing',
+        'gap','rowGap','columnGap','aspectRatio',
+        'flex','flexGrow','flexShrink','flexBasis','margin','padding','border','borderWidth',
+        'borderStyle','minWidth','minHeight','maxWidth','maxHeight','alignSelf','alignItems',
+        'justifyContent','order','listStyle','outline','inset','transition'];
+    }
+    g.__computedCamel = __computedNames;
+    /* Accessors live on one shared prototype: defining them per getComputedStyle()
+     * call made every call cost ~0.57ms; css3test calls it thousands of times,
+     * which is what pinned a core. The raw bridge is ~0.003ms. */
     g.__Computed = function (el, pseudo) { this.__el = el; this.__pseudo = pseudo ? String(pseudo) : ''; };
     (function (proto) {
       function camel(n) { return String(n).replace(/-([a-z])/g, function (m, c) { return c.toUpperCase(); }); }
@@ -292,30 +307,36 @@
         if (!el || !el.style) return '';
         var c = camelOf(n); var old = el.style[c]; el.style[c] = ''; return old;
       };
+      /* length/item describe the declaration (the supported CSS properties),
+       * like a real computed CSSStyleDeclaration; they used to enumerate the
+       * element's *inline* style object, which answered 0 for every element
+       * without a style attribute. */
       proto.item = function (i) {
-        var el = this.__el; var n = 0;
-        if (!el || !el.style) return '';
-        for (var k in el.style) { if (n === i) return k; n++; }
-        return '';
+        var name = g.__computedCamel[i];
+        return name === undefined ? '' : dash(name);
       };
       if (Object.defineProperty) {
         try {
           Object.defineProperty(proto, 'length', { get: function () {
-            var el = this.__el; var i = 0;
-            if (el && el.style) { for (var k in el.style) i++; }
-            return i;
+            return g.__computedCamel.length;
           } });
         } catch (e) {}
       }
       for (var i = 0; i < g.__computedCamel.length; ++i) {
         (function (name) {
           var cssName = dash(name);
-          try {
-            Object.defineProperty ? Object.defineProperty(proto, name, {
-              get: function () { return this.getPropertyValue(cssName); },
-              enumerable: true, configurable: true
-            }) : (proto[name] = '');
-          } catch (e) { proto[name] = ''; }
+          function define(alias) {
+            try {
+              Object.defineProperty ? Object.defineProperty(proto, alias, {
+                get: function () { return this.getPropertyValue(cssName); },
+                enumerable: true, configurable: true
+              }) : (proto[alias] = '');
+            } catch (e) { proto[alias] = ''; }
+          }
+          define(name);
+          /* `-webkit-*` properties answer to both spellings in Chrome
+           * (cs.webkitAppearance and cs.WebkitAppearance). */
+          if (name.slice(0, 6) === 'Webkit') define('w' + name.slice(1));
         })(g.__computedCamel[i]);
       }
     })(g.__Computed.prototype);

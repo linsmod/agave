@@ -547,6 +547,97 @@ static String flexBasisText(const Length& basis)
     }
 }
 
+/* ---- shorthand serialisation -------------------------------------------
+ * Computed style answers shorthand properties by recomputing them from their
+ * longhands. CSSOM asks for exactly that: a shorthand is serialised only when
+ * the longhands can be represented by it, and the empty string otherwise.
+ * Chrome is the reference for the text; the shapes it uses are
+ *   margin/padding         "1px 2px 3px 4px" (collapsed: "1px", "1px 2px", ...)
+ *   border(-width|style|color)  the same four-value collapse
+ *   border(-top|...)       "<width> <style> <color>"; `border` only when all
+ *                          four sides agree (it cannot express four sides)
+ *   border-radius          "4px 6px 8px 10px / 1px 2px 3px 4px" when elliptical
+ *   background             "<color> <image> <repeat> <attachment> <position>
+ *                           / <size> <origin> <clip>"
+ *   font                   "[style] [variant] [weight] <size>[/<line-height>] <family>"
+ *   list-style             "<position> <image> <type>"
+ *   outline                "<color> <style> <width>"
+ *
+ * Before this existed every one of these answered "" (and background/border/
+ * border-* were even grouped with `content`, so `.border` reported the
+ * ::before text - "normal" on an ordinary div).
+ */
+static String computedLonghandText(const CSSComputedStyleDeclaration* declaration, int propertyID)
+{
+    RefPtr<CSSValue> value = declaration->getPropertyCSSValue(propertyID, DoNotUpdateLayout);
+    return value ? value->cssText() : String("");
+}
+
+/* top right bottom left, collapsed the way CSS serialises box values. */
+static String serialiseBox4(const String& top, const String& right, const String& bottom, const String& left)
+{
+    if (right == left) {
+        if (top == bottom) {
+            if (top == right)
+                return top;
+            return top + " " + right;
+        }
+        return top + " " + right + " " + bottom;
+    }
+
+    return top + " " + right + " " + bottom + " " + left;
+}
+
+static String borderSideText(const CSSComputedStyleDeclaration* declaration,
+                             int widthProperty, int styleProperty, int colorProperty)
+{
+    String text = computedLonghandText(declaration, widthProperty);
+    text += " ";
+    text += computedLonghandText(declaration, styleProperty);
+    text += " ";
+    text += computedLonghandText(declaration, colorProperty);
+    return text;
+}
+
+static String overflowKeyword(EOverflow overflow)
+{
+    switch (overflow) {
+        case OVISIBLE:
+            return "visible";
+        case OHIDDEN:
+            return "hidden";
+        case OSCROLL:
+            return "scroll";
+        case OAUTO:
+            return "auto";
+        case OMARQUEE:
+            return "-webkit-marquee";
+        case OOVERLAY:
+            return "overlay";
+    }
+
+    return "visible";
+}
+
+static String backgroundBoxText(EBackgroundBox box)
+{
+    switch (box) {
+        case BGBORDER:
+            return "border-box";
+        case BGPADDING:
+            return "padding-box";
+        case BGCONTENT:
+            return "content-box";
+    }
+
+    return "border-box";
+}
+
+static String pxText(int value)
+{
+    return numberAsString(value) + "px";
+}
+
 PassRefPtr<CSSValue> CSSComputedStyleDeclaration::getPropertyCSSValue(int propertyID) const
 {
     return getPropertyCSSValue(propertyID, UpdateLayout);
@@ -678,14 +769,16 @@ PassRefPtr<CSSValue> CSSComputedStyleDeclaration::getPropertyCSSValue(int proper
             return new CSSPrimitiveValue(CSS_VAL_FIXED);
         case CSS_PROP__WEBKIT_BACKGROUND_CLIP:
         case CSS_PROP__WEBKIT_BACKGROUND_ORIGIN: {
+            /* Chrome reports the `-box` keywords; "border"/"padding"/"content"
+             * is the old parser vocabulary and is not a valid CSS value. */
             EBackgroundBox box = (propertyID == CSS_PROP__WEBKIT_BACKGROUND_CLIP ? style->backgroundClip() : style->backgroundOrigin());
             switch (box) {
                 case BGBORDER:
-                    return new CSSPrimitiveValue(CSS_VAL_BORDER);
+                    return new CSSPrimitiveValue(String("border-box"), CSSPrimitiveValue::CSS_IDENT_TEXT);
                 case BGPADDING:
-                    return new CSSPrimitiveValue(CSS_VAL_PADDING);
+                    return new CSSPrimitiveValue(String("padding-box"), CSSPrimitiveValue::CSS_IDENT_TEXT);
                 case BGCONTENT:
-                    return new CSSPrimitiveValue(CSS_VAL_CONTENT);
+                    return new CSSPrimitiveValue(String("content-box"), CSSPrimitiveValue::CSS_IDENT_TEXT);
             }
             ASSERT_NOT_REACHED();
             return 0;
@@ -1181,7 +1274,11 @@ PassRefPtr<CSSValue> CSSComputedStyleDeclaration::getPropertyCSSValue(int proper
                 // for how high to be in pixels does include things like minimum font size and the zoom factor.
                 // On the other hand, since font-size doesn't include the zoom factor, we really can't do
                 // that here either.
-                return new CSSPrimitiveValue(static_cast<int>(length.percent() * style->fontDescription().specifiedSize()) / 100, CSSPrimitiveValue::CSS_PX);
+                //
+                // Keep the fraction: line-height:1.5 on 13px is 19.5px, which is what Chrome reports and
+                // what pages compare against. Rounding to int here made every fractional line-height
+                // disagree by up to a pixel.
+                return new CSSPrimitiveValue(length.percent() * style->fontDescription().specifiedSize() / 100.0, CSSPrimitiveValue::CSS_PX);
             return new CSSPrimitiveValue(length.value(), CSSPrimitiveValue::CSS_PX);
         }
         case CSS_PROP_LIST_STYLE_IMAGE:
@@ -1332,7 +1429,9 @@ PassRefPtr<CSSValue> CSSComputedStyleDeclaration::getPropertyCSSValue(int proper
                 return new CSSPrimitiveValue(CSS_VAL_AUTO);
             return valueForBorderStyle(style->outlineStyle());
         case CSS_PROP_OUTLINE_WIDTH:
-            return new CSSPrimitiveValue(style->outlineWidth(), CSSPrimitiveValue::CSS_PX);
+            /* Chrome reports the specified width even when outline-style:none
+             * (the initial medium is 3px); outlineWidth() would answer 0. */
+            return new CSSPrimitiveValue(style->outlineWidthForComputedStyle(), CSSPrimitiveValue::CSS_PX);
         case CSS_PROP_OVERFLOW:
         case CSS_PROP_OVERFLOW_X:
         case CSS_PROP_OVERFLOW_Y: {
@@ -1783,15 +1882,6 @@ PassRefPtr<CSSValue> CSSComputedStyleDeclaration::getPropertyCSSValue(int proper
             return getBorderRadiusCornerValue(style->borderTopLeftRadius());
         case CSS_PROP__WEBKIT_BORDER_TOP_RIGHT_RADIUS:
             return getBorderRadiusCornerValue(style->borderTopRightRadius());
-        case CSS_PROP_BACKGROUND:
-        case CSS_PROP_BORDER:
-        case CSS_PROP_BORDER_BOTTOM:
-        case CSS_PROP_BORDER_COLOR:
-        case CSS_PROP_BORDER_LEFT:
-        case CSS_PROP_BORDER_RIGHT:
-        case CSS_PROP_BORDER_STYLE:
-        case CSS_PROP_BORDER_TOP:
-        case CSS_PROP_BORDER_WIDTH:
         case CSS_PROP_CLIP:
         case CSS_PROP_CONTENT: {
             /* The generated text of ::before/::after lives in the ContentData
@@ -1889,9 +1979,158 @@ PassRefPtr<CSSValue> CSSComputedStyleDeclaration::getPropertyCSSValue(int proper
     return 0;
 }
 
+String CSSComputedStyleDeclaration::shorthandValue(int propertyID) const
+{
+    RenderStyle* style = m_pseudoStyle ? m_pseudoStyle : (m_node ? m_node->computedStyle() : 0);
+
+    if (!style)
+        return String();
+
+    switch (static_cast<CSSPropertyID>(propertyID)) {
+        case CSS_PROP_MARGIN:
+            return serialiseBox4(computedLonghandText(this, CSS_PROP_MARGIN_TOP),
+                                 computedLonghandText(this, CSS_PROP_MARGIN_RIGHT),
+                                 computedLonghandText(this, CSS_PROP_MARGIN_BOTTOM),
+                                 computedLonghandText(this, CSS_PROP_MARGIN_LEFT));
+        case CSS_PROP_PADDING:
+            return serialiseBox4(computedLonghandText(this, CSS_PROP_PADDING_TOP),
+                                 computedLonghandText(this, CSS_PROP_PADDING_RIGHT),
+                                 computedLonghandText(this, CSS_PROP_PADDING_BOTTOM),
+                                 computedLonghandText(this, CSS_PROP_PADDING_LEFT));
+        case CSS_PROP_BORDER_WIDTH:
+            return serialiseBox4(computedLonghandText(this, CSS_PROP_BORDER_TOP_WIDTH),
+                                 computedLonghandText(this, CSS_PROP_BORDER_RIGHT_WIDTH),
+                                 computedLonghandText(this, CSS_PROP_BORDER_BOTTOM_WIDTH),
+                                 computedLonghandText(this, CSS_PROP_BORDER_LEFT_WIDTH));
+        case CSS_PROP_BORDER_STYLE:
+            return serialiseBox4(computedLonghandText(this, CSS_PROP_BORDER_TOP_STYLE),
+                                 computedLonghandText(this, CSS_PROP_BORDER_RIGHT_STYLE),
+                                 computedLonghandText(this, CSS_PROP_BORDER_BOTTOM_STYLE),
+                                 computedLonghandText(this, CSS_PROP_BORDER_LEFT_STYLE));
+        case CSS_PROP_BORDER_COLOR:
+            return serialiseBox4(computedLonghandText(this, CSS_PROP_BORDER_TOP_COLOR),
+                                 computedLonghandText(this, CSS_PROP_BORDER_RIGHT_COLOR),
+                                 computedLonghandText(this, CSS_PROP_BORDER_BOTTOM_COLOR),
+                                 computedLonghandText(this, CSS_PROP_BORDER_LEFT_COLOR));
+        case CSS_PROP_BORDER_TOP:
+            return borderSideText(this, CSS_PROP_BORDER_TOP_WIDTH, CSS_PROP_BORDER_TOP_STYLE,
+                                  CSS_PROP_BORDER_TOP_COLOR);
+        case CSS_PROP_BORDER_RIGHT:
+            return borderSideText(this, CSS_PROP_BORDER_RIGHT_WIDTH, CSS_PROP_BORDER_RIGHT_STYLE,
+                                  CSS_PROP_BORDER_RIGHT_COLOR);
+        case CSS_PROP_BORDER_BOTTOM:
+            return borderSideText(this, CSS_PROP_BORDER_BOTTOM_WIDTH, CSS_PROP_BORDER_BOTTOM_STYLE,
+                                  CSS_PROP_BORDER_BOTTOM_COLOR);
+        case CSS_PROP_BORDER_LEFT:
+            return borderSideText(this, CSS_PROP_BORDER_LEFT_WIDTH, CSS_PROP_BORDER_LEFT_STYLE,
+                                  CSS_PROP_BORDER_LEFT_COLOR);
+        case CSS_PROP_BORDER: {
+            /* `border` cannot express four different sides, so CSSOM says to
+             * answer "" then - Chrome does the same. */
+            String top = borderSideText(this, CSS_PROP_BORDER_TOP_WIDTH, CSS_PROP_BORDER_TOP_STYLE,
+                                        CSS_PROP_BORDER_TOP_COLOR);
+
+            if (top == borderSideText(this, CSS_PROP_BORDER_RIGHT_WIDTH, CSS_PROP_BORDER_RIGHT_STYLE,
+                                      CSS_PROP_BORDER_RIGHT_COLOR)
+                && top == borderSideText(this, CSS_PROP_BORDER_BOTTOM_WIDTH, CSS_PROP_BORDER_BOTTOM_STYLE,
+                                         CSS_PROP_BORDER_BOTTOM_COLOR)
+                && top == borderSideText(this, CSS_PROP_BORDER_LEFT_WIDTH, CSS_PROP_BORDER_LEFT_STYLE,
+                                         CSS_PROP_BORDER_LEFT_COLOR))
+                return top;
+
+            return String("");
+        }
+        case CSS_PROP_OUTLINE:
+            return computedLonghandText(this, CSS_PROP_OUTLINE_COLOR) + " "
+                 + computedLonghandText(this, CSS_PROP_OUTLINE_STYLE) + " "
+                 + computedLonghandText(this, CSS_PROP_OUTLINE_WIDTH);
+        case CSS_PROP__WEBKIT_BORDER_RADIUS: {
+            IntSize topLeft = style->borderTopLeftRadius();
+            IntSize topRight = style->borderTopRightRadius();
+            IntSize bottomRight = style->borderBottomRightRadius();
+            IntSize bottomLeft = style->borderBottomLeftRadius();
+            String horizontal = serialiseBox4(pxText(topLeft.width()),
+                                              pxText(topRight.width()),
+                                              pxText(bottomRight.width()),
+                                              pxText(bottomLeft.width()));
+
+            if (topLeft.width() == topLeft.height() && topRight.width() == topRight.height()
+                && bottomRight.width() == bottomRight.height() && bottomLeft.width() == bottomLeft.height())
+                return horizontal;
+
+            return horizontal
+                 + " / " + serialiseBox4(pxText(topLeft.height()),
+                                         pxText(topRight.height()),
+                                         pxText(bottomRight.height()),
+                                         pxText(bottomLeft.height()));
+        }
+        case CSS_PROP_BACKGROUND:
+            return computedLonghandText(this, CSS_PROP_BACKGROUND_COLOR) + " "
+                 + computedLonghandText(this, CSS_PROP_BACKGROUND_IMAGE) + " "
+                 + computedLonghandText(this, CSS_PROP_BACKGROUND_REPEAT) + " "
+                 + computedLonghandText(this, CSS_PROP_BACKGROUND_ATTACHMENT) + " "
+                 + computedLonghandText(this, CSS_PROP_BACKGROUND_POSITION)
+                 + " / " + computedLonghandText(this, CSS_PROP__WEBKIT_BACKGROUND_SIZE) + " "
+                 + backgroundBoxText(style->backgroundOrigin()) + " "
+                 + backgroundBoxText(style->backgroundClip());
+        case CSS_PROP_LIST_STYLE:
+            return computedLonghandText(this, CSS_PROP_LIST_STYLE_POSITION) + " "
+                 + computedLonghandText(this, CSS_PROP_LIST_STYLE_IMAGE) + " "
+                 + computedLonghandText(this, CSS_PROP_LIST_STYLE_TYPE);
+        case CSS_PROP_OVERFLOW: {
+            String horizontal = overflowKeyword(style->overflowX());
+            String vertical = overflowKeyword(style->overflowY());
+
+            if (horizontal == vertical)
+                return horizontal;
+
+            return horizontal + " " + vertical;
+        }
+        case CSS_PROP_FONT: {
+            String text;
+            const FontDescription& description = style->fontDescription();
+
+            if (description.italic())
+                text += "italic ";
+            if (description.smallCaps())
+                text += "small-caps ";
+            /* Chrome prints the numeric weight of a bold face. */
+            if (description.weight() == cBoldWeight)
+                text += "700 ";
+
+            text += computedLonghandText(this, CSS_PROP_FONT_SIZE);
+
+            String lineHeight = computedLonghandText(this, CSS_PROP_LINE_HEIGHT);
+
+            if (lineHeight != "normal")
+                text += " / " + lineHeight;
+
+            text += " ";
+            text += computedLonghandText(this, CSS_PROP_FONT_FAMILY);
+            return text;
+        }
+        default:
+            break;
+    }
+
+    return String();
+}
+
 String CSSComputedStyleDeclaration::getPropertyValue(int propertyID) const
 {
-    RefPtr<CSSValue> value = getPropertyCSSValue(propertyID);
+    Node* node = m_node.get();
+
+    /* Shorthands have no entry in the property switch below (they are not
+     * single RenderStyle fields); they are re-derived from the longhands.
+     * updateLayout happens once here instead of once per longhand. */
+    if (node)
+        node->document()->updateLayoutIgnorePendingStylesheets();
+
+    String shorthand = shorthandValue(propertyID);
+    if (!shorthand.isNull())
+        return shorthand;
+
+    RefPtr<CSSValue> value = getPropertyCSSValue(propertyID, DoNotUpdateLayout);
     if (value)
         return value->cssText();
     return "";

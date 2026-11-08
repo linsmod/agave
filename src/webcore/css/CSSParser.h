@@ -188,6 +188,7 @@ namespace WebCore {
         bool parseValue(int propId, bool important);
         bool parseShorthand(int propId, const int* properties, int numProperties, bool important);
         bool parseFlexShorthand(bool important);
+        bool parseBorderRadiusShorthand(bool important);
         bool parse4Values(int propId, const int* properties, bool important);
         bool parseContent(int propId, bool important);
         bool parseQuotes(int propId, bool important);

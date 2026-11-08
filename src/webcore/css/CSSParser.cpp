@@ -3887,8 +3887,7 @@ bool CSSParser::parseValue(int propId, bool important)
     case CSS_PROP__WEBKIT_BORDER_TOP_RIGHT_RADIUS:
     case CSS_PROP__WEBKIT_BORDER_TOP_LEFT_RADIUS:
     case CSS_PROP__WEBKIT_BORDER_BOTTOM_LEFT_RADIUS:
-    case CSS_PROP__WEBKIT_BORDER_BOTTOM_RIGHT_RADIUS:
-    case CSS_PROP__WEBKIT_BORDER_RADIUS: {
+    case CSS_PROP__WEBKIT_BORDER_BOTTOM_RIGHT_RADIUS: {
         if (num != 1 && num != 2)
             return false;
         valid_primitive = validUnit(value, FLength, strict);
@@ -3908,18 +3907,11 @@ bool CSSParser::parseValue(int propId, bool important)
         }
         
         Pair* pair = new Pair(parsedValue1, parsedValue2);
-        CSSPrimitiveValue* val = new CSSPrimitiveValue(pair);
-        if (propId == CSS_PROP__WEBKIT_BORDER_RADIUS) {
-            const int properties[4] = { CSS_PROP__WEBKIT_BORDER_TOP_RIGHT_RADIUS,
-                                        CSS_PROP__WEBKIT_BORDER_TOP_LEFT_RADIUS,
-                                        CSS_PROP__WEBKIT_BORDER_BOTTOM_LEFT_RADIUS,
-                                        CSS_PROP__WEBKIT_BORDER_BOTTOM_RIGHT_RADIUS };
-            for (int i = 0; i < 4; i++)
-                addProperty(properties[i], val, important);
-        } else
-            addProperty(propId, val, important);
+        addProperty(propId, new CSSPrimitiveValue(pair), important);
         return true;
     }
+    case CSS_PROP__WEBKIT_BORDER_RADIUS:
+        return parseBorderRadiusShorthand(important);
     case CSS_PROP_OUTLINE_OFFSET:
         valid_primitive = validUnit(value, FLength, strict);
         break;
@@ -4455,6 +4447,95 @@ fail:
         delete values[k];
     delete positionYValue;
     return false;
+}
+
+/* `border-radius: <h1> [<h2> <h3> <h4>]? [/ <v1> [<v2> <v3> <v4>]?]?`
+ *
+ * The 2008 code reused the *single corner* syntax here: the shorthand only
+ * accepted one or two values and stored them as one corner's horizontal and
+ * vertical radius, so `border-radius: 8px 8px 0 0` became four 8x8/8x0
+ * corners, and the `a / b` (elliptical) form was rejected outright. Sites
+ * round one or two corners only, so the four-value list and the slash are
+ * parsed properly here and each corner property gets its own pair. */
+bool CSSParser::parseBorderRadiusShorthand(bool important)
+{
+    struct Radius {
+        double value;
+        int unit;
+    };
+    Radius horizontal[4];
+    Radius vertical[4];
+    int horizontalCount = 0;
+    int verticalCount = 0;
+    bool afterSlash = false;
+
+    while (Value* value = valueList->current()) {
+        if (value->unit == Value::Operator && value->iValue == '/') {
+            if (afterSlash || !horizontalCount || verticalCount)
+                return false;
+            afterSlash = true;
+            valueList->next();
+            continue;
+        }
+
+        if (!validUnit(value, FLength, strict))
+            return false;
+
+        if (afterSlash) {
+            if (verticalCount == 4)
+                return false;
+            vertical[verticalCount].value = value->fValue;
+            vertical[verticalCount].unit = value->unit;
+            ++verticalCount;
+        } else {
+            if (horizontalCount == 4)
+                return false;
+            horizontal[horizontalCount].value = value->fValue;
+            horizontal[horizontalCount].unit = value->unit;
+            ++horizontalCount;
+        }
+
+        valueList->next();
+    }
+
+    if (!horizontalCount || (afterSlash && !verticalCount))
+        return false;
+
+    if (!verticalCount) {
+        for (int i = 0; i < horizontalCount; ++i)
+            vertical[i] = horizontal[i];
+        verticalCount = horizontalCount;
+    }
+
+    /* 1-4 values expand over the corners the way CSS defines it:
+     *   1 -> all four; 2 -> TL/BR + TR/BL; 3 -> TL, TR/BL, BR; 4 -> TL TR BR BL */
+    static const int expansion[4][4] = {
+        { 0, 0, 0, 0 },
+        { 0, 1, 0, 1 },
+        { 0, 1, 2, 1 },
+        { 0, 1, 2, 3 }
+    };
+    static const int cornerProperties[4] = {
+        CSS_PROP__WEBKIT_BORDER_TOP_LEFT_RADIUS,
+        CSS_PROP__WEBKIT_BORDER_TOP_RIGHT_RADIUS,
+        CSS_PROP__WEBKIT_BORDER_BOTTOM_RIGHT_RADIUS,
+        CSS_PROP__WEBKIT_BORDER_BOTTOM_LEFT_RADIUS
+    };
+
+    for (int corner = 0; corner < 4; ++corner) {
+        int h = expansion[horizontalCount - 1][corner];
+        int v = expansion[verticalCount - 1][corner];
+        CSSPrimitiveValue* width = new CSSPrimitiveValue(horizontal[h].value,
+                                                         (CSSPrimitiveValue::UnitTypes)horizontal[h].unit);
+        CSSPrimitiveValue* height = width;
+
+        if (vertical[v].value != horizontal[h].value || vertical[v].unit != horizontal[h].unit)
+            height = new CSSPrimitiveValue(vertical[v].value, (CSSPrimitiveValue::UnitTypes)vertical[v].unit);
+
+        addProperty(cornerProperties[corner], new CSSPrimitiveValue(new Pair(width, height)), important);
+    }
+
+    return true;
 }
 
 /* `flex: <grow> <shrink>? || <basis>` (CSS Flexible Box Layout 1). The engine
