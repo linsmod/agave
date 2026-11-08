@@ -213,6 +213,19 @@ struct RuntimeState {
      * dispatched for the other one. Per-frame realms keep their own table,
      * which is what isolates a frame's handlers from its parent (R132). */
     std::map<AntbRealm*, std::vector<Listener>*>* realmListeners;
+    /* Module / script scheduling is per view (roadmap P1-a): two tabs must not
+     * share download slots, the in-flight counter, or each other's queued and
+     * deferred modules. The bodies themselves are cached per view as well -
+     * a shared in-flight entry would be cancelled by whichever view goes away
+     * first (the network layer's HTTP cache still dedupes the transfer). */
+    void*              moduleCache;        /* std::map<std::string, ModuleEntry*>* */
+    void*              moduleSession;      /* Net::Session* */
+    void*              modulePending;      /* std::vector<std::pair<std::string,unsigned long>>* */
+    void*              moduleEntryScripts; /* std::map<std::string, unsigned long>* */
+    void*              arrivedEntryBodies; /* std::vector<ArrivedEntryBody>* */
+    void*              deferredModules;    /* std::vector<DeferredModule>* */
+    void*              lastFlushDocument;  /* WebCore::Document* */
+    int                moduleInFlight;
     /* Last document activated for this view: `activateState()` restores it when
      * the engine thread switches views. */
     DocumentRuntime*   activeDocument;
@@ -237,6 +250,11 @@ struct DocumentRuntime {
     bool               documentBound;
     bool               installed; /* realm's global API installed */
     int                realmSlot; /* __agbFrameSlot number (0 based), -1 = main */
+    /* This document's id (S2): async work started by the document (XHR, module
+     * fetch, deferred script) carries it, so dropping *this* document (a frame
+     * going away) cancels exactly its work. The view's generation stays the
+     * realm-lifetime id used by pins/polyfills and whole-realm teardown. */
+    unsigned long      generation;
     std::vector<CssomRef>* cssomRefs;
     std::set<void*>*   cssomSeen;
 };
@@ -265,7 +283,7 @@ static RuntimeState* g_currentState = &g_emptyState;
  * document is bound (startup, teardown) reads the empty document's fields
  * instead of dereferencing a null pointer. */
 static DocumentRuntime  g_emptyDocument = {
-    &g_emptyState, NULL, NULL, NULL, NULL, false, false, -1, NULL, NULL
+    &g_emptyState, NULL, NULL, NULL, NULL, false, false, -1, 0, NULL, NULL
 };
 static DocumentRuntime* g_currentDocument = &g_emptyDocument;
 
@@ -313,6 +331,17 @@ static unsigned long currentGeneration(void)
         return 0;
 
     return g_currentState->generation;
+}
+
+/* The id of the document that is running right now (0 before a document is
+ * bound). Async work is tagged with it so dropping that document cancels its
+ * work without touching its neighbours'. */
+static unsigned long currentDocumentGeneration(void)
+{
+    if (!g_currentDocument || g_currentDocument == &g_emptyDocument)
+        return 0;
+
+    return g_currentDocument->generation;
 }
 
 /* Page Visibility, as the page sees it: document.hidden / visibilityState. */
@@ -662,6 +691,7 @@ static DocumentRuntime* documentRuntimeFor(RuntimeState* state, WebCore::Documen
     created->view = state;
     created->document = document;
     created->realmSlot = -1;
+    created->generation = nextGeneration();
     documents.push_back(created);
 
     return created;
@@ -1118,6 +1148,7 @@ struct XhrJob : public WebCore::ResourceHandleClient {
         , m_contentType(contentType ? contentType : "")
         , m_postBody(body ? body : "")
         , m_generation(currentGeneration())
+        , m_documentGeneration(currentDocumentGeneration())
         , m_id(nextXhrId())
     {
     }
@@ -1373,9 +1404,11 @@ struct XhrJob : public WebCore::ResourceHandleClient {
     std::string                     m_contentType;
     std::string                     m_postBody;    /* request body (text) */
     unsigned long                   m_generation;  /* the realm that started it */
+    unsigned long                   m_documentGeneration; /* the document that started it */
     long long                       m_id;          /* the id JS aborts with */
 
     unsigned long generation() const { return m_generation; }
+    unsigned long documentGeneration() const { return m_documentGeneration; }
     long long id() const { return m_id; }
 };
 
@@ -1395,6 +1428,30 @@ static void cancelXhrJobsForGeneration(unsigned long generation)
         XhrJob* job = jobs[i];
 
         if (job && job->generation() <= generation) {
+            job->cancel();
+            delete job;
+            jobs.remove(i);
+        } else {
+            ++i;
+        }
+    }
+}
+
+/* S2: one document going away (a frame detached or navigated) cancels the
+ * requests that document started, and nothing else. Matched by id, not by
+ * "<=": a frame's id is newer than its parent document's, so a range compare
+ * would take the parent's work down with it. */
+static void cancelXhrJobsForDocument(unsigned long documentGeneration)
+{
+    Vector<XhrJob*>& jobs = xhrJobs();
+
+    if (!documentGeneration)
+        return;
+
+    for (unsigned i = 0; i < jobs.size(); ) {
+        XhrJob* job = jobs[i];
+
+        if (job && job->documentGeneration() == documentGeneration) {
             job->cancel();
             delete job;
             jobs.remove(i);
@@ -2843,6 +2900,11 @@ static void startSampler(void)
 
 namespace AntRuntime {
 
+/* Defined with the module scheduler (further down); stop()/destroyContext()
+ * need them before that point. */
+static void clearModuleScheduling(RuntimeState* state);
+static void destroyModuleCache(RuntimeState* state);
+
 static void initCookieStorage()
 {
     if (!g_cookieFile.empty())
@@ -2909,15 +2971,36 @@ struct ModuleEntry {
     bool        failed;
     long long   id;
     unsigned long generation;   /* the realm that started the download */
+    unsigned long documentGeneration; /* the document that started it */
     unsigned long serial;       /* identity: a client may only write to the entry it was started for */
 
-    ModuleEntry() : done(false), failed(false), id(0), generation(0), serial(0) {}
+    ModuleEntry() : done(false), failed(false), id(0), generation(0),
+                    documentGeneration(0), serial(0) {}
 };
 
-static std::map<std::string, ModuleEntry*>* g_moduleCache = NULL;
-static Net::Session* g_moduleSession = NULL;
-static std::vector<std::pair<std::string, unsigned long> >* g_modulePending = NULL;
-static int g_moduleInFlight = 0;
+/* Module scheduling is per view (RuntimeState::module*): the same URL fetched
+ * by two tabs is two entries in two tables, and a teardown only cancels the
+ * entries of its own view. `g_moduleSerial` stays process wide (it is an
+ * identity, not ownership). */
+#define g_moduleCache \
+    (*(std::map<std::string, ModuleEntry*>**)&g_currentState->moduleCache)
+#define g_moduleSession \
+    (*(Net::Session**)&g_currentState->moduleSession)
+/* An import waiting for a fetch slot. Tagged with the view (whole-realm
+ * teardown) and with the document (a frame going away cancels only its own). */
+struct PendingModule {
+    std::string   url;
+    unsigned long generation;
+    unsigned long documentGeneration;
+
+    PendingModule(const std::string& u, unsigned long g, unsigned long d)
+        : url(u), generation(g), documentGeneration(d) {}
+};
+
+#define g_modulePending \
+    (*(std::vector<PendingModule>**)&g_currentState->modulePending)
+#define g_moduleInFlight (g_currentState->moduleInFlight)
+
 static unsigned long g_moduleSerial = 0;
 
 /* AGB_OFFLINE=1 (shell --offline): module fetches are served from the cache
@@ -2941,8 +3024,18 @@ static bool moduleOffline(void)
 /* External <script type="module" src> entries routed through the module
  * fetcher: URL -> the generation that asked for it. When the body arrives it
  * is handed to the WebCore notify hook (the waiting tokenizer), so the module
- * runs in the parse flow - never from inside a network pump. */
-static std::map<std::string, unsigned long>* g_moduleEntryScripts = NULL;
+ * runs in the parse flow - never from inside a network pump. Per view: an
+ * entry of one tab arriving while another is the current view used to be
+ * dropped as "stale" (its generation belonged to the other view). */
+/* A routed <script type="module" src> entry: which realm and which document
+ * asked for it (the document id lets a frame teardown drop exactly its own). */
+struct EntryScriptStamp {
+    unsigned long generation;
+    unsigned long documentGeneration;
+};
+
+#define g_moduleEntryScripts \
+    (*(std::map<std::string, EntryScriptStamp>**)&g_currentState->moduleEntryScripts)
 static ModuleEntryNotifyHook g_moduleEntryNotifyHook = NULL;
 
 void setModuleEntryNotifyHook(ModuleEntryNotifyHook hook)
@@ -2982,21 +3075,25 @@ static void modulePrefetchImports(const std::string& url, const std::string& bod
 static void moduleQueuePending(const std::string& url, unsigned long generation)
 {
     if (!g_modulePending)
-        g_modulePending = new std::vector<std::pair<std::string, unsigned long> >();
+        g_modulePending = new std::vector<PendingModule>();
 
     for (size_t i = 0; i < g_modulePending->size(); ++i) {
-        if ((*g_modulePending)[i].first == url)
+        if ((*g_modulePending)[i].url == url)
             return;
     }
 
-    g_modulePending->push_back(std::make_pair(url, generation));
+    if (getenv("AGB_MODULE_DEBUG"))
+        fprintf(stderr, "[modpending] %s gen=%lu docgen=%lu\n", url.c_str(),
+                generation, currentDocumentGeneration());
+
+    g_modulePending->push_back(PendingModule(url, generation, currentDocumentGeneration()));
 }
 
 static void moduleDrainPending(void)
 {
     while (g_modulePending && !g_modulePending->empty()
             && g_moduleInFlight < moduleFetchLimit()) {
-        std::string url = g_modulePending->front().first;
+        std::string url = g_modulePending->front().url;
 
         g_modulePending->erase(g_modulePending->begin());
         moduleStart(url, true);
@@ -3059,11 +3156,67 @@ static void cancelModuleDownloadsForGeneration(unsigned long generation)
 
     /* Imports that were queued for download but never started. */
     if (g_modulePending) {
-        std::vector<std::pair<std::string, unsigned long> >::iterator it = g_modulePending->begin();
+        std::vector<PendingModule>::iterator it = g_modulePending->begin();
 
         while (it != g_modulePending->end()) {
-            if (it->second <= generation)
+            if (it->generation <= generation)
                 it = g_modulePending->erase(it);
+            else
+                ++it;
+        }
+    }
+}
+
+/* S2: a document going away (frame detached/navigated) drops the module work it
+ * started - downloads, queued imports and routed entry scripts - matched by the
+ * document id. The body cache is shared inside the view and stays. */
+static void cancelModuleWorkForDocument(unsigned long documentGeneration)
+{
+    if (!documentGeneration)
+        return;
+
+    if (g_moduleCache) {
+        for (std::map<std::string, ModuleEntry*>::iterator it = g_moduleCache->begin();
+             it != g_moduleCache->end(); ++it) {
+            ModuleEntry* entry = it->second;
+
+            if (!entry || entry->documentGeneration != documentGeneration)
+                continue;
+
+            if (entry->id) {
+                if (g_moduleSession)
+                    g_moduleSession->cancel(entry->id);
+
+                entry->id = 0;
+
+                if (g_moduleInFlight > 0)
+                    --g_moduleInFlight;
+            }
+
+            if (!entry->done) {
+                entry->done = true;
+                entry->failed = true;
+            }
+        }
+    }
+
+    if (g_modulePending) {
+        std::vector<PendingModule>::iterator it = g_modulePending->begin();
+
+        while (it != g_modulePending->end()) {
+            if (it->documentGeneration == documentGeneration)
+                it = g_modulePending->erase(it);
+            else
+                ++it;
+        }
+    }
+
+    if (g_moduleEntryScripts) {
+        std::map<std::string, EntryScriptStamp>::iterator it = g_moduleEntryScripts->begin();
+
+        while (it != g_moduleEntryScripts->end()) {
+            if (it->second.documentGeneration == documentGeneration)
+                it = g_moduleEntryScripts->erase(it);
             else
                 ++it;
         }
@@ -3218,15 +3371,16 @@ struct ArrivedEntryBody {
     bool failed;
 };
 
-static std::vector<ArrivedEntryBody>* g_arrivedEntryBodies = NULL;
+#define g_arrivedEntryBodies \
+    (*(std::vector<ArrivedEntryBody>**)&g_currentState->arrivedEntryBodies)
 
 /* A routed entry script finished (or failed): deposit the result for the
  * frame loop, or report the failure. Dropped when another realm owns the
  * page now. */
 static void moduleEntryScriptArrived(const std::string& url, const ModuleEntry* entry)
 {
-    std::map<std::string, unsigned long>::iterator it;
-    unsigned long generation;
+    std::map<std::string, EntryScriptStamp>::iterator it;
+    EntryScriptStamp stamp;
 
     if (!g_moduleEntryScripts)
         return;
@@ -3236,18 +3390,19 @@ static void moduleEntryScriptArrived(const std::string& url, const ModuleEntry* 
     if (it == g_moduleEntryScripts->end())
         return;
 
-    generation = it->second;
+    stamp = it->second;
     g_moduleEntryScripts->erase(it);
 
-    if (currentGeneration() != generation) {
+    if (currentGeneration() != stamp.generation) {
         if (getenv("AGB_MODULE_DEBUG"))
-            fprintf(stderr, "[modentry] stale %s (gen %lu)\n", url.c_str(), generation);
+            fprintf(stderr, "[modentry] stale %s (gen %lu)\n", url.c_str(), stamp.generation);
         return;
     }
 
     if (getenv("AGB_MODULE_DEBUG"))
-        fprintf(stderr, "[modentry] arrived %s gen=%lu failed=%d\n",
-                url.c_str(), generation, (entry && entry->failed) ? 1 : 0);
+        fprintf(stderr, "[modentry] arrived %s gen=%lu docgen=%lu failed=%d\n",
+                url.c_str(), stamp.generation, stamp.documentGeneration,
+                (entry && entry->failed) ? 1 : 0);
 
     if (entry && !entry->failed) {
         ArrivedEntryBody body;
@@ -3673,9 +3828,10 @@ static void moduleStart(const std::string& url, bool force)
         return;
     }
 
-    /* The download belongs to the realm that asks for it: when that realm is
-     * gone, the download is cancelled with it. */
+    /* The download belongs to the realm and the document that ask for it: when
+     * either is gone, the download is cancelled with it. */
     entry->generation = currentGeneration();
+    entry->documentGeneration = currentDocumentGeneration();
 
     if (g_moduleInFlight >= moduleFetchLimit()) {
         if (!force)
@@ -3746,9 +3902,15 @@ void fetchAndQueueModuleScript(const char* url)
     }
 
     if (!g_moduleEntryScripts)
-        g_moduleEntryScripts = new std::map<std::string, unsigned long>();
+        g_moduleEntryScripts = new std::map<std::string, EntryScriptStamp>();
 
-    (*g_moduleEntryScripts)[u] = currentGeneration();
+    {
+        EntryScriptStamp stamp;
+
+        stamp.generation = currentGeneration();
+        stamp.documentGeneration = currentDocumentGeneration();
+        (*g_moduleEntryScripts)[u] = stamp;
+    }
     moduleStart(u, false);
 
     /* file:// entries (and offline-gated ones) complete synchronously inside
@@ -4011,6 +4173,7 @@ void destroyContext(void* context)
      * not leak its document records or realm handlers. */
     releaseAllRealmListeners(state);
     forgetDocuments(state, false);
+    destroyModuleCache(state);
 
     /* No successor realm will release this generation's pins: the view is
      * gone, so release them now. */
@@ -4071,6 +4234,11 @@ void* contextForPage(void* page)
     return NULL;
 }
 
+/* Defined with the module scheduler (further down); stop()/destroyContext()
+ * need them before that point. */
+static void clearModuleScheduling(RuntimeState* state);
+static void destroyModuleCache(RuntimeState* state);
+
 void stop()
 {
     std::vector<RuntimeState*>& states = runtimeStates();
@@ -4080,6 +4248,7 @@ void stop()
 
         releaseAllRealmListeners(state);
         forgetDocuments(state, true);
+        destroyModuleCache(state);
 
         if (state->engine)
             antb_engine_destroy(state->engine);
@@ -4462,6 +4631,7 @@ struct DeferredModule {
     std::string url;
     std::string source;
     unsigned long generation;   /* the realm that queued it */
+    unsigned long documentGeneration; /* the document that queued it */
     void* document;             /* the document it belongs to (bound before it
                                  * runs: the bridge may still point at the
                                  * frame's initial about:blank document) */
@@ -4471,17 +4641,79 @@ struct DeferredModule {
                                  * a script element the page removed. */
     bool isClassic;             /* classic <script defer> runs via evaluate(),
                                  * module scripts via evaluateModule() */
-    DeferredModule() : generation(0), document(NULL), isClassic(false) {}
+    DeferredModule() : generation(0), documentGeneration(0), document(NULL), isClassic(false) {}
 };
 
-static std::vector<DeferredModule>* g_deferredModules = NULL;
+/* Per view (RuntimeState::deferredModules): a tab's queued defer/module
+ * scripts must never run in another tab's realm. */
+#define g_deferredModules \
+    (*(std::vector<DeferredModule>**)&g_currentState->deferredModules)
 
 /* Set after the post-parse flush ran for a document. A defer script that
  * arrives after that point (slow network, dynamically inserted) must still run,
  * so it executes immediately instead of sitting in a queue that is never
  * flushed. Keyed by document, not by generation: the frame's initial empty
  * document shares the realm generation with the page that replaces it. */
-static void* g_lastFlushDocument = NULL;
+#define g_lastFlushDocument \
+    (*(void**)&g_currentState->lastFlushDocument)
+
+/* The view's realm is going away: drop everything its scheduling tables held
+ * for that realm (in-flight requests were cancelled by generation just before
+ * this call). The module body cache is kept: it is keyed by URL and a reload
+ * of the same view can still use the bodies. */
+static void clearModuleScheduling(RuntimeState* state)
+{
+    if (!state || state == &g_emptyState)
+        return;
+
+    delete *(std::vector<DeferredModule>**)&state->deferredModules;
+    state->deferredModules = NULL;
+    state->lastFlushDocument = NULL;
+
+    delete *(std::vector<std::pair<std::string, unsigned long> >**)&state->modulePending;
+    state->modulePending = NULL;
+
+    delete *(std::map<std::string, unsigned long>**)&state->moduleEntryScripts;
+    state->moduleEntryScripts = NULL;
+
+    delete *(std::vector<ArrivedEntryBody>**)&state->arrivedEntryBodies;
+    state->arrivedEntryBodies = NULL;
+
+    state->moduleInFlight = 0;
+}
+
+/* The view is gone: module bodies, the fetch session and its worker threads. */
+static void destroyModuleCache(RuntimeState* state)
+{
+    Net::Session* session;
+
+    if (!state || state == &g_emptyState)
+        return;
+
+    clearModuleScheduling(state);
+
+    {
+        std::map<std::string, ModuleEntry*>* cache =
+            *(std::map<std::string, ModuleEntry*>**)&state->moduleCache;
+
+        if (cache) {
+            for (std::map<std::string, ModuleEntry*>::iterator it = cache->begin();
+                 it != cache->end(); ++it)
+                delete it->second;
+
+            delete cache;
+            state->moduleCache = NULL;
+        }
+    }
+
+    session = *(Net::Session**)&state->moduleSession;
+
+    if (session) {
+        session->shutdown();
+        delete session;
+        state->moduleSession = NULL;
+    }
+}
 
 int evaluateModule(const char* src, size_t len, const char* filename, char** out, char** err);
 
@@ -4531,6 +4763,7 @@ void queueModule(const char* url, const char* source, void* document)
     module.url = url ? url : "";
     module.source = source ? source : "";
     module.generation = currentGeneration();
+    module.documentGeneration = currentDocumentGeneration();
     module.document = document ? document : g_document;
     module.isClassic = false;
     g_deferredModules->push_back(module);
@@ -4642,6 +4875,7 @@ void queueDeferredModule(void* document, const char* url, const char* source)
     module.url = url ? url : "";
     module.source = source ? source : "";
     module.generation = currentGeneration();
+    module.documentGeneration = currentDocumentGeneration();
     module.document = document ? document : g_document;
     module.isClassic = false;
     g_deferredModules->push_back(module);
@@ -4692,6 +4926,7 @@ void queueDeferredScript(void* document, const char* url, const char* source, vo
     script.url = url ? url : "";
     script.source = source ? source : "";
     script.generation = currentGeneration();
+    script.documentGeneration = currentDocumentGeneration();
     script.document = document;
     script.scriptElement = element;
     script.isClassic = true;
@@ -4715,6 +4950,40 @@ static void cancelDeferredModulesForGeneration(unsigned long generation)
         else
             ++it;
     }
+}
+
+/* S2: a document going away drops the defer/module scripts it queued (they hold
+ * its document pointer and would run against a detached page). */
+static void cancelDeferredModulesForDocument(unsigned long documentGeneration)
+{
+    if (!g_deferredModules || !documentGeneration)
+        return;
+
+    std::vector<DeferredModule>::iterator it = g_deferredModules->begin();
+
+    while (it != g_deferredModules->end()) {
+        if (it->documentGeneration == documentGeneration)
+            it = g_deferredModules->erase(it);
+        else
+            ++it;
+    }
+}
+
+/* Everything one document started, cancelled together (frame detached or
+ * navigated away): its XHRs, its module downloads/queue entries and its
+ * deferred scripts. Matched by the document id - the view generation still
+ * covers whole-realm teardown. */
+static void cancelDocumentResources(unsigned long documentGeneration)
+{
+    if (!documentGeneration)
+        return;
+
+    if (getenv("AGB_EVT_DEBUG"))
+        agbLog(AGB_LOG_EVT, "cancel document resources docgen=%lu", documentGeneration);
+
+    cancelXhrJobsForDocument(documentGeneration);
+    cancelModuleWorkForDocument(documentGeneration);
+    cancelDeferredModulesForDocument(documentGeneration);
 }
 
 int evaluateModule(const char* src, size_t len, const char* filename, char** out, char** err)
@@ -4960,10 +5229,10 @@ static void cancelInFlightResources(unsigned long generation)
      * into a page that is going away. Notify failed so a tokenizer that is
      * blocked waiting for one of them can resume (no JS runs in this notify). */
     if (g_moduleEntryScripts) {
-        std::map<std::string, unsigned long>::iterator it = g_moduleEntryScripts->begin();
+        std::map<std::string, EntryScriptStamp>::iterator it = g_moduleEntryScripts->begin();
 
         while (it != g_moduleEntryScripts->end()) {
-            if (it->second == generation) {
+            if (it->second.generation == generation) {
                 notifyModuleEntry(it->first, NULL, true);
                 g_moduleEntryScripts->erase(it++);
             } else
@@ -5013,6 +5282,10 @@ static void teardownRealm(RuntimeState* state)
     /* The window handlers belong to the realms that are going away (their
      * closures and AntbValue refs die with the engine). */
     releaseAllRealmListeners(state);
+
+    /* Queued/prefetched modules of this view are useless in the next realm
+     * (in-flight ones were cancelled with the other resources below). */
+    clearModuleScheduling(state);
 
     /* The nodes of the previous realm can be released now (their document
      * was replaced a generation ago). */
@@ -5871,6 +6144,9 @@ void forgetFrameRealm(void* document)
             releaseRealmListeners(owner, runtime->realm);
 
             agbLog(AGB_LOG_EVT, "frame realm dropped for document %p", (void*)doc);
+
+            /* S2: the work this document started must not outlive it. */
+            cancelDocumentResources(runtime->generation);
 
             /* Drops the keeper (making the realm unreachable: ant's collector
              * frees it on the next GC), the document object, its listeners and
@@ -13381,7 +13657,6 @@ extern "C" int agb_dump_js_stack_for(void* context, const char* path)
 
     return antb_dump_js_stack_to_file(state->engine, path);
 }
-
 
 
 

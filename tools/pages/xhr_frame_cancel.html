@@ -1,0 +1,14 @@
+<!doctype html><meta charset="utf-8"><title>frame xhr cancel</title>
+<!-- Regression for S2: a frame document going away must cancel the work it
+     started. The child starts an XHR to the slow endpoint, then the parent
+     navigates the frame away 150 ms later; the response arrives ~1.2 s later
+     and must NOT reach the (detached) child document. Expected: fired=0
+     (before S2 the callback ran: fired=1). -->
+<iframe id="f" src="xhr_frame_cancel_child.html"></iframe>
+<script>
+window.__fired = 0;
+window.__failed = 0;
+setTimeout(function () {
+    document.getElementById('f').src = 'xhr_frame_cancel_other.html';
+}, 150);
+</script>

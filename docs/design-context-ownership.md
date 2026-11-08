@@ -101,11 +101,39 @@ ViewRuntime (per view, 只在引擎线程用)
    - `AGB_PER_FRAME_REALM=1` 与 `=0` 两种模式都过同一组用例；
    - 10 次 hammer reload 后 `window event load ... listeners=0` 为 0（reload chain 用例）。
 
-### S2（之后）
+### S2（已实现）
 
-- 模块 map / 定时器归属 / cancellation 全部按 `DocumentRuntime`（generation 变文档级）。
-- 评估"顶层导航不换 engine"：arch-status 写明 per-document engine 是 GC root 的替代（R4/R67），
-  要换得先让 ant 支持按 realm 释放 root；否则保持现状。
+1. **模块调度按 view**（roadmap P1-a）：`moduleCache` / `moduleSession` / `modulePending` /
+   `moduleEntryScripts` / `arrivedEntryBodies` / `deferredModules` / `lastFlushDocument` /
+   `moduleInFlight` 从文件级全局移进 `RuntimeState`。两个 tag 同时加载模块图不再共抢下载槽、
+   不再把对方的排队模块当"过期"丢掉。模块 body 缓存也按 view（同一个 URL 在两个 tab 是两份表项；
+   传输层 HTTP 缓存仍会去重）——共享一个 in-flight 表项会让先关掉的那个 tab 把另一个 tab 的等待删掉。
+2. **generation 分两级**：`RuntimeState::generation` 仍是 **realm 生命周期 id**（pin、polyfills、
+   整 realm teardown 用），新增 `DocumentRuntime::generation` 是 **文档 id**。XHR、module fetch、
+   排队的 import、routed entry script、deferred script 都同时记两个 id：
+   - 整 realm 离场：按 realm id（`<=`）取消（原有语义）；
+   - 一个 frame 文档离场：按文档 id（`==`）取消，只带走它自己启动的工作
+     （`cancelDocumentResources()` ← `forgetFrameRealm()`）。
+   用 `==` 而不是 `<=` 的原因：frame 的文档 id 比父文档新，范围比较会把父页的工作一起杀掉。
+3. **验收**：
+   - `tools/pages/xhr_frame_cancel.html` + `tools/run_xhr_tests.ps1` 的新用例：frame 里的 XHR
+     在 frame 导航走后不得回调（修前 `fired=1`，修后 `fired=0`）；
+   - 全部套件（realm/hang/tab lifecycle/worker/xhr/nav/script-mode/jit/typing/layout）全绿。
+
+### S2 未做（记录原因）
+
+- **ES module registry 仍按 engine（不是按 realm）**：ant 的 `js->modules.state` 没有进
+  `realm/fields.h` 的镜像表。理论上"一个 iframe 文档一个 realm 一份 module map"才是规范行为，
+  但当前 **iframe 里的 ESM 入口脚本与动态 import 根本跑不起来**（见下），改了也测不出收益，
+  等 frame 模块管线补齐再做。改动面：`realm/fields.h` + `realm_mark_one()`（module 值是 GC root）
+  + realm 销毁时 free 各自的 `ant_esm_state_t`。
+- **pin 仍按 realm 记**：`pinNode` 用 realm generation，frame 文档的 pin 要等整个 view teardown
+  才释放（R4/R67 的"按 realm 释放"契约没变）。
+- **发现的模块缺口**（与 S2 无关，但同一条路线上）：
+  ① iframe 里的 `import()` 报 `ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING`（VM 的 import 回调没装到
+  frame realm）；② 动态 import 写在 timer 回调里时基 URL 丢失（`Cannot resolve module: ./x.js`）；
+  ③ `<script>` 正文以 `import(` 开头且是**经典脚本**（不是 module）时，`looksLikeModule()` 会误判成
+  模块脚本 —— `import(` 是合法的经典脚本语法。三条都记在 [plan-roadmap.md](plan-roadmap.md)。
 
 ### S3（可放弃）
 

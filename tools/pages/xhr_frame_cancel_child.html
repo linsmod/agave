@@ -1,0 +1,9 @@
+<!doctype html><meta charset="utf-8"><title>frame xhr child</title>
+<body>
+<script>
+var x = new XMLHttpRequest();
+x.open('GET', '/slow-xhr');
+x.onload = function () { parent.__fired = 1; };
+x.onerror = function () { parent.__failed = 1; };
+x.send();
+</script>

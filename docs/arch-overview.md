@@ -100,9 +100,10 @@ WebCore 内部的渲染管线（DOM → 样式 → 渲染树 → 布局 → 绘�
 - **document-scoped window 对象**（`RealmDocument.cpp`，R132）：`location`/`history` 各自带
   document/Frame，getter 从 receiver 解析文档，不再读 per-view 的 `g_document`；
   `document.location === window.location`，子 frame 读自己的 URL/历史，`parent.location` 读父文档。
-- **generation**：进程级递增的资源 id。所有可能活过文档的资源（XHR、模块下载、待执行模块、
-  DOM pin、文档 slot）都带它；卸载时按它精确取消。realm 与 generation 目前不是一一对应：
-  一个 view 的 generation 对应顶层文档，iframe 的 realm 共用 view 的 generation（S3 待细化）。
+- **generation 有两条**（S2）：`RuntimeState::generation` 是 realm 生命周期 id（pin、polyfills、
+  整 realm 取消），`DocumentRuntime::generation` 是文档 id。异步工作（XHR、module fetch、排队 import、
+  deferred script）两个都记：整个 realm 离场按 realm id 取消，一个 frame 文档离场按文档 id
+  精确取消它自己启动的工作（`cancelDocumentResources()`）。
 - **owner**：桥接 wrapper 的归属文档。文档卸载时按 owner 释放（`antb_release_owner`），避免下一个文档拿到旧节点。
 - **监听器按 realm**：`window.addEventListener` / `onxxx` 存在 `RuntimeState::realmListeners`
   （`map<realm, vector>`）。一次 reload 会先 bind 临时文档、再 bind 提交文档（同一 realm），页面第一段
@@ -114,11 +115,13 @@ WebCore 内部的渲染管线（DOM → 样式 → 渲染树 → 布局 → 绘�
 - **frame 与 window**：每个 realm 的 `window`/`self` 就是该 realm 的全局对象；`parent`/`top` 是
   父/顶层 realm 的全局对象（同 VM，属性访问和调用照常，`parent !== self`、`top.Array !== Array`）。
   ES module map 仍是引擎级（两个 frame import 同一模块共享实例，S3 待做）。
-- **进程级共享**：模块会话（`g_moduleSession`）、`DownloadManager` 单例、generation 计数器、
-  桥的 wrapper/class/method-trampoline 表（wrapper 按 `(js, realm, ptr, tag)` 存，class 和
-  method 表按 engine 归属）。**契约**：任何进程级桥表在新增条目时，`antb_engine_destroy()`
-  必须释放该 engine 的条目（wrapper/class 已这样做；method 表此前漏了，见 R77），否则
-  “每文档一个新 engine”的隔离会被表容量上限击穿，而不是被 JS 状态泄漏击穿。
+- **进程级共享**：generation 计数器、桥的 wrapper/class/method-trampoline 表（wrapper 按
+  `(js, realm, ptr, tag)` 存，class 和 method 表按 engine 归属）。模块调度（fetch session、
+  pending、routed entry、deferred 队列、body 缓存）**按 view**（S2，roadmap P1-a）；
+  ES module registry 仍按 engine（frame 的 ESM 入口/动态 import 尚不可用，见设计文档 S2 未做）。
+  **契约**：任何进程级桥表在新增条目时，`antb_engine_destroy()` 必须释放该 engine 的条目
+  （wrapper/class 已这样做；method 表此前漏了，见 R77），否则“每文档一个新 engine”的隔离会被
+  表容量上限击穿，而不是被 JS 状态泄漏击穿。
 
 ## 4. 一次导航
 

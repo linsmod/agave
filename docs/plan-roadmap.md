@@ -327,12 +327,49 @@
 - 复测：`agave_shell.exe --probe file:///E:/mybrowsers/agave/debug/svg_shapes.svg --shot build-zig-native\svg.bmp`
   （`--shot` 路径要落在 build 目录；本代理环境给子进程的写权限只覆盖那里）。
 
-### P1-a 模块调度状态收敛 per-realm
+### P1-a 模块调度状态收敛 per-view（**已完成 2026-11-09，S2**）
 
-- 现状：`g_moduleCache`（保留全局，内容寻址没问题）/ `g_moduleSession` / `g_modulePending` / `g_deferredModules`
-  是文件级全局，两个标签页共用同一批下载槽与 pending 队列（现在靠 generation 打补丁）。
-- 动作：session / pending / deferred 移到 `RuntimeState`。
-- 验收：两个标签页同时加载模块图互不抢占；A 页排队的模块不会被 B 页执行。
+- 现状（修前）：`g_moduleCache`（保留全局，内容寻址没问题）/ `g_moduleSession` / `g_modulePending` /
+  `g_deferredModules` 是文件级全局，两个标签页共用同一批下载槽与 pending 队列（现在靠 generation 打补丁）。
+- 已做：session / pending / routed-entry 表 / arrived bodies / deferred 队列 / lastFlushDocument /
+  in-flight 计数全部移进 `RuntimeState`；module body 缓存也按 view（共享 in-flight 表项会被先关的
+  tab 取消掉另一个 tab 的等待）。文档级取消：`DocumentRuntime::generation` +
+  `cancelDocumentResources()`（frame 离场只取消它自己的 XHR/module/deferred）。
+- 验收：`run_xhr_tests.ps1` 新增 `xhr_frame_cancel.html`（frame 导航走后 XHR 不回调，修前 fired=1、
+  修后 fired=0）；realm/hang/tab-lifecycle/worker/nav/script-mode/jit/typing/layout 全绿。
+- **仍未做**：ES module registry（ant 的 `js->modules.state`）仍是 engine 级、不是 realm 级；
+  iframe 里的 ESM 入口脚本/动态 import 目前跑不起来（见下面 P1-e），所以等 P1-e 一起做。
+  WebCore 侧 `HTMLTokenizer.cpp` 的 `s_moduleEntryWaiter` 仍是文件级单 waiter（两个 tab 同时解析
+  入口 module 会互相覆盖），也要在 P1-e 里按 document 分表；模块 body 缓存按 view 意味着
+  父/子文档 import 同一 URL 时共用一个表项，子文档离场会取消它（等 P1-f 的 per-realm registry 消掉）。
+
+### P1-e frame 里的 ESM：入口模块与动态 import 都不可用
+
+- 现状（2026-11-09 实测）：`<iframe>` 里的 `<script type="module" src=...>` 不执行（探针读
+  `contentWindow.__modInstance` 是 `undefined`，日志里只有 `script (module) queued for parse end`
+  没有后续）；frame 里的 `import('./x.js')` 报
+  `TypeError [ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING]: A dynamic import callback was not specified.`
+  （VM 的 import 回调没装到这个 realm）。
+- 另外两条动态 import 的坑（主 frame 也踩）：
+  ① `setTimeout(function(){ import('./x.js') })` 报 `Cannot resolve module: ./x.js` —— 基 URL
+     只在顶层求值时设置，异步回调里丢了；
+  ② `<script>` 正文**以 `import(` 开头**时被 `looksLikeModule()` 误判成模块脚本（`import(` 是
+     合法的经典脚本语法），于是被当模块排队/走模块路径。
+- 动作：①frame realm 绑定/进入时也装 dynamic-import 回调（ant 侧 `js_set_dynamic_import_callback`
+  或等价物，桥要透传）；②把"当前脚本 URL"放进 realm 状态，`import()` 从那里取基 URL；
+  ③`looksLikeModule()` 对 `import(` 返回 false（动态 import 不是模块语法）。
+- 验收：两个 iframe 各自 `import('./shared_mod.js')` 各执行一次（`window.__sharedLoads` 各自 1）；
+  timer 里的 `import()` 能解析相对 URL；经典脚本首行 `import(...)` 正常当经典脚本执行。
+
+### P1-f ES module registry 按 realm（依赖 P1-e）
+
+- 现状：ant 的 `js->modules.state` 在 `ant_t` 上、不在 `realm/fields.h` 的镜像表里，所以同一
+  engine 里的两个 frame realm 共享 module map（规范要求每个 realm 一份）。
+- 动作：`realm/fields.h` 加 `ANT_REALM_FIELD(modules)`；`realm_mark_one()` 标记
+  `modules.cache/parent/main/constructor` 与 builtins cache；realm 销毁时清各自的 `ant_esm_state_t`
+  （`esm_loader_cache_cleanup` 目前只清当前 realm）。
+- 验收：P1-e 的"两个 iframe 各自执行一次"用例在 `AGB_PER_FRAME_REALM=1` 下成立。
+
 
 ### P1-c 清 `g_documentParsed` 死标志
 

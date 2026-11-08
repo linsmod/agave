@@ -190,6 +190,43 @@ try {
             Write-Host 'PASS  cap_textdecoder_legacy.html (gbk/gb18030/big5/euc-kr come from the host provider)'
         }
     }
+    # ---- S2: a frame document going away cancels the work it started --------
+    # The child frame starts an XHR to /slow-xhr (1.2 s), the parent navigates
+    # the frame away after 150 ms: the callback must not run against the
+    # detached document (before S2 it did - fired=1). Needs a delayed endpoint,
+    # so this case gets its own server.
+    $slowPort = $Port + 10
+    $slow = Start-Process -FilePath 'python' -WindowStyle Hidden -PassThru `
+        -ArgumentList (Join-Path $root 'tools/slow_xhr_server.py'), "$slowPort", $pageDir
+    try {
+        $ready = $false
+        for ($i = 0; $i -lt 40; $i++) {
+            Start-Sleep -Milliseconds 150
+            try {
+                $r = Invoke-WebRequest -Uri "http://127.0.0.1:$slowPort/xhr_frame_cancel.html" -UseBasicParsing -TimeoutSec 2
+                if ($r.StatusCode -eq 200) { $ready = $true; break }
+            } catch { }
+        }
+        if (-not $ready) { throw "slow xhr server did not come up on port $slowPort" }
+
+        $out = & $exe --probe "http://127.0.0.1:$slowPort/xhr_frame_cancel.html" `
+            --eval-file (Join-Path $pageDir 'check_xhr_frame_cancel.js') `
+            --wait 3000 --settle 300 --timeout 30000 2>&1
+        $code = $LASTEXITCODE
+        $text = $out -join "`n"
+
+        if ($code -ne 0) {
+            Write-Host "FAIL  xhr_frame_cancel.html: probe exit $code"
+            $failed++
+        } elseif ($text -notmatch [regex]::Escape('fired=0')) {
+            Write-Host "FAIL  xhr_frame_cancel.html: frame callback fired after the frame was gone ($text)"
+            $failed++
+        } else {
+            Write-Host 'PASS  xhr_frame_cancel.html (frame work is cancelled with its document)'
+        }
+    } finally {
+        if ($slow -and -not $slow.HasExited) { Stop-Process -Id $slow.Id -Force -ErrorAction SilentlyContinue }
+    }
 } finally {
     Stop-Server
 }
