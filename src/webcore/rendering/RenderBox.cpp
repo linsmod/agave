@@ -776,8 +776,18 @@ void RenderBox::paintBackgroundExtended(GraphicsContext* context, const Color& c
         IntSize tileSize;
 
         calculateBackgroundImageGeometry(bgLayer, tx, ty, w, h, destRect, phase, tileSize);
-        if (!destRect.isEmpty())
+        /* Picasso's pattern fill walks the whole destination rect instead of
+         * the part the clip keeps, so a tiled background on a long box is
+         * O(box area) per frame: css3test's body noise over a 21593px document
+         * cost ~800ms per paint even when 100px were dirty. Only the band that
+         * can be visible is drawn, and the phase is shifted by the same amount
+         * so the tiles stay aligned. */
+        IntRect origDest = destRect;
+        destRect.intersect(IntRect(tx, clipY, w, clipH));
+        if (!destRect.isEmpty()) {
+            phase.move(destRect.x() - origDest.x(), destRect.y() - origDest.y());
             context->drawTiledImage(bg->image(), destRect, phase, tileSize, bgLayer->backgroundComposite());
+        }
     }
 
     if (bgLayer->backgroundClip() != BGBORDER)

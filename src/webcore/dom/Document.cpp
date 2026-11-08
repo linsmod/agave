@@ -1089,8 +1089,15 @@ void Document::recalcStyle(StyleChange change)
         if (change >= Inherit || n->hasChangedChild() || n->changed())
             n->recalcStyle(change);
 
-    if (changed() && view())
-        view()->layout();
+    /* A style change does not imply a layout. RenderStyle::diff() already
+     * decided whether geometry changed, and when it did the renderer marks its
+     * containing blocks and schedules a relayout. Laying out eagerly here made
+     * every paint-only style write (background-position, color, opacity, ...)
+     * pay a full document layout: on css3test (21593px tall) one inline-style
+     * write per frame cost ~100ms of layout, i.e. ~6 FPS instead of ~50.
+     * Geometry reads go through Document::updateLayout(), which lays out only
+     * when v->layoutPending() || renderer()->needsLayout(). */
+    (void)0;
 
 bail_out:
     setChanged(NoStyleChange);

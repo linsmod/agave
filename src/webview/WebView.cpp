@@ -211,7 +211,18 @@ void WebView::scrollRect(int sx, int sy, int x, int y, int width, int height)
 
 void WebView::updateRect(int x, int y, int width, int height)
 {
-	d->m_drawRect.unite(IntRect(x, y, width, height));
+	/* The host surface is exactly the viewport, so anything outside it cannot be
+	 * shown. Long documents do invalidate their whole height (css3test asked for
+	 * 1096x21593 on every frame), and that rect drives both the paint walk and
+	 * the tiled-background fill - i.e. one frame cost grew with the document
+	 * instead of the window. */
+	IntRect rect(x, y, width, height);
+
+	rect.intersect(IntRect(0, 0, d->m_width, d->m_height));
+	if (rect.isEmpty())
+		return;
+
+	d->m_drawRect.unite(rect);
 
 	if (cb_invalidate_rect) {
 		IntRect rc = d->m_drawRect;
@@ -290,11 +301,12 @@ void WebView::paintView(void)
 		if (getenv("AGB_PAINT_FULL"))
 			d->m_drawRect = IntRect(0, 0, d->m_width, d->m_height);
 		//last draw update rect
-		if (!d->m_drawRect.isEmpty()) {
+		IntRect painted = d->m_drawRect;
+		if (!painted.isEmpty()) {
 			GraphicsContext gc(d->m_context);
 			gc.save();
-			gc.clip(d->m_drawRect);
-			d->m_frameView->paint(&gc, d->m_drawRect);
+			gc.clip(painted);
+			d->m_frameView->paint(&gc, painted);
 			gc.restore();
 			d->m_drawRect = IntRect(0, 0, 0, 0); //clear the invalidate Rect 
 		}
@@ -303,9 +315,13 @@ void WebView::paintView(void)
 		layoutMs = (double)(t1.QuadPart - t0.QuadPart) * 1000.0 / (double)freq.QuadPart;
 		paintMs  = (double)(t2.QuadPart - t1.QuadPart) * 1000.0 / (double)freq.QuadPart;
 
+		/* The painted rect is part of the record: "paint=900ms" on a viewport
+		 * is a different bug from "paint=900ms" on a 20000px document rect
+		 * (one long page invalidation repaints everything). */
 		if (getenv("AGB_PERF_LOG") && (layoutMs + paintMs) > 100.0)
-			fprintf(stderr, "[perf] layout=%.0fms paint=%.0fms total=%.0fms\n",
-			        layoutMs, paintMs, layoutMs + paintMs);
+			fprintf(stderr, "[perf] layout=%.0fms paint=%.0fms total=%.0fms rect=%dx%d@%d,%d\n",
+			        layoutMs, paintMs, layoutMs + paintMs,
+			        painted.width(), painted.height(), painted.x(), painted.y());
 	}
 
 	/* An open <select> menu is composited on top of the page, into this view's

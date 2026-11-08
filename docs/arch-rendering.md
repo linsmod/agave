@@ -222,6 +222,16 @@ DOM attach（Element::attach / Text::attach）
   `PopupMenu::windowRect()` 区域先填白，再 `translate` 到菜单原点画条目，最后描 1px 灰边。
   菜单不是独立窗口（宿主没有 `cb_create_popup_menu`），所以它同时出现在无头截图里；
   输入也由 `WebView` 优先路由给它。设计与限制见 [design-select-popup.md](design-select-popup.md)。
+- **脏矩形永远是视口的子集**：`WebView::updateRect()` 把引擎给的失效矩形与
+  `(0,0,width,height)` 求交（surface 就只有视口那么大）。长文档会失效整篇高度
+  （css3test：`1096x21593`），放大到 surface 上就是几十倍的无用工作（R135：一帧 paint 933ms → 70ms）。
+- **平铺背景只画可见带**：`RenderBox::paintBackgroundExtended()` 把
+  `calculateBackgroundImageGeometry()` 算出的 destRect 与 `(tx, clipY, w, clipH)` 求交，
+  再按偏移修正 phase —— Picasso 的 pattern 填充按 destRect 面积走，不按 clip。
+- **样式变化 ≠ 布局**：`FrameView::needsLayout()` 不再把 `document()->hasChangedChild()`
+  当布局请求；`layoutIfNeededRecursive()` 先 `recalcStyle()`，之后只有真的
+  `needsLayout()` 才布局。内联样式写入按 `InlineStyleChange` 标记（不是 `FullStyleChange`），
+  所以 `el.style.backgroundPosition = …` 这类纯绘制变化不再触发整页布局（R135）。
 - 判据：`AGB_PAINT_FULL=1` 后正常 = 失效/裁剪问题；仍不对 = 布局/样式问题
   （详见 [dev-debugging.md](dev-debugging.md) §4）。
 

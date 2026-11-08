@@ -603,6 +603,22 @@
 - 判据：一批"故意恶心"的页面（0 高度盒、超大圆角、负 margin、legend 溢出、table 塌陷、百分比圆角）
   连续跑 10 分钟不产生新的 `agb_crash.txt`；`run_layout_tests.ps1` 仍全绿。
 
+### P1 长页面帧率：整视口重绘仍是 ~70ms（R135 之后）
+
+- 现状（2026-11-08，R135 修完脏矩形放大与"样式变化=整页布局"之后）：css3test 每帧
+  写一次内联样式从 5.3 → **11.7 FPS**，剩下的成本是**整视口重绘 ~70ms**（1084x677，
+  文字为主）；`AGB_PERF_LOG` 的 `[perf]` 行给出 `layout=0 paint=70 rect=1068x677`。
+  `AGB_PROFILE` 的采样热点在 Picasso 的 pattern 填充（`wrap_mode_repeat`）与字形绘制。
+- 可选动作（按性价比）：
+  1. **字形光栅缓存**：同一 (font, glyph, 缩放) 只栅格化一次，按字形 bitmap 复用
+     （现在是 1-bit mono，`Font::drawGlyphs()` 每次重画）；
+  2. **平铺背景缓存**：把 pattern 填充的整块结果缓存成一张 tile 图（尺寸/phase 变了才重做），
+     `RenderBox::paintBackgroundExtended()` 只 blit；
+  3. **分块失效**：现在 html/body 样式变化会 `view()->repaint()`（WebKit 的 canvas 规则），
+     若背景本身没变可以只重绘变化区域（要区分 background-position 与 background-color）。
+- 判据：css3test 每帧写内联样式的 rAF 计时 ≥ 25 FPS；`run_layout_tests.ps1` 与像素组不退化；
+  截图与现在逐像素一致（缓存不能改变外观）。
+
 ### P2 多 tab 并行
 
 - 现状：一条引擎线程串行跑所有 view（[arch-overview.md](arch-overview.md) §1），所以 tab 之间既不并行，

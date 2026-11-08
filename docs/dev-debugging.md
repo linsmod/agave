@@ -209,7 +209,9 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
 | JS 绑定 | `AGB_DOM_DEBUG=1` / `AGB_STYLE_DEBUG=1` / `AGB_EVT_DEBUG=1` | DOM 绑定 / style 访问 / realm·teardown 事件 |
 | 事件派发链 | `AGB_EVT_TRACE=1` | 每次派发沿冒泡链打印 `[evt-trace] <type> node=<ptr> listeners=<n>`：看某个监听器到底在不在链上、有没有被调用（R45 就是靠它确认 React 的委托监听器确实执行了） |
 | 崩溃 | `AGB_TRACE_CRASH=1` | 记录最近 256 条内部 trace（崩溃后能回看走到哪） |
-| 性能 | `AGB_PROFILE=1` / `AGB_PERF_LOG=1` | RIP 采样直方图（退出时 dump `[profjs]`）/ 帧耗时（paint+js > 100ms 才打） |
+| 性能 | `AGB_PROFILE=1` / `AGB_PERF_LOG=1` | RIP 采样直方图（退出时 dump `[profjs]`，用 `tools/cdb_stack.ps1 -Symbolize` 前先把 `module+0x` 聚合成 `#NN` 行）/ 帧耗时（layout+paint > 100ms 才打，**带 `rect=WxH@x,y`**：脏矩形等于视口 = 正常，等于整篇文档 = 失效路径在放大重绘，见 R135） |
+| 性能 | `AGB_LAYOUT_DEBUG=1` | 每 5 次 layout 打 `[layout] calls= total= ms`：区分"真的在反复布局"和"只是在重绘"。整页 layout 在长文档上是 60–100ms 量级（R135） |
+| 性能 | 页面内 rAF 计时 | 探针里跑 `debug/fps_paint.js` 那种脚本（每帧改一个内联样式 + 数 rAF）能量出"每帧 JS+样式+布局+绘制"的真实帧率；只数 rAF 不改样式会把布局/绘制全跳过，数字虚高 |
 | 性能 | `AGB_PUMP_BREAKDOWN=1` | 每帧 `pumpAsyncRequests()` 分段计时（`[pumpbd] xhr=/module=/arrived=/vm=`，单帧 >2ms 才打）：`vm=` 大 = `antb_pump` 里的页面脚本/React 调度器；`xhr=` 大 = XHR 回调；用于区分"网络慢"和"JS 执行慢" |
 | 页面脚本 | `AGB_PAGE_EVAL=eval` | 页面脚本回到 direct-eval 语义（**默认 classic script**，顶层 `var`/`function` 进 `window`，R66）；A/B 与 `run_script_mode_tests.ps1` 用 |
 | GC | `AGB_GC_OFF=1` | 关掉引擎 GC；"关掉就好"是"对象被提前回收"的决定性判据（R60/R63/R67） |
@@ -241,7 +243,8 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
 
 ## 4. 定位手段
 
-- **想在页面里看 console / 网络 / 元素**：右键菜单或 `=` 菜单 → `注入 vConsole`
+- **想在页面里看 console / 网络 / 元素**：**F12 或 Ctrl+Shift+I**（inspector.js 二次注入
+  即自毁，所以同一个键开关），或右键菜单 / `=` 菜单 → `注入 vConsole`
   （默认）或 `注入 inspector.js`（hover 高亮 + 半透明信息浮层，Esc 退出；在页面上
   再右键出页内菜单，复制元素信息 JSON / 选择器 / 尺寸 / 文本 / HTML）。脚本从
   exe 同目录读，改完再点一次即可；`AGB_INSPECTOR` 换 inspector.js 路径。探针等价：

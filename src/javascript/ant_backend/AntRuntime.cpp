@@ -6992,7 +6992,13 @@ static int styleSetter(AntbEngine* engine, AntbValue* self, const char* name, co
     }
 
     antb_free(text);
-    element->setChanged();
+    /* Inline-style change, not a full style change: setProperty() already
+     * marked the element with InlineStyleChange, and upgrading that to
+     * FullStyleChange made Document::recalcStyle() walk the whole document
+     * with Force (Element::recalcStyle turns FullStyleChange + descendant
+     * rules into Force). On css3test that turned every `el.style.x = y` into a
+     * full-document restyle plus a full layout: ~100ms per frame. */
+    element->setChanged(WebCore::InlineStyleChange);
     return 1;
 }
 

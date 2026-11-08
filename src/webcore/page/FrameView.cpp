@@ -795,9 +795,11 @@ bool FrameView::needsLayout() const
     if (!m_frame)
         return false;
     RenderView* root = static_cast<RenderView*>(m_frame->renderer());
-    Document * doc = m_frame->document();
-    // doc->hasChangedChild() condition can occur when using WebKit ObjC interface
-    return layoutPending() || (root && root->needsLayout()) || d->layoutRoot || (doc && doc->hasChangedChild());
+    // doc->hasChangedChild() is a *style* request, not a layout one:
+    // layoutIfNeededRecursive() recalculates style and then asks again, so a
+    // paint-only change no longer forces a full layout (css3test: ~100ms per
+    // frame for a background-position write on a 21593px document).
+    return layoutPending() || (root && root->needsLayout()) || d->layoutRoot;
 }
 
 void FrameView::setNeedsLayout()
@@ -1021,6 +1023,13 @@ void FrameView::layoutIfNeededRecursive()
     // it is also incorrect, since if two frames overlap, the first could be excluded from the dirty
     // region but then become included later by the second frame adding rects to the dirty region
     // when it lays out.
+
+    // A pending style change is not a layout request. Recalculate style here
+    // (FrameView::layout() used to do it, which meant every paint-only style
+    // write - background-position, color - went through a full document
+    // layout) and then lay out only if the recalc actually asked for one.
+    if (m_frame && m_frame->document() && m_frame->document()->hasChangedChild())
+        m_frame->document()->recalcStyle();
 
     if (needsLayout())
         layout();

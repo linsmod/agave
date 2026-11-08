@@ -4321,6 +4321,12 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
                 }
                 if (msg.wParam == 'W' && !shift) { closeTab(g_activeTab); continue; }
                 if (msg.wParam == 'R' && !shift) { reloadActive("ctrl+r"); continue; }
+                /* Ctrl+Shift+I, like Chrome. inspector.js re-injects as a
+                 * toggle, so the same key closes it again. */
+                if (msg.wParam == 'I' && shift && g_tabs[g_activeTab].used) {
+                    injectInspector(g_tabs[g_activeTab].view);
+                    continue;
+                }
                 if (msg.wParam == VK_TAB) { switchTab(shift ? -1 : 1); continue; }
                 /* Ctrl+L selects the current URL: typing then replaces it, which
                  * is also what stops "http://" + a typed path from being glued
@@ -4346,6 +4352,14 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
 
             if (msg.wParam == VK_F5 && g_tabs[g_activeTab].used) {
                 reloadActive("F5");
+                continue;
+            }
+
+            /* F12 toggles the built-in inspector, the same way the tab menu's
+             * "注入 inspector.js" item does (inspector.js destroys itself when
+             * injected twice, so F12 opens and closes it). */
+            if (msg.wParam == VK_F12 && g_tabs[g_activeTab].used) {
+                injectInspector(g_tabs[g_activeTab].view);
                 continue;
             }
 
