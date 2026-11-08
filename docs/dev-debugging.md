@@ -50,7 +50,9 @@ agave_shell.exe --probe <url> [--eval <js>] [--wait ms] [--settle ms] [--timeout
 不建工具栏、不读/写 session/bookmark 文件。唯一的窗口是 `WS_POPUP|WS_EX_TOOLWINDOW` 的**隐藏**父窗口。
 stderr 会打一行 `[probe] headless window hidden, AGB_PROBE_SHOW=1 to show (pid <pid>)`。
 `--shot <bmp>` 抓的是控件自己的 mirror 缓冲（引擎线程每帧写的那份），**不需要**显示窗口；
-`--eval` 之后再等一帧才抓（否则拿到的是 eval 之前的像素，滚动/改 DOM 后的效果看不到，R82）。
+可以和 `--eval`/`--eval-file` 同用：探针先跑脚本、等 `--settle`，再等一帧才抓（否则拿到的是
+eval 之前的像素，滚动/改 DOM 后的效果看不到，R82）。典型用法是「脚本给元素画框/上色 → 截图」，
+R119 的 SVG 对位就是这么量出来的。
 `AGB_PROBE_SHOW=1` 才 ShowWindow，只在调试「窗口可见时行为不同」的路径时才用。
 验证"真的没窗口"：`powershell -File tools/check_window_visible.ps1 -ProcessId <pid>`
 （exit 0 = 无可见窗口，`-Json` 出明细）。要看真实 GUI：`agave_shell.exe <url>`（不带 `--probe`）。

@@ -142,11 +142,16 @@ DeepSeek 登录页（`https://chat.deepseek.com/sign_in`）的 logo 不是静态
 
 `requiresLayer()` 让 logo 能画出来，但布局仍是 `FlexibleBox(0×0)`：盒子宽 0、居中在容器中点，
 182px 的 svg 向右溢出（Chrome 451..633，agave 542..724），于是 hover 框、`getBoundingClientRect`
-和画面三者对不上。三处一起修：
+和画面三者对不上。四处一起修：
 
 - `RenderSVGRoot::calcPrefWidths()`：原来继承 `RenderContainer` 的空实现，min/max 首选宽恒 0；
   改成 replaced 语义（`calcReplacedWidth()` + 边框/padding）。修完 `.ds-sign-in-form__icon` = 182×28、
   位置 451，与 Chrome 一致；回归页 `tools/pages/layout/svg_inline_box.html`。
+- `RenderSVGRoot::applyContentTransforms()` 的**拼接顺序**：picasso 的 `ps_transform` 把矩阵乘进
+  当前用户空间，先 `translate(origin)` 再 `viewBoxToViewTransform()` 会把页面位置也乘上 viewBox
+  缩放，于是**所有**字形整体左移 `origin·(1−scale)`（x=451 时 16px、x=209 时 7px）。改成
+  「viewBox → viewport → currentScale/currentTranslate → origin」，最后裁根盒；`absoluteTransform()`
+  本来就是 `viewBox * translate`，两边终于一致。
 - `RenderSVGRoot::nodeAtPoint()`：子元素都不命中时，点在根自己的盒内要返回 `<svg>` 本身。
   之前直接 `return false`，inspector 永远选不到 svg，空白区落到背后的 `<div>`。
 - `RenderPath::absoluteRects()`：不再返回 `absoluteClippedOverflowRect()`（那是重绘矩形：
@@ -154,11 +159,12 @@ DeepSeek 登录页（`https://chat.deepseek.com/sign_in`）的 logo 不是静态
   `absoluteTransform().mapRect(relativeBBox(hasStroke()))` 的紧包围盒。修完每个 path 的 rect
   与 Chrome 一致（15 vs 14.7），不再是 19。
 
+验证：给 10 个 path 分别上色后逐项比「绘制列 vs rect」，`p0..p9` 全部 ±1px（修前每个都左移 16px）。
+
 已知仍未解决：
 
 - **HTML 静态标记里的 `<svg>`** 仍不渲染（HTMLParser 没有外来内容解析，见阶段 B2）；
 - **页面缩放 ≠100%** 时 inline SVG 内容相对盒子有偏移（125% 实测盒子 227×35、内容仍按 182×29 的用户
-  单位变换），需要把 zoom 统一到 viewport/CTM 计算；
-- DeepSeek 页最后两个字形的 path 仍画在其 bbox 左侧约 16px（合成的 H/V/L 路径页面正常，疑与 React
-  在 layout 之后改写 `d`、渲染树没跟上有关），待单独定位；
+  单位变换），需要把 zoom 统一到 viewport/CTM 计算（新的拼接顺序把 zoom 放在 origin 之前，
+  缩放语义需要再实测一遍）；
 

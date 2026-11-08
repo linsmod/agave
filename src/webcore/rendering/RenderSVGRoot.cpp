@@ -124,6 +124,25 @@ void RenderSVGRoot::calcPrefWidths()
 
 void RenderSVGRoot::applyContentTransforms(PaintInfo& paintInfo, int parentX, int parentY)
 {
+    /* Order matters: picasso composes each concatCTM into the *current* user
+     * space, so a transform applied later also scales everything applied
+     * before it. The viewBox transform (user units -> viewport) must therefore
+     * come first and the page position last. The old order applied the origin
+     * translation first and the viewBox scale afterwards, which scaled the
+     * origin too: with a 182x29 viewBox in a 182x28 box (scale 0.966) every
+     * glyph painted `origin * 0.034` left of its layout box - 16px at x=451 on
+     * chat.deepseek.com/sign_in, 7px at x=209 in the synthetic page. The
+     * geometry (absoluteTransform) never had that scaling, hence boxes and
+     * paint disagreed. */
+    SVGSVGElement* svg = static_cast<SVGSVGElement*>(element());
+    paintInfo.context->concatCTM(svg->viewBoxToViewTransform(width(), height()));
+
+    if (!viewport().isEmpty())
+        paintInfo.context->concatCTM(AffineTransform().translate(viewport().x(), viewport().y()));
+
+    paintInfo.context->concatCTM(AffineTransform().scale(svg->currentScale()));
+    paintInfo.context->concatCTM(AffineTransform().translate(svg->currentTranslate().x(), svg->currentTranslate().y()));
+
     // Translate from parent offsets (html renderers) to a relative transform (svg renderers)
     IntPoint origin;
     origin.move(parentX, parentY);
@@ -140,21 +159,12 @@ void RenderSVGRoot::applyContentTransforms(PaintInfo& paintInfo, int parentX, in
     AffineTransform ctm = RenderContainer::absoluteTransform();
     paintInfo.rect.move(static_cast<int>(ctm.e()), static_cast<int>(ctm.f()));
 
-    SVGSVGElement* svg = static_cast<SVGSVGElement*>(element());
-    paintInfo.context->concatCTM(AffineTransform().scale(svg->currentScale()));
-
-    if (!viewport().isEmpty()) {
-        if (style()->overflowX() != OVISIBLE) {
-            // Clip to the *renderer* box (layout px, page zoom already applied),
-            // not to viewport() (SVG user units): at zoom != 100% they differ and
-            // the content got clipped/shrunk while the box stayed zoomed.
-            paintInfo.context->clip(IntRect(0, 0, width(), height()));
-        }
-
-        paintInfo.context->concatCTM(AffineTransform().translate(viewport().x(), viewport().y()));
+    if (!viewport().isEmpty() && style()->overflowX() != OVISIBLE) {
+        // Clip to the *renderer* box (layout px, page zoom already applied),
+        // not to viewport() (SVG user units): at zoom != 100% they differ and
+        // the content got clipped/shrunk while the box stayed zoomed.
+        paintInfo.context->clip(IntRect(0, 0, width(), height()));
     }
-
-    paintInfo.context->concatCTM(AffineTransform().translate(svg->currentTranslate().x(), svg->currentTranslate().y()));
 }
 
 void RenderSVGRoot::paint(PaintInfo& paintInfo, int parentX, int parentY)
@@ -167,7 +177,6 @@ void RenderSVGRoot::paint(PaintInfo& paintInfo, int parentX, int parentY)
     if (viewport().isEmpty())
         calcViewport();
 
-    SVGSVGElement* svg = static_cast<SVGSVGElement*>(element());
     // A value of zero disables rendering of the element. 
     if (viewport().width() <= 0. || viewport().height() <= 0.)
         return;
@@ -198,9 +207,7 @@ void RenderSVGRoot::paint(PaintInfo& paintInfo, int parentX, int parentY)
     if (childPaintInfo.phase == PaintPhaseForeground)
         prepareToRenderSVGContent(this, childPaintInfo, boundingBox, filter);        
 
-    childPaintInfo.context->concatCTM(svg->viewBoxToViewTransform(width(), height()));
     RenderContainer::paint(childPaintInfo, 0, 0);
-
     if (childPaintInfo.phase == PaintPhaseForeground)
         finishRenderSVGContent(this, childPaintInfo, boundingBox, filter, paintInfo.context);
 

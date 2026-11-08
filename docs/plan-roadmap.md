@@ -281,9 +281,10 @@
      （当前 0 像素）。可复用新增的 picasso `ImageBuffer`。
   3. 页面缩放（≠100%）下 inline SVG 的偏移：125% 时 SVG 内容相对盒子整体偏移/被裁（盒子 rect 227×35，
      内容仍按 182×29 的用户单位变换）。需要把 zoom 统一到 SVG 的 viewport/CTM 计算里。
-  4. DeepSeek 登录页最后两个字形的 path 画在其 bbox 左侧约 16px（合成 H/V/L 路径页面正常）：
-     先查 React 在 layout 后改写 `d` 时 RenderPath 的 path 是否重建（`RenderPath::setPath` 只在
-     `layout()` 里调）。
+  4. ~~DeepSeek 登录页最后两个字形的 path 画在其 bbox 左侧约 16px~~ —— 修好 `RenderSVGRoot` 的盒位置后
+     才看清是**所有**字形整体左移 `origin·(1−viewBoxScale)`：`applyContentTransforms()` 把 viewBox
+     变换接在 origin 平移之后（picasso 在当前用户空间拼接），已改为 viewBox 先、origin 后；
+     上色逐项比对 `p0..p9` 全部 ±1px。见 R119。
   3. 渐变真渲染：`SVGPaintServerGradient::draw` 接 `ps_gradient_create_linear/radial`（含
      objectBoundingBox 变换），替换现在的“首停靠色”降级。
   4. marker / clipPath / mask / pattern / filter：marker 不画、mask 不应用、clipPath 只逐子路径

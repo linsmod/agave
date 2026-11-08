@@ -3361,9 +3361,12 @@ static int probeRun(const char* url)
 
                 g_probeEvalDone = 1;
 
-                /* --shot: capture what the page painted and leave. The window
-                 * is never shown, so this is the headless screenshot path. */
-                if (g_probeShot[0]) {
+                /* --shot without --eval: capture what the page painted and
+                 * leave. The window is never shown, so this is the headless
+                 * screenshot path. With an eval script the capture has to wait
+                 * for the script and its --settle delay (see PROBE_TIMER_SETTLE
+                 * below), otherwise the shot would be the pre-eval frame. */
+                if (g_probeShot[0] && !g_probeScript[0]) {
                     /* Let one more frame run: an --eval that scrolled or mutated
                      * the DOM has not been painted yet, and the control's mirror
                      * still holds the pre-eval pixels. */
@@ -3499,6 +3502,21 @@ static int probeRun(const char* url)
                 if (g_probeReloadMode)
                     g_probeRoundsDone = 1;
 
+                /* --eval + --shot: the script has returned and --settle has
+                 * elapsed. Give the engine one more frame before capturing:
+                 * the control's mirror still holds the pre-eval pixels (R82). */
+                if (g_probeShot[0]) {
+                    if (!g_probeShotSettled) {
+                        g_probeShotSettled = 1;
+                        SetTimer(g_probeWnd, PROBE_TIMER_SETTLE, 300, NULL);
+                        continue;
+                    }
+                    if (probeCapture(g_probeShot))
+                        g_probeGotExit = 1;
+                    else
+                        agbLog(AGB_LOG_PROBE, "shot failed: %s", g_probeShot);
+                }
+
                 break;
             }
 
@@ -3606,7 +3624,9 @@ static void probeUsage(void)
             "            (document.hidden + visibilitychange) without a GUI tab switch\n"
             "  --shot <path>  write a BMP of what the page painted and exit; the\n"
             "            window stays hidden, so this is the headless screenshot\n"
-            "            path (no focus stealing, nothing on screen)\n"
+            "            path (no focus stealing, nothing on screen). Combine it\n"
+            "            with --eval/--eval-file to capture what the script changed\n"
+            "            (the capture waits for the script and --settle)\n"
             "  --keys <text>  type into the page before --eval, through the real\n"
             "            WM_KEYDOWN/WM_CHAR/WM_KEYUP path (the page must focus its\n"
             "            own control; {backspace} {enter} {tab} {left} {right}\n"
