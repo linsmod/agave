@@ -116,6 +116,35 @@ if (Test-Path $slowTimer) {
           ("done={0} watchdogFile={1} {2}ms" -f $done, $watchdog, $r.Ms)
 }
 
+# 4c. The unresponsive verdict is advisory: a script that runs past the budget is
+#     reported to the host - real busy time + a per-event JS stack file - and the
+#     page keeps running. Before this the watchdog aborted it, the prompt could say
+#     "(0.0 s)" (it reported only the command clock) and the stack was nowhere.
+$busyDir = Join-Path $root 'build-zig-native'
+if (Test-Path $slowTimer) {
+    Get-ChildItem $busyDir -Filter 'agb_busy_*.txt' -ErrorAction SilentlyContinue | Remove-Item -Force
+    $env:AGB_UNRESPONSIVE_MS = '1000'
+    try {
+        $r = Invoke-Probe @('--probe', (PageUrl $slowTimer), '--wait', '500', '--settle', '100',
+                            '--timeout', '40000',
+                            '--eval', "probeExit(document.getElementById('out').textContent)")
+    } finally {
+        $env:AGB_UNRESPONSIVE_MS = $null
+    }
+    $stackFile = @(Get-ChildItem $busyDir -Filter 'agb_busy_*.txt' -ErrorAction SilentlyContinue) |
+                 Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    $stackText = if ($stackFile) { Get-Content $stackFile.FullName -Raw } else { '' }
+    $done = $r.Text -match '\[exit\] done'
+    $reported = $r.Text -match 'reporting an unresponsive page script'
+    $hasStack = $stackText -match 'at .*\('
+    $hasBusy = $stackText -match 'busy=[1-9][0-9]*ms'
+    $noAbort = $r.Text -notmatch 'aborting an unresponsive'
+    Check 'unresponsive notice is advisory and leaves a busy-stack file' `
+          ($done -and $reported -and $hasStack -and $hasBusy -and $noAbort) `
+          ("done={0} reported={1} stack={2} busy={3} noAbort={4}" -f $done, $reported, $hasStack, $hasBusy, $noAbort)
+}
+
+
 # 5. Hung page reloaded: the stuck script is aborted, the reload runs, and the
 #    reloaded document must become usable (a stale interrupt request would kill
 #    its scripts too and leave it blank).

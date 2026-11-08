@@ -40,6 +40,10 @@
 #define ID_FIND_PREV  1012
 #define ID_FIND_CLOSE 1013
 
+/* Posted (not called) by onUnresponsive so the "page unresponsive" prompt never
+ * runs inside the control's window procedure. wParam = tab index. */
+#define AGW_SHELL_HANG_PROMPT (WM_APP + 22)
+
 #define TAB_HEIGHT    28
 #define TOOLBAR_Y     4
 #define TOOLBAR_H     34
@@ -57,6 +61,12 @@ typedef struct {
     int           loading;
     int           progress;
     int           used;
+    /* The watchdog reported this tab's page as unresponsive (advisory: nothing
+     * was killed). The dialog is only shown for the active tab; a background
+     * tab is marked in the tab strip and prompts when the user switches to it. */
+    int           hangPending;
+    unsigned int  hangMs;
+    char          hangStack[MAX_PATH_CHARS];
 } Tab;
 
 static HWND  g_hwnd;
@@ -672,6 +682,12 @@ static void setActiveTab(int index)
 
     updateStatus();
     InvalidateRect(g_hwnd, NULL, FALSE);
+
+    /* A tab that hung while it was in the background asks now that the user is
+     * looking at it. Posted so the prompt never runs inside setActiveTab
+     * (which is called from tab creation and from the tab strip). */
+    if (g_tabs[index].hangPending && index == g_activeTab)
+        PostMessageA(g_hwnd, AGW_SHELL_HANG_PROMPT, (WPARAM)index, 0);
 }
 
 static void closeTab(int index)
@@ -1008,40 +1024,214 @@ static void onDownload(AgaveWebView* view, const MC_DOWNLOAD_INFO* info, void* u
         updateStatus();
 }
 
-/* The watchdog stepped in (see AgaveWebView.c): a page script was blocking the
- * page and got aborted, or the engine stopped draining while no script was
- * running (nothing was killed there - aborting cannot help). Runs on the UI
- * thread, so a notice is allowed to be a plain dialog; AGB_HANG_POPUP=0 keeps
- * unattended runs quiet. */
+/* ------------------------------------------------------------------------- */
+/* "page unresponsive" prompt (advisory, per tab)                            */
+/* ------------------------------------------------------------------------- */
+/* Nothing was killed: the page script is still running and the user decides.
+ * The prompt is tab-scoped - a background tab is only marked in the tab strip
+ * and asks when it becomes active (a dialog for a tab the user is not looking
+ * at would be noise, and with one engine thread it would still be honest to
+ * mention it). Wording/behaviour follow the browser prompt: Wait or close the
+ * page. */
+
+#define ID_HANG_WAIT  2001
+#define ID_HANG_CLOSE 2002
+
+typedef struct {
+    int result;   /* 0 = wait, 1 = close the tab */
+} HangPrompt;
+
+static LRESULT CALLBACK hangPromptProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    HangPrompt* prompt = (HangPrompt*)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+
+    switch (message) {
+    case WM_COMMAND:
+        if (LOWORD(wParam) == ID_HANG_WAIT || LOWORD(wParam) == ID_HANG_CLOSE) {
+            if (prompt)
+                prompt->result = (LOWORD(wParam) == ID_HANG_CLOSE) ? 1 : 0;
+            DestroyWindow(hwnd);
+        }
+        return 0;
+
+    case WM_CLOSE:
+        if (prompt)
+            prompt->result = 0;   /* dismissing the prompt means "keep waiting" */
+        DestroyWindow(hwnd);
+        return 0;
+
+    case WM_DESTROY:
+        return 0;
+
+    default:
+        break;
+    }
+
+    return DefWindowProcW(hwnd, message, wParam, lParam);
+}
+
+/* Returns 1 when the user chose to close the tab. Modal (its own message loop):
+ * the engine thread keeps running the page meanwhile, which is the point. */
+static int showHangPrompt(int tabIndex, unsigned int busyMs, const char* stackPath)
+{
+    static int registered;
+    HWND dialog;
+    HWND wait;
+    HangPrompt prompt;
+    wchar_t message[1400];
+    wchar_t stack[600];
+    RECT owner;
+    int w = 520, h = 260;
+    int cx, cy;
+    MSG msg;
+
+    if (!g_hwnd || tabIndex < 0 || tabIndex >= MAX_TABS || !g_tabs[tabIndex].used)
+        return 0;
+
+    agbLog(AGB_LOG_SHELL, "unresponsive prompt: show tab=%d busy=%ums", tabIndex, busyMs);
+
+    if (!registered) {
+        WNDCLASSEXW wc;
+
+        memset(&wc, 0, sizeof(wc));
+        wc.cbSize = sizeof(wc);
+        wc.lpfnWndProc = hangPromptProc;
+        wc.hInstance = g_instance;
+        wc.hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW);
+        wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+        wc.lpszClassName = L"AgaveHangPrompt";
+        RegisterClassExW(&wc);
+        registered = 1;
+    }
+
+    memset(&prompt, 0, sizeof(prompt));
+
+    utf8ToWide(stackPath && stackPath[0] ? stackPath : "(no JS stack captured)",
+               stack, (int)(sizeof(stack) / sizeof(stack[0])));
+
+    _snwprintf(message, sizeof(message) / sizeof(message[0]),
+               L"The page has been unresponsive for %.1f s.\n\n"
+               L"Its script has not returned. You can wait for the page to\n"
+               L"become responsive, or close the page.\n\n"
+               L"Full JS stack:\n%s",
+               busyMs / 1000.0, stack);
+    message[(sizeof(message) / sizeof(message[0])) - 1] = 0;
+
+    GetWindowRect(g_hwnd, &owner);
+    cx = (owner.left + owner.right) / 2;
+    cy = (owner.top + owner.bottom) / 2;
+
+    dialog = CreateWindowExW(WS_EX_DLGMODALFRAME, L"AgaveHangPrompt",
+                             L"agave - page unresponsive",
+                             WS_POPUP | WS_CAPTION | WS_SYSMENU,
+                             cx - w / 2, cy - h / 2, w, h,
+                             g_hwnd, NULL, g_instance, NULL);
+
+    if (!dialog) {
+        agbLog(AGB_LOG_SHELL, "unresponsive prompt: CreateWindowExW failed (%lu)",
+               (unsigned long)GetLastError());
+        return 0;
+    }
+
+    SetWindowLongPtrW(dialog, GWLP_USERDATA, (LONG_PTR)&prompt);
+
+    CreateWindowExW(0, L"STATIC", message,
+                    WS_CHILD | WS_VISIBLE | SS_LEFT,
+                    16, 12, w - 32, 150, dialog, NULL, g_instance, NULL);
+
+    wait = CreateWindowExW(0, L"BUTTON", L"Wait",
+                           WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
+                           w - 230, h - 58, 100, 30, dialog,
+                           (HMENU)(INT_PTR)ID_HANG_WAIT, g_instance, NULL);
+
+    CreateWindowExW(0, L"BUTTON", L"Close tab",
+                    WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                    w - 120, h - 58, 100, 30, dialog,
+                    (HMENU)(INT_PTR)ID_HANG_CLOSE, g_instance, NULL);
+
+    if (wait)
+        SetFocus(wait);
+
+    ShowWindow(dialog, SW_SHOW);
+    UpdateWindow(dialog);
+
+    EnableWindow(g_hwnd, FALSE);
+
+    for (;;) {
+        BOOL got = GetMessageW(&msg, NULL, 0, 0);
+
+        if (got <= 0) {
+            /* The shell was asked to quit while the prompt was up: keep the
+             * quit request for the outer loop instead of swallowing it. */
+            if (got == 0)
+                PostQuitMessage((int)msg.wParam);
+            break;
+        }
+
+        if (!IsWindow(dialog))
+            break;
+
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
+
+    EnableWindow(g_hwnd, TRUE);
+
+    if (IsWindow(dialog))
+        DestroyWindow(dialog);
+
+    return prompt.result;
+}
+
+/* The watchdog reported an unresponsive page (advisory: see
+ * AgaveWebView.c). Runs on the UI thread. Only the tab the user is looking at
+ * prompts; a background tab is marked and prompts when it becomes active. */
 static void onUnresponsive(AgaveWebView* view, const char* reason,
-                           unsigned int busy_ms, void* user)
+                           unsigned int busy_ms, const char* stack_path, void* user)
 {
     Tab* tab = (Tab*)user;
     const char* show = getenv("AGB_HANG_POPUP");
-    char message[700];
+    int index = -1;
+    int i;
 
     (void)view;
 
-    if (tab) {
-        strncpy(tab->status, reason ? reason : "", sizeof(tab->status) - 1);
-        tab->status[sizeof(tab->status) - 1] = 0;
-
-        if (tab == &g_tabs[g_activeTab])
-            updateStatus();
-    }
-
-    agbLog(AGB_LOG_SHELL, "page unresponsive: %s (busy=%ums)", reason ? reason : "",
-           busy_ms);
-
-    if (show && show[0] == '0' && show[1] == 0)
+    if (!tab)
         return;
 
-    _snprintf(message, sizeof(message),
-              "%s\n\n(%.1f s)\n\nAGB_HANG_POPUP=0 turns this notice off.",
-              reason ? reason : "", busy_ms / 1000.0);
-    message[sizeof(message) - 1] = 0;
-    MessageBoxA(g_hwnd, message, "agave - page unresponsive",
-                MB_OK | MB_ICONWARNING | MB_SETFOREGROUND);
+    for (i = 0; i < MAX_TABS; ++i) {
+        if (&g_tabs[i] == tab) {
+            index = i;
+            break;
+        }
+    }
+
+    strncpy(tab->status, reason ? reason : "", sizeof(tab->status) - 1);
+    tab->status[sizeof(tab->status) - 1] = 0;
+
+    tab->hangPending = 1;
+    tab->hangMs = busy_ms;
+    tab->hangStack[0] = 0;
+
+    if (stack_path && stack_path[0]) {
+        strncpy(tab->hangStack, stack_path, sizeof(tab->hangStack) - 1);
+        tab->hangStack[sizeof(tab->hangStack) - 1] = 0;
+    }
+
+    agbLog(AGB_LOG_SHELL, "page unresponsive: tab=%d %s (busy=%ums) stack=%s",
+           index, reason ? reason : "", busy_ms,
+           tab->hangStack[0] ? tab->hangStack : "(none)");
+
+    if (tab == &g_tabs[g_activeTab]) {
+        if (!(show && show[0] == '0' && show[1] == 0))
+            PostMessageA(g_hwnd, AGW_SHELL_HANG_PROMPT, (WPARAM)index, 0);
+
+        updateStatus();
+    } else {
+        /* Background tab: no dialog; the tab strip marks it and the prompt
+         * appears when the user switches to it. */
+        InvalidateRect(g_hwnd, NULL, FALSE);
+    }
 }
 
 /* Right click: the control reports the hit-test; the shell owns the menu. */
@@ -2114,6 +2304,15 @@ static void paintTabs(HDC hdc, int width)
         _snprintf(label, sizeof(label), "%s", g_tabs[i].title[0] ? g_tabs[i].title : "New tab");
         label[sizeof(label) - 1] = 0;
 
+        if (g_tabs[i].hangPending) {
+            size_t used = strlen(label);
+
+            if (used + 4 < sizeof(label))
+                memcpy(label + used, "  !", 4);   /* NUL included */
+
+            SetTextColor(hdc, RGB(200, 30, 30));
+        }
+
         {
             wchar_t wideLabel[128];
 
@@ -2121,6 +2320,8 @@ static void paintTabs(HDC hdc, int width)
             DrawTextW(hdc, wideLabel, -1, &box,
                       DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_END_ELLIPSIS);
         }
+
+        SetTextColor(hdc, RGB(0, 0, 0));
 
         SetRect(&box, x + 148, 2, x + 168, TAB_HEIGHT - 2);
         DrawTextW(hdc, L"x", -1, &box, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
@@ -2183,6 +2384,27 @@ static LRESULT CALLBACK shellProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM
             if (g_tabs[i].used && g_tabs[i].view == (AgaveWebView*)wParam) {
                 closeTab(i);
                 break;
+            }
+        }
+        return 0;
+    }
+
+    case AGW_SHELL_HANG_PROMPT: {
+        int index = (int)wParam;
+
+        if (index >= 0 && index < MAX_TABS && g_tabs[index].used &&
+            g_tabs[index].hangPending) {
+            int closeIt = showHangPrompt(index, g_tabs[index].hangMs,
+                                         g_tabs[index].hangStack);
+
+            g_tabs[index].hangPending = 0;
+            InvalidateRect(hwnd, NULL, FALSE);
+
+            if (closeIt) {
+                agbLog(AGB_LOG_SHELL, "unresponsive prompt: close tab index=%d", index);
+                closeTab(index);
+            } else {
+                agbLog(AGB_LOG_SHELL, "unresponsive prompt: wait tab index=%d", index);
             }
         }
         return 0;
@@ -3018,16 +3240,19 @@ static int probeOnDialog(AgaveWebView* view, int type, const char* message,
 }
 
 /* The watchdog's notice, on the UI thread. The probe has no window to show it
- * in, so it prints one line: that is what makes "the engine aborted a page and
- * told the host" testable headlessly (AGB_UNRESPONSIVE_MS=2000 on a spinner). */
+ * in, so it prints one line plus the busy-stack file: that is what makes "the
+ * engine reported a stuck page and told the host" testable headlessly
+ * (AGB_UNRESPONSIVE_MS=2000 on a spinner). */
 static void probeOnUnresponsive(AgaveWebView* view, const char* reason,
-                                unsigned int busy_ms, void* user)
+                                unsigned int busy_ms, const char* stack_path,
+                                void* user)
 {
     (void)view;
     (void)user;
 
     probePrint("[probe] unresponsive", reason ? reason : "");
-    (void)busy_ms;
+    fprintf(stderr, "[probe] unresponsive busy=%ums stack=%s\n",
+            busy_ms, (stack_path && stack_path[0]) ? stack_path : "(none)");
 }
 
 /* Right click reaches the host on the UI thread (the control copies the payload

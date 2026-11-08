@@ -350,13 +350,13 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
 | `AGB_NAV_ABORT_MS=<ms>` | `src/webview_control/AgaveWebView.c`（`agwWatchdogStart`） | 导航排队兜底：导航命令在队首等这么久、且有 JS 在跑，就中断一次（正常路径在 `agwPost()` 里**投递时就中断**，这里只在"投递时引擎还没进 JS、随后才进"的情况下兜底），默认 100；触发时**不弹提示框** | 看门狗启动时读一次 |
 | `AGB_TEARDOWN_MS=<ms>` | 同上 | 收尾预算：旧文档的 `pagehide`/`visibilitychange`/`unload` 任何一步跑这么久还没返回就中断它（下一个事件照常发），默认 100。导航时旧页被立即中断、收尾按流程走，就靠这一档保证收尾不会拖住导航 | 调小可复现：`debug/teardown_hang.html`（pagehide 死循环）+ `--nav-after 800` |
 | `AGB_USER_ABORT_MS=<ms>` | 同上 | 不换文档的用户动作（停止 / 查找）被页面脚本挡住的容忍时间，默认 1500（导航走上面的 100） | 看门狗启动时读一次 |
-| `AGB_UNRESPONSIVE_MS=<ms>` | 同上 | JS 连续在跑多久算"页面无响应"，默认 12000（`AGB_STUCK_EXEC_MS` 是它的旧名，仍然认） | 调小可复现：`AGB_UNRESPONSIVE_MS=2000` + 20 s 死循环 → `[evt] watchdog: aborting an unresponsive page script` |
+| `AGB_UNRESPONSIVE_MS=<ms>` | 同上 | JS 连续在跑多久算"页面无响应"，默认 12000（`AGB_STUCK_EXEC_MS` 是它的旧名，仍然认）。这一档**只报告，不中断**：宿主收到 `on_unresponsive`（tab 级 "Wait / Close tab" 提示），同时写一份 `agb_busy_<YYYYMMDD-HHMMSS>_pid<pid>.txt`（JS 栈 + busy/jsdepth/head/queue） | 调小可复现：`AGB_UNRESPONSIVE_MS=1000` + 3 s timer 死循环 → `[evt] watchdog: reporting an unresponsive page script (not aborting)` + `[probe] unresponsive busy=…ms stack=…` |
 | `AGB_NATIVE_STALL_MS=<ms>` | 同上 | 没有 JS、命令却多久不 drain 算"引擎在 JS 之外卡住"，默认 10000；这一档**不中断**，只记日志 | — |
 | `AGB_WD_DEBUG=1` | 同上 | 每个 tick 打印 `wd js=… jsbusy=… busy=… queue=… head=…`；判定行尾部带 `ctx=<RuntimeState*>` | 调阈值、判断"真卡/慢"的第一手数据 |
 | `AGB_CONTEXT_ASSERT=1` | `src/javascript/ant_backend/AntRuntime.cpp`（`assertContextThread`） | 每个宿主→引擎入口核对"是否在引擎线程"；跨线程时打印 `[ctx] <entry> on non-engine thread …`。AntRuntime 的上下文只允许引擎线程碰，UI 线程误用过去是**静默**读错文档 | 定位"页面行为莫名跟着上一个 tab/文档走" |
 | `AGB_PARSE_LOG=1` | `src/webcore/html/HTMLTokenizer.cpp` / `HTMLScriptElement.cpp` / `AntRuntime.cpp` | HTML 解析轨迹（默认关）：`tag` 行=解析器在每个 `<script>`/`<style>`/`<link>` 起标签被 tokenize 处打一行（**全部属性**按作者写法原样打印，空值属性只打名字，超长值截断 `(N bytes)`；`src=`/`href=` 后跟 `url=<解析后的绝对地址>`，和作者写的不同才打）；执行行=脚本真正的时刻与形态（inline/external、classic/module、flush 封口**前后**分别打 `queued for parse end` / `running now (parse already finished)`）。排查"脚本为什么在这个时机跑"从这里开始 | 见下例 |
 | `AGB_CSS_PROFILE=1` | `src/webcore/css/CSSParser.cpp`（`parseSheet`） | 每张样式表解析前打印 8 个改写 pass（`hoistPageRules`/`rewriteViewportUnits`/`foldCalc*`…）与 `cssyyparse` 的耗时（默认关）。大样式表排版卡顿时先看这里：先确认哪个 pass 慢，再怀疑语法解析 | 页面带大 `<style>`：用 `debug/stall_baidu_css.html`（百度全部内联 CSS 的本地复现页，~316KB） |
-| `AGB_HANG_POPUP=0` | `examples/browser_shell/main.c`（`onUnresponsive`） | 关掉"页面无响应"提示框（无人值守/自动化时用） | — |
+| `AGB_HANG_POPUP=0` | `examples/browser_shell/main.c`（`onUnresponsive`） | 关掉"页面无响应"提示框（无人值守/自动化时用）；tab 标记和 `agb_busy_*.txt` 仍然会写 | — |
 
 ant 自身 CLI / 基础设施的开关（`ANT_MANIFEST_URL`、`ANT_SANDBOX_*`、`ANT_NO_CRASH_HANDLER` 等）
 在 `H:\ant-v16` 里读，**和 agave 的运行无关**，排查浏览器问题时不用管。
@@ -402,8 +402,8 @@ ant 自身 CLI / 基础设施的开关（`ANT_MANIFEST_URL`、`ANT_SANDBOX_*`、
   | 导航（navigate/刷新/前进后退/load-html）投递时 JS 正在跑 | 用户要离开，页面马上被替换 | **投递即中断**（`agwPost()`，无等待），静默 |
   | 导航命令在队首 ≥100 ms 且有 JS 在跑 | 投递时引擎还没进 JS（原生解析），随后才进 | 中断兜底（`AGB_NAV_ABORT_MS`），静默 |
   | 旧文档收尾（pagehide/visibilitychange/unload）≥100 ms 未返回 | 收尾 handler 卡住 | 中断它，**下一个事件照常发**，静默（`AGB_TEARDOWN_MS`） |
-  | 其它用户动作（停止/查找）被脚本挡住 ≥1.5 s | 用户要操作，但页面留在屏幕上 | 中断并提示（`AGB_USER_ABORT_MS`） |
-  | JS 连续在跑 ≥12 s，没有人在等 | 页面无响应（Chrome 同量级） | 中断并弹提示（`AGB_UNRESPONSIVE_MS`） |
+  | 其它用户动作（停止/查找）被脚本挡住 ≥1.5 s | 用户要操作，但页面留在屏幕上 | 中断（`AGB_USER_ABORT_MS`），静默（日志里能看到） |
+  | JS 连续在跑 ≥12 s，没有人在等 | 页面无响应（Chrome 同量级） | **不中断**：通知宿主（tab 级 Wait / Close tab 提示）+ 写 `agb_busy_<time>_pid<pid>.txt`（JS 栈 + busy/jsdepth/head/queue）。每次 busy 连续段只报一次（`AGB_UNRESPONSIVE_MS`） |
   | 没有 JS、命令却 ≥10 s 不 drain | 引擎在 JS 之外卡住（模态/死锁/原生长活） | **不中断**（没人轮询标志），只记日志（`AGB_NATIVE_STALL_MS`） |
 
   页面脚本在 `macross_event_dispatch()` 里跑（load 事件、timer），**不在命令里** —— 所以"队首等了 1.5 s"
@@ -413,10 +413,15 @@ ant 自身 CLI / 基础设施的开关（`ANT_MANIFEST_URL`、`ANT_SANDBOX_*`、
   收尾预算的起点来自引擎：`documentWillUnload()` 写 `g_teardownStart`，控件通过
   `agb_teardown_started_ms()`（`src/webview/AgbRuntime.h`）轮询——commit 是异步的，控件自己看不到收尾从哪一刻开始。
   中断只对 A 类（失控 JS）有效；B 类（原生阻塞）中断标志挂在那里没人看，所以第三档只记录不动作。
-  每次判定同时写一行 `build-zig-native\agb_watchdog.txt`（pid / kind / jsdepth / 队首命令 / busy / queue）——
-  GUI 里没有 stderr，"探针好好的、窗口里是 0%" 这种问题就靠它。
-  回归：`pwsh -File tools/run_hang_recovery_tests.ps1`（8 条：中断、导航中断、空闲误中断、慢页连刷、
-  timer 长脚本不被杀、卡死页刷新恢复、HTTP 连刷、reload 链）。
+  每次判定同时写一行 `build-zig-native\agb_watchdog.txt`（pid / kind / jsdepth / 队首命令 / busy / jsbusy / queue）——
+  GUI 里没有 stderr，"探针好好的、窗口里是 0%" 这种问题就靠它。**"页面无响应"这一档**每次报告另写一份
+  `agb_busy_<YYYYMMDD-HHMMSS>_pid<pid>.txt`（exe 旁）：先是在**挂起引擎线程**时抓下来的 JS 栈
+  （`at fn (file:line:col)`，已去掉 ANSI 色码），再是 `# agb busy report` 头（时间/pid/reason/busy/jsdepth/head/queue）。
+  一次事件一个文件，不会互相覆盖；回归脚本用 `agb_busy_*.txt` 就能断言"报了 + 有栈"。
+  报告里的 `busy` 是**真正触发的那个时钟**（JS 在栈上时用 jsbusy，命令在跑时用 busy），
+  所以不会再出现弹框 `(0.0 s)` 的怪相。
+  回归：`pwsh -File tools/run_hang_recovery_tests.ps1`（9 条：中断、导航中断、空闲误中断、慢页连刷、
+  timer 长脚本不被杀、无响应只报告且有栈文件、卡死页刷新恢复、HTTP 连刷、reload 链）。
   验证手段：`--probe <卡死页> --interrupt-after 2000`（到点中断，页面继续加载）、
   `--nav-after 2000`（模拟"卡着时重新导航"）、`debug/teardown_hang.html`（pagehide 死循环，
   收尾被切断且 unload 仍执行）、`--hide-after/--show-after`（Page Visibility，不经 GUI 切 tab）。

@@ -80,15 +80,21 @@ typedef struct AgaveWebViewCallback {
      * work short (post to your own thread if you touch GUI state). */
     void (*on_close_window)(AgaveWebView* view, void* user);
 
-    /* The watchdog had to step in: it aborted a page script that was blocking a
-     * navigation or that had been running with nobody waiting on it, or it found
-     * the engine not draining while no script was running at all (that last case
-     * kills nothing - aborting cannot help there). Runs on the UI thread, so a
-     * notice dialog belongs here. `reason` is one short sentence, `busy_ms` is
-     * how long the offending script had been running. A slow but working page
-     * never reaches this callback. */
+    /* A page script has been running with nobody waiting on it for the whole
+     * unresponsive budget (AGB_UNRESPONSIVE_MS, 12 s by default). Nothing was
+     * killed: this is advisory, the host decides (browsers show an
+     * "unresponsive page" prompt offering to wait or close the page). A
+     * navigation or a stop request blocked by a script is a different verdict
+     * and is still aborted, without this callback.
+     *
+     * Runs on the UI thread (a dialog belongs here). `busy_ms` is how long the
+     * script had been running; `stack_path` is a fresh per-event file holding
+     * the live JS stack ("" when no stack could be captured - e.g. the page was
+     * busy outside JS). The control also logs the same facts to
+     * agb_watchdog.txt. One notice per busy streak. */
     void (*on_unresponsive)(AgaveWebView* view, const char* reason,
-                            unsigned int busy_ms, void* user);
+                            unsigned int busy_ms, const char* stack_path,
+                            void* user);
 } AgaveWebViewCallback;
 
 /* Creates the control as a child of `parent`. Returns NULL on failure. */

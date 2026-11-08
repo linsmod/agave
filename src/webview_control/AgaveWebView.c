@@ -144,13 +144,15 @@ static int agwCommandIsNavigation(int type)
 enum { AGW_HANG_NONE, AGW_HANG_USER_ACTION, AGW_HANG_UNRESPONSIVE, AGW_HANG_STALL,
        AGW_HANG_TEARDOWN };
 
-/* Watchdog -> UI thread payload (the reason text and the numbers behind it). */
+/* Watchdog -> UI thread payload (the reason text, the numbers behind it and the
+ * busy-stack file of this report). */
 typedef struct {
     int          kind;
     unsigned int jsDepth;
     int          headType;
     unsigned int busyMs;
     unsigned int queueMs;
+    char         stackPath[MAX_PATH];
 } AgwHangPayload;
 
 typedef struct {
@@ -1070,7 +1072,7 @@ static const char* agwHangReason(int kind)
         return "A page teardown handler (pagehide/visibilitychange/unload) did not "
                "return, so it was aborted.";
     case AGW_HANG_UNRESPONSIVE:
-        return "The page script was unresponsive, so it was aborted.";
+        return "The page script has not returned; the page is still running.";
     case AGW_HANG_STALL:
         return "The engine stopped processing commands while no script was running; "
                "aborting cannot help, so nothing was killed.";
@@ -1084,7 +1086,7 @@ static const char* agwHangReason(int kind)
  * probe but not in the window" has evidence - including the command that was
  * waiting and the VM depth, which is what the three verdicts are made of. */
 static void agwWatchdogRecord(int kind, unsigned int jsDepth, int headType,
-                              DWORD busyMs, DWORD queueMs)
+                              DWORD busyMs, DWORD jsBusyMs, DWORD queueMs)
 {
     char path[MAX_PATH];
     DWORD len = GetModuleFileNameA(NULL, path, sizeof(path) - 1);
@@ -1108,13 +1110,165 @@ static void agwWatchdogRecord(int kind, unsigned int jsDepth, int headType,
         return;
 
     GetLocalTime(&st);
-    fprintf(f, "%04d-%02d-%02d %02d:%02d:%02d pid=%lu kind=%d jsdepth=%u head=%d busy=%lums queue=%lums\n",
+    fprintf(f, "%04d-%02d-%02d %02d:%02d:%02d pid=%lu kind=%d jsdepth=%u head=%d busy=%lums jsbusy=%lums queue=%lums\n",
             (int)st.wYear, (int)st.wMonth, (int)st.wDay,
             (int)st.wHour, (int)st.wMinute, (int)st.wSecond,
             (unsigned long)GetCurrentProcessId(),
             kind, jsDepth, headType,
-            (unsigned long)busyMs, (unsigned long)queueMs);
+            (unsigned long)busyMs, (unsigned long)jsBusyMs, (unsigned long)queueMs);
     fclose(f);
+}
+
+/* The VM's stack renderer writes ANSI colors even when the target is a file
+ * (it renders "pretty" frames). The dump file is meant to be read by a human
+ * and grepped by the tests, so the escape sequences are stripped here. */
+static void agwStripAnsiInFile(const char* path)
+{
+    FILE* f = fopen(path, "rb");
+    char* data;
+    char* out;
+    long size;
+    size_t i, o = 0;
+
+    if (!f)
+        return;
+
+    if (fseek(f, 0, SEEK_END) != 0 || (size = ftell(f)) <= 0 || size > 4 * 1024 * 1024) {
+        fclose(f);
+        return;
+    }
+
+    fseek(f, 0, SEEK_SET);
+    data = (char*)malloc((size_t)size);
+
+    if (!data) {
+        fclose(f);
+        return;
+    }
+
+    if (fread(data, 1, (size_t)size, f) != (size_t)size) {
+        free(data);
+        fclose(f);
+        return;
+    }
+
+    fclose(f);
+
+    out = (char*)malloc((size_t)size + 1);
+
+    if (!out) {
+        free(data);
+        return;
+    }
+
+    for (i = 0; i < (size_t)size; ++i) {
+        if ((unsigned char)data[i] == 0x1b && i + 1 < (size_t)size && data[i + 1] == '[') {
+            i += 2;
+
+            while (i < (size_t)size && data[i] >= '0' && data[i] <= '9')
+                ++i;
+            while (i < (size_t)size && (data[i] == ';' || data[i] == ':'))
+                ++i;
+            while (i < (size_t)size && !((unsigned char)data[i] >= 0x40 && (unsigned char)data[i] <= 0x7e))
+                ++i;
+
+            continue;   /* drop ESC[...<final> */
+        }
+
+        out[o++] = data[i];
+    }
+
+    out[o] = 0;
+
+    f = fopen(path, "wb");
+
+    if (f) {
+        fwrite(out, 1, o, f);
+        fclose(f);
+    }
+
+    free(out);
+    free(data);
+}
+
+/* Captures the live JS stack of the running script into its own file next to
+ * the exe (`agb_busy_<time>_pid<pid>.txt`), one file per report, so a second
+ * episode never overwrites the evidence of the first. The engine thread is
+ * frozen for the walk: the VM must not be moving under it, and the page is
+ * stuck anyway. Returns 0 when no stack could be taken (e.g. the page was busy
+ * outside JS); the metrics are still written. */
+static int agwCaptureBusyStack(const char* reason, unsigned int busyMs,
+                               unsigned int jsBusyMs, unsigned int jsDepth,
+                               int headType, DWORD queueMs, char* out, size_t cap)
+{
+    char path[MAX_PATH];
+    char stack[MAX_PATH];
+    DWORD len = GetModuleFileNameA(NULL, path, sizeof(path) - 1);
+    SYSTEMTIME st;
+    int captured = 0;
+
+    if (out && cap)
+        out[0] = 0;
+
+    if (!len || len >= sizeof(path) - 1)
+        return 0;
+
+    path[len] = 0;
+    while (len > 0 && path[len - 1] != '\\' && path[len - 1] != '/')
+        --len;
+    path[len] = 0;
+
+    GetLocalTime(&st);
+    _snprintf(path + len, sizeof(path) - len,
+              "agb_busy_%04d%02d%02d-%02d%02d%02d_pid%lu.txt",
+              (int)st.wYear, (int)st.wMonth, (int)st.wDay,
+              (int)st.wHour, (int)st.wMinute, (int)st.wSecond,
+              (unsigned long)GetCurrentProcessId());
+    path[sizeof(path) - 1] = 0;
+
+    if (out && cap) {
+        strncpy(out, path, cap - 1);
+        out[cap - 1] = 0;
+    }
+
+    /* The stack goes to the same file, but the bridge writer truncates, so the
+     * metrics are appended afterwards. */
+    _snprintf(stack, sizeof(stack), "%s", path);
+    stack[sizeof(stack) - 1] = 0;
+
+    if (jsDepth && g_engineThread) {
+        void* context = agb_busy_js_context();
+
+        if (context && SuspendThread(g_engineThread) != (DWORD)-1) {
+            captured = agb_dump_js_stack_for(context, stack);
+            ResumeThread(g_engineThread);
+        }
+    }
+
+    {
+        FILE* f = fopen(path, "a");
+
+        if (!f)
+            return 0;
+
+        if (!captured)
+            fprintf(f, "(no JS on the stack at the time of the report)\n");
+
+        fprintf(f, "\n# agb busy report\n# time=%04d-%02d-%02d %02d:%02d:%02d pid=%lu\n"
+                   "# reason=%s\n"
+                   "# busy=%lums jsbusy=%lums jsdepth=%u head=%d queue=%lums\n",
+                (int)st.wYear, (int)st.wMonth, (int)st.wDay,
+                (int)st.wHour, (int)st.wMinute, (int)st.wSecond,
+                (unsigned long)GetCurrentProcessId(),
+                reason ? reason : "",
+                (unsigned long)busyMs, (unsigned long)jsBusyMs, jsDepth,
+                headType, (unsigned long)queueMs);
+        fclose(f);
+    }
+
+    agwStripAnsiInFile(path);
+
+    return 1;
 }
 
 /* Hand the verdict to the UI thread: postMessage is the only thing the
@@ -1152,7 +1306,7 @@ static AgaveWebView* agwBusyViewLocked(void)
 }
 
 static void agwNotifyHang(int kind, unsigned int jsDepth, int headType,
-                          DWORD busyMs, DWORD queueMs)
+                          DWORD busyMs, DWORD queueMs, const char* stackPath)
 {
     AgaveWebView* target;
     AgwHangPayload* payload;
@@ -1176,6 +1330,12 @@ static void agwNotifyHang(int kind, unsigned int jsDepth, int headType,
     payload->headType = headType;
     payload->busyMs = (unsigned int)busyMs;
     payload->queueMs = (unsigned int)queueMs;
+    payload->stackPath[0] = 0;
+
+    if (stackPath && stackPath[0]) {
+        strncpy(payload->stackPath, stackPath, sizeof(payload->stackPath) - 1);
+        payload->stackPath[sizeof(payload->stackPath) - 1] = 0;
+    }
 
     if (!PostMessageA(target->hwnd, AGW_MSG_UNRESPONSIVE, 0, (LPARAM)payload))
         free(payload);
@@ -1187,6 +1347,7 @@ static DWORD WINAPI agwWatchdogThread(LPVOID param)
     DWORD lastTick = GetTickCount();
     DWORD lastReport = 0;    /* rate limit: one verdict per AGW_REPORT_GAP_MS */
     int stallReported = 0;
+    int noticeSent = 0;      /* one advisory notice per busy streak */
 
     (void)param;
 
@@ -1249,39 +1410,66 @@ static DWORD WINAPI agwWatchdogThread(LPVOID param)
             kind = AGW_HANG_STALL;
         }
 
+        /* An idle engine ends the busy streak: a new hang gets a new notice. */
+        if (!jsDepth && !busyMs)
+            noticeSent = 0;
+
         if (kind == AGW_HANG_NONE)
             continue;
 
-        if (kind == AGW_HANG_STALL)
+        /* The advisory verdict (nobody is waiting on the page) must not kill
+         * anything: the host asks the user to wait or close the page. Every
+         * other verdict here is a user action that is blocked, and aborting is
+         * what makes reload/navigate/stop work on a hung page. */
+        if (kind == AGW_HANG_UNRESPONSIVE) {
+            if (noticeSent)
+                continue;               /* one notice per busy streak */
+        } else if (kind == AGW_HANG_STALL) {
             stallReported = 1;
-        else
+        } else {
             antb_interrupt_all_engines();
+        }
 
         /* A script that ignores the abort would otherwise report every tick. */
         if (lastReport && (DWORD)(now - lastReport) < AGW_REPORT_GAP_MS)
             continue;
         lastReport = now;
 
-        agbLog(AGB_LOG_EVT,
-               "watchdog: %s (jsdepth=%u head=%d busy=%lums queue=%lums teardown=%lums ctx=%p)",
-               kind == AGW_HANG_TEARDOWN ? "aborting a teardown handler that does not return"
-               : kind == AGW_HANG_USER_ACTION
-                   ? (agwCommandIsNavigation(headType) ? "aborting a script that blocks a navigation"
-                                                       : "aborting a script that blocks a user action")
-               : kind == AGW_HANG_UNRESPONSIVE ? "aborting an unresponsive page script"
-               : "engine stalled outside JS",
-               jsDepth, headType, (unsigned long)busyMs, (unsigned long)queueMs,
-               (unsigned long)teardownMs, agb_busy_js_context());
-        agwWatchdogRecord(kind, jsDepth, headType, busyMs, queueMs);
-        /* Only a verdict that changed something is worth a dialog. The stall
-         * verdict kills nothing and is the one a merely slow (big layout, slow
-         * image decode) page can produce, so it stays in the log. A navigation
-         * abort is routine (the user asked to leave; the page was mid-script),
-         * so it must not pop a dialog on every click either; the same holds for
-         * a teardown handler that overran its budget. */
-        if (kind != AGW_HANG_STALL && kind != AGW_HANG_TEARDOWN &&
-            !(kind == AGW_HANG_USER_ACTION && agwCommandIsNavigation(headType)))
-            agwNotifyHang(kind, jsDepth, headType, busyMs, queueMs);
+        if (kind == AGW_HANG_UNRESPONSIVE)
+            noticeSent = 1;
+
+        {
+            /* The unresponsive budget is served by two clocks: JS on the VM
+             * stack (timers/onload, outside any command) and the engine's
+             * command clock. Report the one that tripped - showing only the
+             * command clock is how the dialog used to say "(0.0 s)". */
+            DWORD reportBusy = busyMs;
+
+            if (kind == AGW_HANG_UNRESPONSIVE && jsBusyMs > reportBusy)
+                reportBusy = jsBusyMs;
+
+            agbLog(AGB_LOG_EVT,
+                   "watchdog: %s (jsdepth=%u head=%d busy=%lums jsbusy=%lums queue=%lums teardown=%lums ctx=%p)",
+                   kind == AGW_HANG_TEARDOWN ? "aborting a teardown handler that does not return"
+                   : kind == AGW_HANG_USER_ACTION
+                       ? (agwCommandIsNavigation(headType) ? "aborting a script that blocks a navigation"
+                                                           : "aborting a script that blocks a user action")
+                   : kind == AGW_HANG_UNRESPONSIVE ? "reporting an unresponsive page script (not aborting)"
+                   : "engine stalled outside JS",
+                   jsDepth, headType, (unsigned long)reportBusy, (unsigned long)jsBusyMs,
+                   (unsigned long)queueMs, (unsigned long)teardownMs, agb_busy_js_context());
+            agwWatchdogRecord(kind, jsDepth, headType, reportBusy, jsBusyMs, queueMs);
+
+            if (kind == AGW_HANG_UNRESPONSIVE) {
+                char stackPath[MAX_PATH];
+
+                stackPath[0] = 0;
+                agwCaptureBusyStack(agwHangReason(kind), (unsigned int)reportBusy,
+                                    (unsigned int)jsBusyMs, jsDepth, headType,
+                                    queueMs, stackPath, sizeof(stackPath));
+                agwNotifyHang(kind, jsDepth, headType, reportBusy, queueMs, stackPath);
+            }
+        }
     }
 
     return 0;
@@ -1877,7 +2065,8 @@ static LRESULT CALLBACK agwProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
 
         if (item && payload && item->callbacks.on_unresponsive) {
             item->callbacks.on_unresponsive(item, agwHangReason(payload->kind),
-                                            payload->busyMs, item->user);
+                                            payload->busyMs, payload->stackPath,
+                                            item->user);
         }
 
         free(payload);
