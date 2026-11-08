@@ -102,7 +102,9 @@ view（一个 AgaveWebView）
   `dispatchFrameDocumentEvent`；R130 把 `__agbBind` 的 per-view document slot 改成 realm 编号，
   每个 realm 各有一份 document/docObj binding，子 frame 的定时器与回调不再把父文档写进自己的
   document 对象）。**未完成**：ES module map 仍是引擎级（`js->modules.state`），
-  两个 frame import 同一模块仍共享实例；要按 realm 得把 loader 状态搬进 realm 字段。
+  两个 frame import 同一模块仍共享实例；要按 realm 得把 loader 状态搬进 realm 字段；
+  getter 仍读 ambient `g_document`（`location`/`history`/`document.write` 等）的问题与
+  收尾计划见 [design-realm-document-binding.md](design-realm-document-binding.md)。
 - **S4 WindowProxy 转发**：`parent`/`top`/`frames`/`length`/`name`/`frameElement`、`postMessage.source`。
   验收：`cap_window_identity.html` + `cap_postmessage.html`（`event.source !== window`）。
 - **S5 回归与文档**：nav/typing/worker/layout/jit/script-mode + v.qq/deepseek + 新验收页；
