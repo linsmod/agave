@@ -155,6 +155,35 @@ void RenderFlexibleBox::calcHorizontalPrefWidths()
     }    
 }
 
+void RenderFlexibleBox::calcHorizontalMinPrefWidths()
+{
+    /* A row that may wrap does not need all items side by side: its
+     * min-content width is the widest item, not the sum. Using the sum kept
+     * DeepSeek's centred footer from shrinking correctly and it wrapped into
+     * two lines (footer 140 wide instead of the 202.3 Chrome computes). */
+    m_minPrefWidth = 0;
+
+    RenderObject* child = firstChild();
+    while (child) {
+        if (child->isPositioned() || child->style()->visibility() == COLLAPSE) {
+            child = child->nextSibling();
+            continue;
+        }
+
+        Length ml = child->style()->marginLeft();
+        Length mr = child->style()->marginRight();
+        int margin = 0;
+        if (ml.isFixed())
+            margin += ml.value();
+        if (mr.isFixed())
+            margin += mr.value();
+
+        m_minPrefWidth = max(child->minPrefWidth() + margin, m_minPrefWidth);
+
+        child = child->nextSibling();
+    }
+}
+
 void RenderFlexibleBox::calcVerticalPrefWidths()
 {
     RenderObject *child = firstChild();
@@ -196,10 +225,17 @@ void RenderFlexibleBox::calcPrefWidths()
     else {
         m_minPrefWidth = m_maxPrefWidth = 0;
 
-        if (hasMultipleLines() || isVertical())
+        if (isVertical())
             calcVerticalPrefWidths();
-        else
+        else {
             calcHorizontalPrefWidths();
+
+            /* Wrapping rows: max stays the single-line sum (so a shrink-to-fit
+             * parent gets the widest arrangement), min becomes the widest
+             * item - a wrapping row can always shrink to one item. */
+            if (hasMultipleLines())
+                calcHorizontalMinPrefWidths();
+        }
 
         m_maxPrefWidth = max(m_minPrefWidth, m_maxPrefWidth);
     }
@@ -450,7 +486,7 @@ void RenderFlexibleBox::layoutFlexLines(bool wrap, bool relayoutChildren)
         item.child = child;
         item.contentWidth = contentW;
         item.breakOuterWidth = max(minContent, min(contentW, maxContent)) + bordersPlusPadding
-                             + max(0, child->marginLeft()) + max(0, child->marginRight());
+                             + child->marginLeft() + child->marginRight();
         item.minContent = minContent;
         item.maxContent = maxContent;
         item.marginLeft = child->marginLeft();

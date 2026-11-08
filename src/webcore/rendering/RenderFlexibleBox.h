@@ -36,6 +36,7 @@ public:
 
     virtual void calcPrefWidths();
     void calcHorizontalPrefWidths();
+    void calcHorizontalMinPrefWidths();
     void calcVerticalPrefWidths();
 
     virtual void layoutBlock(bool relayoutChildren);
