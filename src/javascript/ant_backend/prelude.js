@@ -422,7 +422,9 @@
     };
   };
   /* Timers run later, possibly while another frame/control is active: capture
-     the current document slot and restore it around the callback. */
+     the current realm slot and restore its realm + document around the
+     callback. In per-frame-realm mode the slot is a realm number (0 = main
+     frame, 1..N = frame realms), never another realm's document slot (R130). */
   g.__agbBind = function (fn, label) {
     var safe = g.__agbSafe(fn, label);
     var slot = (typeof g.__agbFrameSlot === 'function') ? g.__agbFrameSlot() : -1;

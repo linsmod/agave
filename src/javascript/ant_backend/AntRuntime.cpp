@@ -171,6 +171,13 @@ struct RuntimeState {
     int                sessionHistoryIndex;
     AntbValue*         locationObj;
     AntbValue*         docObj;          /* the JS document object (rooted) */
+    /* The main realm's own document binding. g_document/g_docObj above are
+     * "the realm that is running right now"; when ant switches into a frame
+     * realm they must not stay behind, and when it switches back the main
+     * realm's document must still be here (R130). */
+    WebCore::Document* mainDocument;
+    AntbValue*         mainDocObj;      /* rooted, main realm's document object */
+    AntbRealm*         boundRealm;      /* realm g_document/g_docObj belong to */
     bool               documentBound;
     void*              listeners;       /* std::vector<Listener>* (see below) */
     WebCore::Document* docSlots[AGB_MAX_DOCUMENT_SLOTS];
@@ -402,9 +409,20 @@ static int slotForDocument(WebCore::Document* document)
 
 /* DOM binding (defined further down) - all mirrored from g_currentState. */
 
+/* Realms are defined below; activateSlot() needs them first. */
+static bool perFrameRealmEnabled();
+
 static void activateSlot(int slot)
 {
     if (slot < 0 || slot >= g_docSlotCount || !g_docSlots[slot])
+        return;
+
+    /* Per-frame realms use realm slots (globalActivateSlot handles them); the
+     * legacy document slot must never repoint a frame realm's document object
+     * at another document (R130). */
+    if (perFrameRealmEnabled() && g_engine && g_currentState
+            && g_currentState != &g_emptyState && g_currentState->mainRealm
+            && antb_realm_current(g_engine) != g_currentState->mainRealm)
         return;
 
     g_currentSlot = slot;
@@ -437,10 +455,15 @@ struct FrameRealmEntry {
     WebCore::Document* document;
     AntbRealm*         realm;
     AntbValue*         keeper;     /* pinned closure: keeps the realm marked */
+    AntbValue*         docObj;     /* pinned document object of this realm */
+    int                slot;       /* stable __agbFrameSlot number (0 based) */
     bool               installed;
 };
 
 static std::vector<FrameRealmEntry>* g_frameRealms = NULL;
+/* Frame slot numbers are never reused: __agbBind may hold one across many
+ * timers, and a recycled number would silently point at another frame. */
+static int g_nextFrameSlot = 0;
 
 static std::vector<FrameRealmEntry>& frameRealms()
 {
@@ -475,6 +498,8 @@ static AntbRealm* realmForFrameDocument(AntbEngine* engine, WebCore::Document* d
     entry.document = document;
     entry.realm = realm;
     entry.keeper = NULL;
+    entry.docObj = NULL;
+    entry.slot = g_nextFrameSlot++;
     entry.installed = false;
 
     /* A realm is only kept alive while something in it is reachable: ant marks
@@ -500,6 +525,116 @@ static AntbRealm* realmForFrameDocument(AntbEngine* engine, WebCore::Document* d
     return realm;
 }
 
+static FrameRealmEntry* frameRealmEntry(AntbRealm* realm)
+{
+    if (!g_frameRealms || !realm)
+        return NULL;
+
+    for (size_t i = 0; i < g_frameRealms->size(); ++i) {
+        if ((*g_frameRealms)[i].realm == realm)
+            return &(*g_frameRealms)[i];
+    }
+
+    return NULL;
+}
+
+/* __agbFrameSlot number -> entry. 0 is the main realm; frames are slot+1. */
+static FrameRealmEntry* frameRealmEntryBySlot(int slotNumber)
+{
+    if (!g_frameRealms || slotNumber <= 0)
+        return NULL;
+
+    for (size_t i = 0; i < g_frameRealms->size(); ++i) {
+        if ((*g_frameRealms)[i].slot == slotNumber - 1)
+            return &(*g_frameRealms)[i];
+    }
+
+    return NULL;
+}
+
+/* Point the host-side "current document" mirrors at `realm`'s binding. This is
+ * what makes a frame document independent: a timer or callback of one realm can
+ * no longer resolve `document` (or documentOf(self)) to another realm's
+ * document. It deliberately does not touch antb_set_native: the document
+ * objects belong to their realms and are replaced only when that realm binds a
+ * new document (R130). */
+static void applyRealmBinding(AntbRealm* realm)
+{
+    WebCore::Document* document = NULL;
+    AntbValue* docObj = NULL;
+
+    if (!realm || !g_currentState || g_currentState == &g_emptyState || !g_engine)
+        return;
+
+    if (realm == g_currentState->mainRealm) {
+        document = g_currentState->mainDocument;
+        docObj = g_currentState->mainDocObj;
+    } else if (FrameRealmEntry* entry = frameRealmEntry(realm)) {
+        document = entry->document;
+        docObj = entry->docObj;
+    }
+
+    if (!document)
+        return;   /* realm exists but has no document bound yet */
+
+    g_currentState->document = document;
+    g_currentState->boundRealm = realm;
+
+    if (g_docObj) {
+        antb_value_release(g_docObj);
+        g_docObj = 0;
+    }
+    if (docObj)
+        g_docObj = antb_retain(docObj);
+}
+
+/* The realm the engine is in right now. ant switches realm per function call,
+ * without telling the host; this reads the current realm back. */
+static AntbRealm* currentRealm()
+{
+    if (!g_engine)
+        return NULL;
+
+    return antb_realm_current(g_engine);
+}
+
+/* 0 for the main realm, 1..N for frame realms (the number __agbFrameSlot
+ * returns under per-frame realms), -1 when the current realm is unknown. */
+static int currentRealmSlotNumber()
+{
+    AntbRealm* realm;
+
+    if (!perFrameRealmEnabled() || !g_currentState || g_currentState == &g_emptyState)
+        return g_currentSlot;
+
+    realm = currentRealm();
+
+    if (!realm || realm == g_currentState->mainRealm)
+        return 0;
+
+    if (FrameRealmEntry* entry = frameRealmEntry(realm))
+        return entry->slot + 1;
+
+    return -1;
+}
+
+/* bindDocument() set g_document/g_docObj for the main realm: remember that
+ * pair so leaving and re-entering the realm can restore it (R130). */
+static void noteMainBinding()
+{
+    if (!g_currentState || g_currentState == &g_emptyState)
+        return;
+
+    g_currentState->mainDocument = g_document;
+    if (g_currentState->mainDocObj) {
+        antb_value_release(g_currentState->mainDocObj);
+        g_currentState->mainDocObj = 0;
+    }
+    if (g_docObj)
+        g_currentState->mainDocObj = antb_retain(g_docObj);
+    g_currentState->boundRealm = currentRealm();
+}
+
 /* The realm a document runs in: the engine's main realm for a top-level
  * document (or for a frame when per-frame realms are off, in which case the
  * caller only uses it for parent/top lookups), a dedicated realm otherwise. */
@@ -520,9 +655,12 @@ static void forgetFrameRealms()
     if (!g_frameRealms)
         return;
 
-    for (size_t i = 0; i < g_frameRealms->size(); ++i)
+    for (size_t i = 0; i < g_frameRealms->size(); ++i) {
         if ((*g_frameRealms)[i].keeper)
             antb_value_release((*g_frameRealms)[i].keeper);
+        if ((*g_frameRealms)[i].docObj)
+            antb_value_release((*g_frameRealms)[i].docObj);
+    }
 
     g_frameRealms->clear();
 }
@@ -646,6 +784,7 @@ int globalClipboardSetText(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*
 int globalFramePostMessage(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalConsoleLine(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalConsoleLineEx(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+
 int globalLayoutInfo(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalDialog(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalCloseWindow(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
@@ -2055,7 +2194,6 @@ int docCreateHTMLDocument(AntbEngine* engine, AntbValue*, AntbValue** args, int 
                           AntbValue* out, void*)
 {
     WebCore::Document* doc = documentOf(NULL);
-    WebCore::ExceptionCode ec = 0;
     WTF::PassRefPtr<WebCore::HTMLDocument> created;
 
     if (!doc)
@@ -2897,13 +3035,31 @@ static void contextActivate(AntbEngine* engine)
     if (!engine)
         return;
 
-    if (g_currentState && g_currentState->engine == engine)
+    if (g_currentState && g_currentState->engine == engine) {
+        /* Same view: ant may still have switched into a frame realm behind our
+         * back. A bridged callback must see that realm's document, not the one
+         * whichever frame ran last left in g_document (R130). */
+        if (perFrameRealmEnabled()) {
+            AntbRealm* realm = antb_realm_current(engine);
+
+            if (realm && realm != g_currentState->boundRealm)
+                applyRealmBinding(realm);
+        }
         return;
+    }
 
     state = stateForEngine(engine);
 
-    if (state)
+    if (state) {
         activateState(state);
+
+        if (perFrameRealmEnabled()) {
+            AntbRealm* realm = antb_realm_current(engine);
+
+            if (realm && realm != g_currentState->boundRealm)
+                applyRealmBinding(realm);
+        }
+    }
 }
 
 /* URL of the script currently being evaluated; used as the base for the
@@ -5002,6 +5158,15 @@ static void stopRealm(void)
         antb_value_release(g_docObj);
         g_docObj = 0;
     }
+    /* The main realm's binding is another reference to the same engine's
+     * objects; it must be dropped here too, otherwise the next document would
+     * release a handle of the destroyed engine (R130). */
+    if (state->mainDocObj) {
+        antb_value_release(state->mainDocObj);
+        state->mainDocObj = 0;
+    }
+    state->mainDocument = 0;
+    state->boundRealm = 0;
     /* Session history states are JS values of the realm that just died. */
     sessionHistoryClear();
 
@@ -5148,55 +5313,55 @@ AntbValue* documentObjectFor(AntbEngine* engine, WebCore::Document* document)
     if (!docObj)
         return NULL;
 
-        antb_define_property_rw(engine, docObj, "title", titleGetter, titleSetter, NULL);
-        antb_define_property_rw(engine, docObj, "cookie", titleGetter, titleSetter, NULL);
+    antb_define_property_rw(engine, docObj, "title", titleGetter, titleSetter, NULL);
+    antb_define_property_rw(engine, docObj, "cookie", titleGetter, titleSetter, NULL);
 
-        antb_define_method(engine, docObj, "getElementById", docGetElementById, NULL);
-        antb_define_method(engine, docObj, "createElement", docCreateElement, NULL);
-        antb_define_method(engine, docObj, "createElementNS", docCreateElementNS, NULL);
-        antb_define_method(engine, docObj, "createTextNode", docCreateTextNode, NULL);
-        antb_define_method(engine, docObj, "createComment", docCreateComment, NULL);
-        antb_define_method(engine, docObj, "createDocumentFragment", docCreateDocumentFragment, NULL);
-        /* document.implementation: jQuery and others feature-test
-         * document.implementation.createHTMLDocument(). */
-        {
-            AntbValue* implObj = antb_make_object(engine);
-            if (implObj) {
-                antb_define_method(engine, implObj, "createHTMLDocument", docCreateHTMLDocument, NULL);
-                antb_define_method(engine, implObj, "hasFeature", docHasFeature, NULL);
-                antb_set_prop(engine, docObj, "implementation", implObj);
-                antb_value_release(implObj);
-            }
+    antb_define_method(engine, docObj, "getElementById", docGetElementById, NULL);
+    antb_define_method(engine, docObj, "createElement", docCreateElement, NULL);
+    antb_define_method(engine, docObj, "createElementNS", docCreateElementNS, NULL);
+    antb_define_method(engine, docObj, "createTextNode", docCreateTextNode, NULL);
+    antb_define_method(engine, docObj, "createComment", docCreateComment, NULL);
+    antb_define_method(engine, docObj, "createDocumentFragment", docCreateDocumentFragment, NULL);
+    /* document.implementation: jQuery and others feature-test
+     * document.implementation.createHTMLDocument(). */
+    {
+        AntbValue* implObj = antb_make_object(engine);
+        if (implObj) {
+            antb_define_method(engine, implObj, "createHTMLDocument", docCreateHTMLDocument, NULL);
+            antb_define_method(engine, implObj, "hasFeature", docHasFeature, NULL);
+            antb_set_prop(engine, docObj, "implementation", implObj);
+            antb_value_release(implObj);
         }
-        antb_define_method(engine, docObj, "createHTMLDocument", docCreateHTMLDocument, NULL);
-        antb_define_method(engine, docObj, "write", docWrite, NULL);
-        antb_define_method(engine, docObj, "writeln", docWriteln, NULL);
-        antb_define_method(engine, docObj, "addEventListener", nodeAddEventListener, NULL);
-        antb_define_method(engine, docObj, "removeEventListener", nodeRemoveEventListener, NULL);
-        antb_define_method(engine, docObj, "dispatchEvent", nodeDispatchEvent, NULL);
-        /* The document is a plain object (not a Node wrapper), so the node
-         * methods have to be installed on it explicitly. */
-        antb_define_method(engine, docObj, "getElementsByTagName", nodeGetElementsByTagName, NULL);
-        antb_define_method(engine, docObj, "getElementsByClassName", nodeGetElementsByClassName, NULL);
-        antb_define_method(engine, docObj, "hasChildNodes", nodeHasChildNodes, NULL);
-        antb_define_method(engine, docObj, "querySelector", nodeQuerySelector, NULL);
-        antb_define_method(engine, docObj, "querySelectorAll", nodeQuerySelectorAll, NULL);
-        antb_define_method(engine, docObj, "appendChild", nodeAppendChild, NULL);
-        antb_define_method(engine, docObj, "removeChild", nodeRemoveChild, NULL);
-        antb_define_method(engine, docObj, "insertBefore", nodeInsertBefore, NULL);
-        antb_define_method(engine, docObj, "replaceChild", nodeReplaceChild, NULL);
-        antb_define_method(engine, docObj, "getAttribute", nodeGetAttribute, NULL);
-        antb_define_method(engine, docObj, "setAttribute", nodeSetAttribute, NULL);
-        antb_define_method(engine, docObj, "hasAttribute", nodeHasAttribute, NULL);
-        antb_define_method(engine, docObj, "cloneNode", nodeCloneNode, NULL);
-        antb_define_method(engine, docObj, "contains", nodeContains, NULL);
-        antb_define_method(engine, docObj, "importNode", nodeDocumentImportNode, NULL);
-        antb_define_method(engine, docObj, "adoptNode", nodeDocumentAdoptNode, NULL);
-        antb_define_method(engine, docObj, "elementFromPoint", nodeDocumentElementFromPoint, NULL);
-        antb_define_method(engine, docObj, "hasFocus", nodeDocumentHasFocus, NULL);
+    }
+    antb_define_method(engine, docObj, "createHTMLDocument", docCreateHTMLDocument, NULL);
+    antb_define_method(engine, docObj, "write", docWrite, NULL);
+    antb_define_method(engine, docObj, "writeln", docWriteln, NULL);
+    antb_define_method(engine, docObj, "addEventListener", nodeAddEventListener, NULL);
+    antb_define_method(engine, docObj, "removeEventListener", nodeRemoveEventListener, NULL);
+    antb_define_method(engine, docObj, "dispatchEvent", nodeDispatchEvent, NULL);
+    /* The document is a plain object (not a Node wrapper), so the node
+     * methods have to be installed on it explicitly. */
+    antb_define_method(engine, docObj, "getElementsByTagName", nodeGetElementsByTagName, NULL);
+    antb_define_method(engine, docObj, "getElementsByClassName", nodeGetElementsByClassName, NULL);
+    antb_define_method(engine, docObj, "hasChildNodes", nodeHasChildNodes, NULL);
+    antb_define_method(engine, docObj, "querySelector", nodeQuerySelector, NULL);
+    antb_define_method(engine, docObj, "querySelectorAll", nodeQuerySelectorAll, NULL);
+    antb_define_method(engine, docObj, "appendChild", nodeAppendChild, NULL);
+    antb_define_method(engine, docObj, "removeChild", nodeRemoveChild, NULL);
+    antb_define_method(engine, docObj, "insertBefore", nodeInsertBefore, NULL);
+    antb_define_method(engine, docObj, "replaceChild", nodeReplaceChild, NULL);
+    antb_define_method(engine, docObj, "getAttribute", nodeGetAttribute, NULL);
+    antb_define_method(engine, docObj, "setAttribute", nodeSetAttribute, NULL);
+    antb_define_method(engine, docObj, "hasAttribute", nodeHasAttribute, NULL);
+    antb_define_method(engine, docObj, "cloneNode", nodeCloneNode, NULL);
+    antb_define_method(engine, docObj, "contains", nodeContains, NULL);
+    antb_define_method(engine, docObj, "importNode", nodeDocumentImportNode, NULL);
+    antb_define_method(engine, docObj, "adoptNode", nodeDocumentAdoptNode, NULL);
+    antb_define_method(engine, docObj, "elementFromPoint", nodeDocumentElementFromPoint, NULL);
+    antb_define_method(engine, docObj, "hasFocus", nodeDocumentHasFocus, NULL);
 
-        /* Document is a Node: let the node APIs work directly on it. */
-        antb_set_native(docObj, document, AGB_TAG_NODE);
+    /* Document is a Node: let the node APIs work directly on it. */
+    antb_set_native(docObj, document, AGB_TAG_NODE);
 
     {
         DocObjectEntry e;
@@ -5757,19 +5922,14 @@ static void bindFrameRealm(AntbEngine* engine, WebCore::Document* document)
 
     installChildFrameGlobals(engine, document);
 
-    /* g_docObj mirrors "the document object of the realm we are in". */
-    if (g_docObj) {
-        antb_value_release(g_docObj);
-        g_docObj = 0;
+    /* Keep this realm's document object pinned here: timers and callbacks of
+     * the realm are restored from it, never rebuilt/repointed (R130). */
+    if (entry->docObj) {
+        antb_value_release(entry->docObj);
+        entry->docObj = 0;
     }
-    {
-        AntbValue* docObj = documentObjectFor(engine, document);
-
-        if (docObj) {
-            g_docObj = antb_retain(docObj);
-            antb_value_release(docObj);
-        }
-    }
+    entry->docObj = documentObjectFor(engine, document);
+    applyRealmBinding(entry->realm);
 
     antb_value_release(global);
 
@@ -5788,6 +5948,11 @@ void forgetFrameRealm(void* document)
 
     for (size_t i = 0; i < entries.size(); ) {
         if (entries[i].document == doc) {
+            /* Do not leave the host mirrors on a realm that is going away. */
+            if (g_currentState && g_currentState != &g_emptyState
+                    && g_currentState->boundRealm == entries[i].realm)
+                applyRealmBinding(g_currentState->mainRealm);
+
             /* Wrapper objects created in this realm (and their permanent pins)
              * go first: with the pins left behind the realm could never be
              * collected. */
@@ -5799,6 +5964,10 @@ void forgetFrameRealm(void* document)
             if (entries[i].keeper) {
                 antb_value_release(entries[i].keeper);
                 entries[i].keeper = NULL;
+            }
+            if (entries[i].docObj) {
+                antb_value_release(entries[i].docObj);
+                entries[i].docObj = NULL;
             }
 
             entries.erase(entries.begin() + i);
@@ -5833,6 +6002,15 @@ void bindDocument(void* document)
     if (perFrameRealmEnabled() && g_engine && g_document && g_currentState
             && g_currentState != &g_emptyState && g_currentState->mainRealm)
         antb_realm_enter(g_engine, g_currentState->mainRealm);
+
+    /* A frame realm may have run last: the mirrors must go back to the main
+     * realm's own document even when this bind is a no-op (R130). */
+    if (perFrameRealmEnabled() && g_currentState && g_currentState != &g_emptyState) {
+        AntbRealm* realm = currentRealm();
+
+        if (realm && realm != g_currentState->boundRealm)
+            applyRealmBinding(realm);
+    }
 
     /* Binding the document that is already installed is a no-op. A page with
      * async ad scripts gets here 3-6 times for the same document, and the
@@ -5873,12 +6051,12 @@ void bindDocument(void* document)
         }
         sessionHistoryNoteDocument(g_document);
         installFrameGlobals(g_engine, g_document);
+        noteMainBinding();
         return;
     }
 
     {
         AntbValue* global   = antb_global(g_engine);
-        AntbValue* window   = global;   /* window IS the global object */
         AntbValue* docObj   = documentObjectFor(g_engine, g_document);
 
         if (!global || !docObj) {
@@ -5957,6 +6135,7 @@ void bindDocument(void* document)
          * by the installer below (a child frame reads the same global object). */
         installFrameGlobals(g_engine, g_document);
         g_docObj = antb_retain(docObj);
+        noteMainBinding();
 
         antb_value_release(docObj);
         antb_value_release(global);
@@ -10635,7 +10814,11 @@ int globalOpenWindow(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
 
 int globalFrameSlot(AntbEngine* engine, AntbValue*, AntbValue**, int, AntbValue* out, void*)
 {
-    AntbValue* v = antb_make_number(engine, (double)g_currentSlot);
+    /* With per-frame realms the number identifies the realm (0 = main frame,
+     * 1..N = frame realms), not a per-view document slot: a slot of another
+     * realm must never be returned, or __agbBind would restore the parent
+     * document inside a child frame (R130). */
+    AntbValue* v = antb_make_number(engine, (double)currentRealmSlotNumber());
 
     if (!v)
         return 0;
@@ -10648,13 +10831,29 @@ int globalFrameSlot(AntbEngine* engine, AntbValue*, AntbValue**, int, AntbValue*
 int globalActivateSlot(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
                        AntbValue* out, void*)
 {
-    int previous = g_currentSlot;
+    int previous = currentRealmSlotNumber();
 
     if (argc > 0) {
         int slot = (int)antb_to_number(args[0]);
 
-        if (slot >= 0 && slot < g_docSlotCount)
+        if (perFrameRealmEnabled()) {
+            /* Switch realm AND its document binding; never repoint a document
+             * object that belongs to another realm. */
+            if (slot == 0 && g_currentState && g_currentState != &g_emptyState
+                    && g_currentState->mainRealm) {
+                antb_realm_enter(engine, g_currentState->mainRealm);
+                applyRealmBinding(g_currentState->mainRealm);
+            } else if (slot > 0) {
+                FrameRealmEntry* entry = frameRealmEntryBySlot(slot);
+
+                if (entry && entry->realm) {
+                    antb_realm_enter(engine, entry->realm);
+                    applyRealmBinding(entry->realm);
+                }
+            }
+        } else if (slot >= 0 && slot < g_docSlotCount) {
             activateSlot(slot);
+        }
     }
 
     {

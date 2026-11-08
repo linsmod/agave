@@ -16,5 +16,10 @@
   f.id = 'fr';
   f.src = 'realm_child.html';
   document.body.appendChild(f);
+
+  /* Parent timers keep firing while the child realm exists. They must not touch
+     the child's document binding (R128). */
+  window.__parentTicks = 0;
+  setInterval(function () { window.__parentTicks++; }, 5);
 </script>
 </body></html>

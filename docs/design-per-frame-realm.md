@@ -97,9 +97,11 @@ view（一个 AgaveWebView）
   模块表仍按引擎、iframe 的 DCL 仍不单独派发、`parent` 是父 realm 的 global 而不是 WindowProxy。
 - **S3 事件/定时器/模块按 realm**：派发、回调、模块求值都先切到目标 realm。
   验收：iframe 的 DCL 单独派发；两个 frame 各跑一份同一 module 不互相覆盖；worker 回归不变。
-  **状态：事件部分已完成**（`Document::finishedParsing()` 绑定本 document 后 flush 模块再派发唯一的
-  DCL，iframe 由此获得自己的 DCL，同时修掉 P0-c 双发；frame 的 `load` 走
-  `dispatchFrameDocumentEvent`）。**未完成**：ES module map 仍是引擎级（`js->modules.state`），
+  **状态：事件 + 定时器/realm binding 已完成**（`Document::finishedParsing()` 绑定本 document 后
+  flush 模块再派发唯一的 DCL，iframe 由此获得自己的 DCL，同时修掉 P0-c 双发；frame 的 `load` 走
+  `dispatchFrameDocumentEvent`；R130 把 `__agbBind` 的 per-view document slot 改成 realm 编号，
+  每个 realm 各有一份 document/docObj binding，子 frame 的定时器与回调不再把父文档写进自己的
+  document 对象）。**未完成**：ES module map 仍是引擎级（`js->modules.state`），
   两个 frame import 同一模块仍共享实例；要按 realm 得把 loader 状态搬进 realm 字段。
 - **S4 WindowProxy 转发**：`parent`/`top`/`frames`/`length`/`name`/`frameElement`、`postMessage.source`。
   验收：`cap_window_identity.html` + `cap_postmessage.html`（`event.source !== window`）。

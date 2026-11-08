@@ -7,6 +7,23 @@
      differ from what the parent gets for the same node. */
   window.__selfBody = document.body;
 
+  /* A timer of this realm must be restored into THIS realm and THIS document.
+     Before R130 __agbFrameSlot() returned the parent's document slot, so the
+     first timer callback repointed the child's document object at the parent
+     document: document.URL became the parent's and the child's nodes vanished. */
+  window.__childTimerUrl = '';
+  window.__childTimerMarker = '';
+  window.__childTimerDocSame = '';
+  (function () {
+    var d0 = document, u0 = document.URL;
+    setTimeout(function () {
+      window.__childTimerUrl = (document.URL === u0) ? 'own' : ('other:' + document.URL);
+      window.__childTimerMarker = document.getElementById('c') ? 'found' : 'missing';
+      window.__childTimerDocSame = (document === d0 && window.document === d0)
+          ? 'same' : 'changed';
+    }, 40);
+  })();
+
   /* Browser hosts install timers into every frame realm (P0-l). The child
      must see them during parsing, not just after load. */
   window.__childTimer = typeof setTimeout;

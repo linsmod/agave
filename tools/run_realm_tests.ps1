@@ -55,7 +55,10 @@ probeExit([
   'parentDcl=' + window.__parentDcl,
   'childTimer=' + (cw ? cw.__childTimer : 'n/a'),
   'childInterval=' + (cw ? cw.__childInterval : 'n/a'),
-  'childTimerWorks=' + (cw ? cw.__childTimerWorks : 'n/a')
+  'childTimerWorks=' + (cw ? cw.__childTimerWorks : 'n/a'),
+  'childTimerUrl=' + (cw ? cw.__childTimerUrl : 'n/a'),
+  'childTimerMarker=' + (cw ? cw.__childTimerMarker : 'n/a'),
+  'childTimerDocSame=' + (cw ? cw.__childTimerDocSame : 'n/a')
 ].join('|'));
 '@ | Set-Content -Path $checkJs -Encoding ascii
 
@@ -118,7 +121,9 @@ if ($shared.Code -ne 0) {
     Write-Host ("FAIL  shared realm baseline: exit {0}" -f $shared.Code)
 } elseif ($sharedText -notmatch 'parentSelf=true' -or
           $sharedText -notmatch 'childReachable=string' -or
-          $sharedText -notmatch 'parentFn=PF-ok') {
+          $sharedText -notmatch 'parentFn=PF-ok' -or
+          $sharedText -notmatch 'childTimerUrl=own' -or
+          $sharedText -notmatch 'childTimerMarker=found') {
     $failures++
     Write-Host "FAIL  shared realm baseline: cross-frame access broken"
     Write-Host (($sharedText -split "`n" | Select-Object -Last 2) -join "`n")
@@ -145,7 +150,10 @@ if ($perFrame.Code -ne 0) {
         @{ Name = 'parent DCL ran once';      Want = 'parentDcl=1';              Ok = ($perFrameText -match 'parentDcl=1') },
         @{ Name = 'child realm has timers';   Want = 'childTimer=function';      Ok = ($perFrameText -match 'childTimer=function') },
         @{ Name = 'child realm has interval'; Want = 'childInterval=function';   Ok = ($perFrameText -match 'childInterval=function') },
-        @{ Name = 'child timer fires';        Want = 'childTimerWorks=1';        Ok = ($perFrameText -match 'childTimerWorks=1') }
+        @{ Name = 'child timer fires';        Want = 'childTimerWorks=1';        Ok = ($perFrameText -match 'childTimerWorks=1') },
+        @{ Name = 'timer keeps child document'; Want = 'childTimerUrl=own';      Ok = ($perFrameText -match 'childTimerUrl=own') },
+        @{ Name = 'timer sees child DOM';     Want = 'childTimerMarker=found';   Ok = ($perFrameText -match 'childTimerMarker=found') },
+        @{ Name = 'timer document identity';  Want = 'childTimerDocSame=same';   Ok = ($perFrameText -match 'childTimerDocSame=same') }
     )
 
     foreach ($c in $checks) {
