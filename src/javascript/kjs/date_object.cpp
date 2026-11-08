@@ -296,12 +296,6 @@ bool DateInstance::getUTCTime(double &milli) const
     return true;
 }
 
-static inline bool isTime_tSigned()
-{
-    time_t minusOne = (time_t)(-1);
-    return minusOne < 0;
-}
-
 // ------------------------------ DatePrototype -----------------------------
 
 const ClassInfo DatePrototype::info = {"Date", &DateInstance::info, &dateTable, 0};
@@ -619,7 +613,6 @@ JSValue *DateObjectFuncImp::callAsFunction(ExecState* exec, JSObject*, const Lis
     }
 
     GregorianDateTime t;
-    memset(&t, 0, sizeof(t));
     int year = args[0]->toInt32(exec);
     t.year = (year >= 0 && year <= 99) ? year : year - 1900;
     t.month = args[1]->toInt32(exec);
@@ -983,7 +976,6 @@ static double parseDate(const UString &date)
     // fall back to local timezone
     if (!haveTZ) {
         GregorianDateTime t;
-        memset(&t, 0, sizeof(tm));
         t.monthDay = day;
         t.month = month;
         t.year = year - 1900;

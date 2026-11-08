@@ -43,7 +43,11 @@ namespace WebCore {
         static bool parseTransformAttribute(SVGTransformList*, const UChar*& ptr, const UChar* end);
         static bool parseTransformValue(unsigned type, const UChar*& ptr, const UChar* end, SVGTransform&);
         
+        /* SVGLocatable's virtual getCTM()/getScreenCTM() stay visible next to
+         * these (SVGElement*) helpers. */
+        using SVGLocatable::getCTM;
         AffineTransform getCTM(const SVGElement*) const;
+        using SVGLocatable::getScreenCTM;
         AffineTransform getScreenCTM(const SVGElement*) const;
         
         virtual AffineTransform animatedLocalTransform() const = 0;

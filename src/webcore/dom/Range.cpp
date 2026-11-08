@@ -596,8 +596,8 @@ bool Range::intersectsNode(Node* refNode, ExceptionCode& ec)
         return false;
     }
     
-    if (m_detached && refNode->attached() ||
-        !m_detached && !refNode->attached() ||
+    if ((m_detached && refNode->attached()) ||
+        (!m_detached && !refNode->attached()) ||
         refNode->document() != m_ownerDocument)
         // firefox doesn't throw an exception for these case; it returns false
         return false;
@@ -1606,9 +1606,8 @@ bool operator==(const Range &a, const Range &b)
 {
     if (&a == &b)
         return true;
-    // Not strictly legal C++, but in practice this can happen, and works fine with GCC.
-    if (!&a || !&b)
-        return false;
+    /* A null reference cannot exist in well-defined C++; the old `!&a || !&b`
+     * check was UB and always false, so it is gone. */
     bool ad = a.isDetached();
     bool bd = b.isDetached();
     if (ad && bd)

@@ -162,9 +162,6 @@ using namespace HTMLNames;
 // for dual G5s. :)
 static const int cLayoutScheduleThreshold = 250;
 
-// Use 1 to represent the document's default form.
-static HTMLFormElement* const defaultForm = reinterpret_cast<HTMLFormElement*>(1);
-
 // Golden ratio - arbitrary start value to avoid mapping all 0's to all 0's
 static const unsigned PHI = 0x9e3779b9U;
 
@@ -2360,7 +2357,7 @@ void Document::recalcStyleSelector()
                 }
             }
 
-        } else if (n->isHTMLElement() && (n->hasTagName(linkTag) || n->hasTagName(styleTag))
+        } else if ((n->isHTMLElement() && (n->hasTagName(linkTag) || n->hasTagName(styleTag)))
 #if ENABLE(SVG)
             ||  (n->isSVGElement() && n->hasTagName(SVGNames::styleTag))
 #endif

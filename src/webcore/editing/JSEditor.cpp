@@ -526,10 +526,7 @@ bool enabledPaste(Frame* frame)
     return settings && settings->isDOMPasteAllowed() && frame->editor()->canPaste();
 }
 
-bool enabledAnyRangeSelection(Frame* frame)
-{
-    return frame->selectionController()->isRange();
-}
+
 
 bool enabledAnyEditableRangeSelection(Frame* frame)
 {

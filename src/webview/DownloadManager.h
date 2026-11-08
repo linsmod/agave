@@ -27,7 +27,7 @@ namespace WebCore {
 
 class ResourceError;
 class ResourceHandle;
-class ResourceRequest;
+struct ResourceRequest;
 class ResourceResponse;
 
 class DownloadJob : public Shared<DownloadJob>, public ResourceHandleClient {

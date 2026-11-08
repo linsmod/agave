@@ -45,6 +45,8 @@ public:
     HTMLImageElement* imageElement() const { return m_imageElement; }
     
     void windowSizeChanged();
+    /* CachedResourceClient::imageChanged(CachedImage*) stays visible. */
+    using HTMLDocument::imageChanged;
     void imageChanged();
     void imageClicked(int x, int y);
 private:

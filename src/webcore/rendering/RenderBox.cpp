@@ -2690,7 +2690,7 @@ IntRect RenderBox::caretRect(int offset, EAffinity affinity, int* extraWidthToEn
     //
     // FIXME: ignoring :first-line, missing good reason to take care of
     int fontHeight = style()->font().height();
-    if (fontHeight > rect.height() || !isReplaced() && !isTable())
+    if (fontHeight > rect.height() || (!isReplaced() && !isTable()))
         rect.setHeight(fontHeight);
 
     RenderObject* cb = containingBlock();

@@ -102,10 +102,7 @@ void StyledElement::updateStyleAttributeIfNeeded() const
     }
 }
 
-inline static bool isClassWhitespace(UChar c)
-{
-    return c == ' ' || c == '\r' || c == '\n' || c == '\t';
-}
+
 
 StyledElement::StyledElement(const QualifiedName& name, Document *doc)
     : Element(name, doc)

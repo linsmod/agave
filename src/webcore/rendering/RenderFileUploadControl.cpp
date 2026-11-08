@@ -41,7 +41,6 @@ namespace WebCore {
 using namespace HTMLNames;
 
 const int afterButtonSpacing = 4;
-const int iconHeight = 16;
 const int iconWidth = 16;
 const int iconFilenameSpacing = 2;
 const int defaultWidthNumChars = 34;

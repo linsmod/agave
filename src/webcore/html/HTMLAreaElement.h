@@ -49,6 +49,8 @@ public:
 
     bool mapMouseEvent(int x, int y, const IntSize&, HitTestResult&);
 
+    /* Node::getRect()'s no-argument form stays visible next to this one. */
+    using HTMLAnchorElement::getRect;
     virtual IntRect getRect(RenderObject*) const;
 
     String accessKey() const;

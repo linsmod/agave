@@ -64,7 +64,7 @@ void initFileJob(ResourceHandle* job)
         url = url.left(url.find(query));
 
     // Determine the MIME type based on the path.
-	d->m_mightDownloadFromHandle = false;
+    d->m_mightDownloadFromHandle = false;
 
 	d->m_url = (char*)fastStrdup(url.utf8().data());
     curl_easy_setopt(d->m_handle, CURLOPT_URL, d->m_url);

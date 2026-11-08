@@ -33,16 +33,7 @@
 #include "../NetworkTypes.h"
 #include "../NetLog.h"
 
-/* Millisecond-resolution clock used by the net log entries. */
-static long long nowTicksForLog()
-{
-    LARGE_INTEGER counter;
 
-    if (QueryPerformanceCounter(&counter))
-        return (long long)counter.QuadPart;
-
-    return (long long)GetTickCount64();
-}
 
 namespace Net {
 

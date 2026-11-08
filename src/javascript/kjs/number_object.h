@@ -89,6 +89,9 @@ namespace KJS {
     enum { NaNValue, NegInfinity, PosInfinity, MaxValue, MinValue };
 
     Completion execute(const List &);
+    /* Legacy one-argument form; keep the virtual construct(ExecState*, ...)
+     * visible instead of hiding it. */
+    using InternalFunctionImp::construct;
     JSObject *construct(const List &);
   };
 

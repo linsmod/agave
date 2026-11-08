@@ -38,6 +38,8 @@ namespace WebCore {
         bool stretchMethod() const;
 
         virtual const char* renderName() const { return "RenderSVGTextPath"; }
+        /* RenderObject's topLevel overload stays visible. */
+        using RenderSVGInline::absoluteRects;
         virtual void absoluteRects(Vector<IntRect>& rects, int tx, int ty);
 
     private:

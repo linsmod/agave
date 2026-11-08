@@ -37,6 +37,27 @@ namespace WebCore {
 static bool flexDebugEnabled();
 static void flexDebugChild(const char* when, RenderObject* box, RenderObject* child);
 
+namespace {
+/* One flex item while lines are laid out. File scope because C++98 does not
+ * allow a local type as a template argument (Vector<LineItem>). */
+struct LineItem {
+    RenderObject* child;
+    int contentWidth;   /* target content-box width */
+    int outerWidth;     /* margin box width */
+    int outerHeight;    /* margin box height */
+    int minContent;     /* content-box floor (min-width / min-content) */
+    int maxContent;     /* content-box ceiling (max-width), INT_MAX if none */
+    int extraWidth;     /* border + padding + horizontal margins */
+    int breakOuterWidth; /* outer size with min/max applied, used for line breaking */
+    float grow;
+    float shrink;
+    int marginLeft, marginRight, marginTop, marginBottom;
+    int line;
+    bool frozen;
+    int violationSign;  /* +1 clamped up to min, -1 clamped down to max, 0 none */
+};
+}
+
 class FlexBoxIterator {
 public:
     FlexBoxIterator(RenderFlexibleBox* parent) {
@@ -391,23 +412,6 @@ void RenderFlexibleBox::layoutBlock(bool relayoutChildren)
  * Start from the basis, clamp at min/max, distribute the free space. */
 void RenderFlexibleBox::layoutFlexLines(bool wrap, bool relayoutChildren)
 {
-    struct LineItem {
-        RenderObject* child;
-        int contentWidth;   /* target content-box width */
-        int outerWidth;     /* margin box width */
-        int outerHeight;    /* margin box height */
-        int minContent;     /* content-box floor (min-width / min-content) */
-        int maxContent;     /* content-box ceiling (max-width), INT_MAX if none */
-        int extraWidth;     /* border + padding + horizontal margins */
-        int breakOuterWidth; /* outer size with min/max applied, used for line breaking */
-        float grow;
-        float shrink;
-        int marginLeft, marginRight, marginTop, marginBottom;
-        int line;
-        bool frozen;
-        int violationSign;  /* +1 clamped up to min, -1 clamped down to max, 0 none */
-    };
-
     const int contentLeft = borderLeft() + paddingLeft();
     const int innerWidth = max(0, contentWidth());
     const int columnGap = max(0, style()->flexColumnGap().calcValue(innerWidth));

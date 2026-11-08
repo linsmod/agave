@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Copyright (C) 1999-2000 Harri Porten (porten@kde.org)
  * Copyright (C) 2006, 2007 Apple Inc. All rights reserved.
  *
@@ -63,11 +63,7 @@ namespace KJS {
 
 /* Constants */
 
-static const double minutesPerDay = 24.0 * 60.0;
 static const double secondsPerDay = 24.0 * 60.0 * 60.0;
-static const double secondsPerYear = 24.0 * 60.0 * 60.0 * 365.0;
-
-static const double usecPerSec = 1000000.0;
 
 static const double maxUnixTime = 2145859200.0; // 12/31/2037
 

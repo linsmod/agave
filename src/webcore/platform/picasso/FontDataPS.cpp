@@ -43,7 +43,7 @@ void FontData::platformInit()
     } else
         m_xHeight = info.ascent * 0.5f;
 
-	ps_get_text_extent(getGlobalContext(), " ", 1, &size);
+    ps_get_text_extent(getGlobalContext(), " ", 1, &size);
     m_spaceWidth = size.w;
 
     m_lineGap = info.leading;
@@ -58,7 +58,7 @@ void FontData::platformInit()
         fprintf(stderr, "[fontdbg] size=%g ascent=%g descent=%g leading=%g unitsEm=%u xHeight=%g\n",
                 (double)m_font.size(), (double)m_ascent, (double)m_descent,
                 (double)info.leading, (unsigned)info.unitsEM, (double)m_xHeight);
-	ps_set_font(getGlobalContext(), f);
+    ps_set_font(getGlobalContext(), f);
 }
 
 void FontData::platformDestroy()

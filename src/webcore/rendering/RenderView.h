@@ -76,6 +76,8 @@ public:
 
     virtual void absoluteRects(Vector<IntRect>&, int tx, int ty, bool topLevel = true);
 
+    /* RenderObject's non-const virtual selectionRect(bool) stays visible. */
+    using RenderBlock::selectionRect;
     IntRect selectionRect(bool clipToVisibleContent = true) const;
 
     void setMaximalOutlineSize(int o) { m_maximalOutlineSize = o; }

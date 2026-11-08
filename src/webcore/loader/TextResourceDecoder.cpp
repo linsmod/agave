@@ -566,7 +566,7 @@ bool TextResourceDecoder::checkForHeadCharset(const char* data, size_t len, bool
                     ptr++;
                     continue;
                 }
-                if (c >= 'a' && c <= 'z' || c >= '0' && c <= '9')
+                if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))
                     ;
                 else if (c >= 'A' && c <= 'Z')
                     c += 'a' - 'A';
@@ -625,7 +625,7 @@ bool TextResourceDecoder::checkForHeadCharset(const char* data, size_t len, bool
                     if (str[pos++] != '=')
                         continue;
                     while (pos < (int)str.length() &&
-                            (str[pos] <= ' ') || str[pos] == '=' || str[pos] == '"' || str[pos] == '\'')
+                           (str[pos] <= ' ' || str[pos] == '=' || str[pos] == '"' || str[pos] == '\''))
                         pos++;
 
                     // end ?

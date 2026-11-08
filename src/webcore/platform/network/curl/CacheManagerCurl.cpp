@@ -440,7 +440,7 @@ void CacheManager::load()
     if (fp == INVALID_FILE_HANDLE)
     	return;
 
-	unsigned count = 0;
+    unsigned count = 0;
 	CacheIndexFileHeader header;
 
 	if (!readFile((unsigned char*)&header, sizeof(CacheIndexFileHeader), 1, fp))
@@ -483,7 +483,7 @@ void CacheManager::save()
     if (fp == INVALID_FILE_HANDLE)
     	return;
 
-	lock();
+    lock();
 	unsigned count = m_data->entrys.size();
 
 	CacheIndexFileHeader header;

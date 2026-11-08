@@ -72,6 +72,9 @@ public:
     bool multiple() const { return m_multiple; }
 
     void add(HTMLElement* element, HTMLElement* before, ExceptionCode&);
+    /* DOM's select.remove(index) hides Node::remove(ExceptionCode&); keep the
+     * virtual one visible. */
+    using HTMLFormControlElementWithState::remove;
     void remove(int index);
 
     String value();

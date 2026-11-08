@@ -128,7 +128,7 @@ static unsigned short big5_conv_to_uchar (const unsigned char* mchar, int len)
     else
         index = 94 * 94 + (mchar [0] - 0xa1) * 63 + (mchar [1] - 0x40);
 
-	return (unsigned short)big5_map[index];
+    return (unsigned short)big5_map[index];
 }
 
 static int big5_conv_from_uchar (unsigned short wc, unsigned char* mchar)

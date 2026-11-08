@@ -89,9 +89,6 @@ const RenderLayer::ScrollAlignment RenderLayer::gAlignCenterAlways = { RenderLay
 const RenderLayer::ScrollAlignment RenderLayer::gAlignTopAlways = { RenderLayer::alignTop, RenderLayer::alignTop, RenderLayer::alignTop };
 const RenderLayer::ScrollAlignment RenderLayer::gAlignBottomAlways = { RenderLayer::alignBottom, RenderLayer::alignBottom, RenderLayer::alignBottom };
 
-const int MinimumWidthWhileResizing = 100;
-const int MinimumHeightWhileResizing = 40;
-
 void* ClipRects::operator new(size_t sz, RenderArena* renderArena) throw()
 {
     return renderArena->allocate(sz);
@@ -898,8 +895,6 @@ void RenderLayer::resize(const PlatformMouseEvent& evt, const IntSize& oldOffset
     IntSize minimumSize = element->minimumSizeForResizing().shrunkTo(currentSize);
     element->setMinimumSizeForResizing(minimumSize);
 
-    IntSize adjustedOldOffset = IntSize(oldOffset.width() / zoomFactor, oldOffset.height() / zoomFactor);
-    
     IntSize difference = (currentSize + newOffset - oldOffset).expandedTo(minimumSize) - currentSize;
 
     CSSStyleDeclaration* style = element->style();

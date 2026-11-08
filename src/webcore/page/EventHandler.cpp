@@ -79,10 +79,6 @@ const int TextDragHysteresis = 3;
 const int GeneralDragHysteresis = 3;
 const double TextDragDelay = 0.15;
 
-// Match key code of composition keydown event on windows.
-// IE sends VK_PROCESSKEY which has value 229;
-const int CompositionEventKeyCode = 229;
-
 #if ENABLE(SVG)
 using namespace SVGNames;
 #endif

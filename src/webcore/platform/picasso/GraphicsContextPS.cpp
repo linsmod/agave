@@ -339,7 +339,7 @@ void GraphicsContext::drawEllipse(const IntRect& r)
     if (paintingDisabled())
         return;	
 
-	bool f = false;
+    bool f = false;
 	bool s = false;
 	ps_rect rect = {r.x(), r.y(), r.width(), r.height()};
 
@@ -440,7 +440,7 @@ void GraphicsContext::drawConvexPolygon(size_t numPoints, const FloatPoint* poin
     if (numPoints <= 1)
         return;
 
-	ps_context* gc = m_data->context;
+    ps_context* gc = m_data->context;
 
 	ps_point p = {points[0].x(), points[0].y()};
 	ps_move_to(gc, &p);
@@ -470,7 +470,7 @@ void GraphicsContext::fillRect(const FloatRect& r, const CanvasGradient* g)
 {
     if (paintingDisabled())
         return;	
-	ps_context* gc = m_data->context;
+    ps_context* gc = m_data->context;
 
 	ps_rect rect = {r.x(), r.y(), r.width(), r.height()};
     ps_rectangle(gc, &rect);
@@ -490,7 +490,7 @@ void GraphicsContext::fillRect(const IntRect& rect, const Color& color)
     if (paintingDisabled())
         return;	
 
-	FloatRect floatrect = rect;
+    FloatRect floatrect = rect;
 	fillRect(floatrect, color);
 }
 
@@ -627,7 +627,7 @@ void GraphicsContext::translate(int x, int y)
 {
     if (paintingDisabled())
         return;
-	ps_translate(m_data->context, x, y);
+    ps_translate(m_data->context, x, y);
     m_data->matrix.translate((float)x, (float)y);
 }
 
@@ -648,7 +648,7 @@ void GraphicsContext::setPlatformStrokeThickness(float width)
 {
     if (paintingDisabled())
         return;
-	(void)ps_set_line_width(m_data->context, width);
+    (void)ps_set_line_width(m_data->context, width);
 }
 
 void GraphicsContext::setLineCap(LineCap cap) 
@@ -675,7 +675,7 @@ void GraphicsContext::setLineJoin(LineJoin join)
     if (paintingDisabled())
         return;	
 
-	ps_context* gc = m_data->context;
+    ps_context* gc = m_data->context;
 	switch (join) {
 		case MiterJoin:
 			ps_set_line_join(gc, LINE_JOIN_MITER);
@@ -702,7 +702,7 @@ void GraphicsContext::setCompositeOperation(CompositeOperator op)
     if (paintingDisabled())
         return;	
 
-	ps_context* gc = m_data->context;
+    ps_context* gc = m_data->context;
     switch (op)
     {
         case CompositeClear:
@@ -802,7 +802,7 @@ void GraphicsContext::scale(const FloatSize& size)
 {
     if (paintingDisabled())
         return;
-	ps_scale(m_data->context, size.width(), size.height());
+    ps_scale(m_data->context, size.width(), size.height());
     m_data->matrix.scale (size.width(), size.height());
 }
 
@@ -810,7 +810,7 @@ void GraphicsContext::rotate(float angle)
 {
     if (paintingDisabled())
         return;
-	ps_rotate(m_data->context, angle);
+    ps_rotate(m_data->context, angle);
     m_data->matrix.rotate (angle);
 }
 
@@ -829,7 +829,7 @@ void GraphicsContext::setMiterLimit(float m)
 {
     if (paintingDisabled())
         return;
-	ps_set_miter_limit(m_data->context, m);
+    ps_set_miter_limit(m_data->context, m);
 }
 
 void GraphicsContext::setPlatformFillColor(const Color& fill)
@@ -850,7 +850,7 @@ void GraphicsContext::strokePath(const Path& path)
 {
     if (paintingDisabled())
         return;
-	ps_set_path(m_data->context, path.platformPath());
+    ps_set_path(m_data->context, path.platformPath());
 	ps_stroke(m_data->context);
 }
 
@@ -858,7 +858,7 @@ void GraphicsContext::fillPath (const Path& path)
 {
     if (paintingDisabled())
         return;
-	ps_set_path(m_data->context, path.platformPath());
+    ps_set_path(m_data->context, path.platformPath());
 	ps_fill(m_data->context);
 }
 
@@ -915,7 +915,7 @@ void GraphicsContext::fillRoundedRect(const IntRect& rc, const IntSize& topLeft,
     if (paintingDisabled())
         return;	
 
-	if (color.alpha()) {
+    if (color.alpha()) {
 		setBrushColor(m_data->context, color);
 		ps_rect r = {rc.x(), rc.y(), rc.width(), rc.height()};
 		ps_rounded_rect(m_data->context, &r, topLeft.width(), topLeft.height(), topRight.width(), 
@@ -930,7 +930,7 @@ void GraphicsContext::clearRect(const FloatRect& r)
     if (paintingDisabled())
         return;	
 		
-	ps_save(m_data->context);
+    ps_save(m_data->context);
 	ps_color c = {0, 0, 0, 0};
 
     ps_point p1 = {r.x(), r.y()};
@@ -950,7 +950,7 @@ void GraphicsContext::setShadow(IntSize const& size, int blur, Color const& col)
     if (paintingDisabled())
         return;	
 
-	ps_color sc = make_color(col);
+    ps_color sc = make_color(col);
 	ps_set_shadow(m_data->context, size.width(), size.height(), (double)blur/40);
 	ps_set_shadow_color(m_data->context, &sc);
 }
@@ -959,7 +959,7 @@ void GraphicsContext::clearShadow()
 {
     if (paintingDisabled())
         return;	
-	ps_reset_shadow(m_data->context);
+    ps_reset_shadow(m_data->context);
 }
 
 const AffineTransform & GraphicsContext::getMatrix(void) const

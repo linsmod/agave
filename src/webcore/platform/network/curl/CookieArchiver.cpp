@@ -92,7 +92,7 @@ int CookieArchiver::save(DomainCookie *domain)
     if (!domain && m_cookieDir.isEmpty())
         return -1;
 
-	String fileName = m_cookieDir + "/";
+    String fileName = m_cookieDir + "/";
 	fileName += domain->domain();
 	fileName += ".dat";
 
@@ -218,7 +218,7 @@ int CookieArchiver::load(CookieManager *mgr)
     if (!mgr && m_cookieDir.isEmpty())
         return -1;
 
-	String fileName = m_cookieDir + "/index.dat";
+    String fileName = m_cookieDir + "/index.dat";
     HFile fp = openFile(fileName, "r+");
     if (!fp)
          return -1; 
@@ -262,7 +262,7 @@ bool CookieArchiver::save(CookieManager *mgr)
     if (!mgr && m_cookieDir.isEmpty())
         return false;
 
-	String fileName = m_cookieDir + "/index.dat";
+    String fileName = m_cookieDir + "/index.dat";
     HFile fp = openFile(fileName, "w+");
     if (!fp)
          return false;

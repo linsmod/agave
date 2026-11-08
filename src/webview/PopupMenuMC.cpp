@@ -88,7 +88,7 @@ void PopupMenu::show(const IntRect& r, FrameView* v, int index)
     	if (clientRect().isEmpty())
         	return;
 
-		if (!m_popup) {
+        if (!m_popup) {
 			_mc_rect rc = {r.x(), r.y(), r.width(), r.height()};
 			m_popup = cb_create_popup_menu(&rc);
 
@@ -105,7 +105,7 @@ void PopupMenu::show(const IntRect& r, FrameView* v, int index)
             	m_scrollBar->setContainingView(m_view);
         	}
 	
-		if (m_popup->move) {
+        if (m_popup->move) {
 			_mc_rect mrc = {m_windowRect.x(), m_windowRect.y(), 
 											m_windowRect.width(), m_windowRect.height()};
 			m_popup->move(m_popup, &mrc);
@@ -186,7 +186,7 @@ bool PopupMenu::setFocusedIndex(int i, bool hotTracking)
     if (!client()->itemIsEnabled(i))
         return false;
 
-	if (!m_popup)
+    if (!m_popup)
 		return false;
 
     invalidateItem(focusedIndex());
@@ -295,7 +295,7 @@ void PopupMenu::invalidateItem(int index)
     if (m_scrollBar)
         damageRect.setWidth(damageRect.width() - m_scrollBar->frameGeometry().width());
 
-	if (m_popup->dirty) {
+    if (m_popup->dirty) {
     	_mc_rect r = {damageRect.x(), damageRect.y(), damageRect.width(), damageRect.height()}; 
     	m_popup->dirty(m_popup, &r);
 	}
@@ -349,7 +349,7 @@ void PopupMenu::updateFromElement()
     if (!m_popup)
         return;
 
-	if (m_popup->dirty)
+    if (m_popup->dirty)
  		m_popup->dirty(m_popup, 0);
 
     if (!scrollToRevealSelection() && m_popup->update)

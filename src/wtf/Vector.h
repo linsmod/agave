@@ -78,7 +78,10 @@ namespace WTF {
     {
         static void initialize(T* begin, T* end) 
         {
-            memset(begin, 0, reinterpret_cast<char*>(end) - reinterpret_cast<char*>(begin));
+            /* Zeroing is the deliberate idiom for the simple types WebKit
+             * keeps in Vectors (an all-zero RefPtr is null). The void* cast
+             * keeps -Wnontrivial-memcall quiet about exactly that idiom. */
+            memset(static_cast<void*>(begin), 0, reinterpret_cast<char*>(end) - reinterpret_cast<char*>(begin));
         }
     };
 

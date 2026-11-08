@@ -97,8 +97,6 @@ static void freeHandle(DeprecatedStringData **);
 
 #define IS_ASCII_QCHAR(c) ((c).unicode() > 0 && (c).unicode() <= 0xff)
 
-static const int caseDelta = ('a' - 'A');
-
 const char * const DeprecatedString::null = 0;
 
 DeprecatedStringData *DeprecatedString::shared_null = 0;
@@ -170,11 +168,6 @@ static bool equalCaseInsensitive(const DeprecatedChar *a, const DeprecatedChar *
         a++; b++;
     }
     return true;
-}
-
-static inline bool equalCaseInsensitive(char c1, char c2)
-{
-    return toASCIILower(c1) == toASCIILower(c2);
 }
 
 static inline bool equalCaseInsensitive(DeprecatedChar c1, char c2)

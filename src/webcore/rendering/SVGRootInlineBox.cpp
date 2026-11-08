@@ -747,7 +747,6 @@ void SVGRootInlineBox::layoutInlineBoxes(InlineFlowBox* start, Vector<SVGChar>::
             SVGInlineTextBox* textBox = static_cast<SVGInlineTextBox*>(curr);
             unsigned length = textBox->len();
 
-            SVGChar curChar = *it; 
             ASSERT(it != m_svgChars.end());  
 
             FloatRect stringRect;

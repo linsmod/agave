@@ -39,6 +39,8 @@ public:
 
     virtual const char* renderName() const { return "RenderTableCol"; }
     virtual bool isTableCol() const { return true; }
+    /* RenderObject::lineHeight(bool, bool) stays visible. */
+    using RenderContainer::lineHeight;
     virtual short lineHeight(bool) const { return 0; }
     virtual void updateFromElement();
 

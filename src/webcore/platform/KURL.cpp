@@ -1274,7 +1274,7 @@ void KURL::parse(const char *url, const DeprecatedString *originalString)
     } else
         urlString = DeprecatedString(buffer.data(), fragmentEndPos);
 
-	m_hash = urlComputeHash(urlString.latin1());
+    m_hash = urlComputeHash(urlString.latin1());
 
 
     ASSERT(p - buffer.data() <= (int)buffer.size());

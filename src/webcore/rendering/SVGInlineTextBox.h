@@ -29,9 +29,9 @@
 
 namespace WebCore {
 
-    class SVGChar;
+    struct SVGChar;
     class SVGRootInlineBox;
-    class SVGTextDecorationInfo;
+    struct SVGTextDecorationInfo;
 
     class SVGInlineTextBox : public InlineTextBox {
     public:

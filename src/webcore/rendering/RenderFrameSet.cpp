@@ -507,9 +507,9 @@ void RenderFrameSet::layout()
         for (int i=0; i<later_rows; i++)
             later_r[i].setValue(Relative, 1);
 
-        layOutAxis(m_rows, (Length*)(&later_r), m_height - (rows - 1) * borderThickness);
-        layOutAxis(m_cols, (Length*)(&later_c), m_width - (cols - 1) * borderThickness);
-		delete later_r;
+        layOutAxis(m_rows, later_r, m_height - (rows - 1) * borderThickness);
+        layOutAxis(m_cols, &later_c, m_width - (cols - 1) * borderThickness);
+        delete [] later_r;
     } else {
         layOutAxis(m_rows, frameSet()->rowLengths(), m_height - (rows - 1) * borderThickness);
         layOutAxis(m_cols, frameSet()->colLengths(), m_width - (cols - 1) * borderThickness);

@@ -804,9 +804,6 @@ void CanvasRenderingContext2D::drawImage(HTMLCanvasElement* canvas, const FloatR
     if (!c)
         return;
         
-    FloatRect sourceRect = c->roundToDevicePixels(srcRect);
-    FloatRect destRect = c->roundToDevicePixels(dstRect);
-        
     // FIXME: Do this through platform-independent GraphicsContext API.
 #if PLATFORM(CG)
     CGImageRef platformImage = canvas->createPlatformImage();

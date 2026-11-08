@@ -43,25 +43,7 @@ const int kBufferMillis = 100;
  * clips use and is plenty for a browser that paints on the frame loop. */
 const int kVideoFps = 25;
 
-/* Reads a decimal "HH:MM:SS.xxx" value out of ffmpeg's stderr progress line;
- * used only for the total duration when the header parser could not give one. */
-double parseTimeFromProgress(const std::string& text)
-{
-    size_t pos = text.find("out_time=");
 
-    if (pos == std::string::npos)
-        return -1;
-
-    {
-        int h = 0, m = 0;
-        double s = 0;
-
-        if (sscanf(text.c_str() + pos + 9, "%d:%d:%lf", &h, &m, &s) == 3)
-            return h * 3600.0 + m * 60.0 + s;
-    }
-
-    return -1;
-}
 
 } // namespace
 

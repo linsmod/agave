@@ -97,6 +97,9 @@ namespace KJS {
         virtual JSValue *callAsFunction(ExecState *, JSObject *thisObj, const List &args);
 
         Completion execute(const List &);
+        /* Legacy one-argument form; keep the virtual construct(ExecState*, ...)
+         * visible instead of hiding it. */
+        using InternalFunctionImp::construct;
         JSObject *construct(const List &);
     };
 

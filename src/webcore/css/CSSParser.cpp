@@ -1858,7 +1858,8 @@ static String expandSelectorList(const String& prelude)
 
 /* Removes comments from a selector prelude before the text-based rewrites run.
  * Those rewrites parse quotes, and an apostrophe inside a comment
- * ("/* DeepSeek's verify-code divider *\/") looks like a string start: the
+ * ("DeepSeek's verify-code divider", between comment delimiters) looks like a
+ * string start: the
  * splitter swallowed the selector that followed and the rule silently vanished.
  * Comments carry no meaning in a prelude. */
 static String stripCommentsFromSelector(const String& selector)
@@ -5968,9 +5969,8 @@ int CSSParser::parseHSLParameters(Value* value, double* colorArray)
                 return 0;
             // normalize the Hue value and change it to be between 0 and 1.0
             double hue = v->fValue;
-            if (v->unit == CSSPrimitiveValue::CSS_DEG)
-                hue = hue;                        // already degrees
-            else if (v->unit == CSSPrimitiveValue::CSS_RAD)
+            /* CSS_DEG already is degrees; only the other angle units convert. */
+            if (v->unit == CSSPrimitiveValue::CSS_RAD)
                 hue = hue * 180.0 / M_PI;
             else if (v->unit == CSSPrimitiveValue::CSS_GRAD)
                 hue = hue * 0.9;
@@ -6526,7 +6526,7 @@ static inline int yyerror(const char *str)
 
 #else
 
-static inline int yyerror(const char*) { return 1; }
+
 
 #endif
 

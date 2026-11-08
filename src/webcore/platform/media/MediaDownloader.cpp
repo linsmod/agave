@@ -307,15 +307,18 @@ static unsigned long long cacheBudgetBytes()
     return megabytes * 1024ULL * 1024ULL;
 }
 
+/* A candidate file for cache eviction; file scope because C++98 does not
+ * allow a local type as a template argument (std::vector<Item>). */
+struct Item {
+    std::string data;
+    FILETIME when;
+    unsigned long long size;
+};
+
 static void pruneCache(const std::string& path)
 {
     std::string dir = path;
     size_t slash = dir.find_last_of("\\/");
-    struct Item {
-        std::string data;
-        FILETIME when;
-        unsigned long long size;
-    };
     std::vector<Item> items;
     unsigned long long total = 0;
 

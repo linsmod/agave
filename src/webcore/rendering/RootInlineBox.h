@@ -82,6 +82,8 @@ public:
 
     void childRemoved(InlineBox* box);
 
+    /* InlineBox's 3-argument overload stays visible. */
+    using InlineFlowBox::canAccommodateEllipsis;
     bool canAccommodateEllipsis(bool ltr, int blockEdge, int lineBoxEdge, int ellipsisWidth);
     void placeEllipsis(const AtomicString& ellipsisStr, bool ltr, int blockEdge, int ellipsisWidth, InlineBox* markupBox = 0);
     virtual int placeEllipsisBox(bool ltr, int blockEdge, int ellipsisWidth, bool& foundBox);

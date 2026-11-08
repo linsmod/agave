@@ -42,6 +42,8 @@ namespace WebCore {
         static PassRefPtr<MainResourceLoader> create(Frame*);
         virtual ~MainResourceLoader();
 
+        /* ResourceLoader::load(const ResourceRequest&) stays visible. */
+        using ResourceLoader::load;
         virtual bool load(const ResourceRequest&, const SubstituteData&);
         virtual void addData(const char*, int, bool allAtOnce);
 

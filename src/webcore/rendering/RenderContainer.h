@@ -61,6 +61,8 @@ public:
 
     virtual VisiblePosition positionForCoordinates(int x, int y);
 
+    /* RenderObject's overload (with useSelectionHeight) stays visible. */
+    using RenderBox::addLineBoxRects;
     virtual void addLineBoxRects(Vector<IntRect>&, unsigned startOffset = 0, unsigned endOffset = UINT_MAX);
 
 private:

@@ -52,6 +52,8 @@ public:
     virtual void calcPrefWidths();
     
     virtual IntRect absoluteClippedOverflowRect();
+    /* RenderObject's topLevel overload stays visible. */
+    using RenderContainer::absoluteRects;
     virtual void absoluteRects(Vector<IntRect>& rects, int tx, int ty);
     virtual void addFocusRingRects(GraphicsContext*, int tx, int ty);
 
