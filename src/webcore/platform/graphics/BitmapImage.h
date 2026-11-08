@@ -119,6 +119,15 @@ private:
     bool shouldAnimate();
     virtual void startAnimation();
     void advanceAnimation(Timer<BitmapImage>*);
+
+    /* Progressive decoding: a draw may leave rows undecoded (the decoder works
+     * under a per-paint budget). The draw asks the observer to repaint the
+     * image, which puts the next slice into the next frame; if the image stops
+     * being drawn (scrolled away) the chain simply ends. The counter is a
+     * safety valve against a decoder that claims work forever without
+     * producing rows. See docs/design-async-image-decode.md. */
+    void requestFrameProgress();
+    void resetFrameProgress();
     
     // Handle platform-specific data
     void initPlatformData();
@@ -147,6 +156,8 @@ private:
     bool m_animationFinished;  // Whether or not we've completed the entire animation.
 
     bool m_allDataReceived;  // Whether or not we've received all our data.
+
+    unsigned m_frameProgressRequests; // Progress repaints asked for the current frame.
 
     mutable bool m_haveSize; // Whether or not our |m_size| member variable has the final overall image size yet.
     bool m_sizeAvailable; // Whether or not we can obtain the size of the first image frame yet from ImageIO.

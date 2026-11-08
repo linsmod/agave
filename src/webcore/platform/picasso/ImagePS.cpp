@@ -101,7 +101,6 @@ static bool draw_scaled_image(GraphicsContext* context, NativeImagePtr imgref,
 {
     if (!context || !imgref || !imgref->source || !imgref->source->initialized())
         return false;
-
     /* bitblt copies pixels, it does not blend, so alpha sources must not use
      * it. Same reason the 1:1 fast path below checks imgref->transparent. */
     if (imgref->transparent || op != CompositeSourceOver)
@@ -111,7 +110,7 @@ static bool draw_scaled_image(GraphicsContext* context, NativeImagePtr imgref,
         return false;
 
     {
-        PixelsBuffer* buffer = imgref->source->decoder()->frameBufferAtIndex(imgref->index);
+        PixelsBuffer* buffer = imgref->source->frameBufferAtIndex(imgref->index);
 
         if (!buffer || !buffer->bytes().data() || buffer->status() == PixelsBuffer::FrameEmpty)
             return false;
@@ -154,6 +153,31 @@ static bool draw_scaled_image(GraphicsContext* context, NativeImagePtr imgref,
 
         {
             const unsigned* s = (const unsigned*)buffer->bytes().data();
+            /* Only the rows that are decoded so far are sampled: a partial
+             * frame (per-paint decode budget) has the rest zeroed, and reading
+             * them would cost the same as a full pass while painting nothing. */
+            const int decodedRows = (int)buffer->height();
+            /* Box-filter samples per destination pixel. The exact box is
+             * (sw/dw)x(sh/dh) taps - 100 for a 4000px JPEG shown in 400px - and
+             * costs ~85ms on a 12MP source. Partial frames use a very cheap
+             * box (2 taps/axis: they are visibly filling in anyway); the final
+             * frame uses a denser one, so what stays on screen looks like the
+             * exact filter at a fraction of the cost. AGB_IMG_SAMPLE_MAX sets
+             * the final cap (0 = exact, for pixel-reference screenshots). */
+            static int maxTaps = -1;
+            int stepMax;
+
+            if (maxTaps < 0) {
+                const char* value = getenv("AGB_IMG_SAMPLE_MAX");
+
+                maxTaps = value ? atoi(value) : 4;
+                if (maxTaps < 0)
+                    maxTaps = 0;
+            }
+            if (buffer->status() == PixelsBuffer::FrameComplete)
+                stepMax = maxTaps;
+            else
+                stepMax = (maxTaps == 0 || maxTaps > 2) ? 2 : maxTaps;
             int y;
 
             for (y = 0; y < dh; ++y) {
@@ -165,6 +189,13 @@ static bool draw_scaled_image(GraphicsContext* context, NativeImagePtr imgref,
                     y1 = y0 + 1;
                 if (y1 > sy + sh)
                     y1 = sy + sh;
+                if (y0 >= decodedRows)
+                    continue; /* not decoded yet */
+                if (y1 > decodedRows)
+                    y1 = decodedRows;
+
+                /* Subsample the source band instead of averaging all of it. */
+                int stepY = (stepMax > 0 && y1 - y0 > stepMax) ? (y1 - y0) / stepMax : 1;
 
                 for (x = 0; x < dw; ++x) {
                     int x0 = sx + (x * sw) / dw;
@@ -177,14 +208,20 @@ static bool draw_scaled_image(GraphicsContext* context, NativeImagePtr imgref,
                     if (x1 > sx + sw)
                         x1 = sx + sw;
 
+                    /* Subsample the box instead of averaging every pixel it
+                     * covers (see stepY above). Hoisted out of the row loop:
+                     * an integer division per destination pixel per row is
+                     * measurable on a 400x300 draw. */
+                    int stepX = (stepMax > 0 && x1 - x0 > stepMax) ? (x1 - x0) / stepMax : 1;
+
                     /* Box filter: average the source pixels this destination
                      * pixel covers. The buffer is premultiplied BGRA, so the
                      * four byte lanes can be averaged independently. */
-                    for (j = y0; j < y1; ++j) {
+                    for (j = y0; j < y1; j += stepY) {
                         const unsigned* row = s + (size_t)j * imgW;
                         int i;
 
-                        for (i = x0; i < x1; ++i) {
+                        for (i = x0; i < x1; i += stepX) {
                             unsigned p = row[i];
 
                             acc0 += p & 0xff;
@@ -198,8 +235,15 @@ static bool draw_scaled_image(GraphicsContext* context, NativeImagePtr imgref,
                     if (!n)
                         n = 1;
 
-                    pixels[(size_t)y * dw + x] = ((acc3 / n) << 24) | ((acc2 / n) << 16)
-                                               | ((acc1 / n) << 8) | (acc0 / n);
+                    /* One division per pixel instead of four: scale is 16.16
+                     * fixed point of 1/n, applied with a shift. */
+                    unsigned scale = 0x10000u / n;
+                    unsigned a0 = (acc0 * scale) >> 16;
+                    unsigned a1 = (acc1 * scale) >> 16;
+                    unsigned a2 = (acc2 * scale) >> 16;
+                    unsigned a3 = (acc3 * scale) >> 16;
+
+                    pixels[(size_t)y * dw + x] = (a3 << 24) | (a2 << 16) | (a1 << 8) | a0;
                 }
             }
         }
@@ -234,7 +278,10 @@ static ps_image* build_image(NativeImagePtr imgref){
 	if (!imgref->source->initialized())
 		return 0;
 
-    PixelsBuffer* buffer = imgref->source->decoder()->frameBufferAtIndex(imgref->index);
+    PixelsBuffer* buffer = imgref->source->frameBufferAtIndex(imgref->index);
+    if (!buffer || !buffer->bytes().data())
+        return 0;
+
 	ps_image* img = ps_image_create_with_data(buffer->bytes().data(), pixelFormat(),
 												imgref->width, imgref->height, imgref->pitch);
 
@@ -303,14 +350,21 @@ void BitmapImage::draw(GraphicsContext* context, const FloatRect& dst, const Flo
 	startAnimation();
 
     NativeImagePtr imgref = nativeImageForCurrentFrame();
-	if (!imgref)
+	if (!imgref) {
+        /* Nothing to draw yet, but the decoder may still owe rows (the per-paint
+         * budget stopped it): keep the progression alive. */
+        if (m_source.frameHasMoreWork())
+            requestFrameProgress();
 		return;
+    }
 
     /* A scaled draw must not go through picasso's image-fill sampler (see
      * draw_scaled_image); scale the pixels here and blit. */
     if ((dst.size() != src.size()) && draw_scaled_image(context, imgref, dst, src, op)) {
         if (imageObserver())
             imageObserver()->didDraw(this);
+        if (m_source.frameHasMoreWork())
+            requestFrameProgress();
         return;
     }
 
@@ -342,6 +396,11 @@ void BitmapImage::draw(GraphicsContext* context, const FloatRect& dst, const Flo
 
 	if (imageObserver())
 		imageObserver()->didDraw(this);
+
+    /* The frame may still be missing rows (budget): ask for another paint so the
+     * next slice happens on the next frame, not inside this one. */
+    if (m_source.frameHasMoreWork())
+            requestFrameProgress();
 }
 
 void BitmapImage::checkForSolidColor()

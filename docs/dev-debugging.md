@@ -210,7 +210,11 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
 | 事件派发链 | `AGB_EVT_TRACE=1` | 每次派发沿冒泡链打印 `[evt-trace] <type> node=<ptr> listeners=<n>`：看某个监听器到底在不在链上、有没有被调用（R45 就是靠它确认 React 的委托监听器确实执行了） |
 | 崩溃 | `AGB_TRACE_CRASH=1` | 记录最近 256 条内部 trace（崩溃后能回看走到哪） |
 | 渲染树/层树 | `AGB_LAYER_TRACE=1` | 每层出生/挂接/摘链/释放各打一行（`[lay] birth id=… kind=… why=…`、`LINK`、`UNLINK`、`free`）。Debug 构建里 `RenderLayer::destroy()` 发现层还挂在链上时**无条件**打 `[lay] DESTROY-WHILE-LINKED`（带 id/kind/why/parent/first）——看到它基本就是层树拆除的 use-after-free（R134），配 `tools/pages/fuzz_layer.html` 复现 |
-| 性能 | `AGB_PROFILE=1` / `AGB_PERF_LOG=1` | RIP 采样直方图（退出时 dump `[profjs]`，用 `tools/cdb_stack.ps1 -Symbolize` 前先把 `module+0x` 聚合成 `#NN` 行）/ 帧耗时（layout+paint > 100ms 才打，**带 `rect=WxH@x,y`**：脏矩形等于视口 = 正常，等于整篇文档 = 失效路径在放大重绘，见 R135） |
+| 图片解码 | `AGB_IMG_DECODE_MS=12` | 每帧（一次 paint）所有图片共享的解码时间预算，默认 **12ms**；`0` = 不限（旧行为，一帧解完整张图）。超出的行留到后续帧，图像逐行出现（R136） |
+| 图片解码 | `AGB_IMG_DECODE_ROWS=256` | 单次 `frameBufferAtIndex` 的行上限（JPEG 按行；PNG 按 64KB 字节块计时间预算）。与 `AGB_IMG_DECODE_MS` 共同决定切片粒度 |
+| 图片解码 | `AGB_IMG_SAMPLE_MAX=4` | 缩放绘制的盒式滤波每轴采样上限（大图缩小时精确盒=100 taps/像素）。**完整帧**用这个值，未完成帧固定 2；`0` = 精确盒（参考截图/像素对拍用） |
+| 图片解码 | `[perf] ... decode=Nms` | `AGB_PERF_LOG=1` 时 `[perf]` 行里的 `decode=` 是本帧花在 libjpeg/libpng 里的时间；一帧只要解过码就会打（渐进解码会连续出现多帧） |
+| 性能 | `AGB_PROFILE=1` / `AGB_PERF_LOG=1` | RIP 采样直方图（退出时 dump `[profjs]`，用 `tools/cdb_stack.ps1 -Symbolize` 前先把 `module+0x` 聚合成 `#NN` 行）/ 帧耗时（layout+paint > 100ms 才打，**带 `rect=WxH@x,y` 与 `decode=`**：脏矩形等于视口 = 正常，等于整篇文档 = 失效路径在放大重绘（R135），`decode=` 接近 `paint=` 时是图片解码跑在 paint 里（[design-async-image-decode.md](design-async-image-decode.md)）） |
 | 性能 | `AGB_LAYOUT_DEBUG=1` | 每 5 次 layout 打 `[layout] calls= total= ms`：区分"真的在反复布局"和"只是在重绘"。整页 layout 在长文档上是 60–100ms 量级（R135） |
 | 性能 | 页面内 rAF 计时 | 探针里跑 `debug/fps_paint.js` 那种脚本（每帧改一个内联样式 + 数 rAF）能量出"每帧 JS+样式+布局+绘制"的真实帧率；只数 rAF 不改样式会把布局/绘制全跳过，数字虚高 |
 | 性能 | `AGB_PUMP_BREAKDOWN=1` | 每帧 `pumpAsyncRequests()` 分段计时（`[pumpbd] xhr=/module=/arrived=/vm=`，单帧 >2ms 才打）：`vm=` 大 = `antb_pump` 里的页面脚本/React 调度器；`xhr=` 大 = XHR 回调；用于区分"网络慢"和"JS 执行慢" |

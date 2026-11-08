@@ -28,6 +28,7 @@
 
 #include "config.h"
 #include "IntRect.h"
+#include "ImageDecodeStats.h"
 #include "ImageSource.h"
 #include <wtf/Vector.h>
 #include "PixelArray.h"
@@ -129,8 +130,26 @@ private:
 class ImageDecoder
 {
 public:
-    ImageDecoder() :m_sizeAvailable(false), m_failed(false) {}
+    ImageDecoder()
+        : m_sizeAvailable(false), m_failed(false), m_moreWork(false),
+          m_budgetRows(0), m_budgetDeadline(0.0)
+    {}
     virtual ~ImageDecoder() {}
+
+    /* One frameBufferAtIndex() call may not decode the whole frame: paint calls
+     * it, and a 12MP JPEG is ~460ms of libjpeg. A budget bounds the work per
+     * call; the frame stays FramePartial, hasMoreWork() says "call again", and
+     * the image is finished over the following frames (see
+     * docs/design-async-image-decode.md).
+     *
+     * maxRows <= 0   : no row limit
+     * deadline <= 0  : no time limit (i.e. decode everything this call)
+     * Both limits are advisory per decoder; JPEG/PNG honour both. */
+    void setDecodeBudget(int maxRows, double deadline) { m_budgetRows = maxRows; m_budgetDeadline = deadline; }
+
+    /* True when this decoder still has rows/bytes to produce for the frame that
+     * is currently in m_frameBufferCache: the caller should come back. */
+    bool hasMoreWork() const { return m_moreWork; }
 
     // All specific decoder plugins must do something with the data they are given.
     virtual void setData(const Vector<char>& data, bool allDataReceived) { m_data = data; }
@@ -161,11 +180,30 @@ public:
     void setFailed() { m_failed = true; }
 
 protected:
+    /* Implemented by the decoders' row loops: true when the budget for this
+     * call is used up, so the loop must stop and leave the rest for the next
+     * call. rowsDone is how many rows this call produced so far. */
+    bool budgetExhausted(int rowsDone) const
+    {
+        if (m_budgetRows > 0 && rowsDone >= m_budgetRows)
+            return true;
+        if (m_budgetDeadline > 0.0 && imageDecodeStatsNow() >= m_budgetDeadline)
+            return true;
+        return false;
+    }
+
+    void setMoreWork(bool more) { m_moreWork = more; }
+
     Vector<char> m_data; // The encoded data.
     Vector<PixelsBuffer> m_frameBufferCache;
     bool m_sizeAvailable;
     mutable bool m_failed;
     IntSize m_size;
+
+private:
+    bool m_moreWork;
+    int m_budgetRows;
+    double m_budgetDeadline;
 };
 
 }

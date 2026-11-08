@@ -31,6 +31,7 @@
 | `run_script_mode_tests.ps1` | classic script 语义（顶层 `var`/`function` 进 `window`，R66）+ 热点循环性能 + `document.readyState`/`currentScript` | 无（Chrome 数值为注释里的基准） | `ALL SCRIPT MODE CHECKS PASSED` |
 | `run_realm_tests.ps1` | 每 frame 一个 realm（`design-per-frame-realm.md`）：先编译 `tools/ant_realm_probe.c` 直接测桥（一 isolate 三 realm），再走 iframe 页面 | 本机编译器（脚本自己编 `ant_realm_probe.exe`） | `ALL REALM CHECKS PASSED` |
 | `run_sticky_tests.ps1` | `position:sticky`：视口/内层滚动容器/containing block 边界、命中跟随（R82），几何 + 像素 | 无（期望值来自 Chrome） | `STICKY=PASS` |
+| `run_image_tests.ps1` | 图片解码预算（R136）：切片解码与一次性解码**逐字节同像素**（JPEG + PNG）、大图不再单帧停摆（paint 上限 / rAF gap）、`AGB_IMG_DECODE_MS=0` 恢复旧行为、缩放采样开关有效 | 无（脚本自己用 System.Drawing 生成 4000×3000 JPEG / 3000×2000 PNG 到 `build-zig-native/img_test`） | `IMAGE=PASS` |
 | `run_media_tests.ps1` | 媒体元素 API/几何/传输（play → timeupdate → ended）；有 ffmpeg 走真解码，没有则内部 ticker | 无（ffmpeg 可选） | `MEDIA=PASS` |
 | `run_media_real_tests.ps1` | 真解码回放：`currentTime` 走墙钟、暂停/续播、seek、`ended`、画面与 ffmpeg 同位置解码一致 | ffmpeg（缺失则跳过像素项）、网络（远程样片；`-SkipRemote` 可关） | `MEDIA-REAL=PASS (n skipped)` |
 | `run_site_smoke.ps1` | 真实站点冒烟：deepseek / baidu / vqq 的加载、JS 执行、DOM 规模（vqq 带 `AGB_GC_OFF=1`，见 R68） | **网络** | `ALL SITE SMOKE PASSED`；每站打印 `all=元素数` |
@@ -42,6 +43,7 @@
 |---|---|
 | 渲染 / 布局 / CSS 解析 / 字体度量 | `run_layout_tests`（几何 + 像素全组）、`run_site_smoke` |
 | 命中测试 / layer / 绘制裁剪 / z-order | `run_layout_tests` 的像素组、`run_sticky_tests`、`run_inspector_tests` |
+| 图片解码 / 缩放绘制 / 图片在页面里的渐进出现 | `run_image_tests`、`run_layout_tests`（含图片的像素组）、`run_sticky_tests` |
 | DOM / JS 绑定 / 事件 / 生命周期 | `run_script_mode_tests`、`run_realm_tests`、`run_xhr_tests`、`run_jit_loop_tests` |
 | 导航 / 加载器 / 重定向 | `run_nav_tests`、`run_site_smoke` |
 | 输入（键盘 / IME / 焦点） | `run_typing_tests` |

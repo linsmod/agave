@@ -108,7 +108,7 @@ public:
         m_readOffset = 0;
     }
 
-    void decode(const Vector<char>& data, bool sizeOnly)
+    void decode(const Vector<char>& data, bool sizeOnly, unsigned maxBytes = 0)
     {
         m_decodingSizeOnly = sizeOnly;
 
@@ -123,9 +123,17 @@ public:
         // offset after png_process_data returns.
         unsigned offset = m_readOffset;
         unsigned remaining = data.size() - m_readOffset;
-        m_readOffset = data.size();
+        /* In the full-decode pass the caller may hand us a prefix of the
+         * remaining bytes (a per-paint budget): libpng's progressive reader
+         * buffers whatever it is given, so the next call simply continues at
+         * the byte after this slice. */
+        if (maxBytes && remaining > maxBytes)
+            remaining = maxBytes;
+        m_readOffset = offset + remaining;
         png_process_data(m_png, m_info, (png_bytep)(data.data()) + offset, remaining);
     }
+
+    unsigned readOffset() const { return m_readOffset; }
 
     bool decodingSizeOnly() const { return m_decodingSizeOnly; }
     png_structp pngPtr() const { return m_png; }
@@ -207,10 +215,38 @@ PixelsBuffer* PNGImageDecoder::frameBufferAtIndex(size_t index)
 // Feed data to the PNG reader.
 void PNGImageDecoder::decode(bool sizeOnly)
 {
-    if (m_failed)
+    if (m_failed || !m_reader)
         return;
 
-    m_reader->decode(m_data, sizeOnly);
+    if (sizeOnly) {
+        /* Header pass: libpng pauses itself as soon as the size is known, so
+         * there is nothing to budget here. */
+        m_reader->decode(m_data, sizeOnly);
+    } else {
+        /* Paint calls this, so feed the file in chunks and stop when the frame
+         * budget is used up: libpng's progressive reader keeps its state, so
+         * the next call continues from readOffset. A whole 12MP PNG inflated in
+         * one call is the same stall as a JPEG. */
+        const unsigned chunkBytes = 64 * 1024;
+        unsigned total = m_data.size();
+
+        for (;;) {
+            unsigned before = m_reader->readOffset();
+
+            m_reader->decode(m_data, false, chunkBytes);
+
+            if (m_complete || m_failed)
+                break;
+            if (m_reader->readOffset() <= before)
+                break; /* no progress: libpng is waiting for more bytes */
+            if (m_reader->readOffset() >= total)
+                break; /* everything fed, frame still partial (truncated load) */
+            if (budgetExhausted(0))
+                break;
+        }
+
+        setMoreWork(!m_complete && !m_failed && m_reader && m_reader->readOffset() < total);
+    }
     
     /* Cleanup happens here, after png_process_data() has returned. Doing it in
      * pngComplete() was a use-after-free: that callback runs *inside*
@@ -221,6 +257,7 @@ void PNGImageDecoder::decode(bool sizeOnly)
         delete m_reader;
         m_reader = 0;
         m_data.clear();
+        setMoreWork(false);
     }
 }
 

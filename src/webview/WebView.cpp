@@ -26,6 +26,7 @@
 #include "Editor.h"
 #include "EventHandler.h"
 #include "GraphicsContext.h"
+#include "ImageDecodeStats.h"
 #include "Settings.h"
 #include "ContextMenu.h"
 #include "SchemeExtension.h"
@@ -290,6 +291,11 @@ void WebView::paintView(void)
 
 		QueryPerformanceFrequency(&freq);
 		QueryPerformanceCounter(&t0);
+		/* The decoders run inside paint (RenderImage -> BitmapImage::draw ->
+		 * ImageSource::createFrameAtIndex), so account for them separately:
+		 * otherwise a 460ms JPEG decode is reported as "paint=467ms" and looks
+		 * like a paint-traversal bug. See ImageDecodeStats.h. */
+		imageDecodeStatsBeginFrame();
 
 		d->m_frameView->layoutIfNeededRecursive();
 
@@ -302,26 +308,36 @@ void WebView::paintView(void)
 			d->m_drawRect = IntRect(0, 0, d->m_width, d->m_height);
 		//last draw update rect
 		IntRect painted = d->m_drawRect;
+		/* Take the rect before painting, not after: a paint can invalidate more
+		 * (a partially decoded image asks for the next slice), and that request
+		 * must survive into the next frame instead of being cleared here. */
+		d->m_drawRect = IntRect(0, 0, 0, 0);
 		if (!painted.isEmpty()) {
 			GraphicsContext gc(d->m_context);
 			gc.save();
 			gc.clip(painted);
 			d->m_frameView->paint(&gc, painted);
 			gc.restore();
-			d->m_drawRect = IntRect(0, 0, 0, 0); //clear the invalidate Rect 
 		}
 		QueryPerformanceCounter(&t2);
 
 		layoutMs = (double)(t1.QuadPart - t0.QuadPart) * 1000.0 / (double)freq.QuadPart;
 		paintMs  = (double)(t2.QuadPart - t1.QuadPart) * 1000.0 / (double)freq.QuadPart;
 
+		double decodeMs = imageDecodeStatsPeekMs();
+
+		imageDecodeStatsEndFrame();
+
 		/* The painted rect is part of the record: "paint=900ms" on a viewport
 		 * is a different bug from "paint=900ms" on a 20000px document rect
-		 * (one long page invalidation repaints everything). */
-		if (getenv("AGB_PERF_LOG") && (layoutMs + paintMs) > 100.0)
-			fprintf(stderr, "[perf] layout=%.0fms paint=%.0fms total=%.0fms rect=%dx%d@%d,%d\n",
+		 * (one long page invalidation repaints everything). decode= is the part
+		 * of paint spent inside libjpeg/libpng/GIF; a frame that decoded
+		 * anything is logged too, since progressive decoding deliberately
+		 * spreads one image over many frames. */
+		if (getenv("AGB_PERF_LOG") && ((layoutMs + paintMs) > 100.0 || decodeMs > 0.5))
+			fprintf(stderr, "[perf] layout=%.0fms paint=%.0fms total=%.0fms rect=%dx%d@%d,%d decode=%.1fms\n",
 			        layoutMs, paintMs, layoutMs + paintMs,
-			        painted.width(), painted.height(), painted.x(), painted.y());
+			        painted.width(), painted.height(), painted.x(), painted.y(), decodeMs);
 	}
 
 	/* An open <select> menu is composited on top of the page, into this view's

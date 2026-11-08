@@ -20,6 +20,7 @@
 #include "CookieManager.h"
 #include "CacheManager.h"
 #include "GraphicsContext.h"
+#include "ImageDecodeStats.h"
 #include "PlatformScrollBar.h"
 #include "PopupMenu.h"
 #include "WebView.h"
@@ -130,6 +131,7 @@ MC_STATUS macross_view_update(MaCrossView* view, const MC_RECT* rc)
 		LARGE_INTEGER freq, t0, t1;
 		double paintMs = 0.0;
 		double jsMs = 0.0;
+		double decodeMs = 0.0;
 
 		QueryPerformanceFrequency(&freq);
 		QueryPerformanceCounter(&t0);
@@ -175,8 +177,13 @@ MC_STATUS macross_view_update(MaCrossView* view, const MC_RECT* rc)
 
 		paintMs = (double)(t1.QuadPart - t0.QuadPart) * 1000.0 / (double)freq.QuadPart;
 
+		/* Decode time is a subset of paint (see ImageDecodeStats.h): reported
+		 * here too so the macross-level "update" line separates
+		 * "the page is slow" from "one image decoded synchronously". */
+		decodeMs = WebCore::imageDecodeStatsPeekMs();
+
 		if (getenv("AGB_PERF_LOG") && (paintMs + jsMs) > 100.0)
-			fprintf(stderr, "[perf] update paint=%.0fms js=%.0fms\n", paintMs, jsMs);
+			fprintf(stderr, "[perf] update paint=%.0fms js=%.0fms decode=%.0fms\n", paintMs, jsMs, decodeMs);
 	}
 
 	return MC_STATUS_SUCCESS;

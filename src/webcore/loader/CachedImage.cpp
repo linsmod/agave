@@ -307,4 +307,13 @@ void CachedImage::animationAdvanced(const Image* image)
         notifyObservers();
 }
 
+/* The paint that just ran only decoded a slice of this frame (per-paint decode
+ * budget). Ask the renderers to repaint, which puts the next slice into the
+ * next frame; BitmapImage owns the pacing (a one-shot timer). */
+void CachedImage::imageFrameProgress(const Image* image)
+{
+    if (image == m_image)
+        notifyObservers();
+}
+
 } //namespace WebCore

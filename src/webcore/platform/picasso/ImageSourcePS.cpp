@@ -9,6 +9,7 @@
 #include "config.h"
 
 #include "ImageDecoder.h"
+#include "ImageDecodeStats.h"
 #include "ImageSource.h"
 #include "SharedBuffer.h"
 #include "Debug.h"
@@ -44,6 +45,82 @@ namespace WebCore {
 
 extern ps_color_format pixelFormat(void);
 extern int pixelPerBytes(void);
+
+/* Every decoder entry point below is lazy: the first call for a frame decodes
+ * it, and a large JPEG/PNG used to decode all of its rows inside that one call.
+ * Time them so [perf] can say "paint=467ms, decode=460ms" instead of blaming
+ * the paint traversal. See ImageDecodeStats.h. */
+static PixelsBuffer* timedFrameBufferAtIndex(ImageDecoder* decoder, size_t index)
+{
+    double began = imageDecodeStatsNow();
+    PixelsBuffer* buffer = decoder->frameBufferAtIndex(index);
+
+    imageDecodeStatsAddMs((imageDecodeStatsNow() - began) * 1000.0);
+    return buffer;
+}
+
+/* How much decoding one paint may do, across all images.
+ *
+ * AGB_IMG_DECODE_MS   0 = unlimited (old behaviour), default 12ms/frame: the
+ *                     rest of the rows are decoded on later frames while the
+ *                     page keeps running JS/input (R136).
+ * AGB_IMG_DECODE_ROWS row cap for one decoder call (default 256). */
+static double imageDecodeBudgetMs()
+{
+    static double ms = -1.0;
+
+    if (ms < 0.0) {
+        const char* value = getenv("AGB_IMG_DECODE_MS");
+
+        ms = value ? atof(value) : 12.0;
+        if (ms < 0.0)
+            ms = 0.0;
+    }
+    return ms;
+}
+
+static int imageDecodeBudgetRows()
+{
+    static int rows = -1;
+
+    if (rows < 0) {
+        const char* value = getenv("AGB_IMG_DECODE_ROWS");
+
+        rows = value ? atoi(value) : 256;
+        if (rows < 0)
+            rows = 0;
+    }
+    return rows;
+}
+
+/* Applies this frame's remaining decode budget to the decoder. Every public
+ * ImageSource entry that can decode goes through here, so the budget covers
+ * scaled draws and pattern fills too. */
+static void applyDecodeBudget(ImageDecoder* decoder)
+{
+    double budgetMs = imageDecodeBudgetMs();
+    double deadline = 0.0;
+
+    if (budgetMs <= 0.0) {
+        /* AGB_IMG_DECODE_MS=0 means "no budget at all" (the pre-R136 behaviour,
+         * used for reference screenshots and A/B runs): no time limit and no
+         * row cap, so one call decodes the whole frame. */
+        decoder->setDecodeBudget(0, 0.0);
+        return;
+    }
+
+    double left = budgetMs;
+
+    /* Inside paint every image shares the frame's budget; outside it (JS
+     * decode(), an animation timer) the call gets a fresh one. */
+    if (imageDecodeStatsInFrame()) {
+        left -= imageDecodeStatsPeekMs();
+        if (left < 0.0)
+            left = 0.0;
+    }
+    deadline = imageDecodeStatsNow() + left / 1000.0;
+    decoder->setDecodeBudget(imageDecodeBudgetRows(), deadline);
+}
 
 ImageDecoder* createDecoder(const Vector<char>& data)
 {
@@ -183,6 +260,20 @@ size_t ImageSource::frameCount() const
     return m_decoder ? m_decoder->frameCount() : 0;
 }
 
+PixelsBuffer* ImageSource::frameBufferAtIndex(size_t index)
+{
+    if (!m_decoder)
+        return 0;
+
+    applyDecodeBudget(m_decoder);
+    return timedFrameBufferAtIndex(m_decoder, index);
+}
+
+bool ImageSource::frameHasMoreWork() const
+{
+    return m_decoder && m_decoder->hasMoreWork();
+}
+
 NativeImagePtr ImageSource::createFrameAtIndex(size_t index)
 {
     if (!m_decoder || m_decoder->failed())
@@ -207,7 +298,7 @@ NativeImagePtr ImageSource::createFrameAtIndex(size_t index)
         }
     }
 
-    PixelsBuffer* buffer = m_decoder->frameBufferAtIndex(index);
+    PixelsBuffer* buffer = frameBufferAtIndex(index);
 
     /* [cache]: which frame a paint is about to use. FramePartial with fewer rows
      * than the image means the paint is drawing a half-decoded frame;
@@ -248,7 +339,7 @@ float ImageSource::frameDurationAtIndex(size_t index)
     if (!m_decoder)
         return 0;
 
-    PixelsBuffer* buffer = m_decoder->frameBufferAtIndex(index);
+    PixelsBuffer* buffer = frameBufferAtIndex(index);
     if (!buffer || buffer->status() == PixelsBuffer::FrameEmpty)
         return 0;
 
@@ -260,7 +351,7 @@ bool ImageSource::frameHasAlphaAtIndex(size_t index)
     if (!m_decoder || !m_decoder->supportsAlpha())
         return false;
 
-    PixelsBuffer* buffer = m_decoder->frameBufferAtIndex(index);
+    PixelsBuffer* buffer = frameBufferAtIndex(index);
     if (!buffer || buffer->status() == PixelsBuffer::FrameEmpty)
         return false;
 
@@ -272,7 +363,7 @@ bool ImageSource::frameIsCompleteAtIndex(size_t index)
     if (!m_decoder)
         return false;
 
-    PixelsBuffer* buffer = m_decoder->frameBufferAtIndex(index);
+    PixelsBuffer* buffer = frameBufferAtIndex(index);
     return buffer && buffer->status() == PixelsBuffer::FrameComplete;
 }
 

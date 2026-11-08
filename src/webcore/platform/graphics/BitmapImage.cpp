@@ -56,6 +56,7 @@ BitmapImage::BitmapImage(ImageObserver* observer)
     , m_animatingImageType(true)
     , m_animationFinished(false)
     , m_allDataReceived(false)
+    , m_frameProgressRequests(0)
     , m_haveSize(false)
     , m_sizeAvailable(false)
     , m_decodedSize(0)
@@ -71,6 +72,10 @@ BitmapImage::~BitmapImage()
 
 void BitmapImage::destroyDecodedData(bool incremental)
 {
+    /* A new decoder is about to be built (or the frames dropped): repaints that
+     * were queued for the old partial frame are meaningless now. */
+    resetFrameProgress();
+
     // Destroy the cached images and release them.
     if (m_frames.size()) {
         int sizeChange = 0;
@@ -242,8 +247,7 @@ void BitmapImage::resetAnimation()
         destroyDecodedData();
 }
 
-void BitmapImage::advanceAnimation(Timer<BitmapImage>* timer)
-{
+void BitmapImage::advanceAnimation(Timer<BitmapImage>* timer){
     // Stop the animation.
     stopAnimation();
     
@@ -281,6 +285,31 @@ void BitmapImage::advanceAnimation(Timer<BitmapImage>* timer)
     // to force a request for the next frame via startAnimation().  This allows images that move offscreen while
     // scrolling to stop animating (thus saving memory from additional decoded frames and
     // CPU time spent doing the decoding).
+}
+
+/* The frame was drawn with rows still undecoded: the decoder stopped at the
+ * per-paint budget (ImageSource::frameBufferAtIndex). Ask the observer to
+ * repaint the image, which puts the next slice into the next frame - the same
+ * "only while it is actually drawn" rule as animation, so an image that
+ * scrolls out of view simply stops decoding. The request counter guards
+ * against a decoder that keeps claiming work without producing rows. */
+void BitmapImage::requestFrameProgress()
+{
+    if (!imageObserver())
+        return;
+
+    /* A 16384-row image at 64 rows/frame needs 256 slices; allow plenty, but
+     * stop a decoder that is stuck (e.g. truncated data that never advances). */
+    if (m_frameProgressRequests > 4096)
+        return;
+
+    m_frameProgressRequests++;
+    imageObserver()->imageFrameProgress(this);
+}
+
+void BitmapImage::resetFrameProgress()
+{
+    m_frameProgressRequests = 0;
 }
 
 }

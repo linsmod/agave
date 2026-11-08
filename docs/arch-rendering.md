@@ -232,6 +232,14 @@ DOM attach（Element::attach / Text::attach）
   `PopupMenu::windowRect()` 区域先填白，再 `translate` 到菜单原点画条目，最后描 1px 灰边。
   菜单不是独立窗口（宿主没有 `cb_create_popup_menu`），所以它同时出现在无头截图里；
   输入也由 `WebView` 优先路由给它。设计与限制见 [design-select-popup.md](design-select-popup.md)。
+- **图片解码是 paint 的一部分**（`RenderImage::paint → BitmapImage::draw →
+  ImageSource::frameBufferAtIndex → ImageDecoder`），但按**每帧预算**切片：`AGB_IMG_DECODE_MS`
+  （默认 12ms，所有图共享）× `AGB_IMG_DECODE_ROWS`，JPEG 按行、PNG 按 64KB 块，超出的行留在
+  后续帧（部分帧 alpha=0 的行画出来就是空白，未定义 `IMAGE_DISPLAY_ONCE`）。续解靠
+  `BitmapImage::requestFrameProgress()` → 观察者重绘 → 下一帧再解一片；图滚出视口链条自然停。
+  缩放绘制只采已解出的行，并按 `AGB_IMG_SAMPLE_MAX` 限制盒式滤波的 taps（完整帧 4、未完成帧 2，
+  0=精确）。`[perf]` 的 `decode=` 是这部分时间（R136，设计见
+  [design-async-image-decode.md](design-async-image-decode.md)；L2 工作线程、L3 按显示尺寸解码待做）。
 - **脏矩形永远是视口的子集**：`WebView::updateRect()` 把引擎给的失效矩形与
   `(0,0,width,height)` 求交（surface 就只有视口那么大）。长文档会失效整篇高度
   （css3test：`1096x21593`），放大到 surface 上就是几十倍的无用工作（R135：一帧 paint 933ms → 70ms）。

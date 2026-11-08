@@ -256,7 +256,12 @@ public:
       
                     if (!m_decoder->outputScanlines())
                         return true; /* I/O suspension */
-      
+
+                    /* Budget ran out mid-image: stay in this state, the next
+                     * call resumes the scanline loop (hasMoreWork is true). */
+                    if (m_decoder->hasMoreWork())
+                        return true;
+
                     /* If we've completed image output ... */
                     assert(m_info.output_scanline == m_info.output_height);
                     m_state = JPEG_DONE;
@@ -298,6 +303,11 @@ public:
                                 m_info.output_scanline = 0xffffff;
                             return true; /* I/O suspension */
                         }
+
+                        /* Same as the sequential path: finish this scan on the
+                         * next call instead of blowing the paint budget. */
+                        if (m_decoder->hasMoreWork())
+                            return true;
 
                         if (m_info.output_scanline == m_info.output_height) {
                             if (!jpeg_finish_output(&m_info))
@@ -484,13 +494,25 @@ bool JPEGImageDecoder::outputScanlines()
     JSAMPARRAY samples = m_reader->samples();
 
     unsigned dst = 0;  
+    /* Bounded row loop: paint calls us from inside its traversal, so a whole
+     * 12MP image (hundreds of ms of libjpeg) must not be decoded in one go.
+     * When the budget runs out we return with the frame still FramePartial and
+     * hasMoreWork() true; the next call resumes at output_scanline. */
+    int rowsDone = 0;
     while (info->output_scanline < info->output_height) {
+        if (budgetExhausted(rowsDone)) {
+            setMoreWork(true);
+            return true;
+        }
         /* Request one scanline.  Returns 0 or 1 scanlines. */
         unsigned int curr_sl = info->output_scanline * m_size.width();
-        if (jpeg_read_scanlines(info, samples, 1) != 1)
+        if (jpeg_read_scanlines(info, samples, 1) != 1) {
+            /* Out of input bytes: not "more work now", so the image does not
+             * ask for a repaint until the next data arrival does. */
+            setMoreWork(false);
             return false;
-        JSAMPLE *j1 = samples[0];
-        for (unsigned i = 0; i < info->output_width; ++i) {
+        }
+        JSAMPLE *j1 = samples[0];        for (unsigned i = 0; i < info->output_width; ++i) {
             unsigned r = *j1++;
             unsigned g = *j1++;
             unsigned b = *j1++;
@@ -499,8 +521,10 @@ bool JPEGImageDecoder::outputScanlines()
         }
 
         buffer.ensureHeight(info->output_scanline);
+        rowsDone++;
     }
 
+    setMoreWork(false);
     return true;
 }
 
@@ -512,6 +536,7 @@ void JPEGImageDecoder::jpegComplete()
     // Hand back an appropriately sized buffer, even if the image ended up being empty.
     PixelsBuffer& buffer = m_frameBufferCache[0];
     buffer.setStatus(PixelsBuffer::FrameComplete);
+    setMoreWork(false);
     /* term_source() runs inside the reader's decode(): m_data is what libjpeg
      * is reading from, so it may only be cleared by decode() after the call
      * returns (R62). */

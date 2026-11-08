@@ -38,6 +38,7 @@ class SharedBuffer;
 
 class ImageDecoder;
 class ImageSource;
+class PixelsBuffer;
 
 class ImageRef : Noncopyable
 {
@@ -92,6 +93,17 @@ public:
     size_t frameCount() const;
     
     NativeImagePtr createFrameAtIndex(size_t);
+
+    /* The decoder's pixels for one frame, decoded with this paint's budget
+     * applied (docs/design-async-image-decode.md). Paint code that needs the
+     * raw buffer - ImagePS's scaled draw and pattern fill - must come through
+     * here instead of decoder()->frameBufferAtIndex(), otherwise it skips the
+     * budget and decodes a whole image inside one frame. */
+    PixelsBuffer* frameBufferAtIndex(size_t index);
+
+    /* True while the decoder still owes rows for the frame: the owner should
+     * come back for another slice (BitmapImage re-arms its timer). */
+    bool frameHasMoreWork() const;
     
     float frameDurationAtIndex(size_t);
     bool frameHasAlphaAtIndex(size_t); // Whether or not the frame actually used any alpha.

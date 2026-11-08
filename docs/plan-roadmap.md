@@ -253,6 +253,24 @@
 
 ## P1：机制收敛
 
+### P1-z 图片解码离开 paint（L0–L3，2026-11-08 起；L0+L1 已完成，L2/L3 待做）
+
+- 现状：`RenderImage::paint → BitmapImage::draw → ImageSource::createFrameAtIndex →
+  ImageDecoder::frameBufferAtIndex` 全在引擎线程上，且 JPEG `outputScanlines()` 一次解完整张图。
+  实测 `debug/img_decode_block.html`（4000×3000 JPEG 显示成 400×300）：`[perf] paint=467ms
+  rect=400x300`、页面 rAF `maxgap=100ms` —— 脏矩形很小，时间全在解码里；这段时间 JS/输入/滚动/
+  下一帧全停（UI 线程只是继续 BitBlt 旧 mirror）。
+- **已完成 L0+L1（R136）**：`[perf]` 带 `decode=`；JPEG 行循环/PNG 字节块按每帧预算切片
+  （`AGB_IMG_DECODE_MS`，默认 12ms），部分帧照常绘制、靠重绘续解；缩放绘制只采已解出的行并按
+  预算限制采样（`AGB_IMG_SAMPLE_MAX`）。实测单帧 paint 467ms → **20ms**、rAF gap 100ms →
+  **38ms**、切片与一次性解码逐字节同像素；判据 `tools/run_image_tests.ps1`（IMAGE=PASS）。
+- 待做（设计见 [design-async-image-decode.md](design-async-image-decode.md)）：
+  **L2** `ImageDecodeService` 工作线程（行级发布 + 引擎线程轮询，模式同 `MediaPipeline`），
+  paint 里 `decode=0`；**L3** 按显示尺寸解码（JPEG `scale_denom`，省 4–64× 像素，同时消掉
+  缩放采样和切片重采的 CPU）。L3 是下一个杠杆。
+- 验收：L2 后同页 `decode=0ms` 且反复导航/关窗 50 次无线程泄漏；L3 后大图 `decode` 降到 1/4 以下；
+  `run_image_tests`、`run_layout_tests` 像素组、`fuzz_layer`、deepseek/v.qq smoke 不退化。
+
 ### P1-y SVG 渲染：复活 ksvg2（2026-11-07 起）
 
 - 路线：启用仓库自带的 2008 版 ksvg2（`ENABLE_SVG`），不移植 Blink/miniblink 的 SVG，也不先用第三方

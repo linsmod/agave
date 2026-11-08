@@ -39,6 +39,11 @@ public:
     virtual void decodedSizeChanged(const Image*, size_t delta) = 0;
     virtual void didDraw(const Image*) = 0;
 
+    /* The image was drawn with rows still missing (the decoder works under a
+     * per-paint budget): observers should repaint it so the next frame can
+     * decode another slice. See docs/design-async-image-decode.md. */
+    virtual void imageFrameProgress(const Image*) = 0;
+
     virtual bool shouldPauseAnimation(const Image*) = 0;
     virtual void animationAdvanced(const Image*) = 0;
 };
