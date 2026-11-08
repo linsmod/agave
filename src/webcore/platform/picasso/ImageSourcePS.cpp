@@ -229,6 +229,41 @@ void ImageSource::setData(SharedBuffer* data, bool allDataReceived)
     if (!m_decoder)
         return;
     m_decoder->setData(data->buffer(), allDataReceived);
+    applyScaleHint();
+}
+
+/* L3: keep the decoder's scale hint in sync with the display size. Called
+ * whenever a decoder (re)appears, and from setScaleHint(). */
+void ImageSource::applyScaleHint()
+{
+    if (m_decoder)
+        m_decoder->setScaleHint(m_scaleHint);
+}
+
+bool ImageSource::setScaleHint(const IntSize& displaySize)
+{
+    if (displaySize.width() <= 0 || displaySize.height() <= 0)
+        return false;
+
+    m_scaleHint = displaySize;
+    if (!m_decoder)
+        return false;
+
+    applyScaleHint();
+
+    /* Re-decode only when the frame we already have is smaller than what is
+     * being displayed now (zoom-in/resize): decoding a bigger buffer than the
+     * screen can show wastes work, decoding a smaller one shows upscaled mush.
+     * Never ask for more than the natural size, though: an image displayed
+     * larger than its own pixels would otherwise re-decode on every frame. */
+    const PixelsBuffer* buffer = m_decoder->cachedFrameBuffer(0);
+    IntSize natural = size();
+
+    if (!buffer || buffer->width() == 0)
+        return false; /* nothing decoded yet: the hint is already stored */
+    if (natural.width() > 0 && buffer->width() >= (unsigned)natural.width())
+        return false; /* already full resolution */
+    return buffer->width() < (unsigned)displaySize.width();
 }
 
 bool ImageSource::isSizeAvailable()
@@ -272,6 +307,15 @@ PixelsBuffer* ImageSource::frameBufferAtIndex(size_t index)
 bool ImageSource::frameHasMoreWork() const
 {
     return m_decoder && m_decoder->hasMoreWork();
+}
+
+IntSize ImageSource::decodedFrameSize(size_t index) const
+{
+    const PixelsBuffer* buffer = m_decoder ? m_decoder->cachedFrameBuffer(index) : 0;
+
+    if (!buffer || buffer->width() == 0)
+        return IntSize();
+    return IntSize((int)buffer->width(), (int)buffer->fullHeight());
 }
 
 NativeImagePtr ImageSource::createFrameAtIndex(size_t index)
@@ -321,9 +365,12 @@ NativeImagePtr ImageSource::createFrameAtIndex(size_t index)
     ImageRef* img = new ImageRef;
 	img->source = this;
 	img->index = index;
-	img->width = size().width();
-	img->height = size().height();
-	img->pitch = size().width()*pixelPerBytes();
+	/* Buffer geometry: smaller than natural when the decoder used a scale (L3). */
+	img->width = buffer->width() ? (int)buffer->width() : size().width();
+	img->height = buffer->fullHeight() ? (int)buffer->fullHeight() : size().height();
+	img->naturalWidth = size().width();
+	img->naturalHeight = size().height();
+	img->pitch = img->width * pixelPerBytes();
 
 	if (buffer->hasAlpha()) {
 		if (pixelFormat() != COLOR_FORMAT_BGRA) {

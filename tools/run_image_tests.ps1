@@ -212,10 +212,10 @@ $gapLimit = 70        # was ~100ms (the whole decode landing in one frame)
 $r3 = Run-Probe $timerUrl $null 3000 @{ AGB_PERF_LOG = '1' }
 $perf = Perf-Paints $r3.Log
 $gap = Max-Gap $r3.Log
-if ($perf.Paints.Count -lt 5) {
-    Fail ("decode was not sliced (only {0} decoding frames)" -f $perf.Paints.Count)
+if ($perf.Paints.Count -lt 1) {
+    Fail 'no decoding frame at all'
 } else {
-    Pass ("decode sliced over {0} frames" -f $perf.Paints.Count)
+    Pass ("decode finished in {0} frame(s)" -f $perf.Paints.Count)
 }
 $maxPaint = ($perf.Paints | Measure-Object -Maximum).Maximum
 if ($maxPaint -gt $paintLimit) {
@@ -231,8 +231,22 @@ if ($null -eq $gap) {
     Pass ("rAF gap {0}ms (limit {1}ms)" -f $gap, $gapLimit)
 }
 
-# 3. AGB_IMG_DECODE_MS=0 restores the one-shot path
-$r4 = Run-Probe $timerUrl $null 3000 @{ AGB_PERF_LOG = '1'; AGB_IMG_DECODE_MS = '0' }
+# 2b. L3: decoding at display size must be much cheaper than decoding natural size
+$rScaled = Run-Probe $timerUrl $null 3000 @{ AGB_PERF_LOG = '1' }
+$rNatural = Run-Probe $timerUrl $null 3000 @{ AGB_PERF_LOG = '1'; AGB_IMG_NO_SCALE = '1' }
+$scaledMs = (Perf-Paints $rScaled.Log).Decodes | Measure-Object -Sum
+$naturalMs = (Perf-Paints $rNatural.Log).Decodes | Measure-Object -Sum
+if (-not $scaledMs.Count -or -not $naturalMs.Count) {
+    Fail 'L3: no decode timings'
+} elseif ($scaledMs.Sum -gt $naturalMs.Sum / 3) {
+    Fail ("L3: scaled decode {0:N0}ms is not much cheaper than natural {1:N0}ms" -f $scaledMs.Sum, $naturalMs.Sum)
+} else {
+    Pass ("L3: scaled decode {0:N0}ms vs natural {1:N0}ms" -f $scaledMs.Sum, $naturalMs.Sum)
+}
+
+# 3. AGB_IMG_DECODE_MS=0 restores the one-shot path (with L3 disabled, otherwise
+#    the frame is small enough to be cheap even in one shot)
+$r4 = Run-Probe $timerUrl $null 3000 @{ AGB_PERF_LOG = '1'; AGB_IMG_DECODE_MS = '0'; AGB_IMG_NO_SCALE = '1' }
 $perfOld = Perf-Paints $r4.Log
 $oldMax = 0
 if ($perfOld.Paints.Count) { $oldMax = ($perfOld.Paints | Measure-Object -Maximum).Maximum }

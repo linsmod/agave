@@ -64,6 +64,12 @@
  */
 #undef CHAR_IS_UNSIGNED
 
+/* Reduced-size IDCT (1/2, 1/4, 1/8 output). agave decodes a big JPEG at the
+ * size it is actually displayed (docs/design-async-image-decode.md, L3), and
+ * without this define libjpeg ignores scale_num/scale_denom. The matching
+ * jidctred.c lives next to the other IJG sources in dist/src/jpeg. */
+#define IDCT_SCALING_SUPPORTED
+
 
 /* defines that need not be visible to callers of the IJG library */
 

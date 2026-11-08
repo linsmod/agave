@@ -213,6 +213,8 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
 | 图片解码 | `AGB_IMG_DECODE_MS=12` | 每帧（一次 paint）所有图片共享的解码时间预算，默认 **12ms**；`0` = 不限（旧行为，一帧解完整张图）。超出的行留到后续帧，图像逐行出现（R136） |
 | 图片解码 | `AGB_IMG_DECODE_ROWS=256` | 单次 `frameBufferAtIndex` 的行上限（JPEG 按行；PNG 按 64KB 字节块计时间预算）。与 `AGB_IMG_DECODE_MS` 共同决定切片粒度 |
 | 图片解码 | `AGB_IMG_SAMPLE_MAX=4` | 缩放绘制的盒式滤波每轴采样上限（大图缩小时精确盒=100 taps/像素）。**完整帧**用这个值，未完成帧固定 2；`0` = 精确盒（参考截图/像素对拍用） |
+| 图片解码 | `AGB_IMG_NO_SCALE=1` | 关掉 L3 的"按显示尺寸解码"（JPEG 用 libjpeg IDCT scaling 只解 1/2、1/4、1/8）。参考截图、像素对拍、怀疑缩放解码画质时用（R137） |
+| 图片解码 | `AGB_IMG_SCALE_DEBUG=1` | 打 `[img-scale] jpeg natural=WxH display=WxH denom=N out=WxH`：确认 hint 传到了解码器、libjpeg 真的缩小了输出 |
 | 图片解码 | `[perf] ... decode=Nms` | `AGB_PERF_LOG=1` 时 `[perf]` 行里的 `decode=` 是本帧花在 libjpeg/libpng 里的时间；一帧只要解过码就会打（渐进解码会连续出现多帧） |
 | 性能 | `AGB_PROFILE=1` / `AGB_PERF_LOG=1` | RIP 采样直方图（退出时 dump `[profjs]`，用 `tools/cdb_stack.ps1 -Symbolize` 前先把 `module+0x` 聚合成 `#NN` 行）/ 帧耗时（layout+paint > 100ms 才打，**带 `rect=WxH@x,y` 与 `decode=`**：脏矩形等于视口 = 正常，等于整篇文档 = 失效路径在放大重绘（R135），`decode=` 接近 `paint=` 时是图片解码跑在 paint 里（[design-async-image-decode.md](design-async-image-decode.md)）） |
 | 性能 | `AGB_LAYOUT_DEBUG=1` | 每 5 次 layout 打 `[layout] calls= total= ms`：区分"真的在反复布局"和"只是在重绘"。整页 layout 在长文档上是 60–100ms 量级（R135） |

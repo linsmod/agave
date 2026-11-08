@@ -56,6 +56,7 @@ BitmapImage::BitmapImage(ImageObserver* observer)
     , m_animatingImageType(true)
     , m_animationFinished(false)
     , m_allDataReceived(false)
+    , m_useNaturalDecode(false)
     , m_frameProgressRequests(0)
     , m_haveSize(false)
     , m_sizeAvailable(false)
@@ -130,7 +131,8 @@ void BitmapImage::cacheFrame(size_t index)
         m_frames[index].m_duration = m_source.frameDurationAtIndex(index);
     m_frames[index].m_hasAlpha = m_source.frameHasAlphaAtIndex(index);
     
-    int sizeChange = m_frames[index].m_frame ? m_size.width() * m_size.height() * pixelPerBytes() : 0;
+    int sizeChange = m_frames[index].m_frame
+        ? m_frames[index].m_frame->width * m_frames[index].m_frame->height * pixelPerBytes() : 0;
     if (sizeChange) {
         m_decodedSize += sizeChange;
         if (imageObserver())

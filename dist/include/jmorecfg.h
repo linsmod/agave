@@ -1,4 +1,4 @@
-﻿/*
+/*
  * jmorecfg.h
  *
  * Copyright (C) 1991-1997, Thomas G. Lane.
@@ -355,7 +355,7 @@ typedef unsigned char boolean;
 #define D_PROGRESSIVE_SUPPORTED	    /* Progressive JPEG? (Requires MULTISCAN)*/
 #define SAVE_MARKERS_SUPPORTED	    /* jpeg_save_markers() needed? */
 #define BLOCK_SMOOTHING_SUPPORTED   /* Block smoothing? (Progressive only) */
-#undef  IDCT_SCALING_SUPPORTED	    /* Output rescaling via IDCT? */
+#define IDCT_SCALING_SUPPORTED	    /* Output rescaling via IDCT (agave L3) */
 #undef  UPSAMPLE_SCALING_SUPPORTED  /* Output rescaling at upsample stage? */
 #define UPSAMPLE_MERGING_SUPPORTED  /* Fast path for sloppy upsampling? */
 #undef  QUANT_1PASS_SUPPORTED	    /* 1-pass color quantization? */

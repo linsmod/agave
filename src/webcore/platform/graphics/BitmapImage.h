@@ -98,6 +98,8 @@ public:
 
 private:
     virtual void draw(GraphicsContext*, const FloatRect& dstRect, const FloatRect& srcRect, CompositeOperator);
+    virtual void drawPattern(GraphicsContext*, const FloatRect& srcRect, const AffineTransform& patternTransform,
+                             const FloatPoint& phase, CompositeOperator, const FloatRect& dstRect);
 
     size_t currentFrame() const { return m_currentFrame; }
     size_t frameCount();
@@ -156,6 +158,11 @@ private:
     bool m_animationFinished;  // Whether or not we've completed the entire animation.
 
     bool m_allDataReceived;  // Whether or not we've received all our data.
+
+    /* Set when the image is used as a repeating pattern: pattern tiles need
+     * pixels in image space, so a scaled decode (L3) would tile at the wrong
+     * size. Such an image decodes at its natural size. */
+    bool m_useNaturalDecode;
 
     unsigned m_frameProgressRequests; // Progress repaints asked for the current frame.
 

@@ -280,6 +280,7 @@ void GIFImageDecoder::prepEmptyFrameBuffer(PixelsBuffer* buffer) const
 {
     buffer->bytes().resize(m_size.width() * m_size.height());
     buffer->bytes().init(0x0);
+    buffer->setFrameSize(m_size.width(), m_size.height());
     buffer->setHasAlpha(true);
 }
 

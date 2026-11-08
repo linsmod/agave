@@ -90,7 +90,7 @@ public:
 protected:
     static void fillWithSolidColor(GraphicsContext* ctxt, const FloatRect& dstRect, const Color& color, CompositeOperator op);
 
-private:
+protected:
     virtual void draw(GraphicsContext*, const FloatRect& dstRect, const FloatRect& srcRect, CompositeOperator) = 0;
     void drawTiled(GraphicsContext*, const FloatRect& dstRect, const FloatPoint& srcPoint, const FloatSize& tileSize, CompositeOperator);
     void drawTiled(GraphicsContext*, const FloatRect& dstRect, const FloatRect& srcRect, TileRule hRule, TileRule vRule, CompositeOperator);
@@ -109,7 +109,6 @@ protected:
     RefPtr<SharedBuffer> m_data; // The encoded raw data for the image. 
     ImageObserver* m_imageObserver;
 };
-
 }
 
 #endif

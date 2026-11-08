@@ -53,6 +53,11 @@ public:
     
     virtual bool supportsAlpha() const { return false; }
 
+    /* L3: decode at a DCT scale that still covers the display size. */
+    virtual void setScaleHint(const IntSize& display);
+    int scaleDenomFor(const IntSize& natural) const;
+    const IntSize& scaleHint() const { return m_scaleHint; }
+
     void decode(bool sizeOnly = false);
 
     JPEGImageReader* reader() { return m_reader; }
@@ -69,6 +74,7 @@ public:
 
 private:
     mutable JPEGImageReader* m_reader;
+    IntSize m_scaleHint; // Display size in device pixels (0x0 = decode natural).
 };
 
 }

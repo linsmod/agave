@@ -50,7 +50,7 @@ public:
         DisposeOverwritePrevious = 3,  // Clear frame to previous framebuffer contents
     };
 
-    PixelsBuffer() : m_height(0), m_status(FrameEmpty), m_duration(0),
+    PixelsBuffer() : m_width(0), m_fullHeight(0), m_height(0), m_status(FrameEmpty), m_duration(0),
                      m_disposalMethod(DisposeNotSpecified), m_hasAlpha(false)
     {
     } 
@@ -58,6 +58,12 @@ public:
     const PixelArray& bytes() const { return m_bytes; }
     PixelArray& bytes() { return m_bytes; }
     const IntRect& rect() const { return m_rect; }
+    /* Buffer geometry. A decoder may decode smaller than the image's natural
+     * size (JPEG DCT scaling, L3 in docs/design-async-image-decode.md), so the
+     * pixel buffer has its own width/height; height() keeps its old meaning of
+     * "rows decoded so far". */
+    unsigned width() const { return m_width; }
+    unsigned fullHeight() const { return m_fullHeight; }
     unsigned height() const { return m_height; }
     FrameStatus status() const { return m_status; }
     unsigned duration() const { return m_duration; }
@@ -65,6 +71,7 @@ public:
     bool hasAlpha() const { return m_hasAlpha; }
 
     void setRect(const IntRect& r) { m_rect = r; }
+    void setFrameSize(unsigned width, unsigned height) { m_width = width; m_fullHeight = height; }
     void ensureHeight(unsigned rowIndex) { if (rowIndex > m_height) m_height = rowIndex; }
     void setStatus(FrameStatus s) { m_status = s; }
     void setDuration(unsigned duration) { m_duration = duration; }
@@ -117,6 +124,8 @@ private:
     IntRect m_rect;    // The rect of the original specified frame within the overall buffer.
                        // This will always just be the entire buffer except for GIF frames
                        // whose original rect was smaller than the overall image size.
+    unsigned m_width;      // Buffer width (may be smaller than the image's natural width).
+    unsigned m_fullHeight; // Buffer height (may be smaller than the natural height).
     unsigned m_height; // The height (the number of rows we've fully decoded).
     FrameStatus m_status; // Whether or not this frame is completely finished decoding.
     unsigned m_duration; // The animation delay.
@@ -151,6 +160,14 @@ public:
      * is currently in m_frameBufferCache: the caller should come back. */
     bool hasMoreWork() const { return m_moreWork; }
 
+    /* The frame buffer as it is now, without decoding anything. ImageSource
+     * uses it to tell whether the decoded size is still big enough for the
+     * display (L3) - calling frameBufferAtIndex() there would decode. */
+    const PixelsBuffer* cachedFrameBuffer(size_t index) const
+    {
+        return index < m_frameBufferCache.size() ? &m_frameBufferCache[index] : 0;
+    }
+
     // All specific decoder plugins must do something with the data they are given.
     virtual void setData(const Vector<char>& data, bool allDataReceived) { m_data = data; }
 
@@ -175,6 +192,12 @@ public:
 
     // Whether or not the underlying image format even supports alpha transparency.
     virtual bool supportsAlpha() const { return true; }
+
+    /* How big the image is drawn, in device pixels (docs/design-async-image-decode.md
+     * L3). Decoders that can produce a smaller frame than the natural one use it:
+     * JPEG picks a libjpeg DCT scale (1/1, 1/2, 1/4, 1/8) that still covers the
+     * display size. The natural size (size()) never changes. */
+    virtual void setScaleHint(const IntSize&) { }
 
     bool failed() const { return m_failed; }
     void setFailed() { m_failed = true; }

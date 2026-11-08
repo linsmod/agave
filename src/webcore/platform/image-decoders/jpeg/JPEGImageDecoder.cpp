@@ -40,7 +40,7 @@
 #ifdef JPEG_SUPPORT
 
 #include <assert.h>
-
+#include <stdlib.h>
 
 extern "C" {
 #include <stdio.h>
@@ -94,6 +94,7 @@ public:
         , m_bytesToSkip(0)
         , m_state(JPEG_HEADER)
         , m_samples(0)
+        , m_scaleDenom(1)
     {
         memset(&m_info, 0, sizeof(jpeg_decompress_struct));
  
@@ -199,6 +200,10 @@ public:
                  */
                 m_info.buffered_image = jpeg_has_multiple_scans(&m_info);
 
+                /* L3: the scale hint can arrive after the header (the first
+                 * draw knows the display size), so the denom is chosen in the
+                 * START_DECOMPRESS state below, right before libjpeg starts.
+                 * Here only make sure the buffer is available. */
                 /* Used to set up image size so arrays can be allocated */
                 jpeg_calc_output_dimensions(&m_info);
 
@@ -241,6 +246,27 @@ public:
                 m_info.do_fancy_upsampling = true;
                 m_info.enable_2pass_quant = false;
                 m_info.do_block_smoothing = true;
+
+                /* L3: choose the DCT scale now. The display-size hint can arrive
+                 * after the header (the first draw is what knows the display
+                 * size), so the header pass always computes natural output and
+                 * this state overrides it just before libjpeg starts. */
+                if (!m_decodingSizeOnly) {
+                    int denom = m_decoder->scaleDenomFor(
+                        IntSize(m_info.image_width, m_info.image_height));
+
+                    if (denom > 1) {
+                        m_info.scale_num = 1;
+                        m_info.scale_denom = denom;
+                        jpeg_calc_output_dimensions(&m_info);
+                    }
+                    m_scaleDenom = denom;
+                    if (getenv("AGB_IMG_SCALE_DEBUG"))
+                        fprintf(stderr, "[img-scale] jpeg natural=%dx%d display=%dx%d denom=%d out=%ux%u\n",
+                                (int)m_info.image_width, (int)m_info.image_height,
+                                m_decoder->scaleHint().width(), m_decoder->scaleHint().height(),
+                                denom, (unsigned)m_info.output_width, (unsigned)m_info.output_height);
+                }
 
                 /* Start decompressor */
                 if (!jpeg_start_decompress(&m_info))
@@ -357,6 +383,7 @@ private:
     int m_bytesToSkip;
     bool m_decodingSizeOnly;
     bool m_initialized;
+    int m_scaleDenom; // libjpeg DCT scale actually applied (1/1, 1/2, 1/4, 1/8)
 
     jpeg_decompress_struct m_info;
     decoder_error_mgr m_err;
@@ -406,6 +433,31 @@ JPEGImageDecoder::JPEGImageDecoder()
 JPEGImageDecoder::~JPEGImageDecoder()
 {
     delete m_reader;
+}
+
+/* L3: the image is drawn at m_scaleHint device pixels, so a big JPEG does not
+ * need to be decoded at its natural size. libjpeg can scale by 1/1, 1/2, 1/4 or
+ * 1/8 during the DCT step; pick the strongest one whose output still covers the
+ * display (never decode smaller than what is shown, except when the image is
+ * drawn larger than natural - then 1/1 is the only choice). */
+void JPEGImageDecoder::setScaleHint(const IntSize& display)
+{
+    m_scaleHint = display;
+}
+
+int JPEGImageDecoder::scaleDenomFor(const IntSize& natural) const
+{
+    if (natural.width() <= 0 || natural.height() <= 0)
+        return 1;
+    if (m_scaleHint.width() <= 0 || m_scaleHint.height() <= 0)
+        return 1;
+
+    for (int denom = 8; denom >= 2; denom /= 2) {
+        if ((natural.width() + denom - 1) / denom >= m_scaleHint.width()
+            && (natural.height() + denom - 1) / denom >= m_scaleHint.height())
+            return denom;
+    }
+    return 1;
 }
 
 // Take the data and store it.
@@ -471,18 +523,25 @@ void JPEGImageDecoder::decode(bool sizeOnly)
 
 bool JPEGImageDecoder::outputScanlines()
 {
-    if (m_frameBufferCache.isEmpty())
+    if (m_frameBufferCache.isEmpty() || !m_reader)
         return false;
 
-    // Resize to the width and height of the image.
+    jpeg_decompress_struct* info = m_reader->info();
+
+    /* The buffer holds the *output* size, which is smaller than the image's
+     * natural size when a DCT scale is in effect (L3). */
+    const unsigned outputWidth = info->output_width;
+    const unsigned outputHeight = info->output_height;
+
     PixelsBuffer& buffer = m_frameBufferCache[0];
     if (buffer.status() == PixelsBuffer::FrameEmpty) {
         // Let's resize our buffer now to the correct width/height.
         PixelArray& bytes = buffer.bytes();
-        bytes.resize(m_size.width() * m_size.height());
+        bytes.resize(outputWidth * outputHeight);
         bytes.init(0x0);
         // Update our status to be partially complete.
         buffer.setStatus(PixelsBuffer::FramePartial);
+        buffer.setFrameSize(outputWidth, outputHeight);
 
         // For JPEGs, the frame always fills the entire image.
         buffer.setRect(IntRect(0, 0, m_size.width(), m_size.height()));
@@ -490,7 +549,6 @@ bool JPEGImageDecoder::outputScanlines()
         // We don't have alpha (this is the default when the buffer is constructed).
     }
 
-    jpeg_decompress_struct* info = m_reader->info();
     JSAMPARRAY samples = m_reader->samples();
 
     unsigned dst = 0;  
@@ -499,20 +557,21 @@ bool JPEGImageDecoder::outputScanlines()
      * When the budget runs out we return with the frame still FramePartial and
      * hasMoreWork() true; the next call resumes at output_scanline. */
     int rowsDone = 0;
-    while (info->output_scanline < info->output_height) {
+    while (info->output_scanline < outputHeight) {
         if (budgetExhausted(rowsDone)) {
             setMoreWork(true);
             return true;
         }
         /* Request one scanline.  Returns 0 or 1 scanlines. */
-        unsigned int curr_sl = info->output_scanline * m_size.width();
+        unsigned int curr_sl = info->output_scanline * outputWidth;
         if (jpeg_read_scanlines(info, samples, 1) != 1) {
             /* Out of input bytes: not "more work now", so the image does not
              * ask for a repaint until the next data arrival does. */
             setMoreWork(false);
             return false;
         }
-        JSAMPLE *j1 = samples[0];        for (unsigned i = 0; i < info->output_width; ++i) {
+        JSAMPLE *j1 = samples[0];
+        for (unsigned i = 0; i < outputWidth; ++i) {
             unsigned r = *j1++;
             unsigned g = *j1++;
             unsigned b = *j1++;

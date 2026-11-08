@@ -96,6 +96,23 @@ static ps_composite get_com_op(CompositeOperator op)
  *
  * Only opaque images in the canvas pixel format take this route; anything else
  * falls back to the old path. */
+/* Source rect (natural image pixels - what CSS/layout talk about) -> pixel
+ * buffer pixels. They differ when the decoder produced a scaled frame (L3:
+ * JPEG DCT scaling), in which case the buffer is smaller than the image. */
+static void bufferRectForSource(NativeImagePtr imgref, const FloatRect& src,
+                                int& sx, int& sy, int& sw, int& sh)
+{
+    int natW = imgref->naturalWidth > 0 ? imgref->naturalWidth : imgref->width;
+    int natH = imgref->naturalHeight > 0 ? imgref->naturalHeight : imgref->height;
+    float kx = natW > 0 ? (float)imgref->width / (float)natW : 1.0f;
+    float ky = natH > 0 ? (float)imgref->height / (float)natH : 1.0f;
+
+    sx = (int)(src.x() * kx + 0.5f);
+    sy = (int)(src.y() * ky + 0.5f);
+    sw = (int)(src.width() * kx + 0.5f);
+    sh = (int)(src.height() * ky + 0.5f);
+}
+
 static bool draw_scaled_image(GraphicsContext* context, NativeImagePtr imgref,
                               const FloatRect& dst, const FloatRect& src, CompositeOperator op)
 {
@@ -119,10 +136,12 @@ static bool draw_scaled_image(GraphicsContext* context, NativeImagePtr imgref,
         int imgH = imgref->height;
 
         /* Source rectangle in image pixels, clamped to the image. */
-        int sx = (int)src.x();
-        int sy = (int)src.y();
-        int sw = (int)(src.width() + 0.5f);
-        int sh = (int)(src.height() + 0.5f);
+        int sx;
+        int sy;
+        int sw;
+        int sh;
+
+        bufferRectForSource(imgref, src, sx, sy, sw, sh);
 
         if (sx < 0) { sw += sx; sx = 0; }
         if (sy < 0) { sh += sy; sy = 0; }
@@ -309,7 +328,16 @@ void Image::drawPattern(GraphicsContext* context, const FloatRect& tileRect, con
 		ps_context * gc = context->platformContext(); 
 		ps_composite com_op = ps_set_composite_operator(gc, get_com_op(op));
 
-		ps_rect rect = {tileRect.x(), tileRect.y(), tileRect.width(), tileRect.height()};
+        /* tileRect is in natural image pixels (background geometry); the image
+         * object is in buffer pixels, which differ for a scaled decode (L3). */
+        int bsx;
+        int bsy;
+        int bsw;
+        int bsh;
+
+        bufferRectForSource(imgref, tileRect, bsx, bsy, bsw, bsh);
+
+		ps_rect rect = {bsx, bsy, bsw, bsh};
 		ps_image* pimg = ps_image_create_from_image(img, &rect);
 
 		if (tileRect.size() == dst.size() && !p.x() && !p.y()) { //For optimization with single image
@@ -349,6 +377,25 @@ void BitmapImage::draw(GraphicsContext* context, const FloatRect& dst, const Flo
 {  
 	startAnimation();
 
+    /* L3: tell the decoder how big this image is actually drawn, so a 12MP JPEG
+     * shown in a 400x300 box decodes at 1/8 scale instead of full size. If the
+     * frame we have is now too small for the display (zoom in, resize), drop it
+     * and decode again - the hint is applied to the fresh decoder. */
+    if (context && !getenv("AGB_IMG_NO_SCALE") && !m_useNaturalDecode) {
+        ps_point p0 = { dst.x(), dst.y() };
+        ps_point p1 = { dst.x() + dst.width(), dst.y() + dst.height() };
+        ps_context* gc = context->platformContext();
+
+        ps_world_to_viewport(gc, &p0);
+        ps_world_to_viewport(gc, &p1);
+
+        int dw = (int)(p1.x - p0.x + 0.5f);
+        int dh = (int)(p1.y - p0.y + 0.5f);
+
+        if (dw > 0 && dh > 0 && m_source.setScaleHint(IntSize(dw, dh)))
+            destroyDecodedData();
+    }
+
     NativeImagePtr imgref = nativeImageForCurrentFrame();
 	if (!imgref) {
         /* Nothing to draw yet, but the decoder may still owe rows (the per-paint
@@ -371,7 +418,16 @@ void BitmapImage::draw(GraphicsContext* context, const FloatRect& dst, const Flo
 	ps_image * img = build_image(imgref);
     if (img) {
         ps_context * gc = context->platformContext(); 
-		ps_rect rect = {src.x(), src.y(), src.width(), src.height()};
+        /* Source rect arrives in natural image pixels; ps_image works in buffer
+         * pixels (they differ for a scaled decode). */
+        int sx;
+        int sy;
+        int sw;
+        int sh;
+
+        bufferRectForSource(imgref, src, sx, sy, sw, sh);
+
+		ps_rect rect = {sx, sy, sw, sh};
 		ps_rect drect = {dst.x(), dst.y(), dst.width(), dst.height()};
 		if ((dst.size() == src.size()) && (op == CompositeSourceOver) 
 			&& (!imgref->transparent)) {
@@ -401,6 +457,23 @@ void BitmapImage::draw(GraphicsContext* context, const FloatRect& dst, const Flo
      * next slice happens on the next frame, not inside this one. */
     if (m_source.frameHasMoreWork())
             requestFrameProgress();
+}
+
+void BitmapImage::drawPattern(GraphicsContext* context, const FloatRect& tileRect, const AffineTransform& patternTransform,
+                              const FloatPoint& p, CompositeOperator op, const FloatRect& dst)
+{
+    /* A repeating background repeats the tile at its *image* pixel size, so the
+     * tile has to be decoded at the natural size: a scaled decode (L3) would
+     * repeat a smaller tile and change the pattern geometry. Switch this image
+     * to natural-size decoding for good (draw() stops hinting it down). */
+    m_useNaturalDecode = true;
+
+    IntSize decoded = m_source.decodedFrameSize(m_currentFrame);
+
+    if (decoded.width() > 0 && decoded != size())
+        destroyDecodedData(); /* re-decode at the natural size */
+
+    Image::drawPattern(context, tileRect, patternTransform, p, op, dst);
 }
 
 void BitmapImage::checkForSolidColor()

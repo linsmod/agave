@@ -264,10 +264,14 @@
   （`AGB_IMG_DECODE_MS`，默认 12ms），部分帧照常绘制、靠重绘续解；缩放绘制只采已解出的行并按
   预算限制采样（`AGB_IMG_SAMPLE_MAX`）。实测单帧 paint 467ms → **20ms**、rAF gap 100ms →
   **38ms**、切片与一次性解码逐字节同像素；判据 `tools/run_image_tests.ps1`（IMAGE=PASS）。
+- **已完成 L3（R137）**：按显示尺寸解码。`ImageSource::setScaleHint()` +
+  libjpeg `scale_denom`（1/2、1/4、1/8）；自带 libjpeg 原本 `#undef IDCT_SCALING_SUPPORTED`
+  且缺 `jidctred.c`，已补（`dist/include/jmorecfg.h`、`dist/src/jpeg/jidctred.c`）。12MP JPEG
+  显示 400×300：decode **424ms → 35ms**，切片帧 35 → 5，`paint` 最大 15ms；判据
+  `run_image_tests.ps1` 的 L3 组。重复背景（`drawPattern`）仍按 natural 解码，PNG/GIF 暂不缩放。
 - 待做（设计见 [design-async-image-decode.md](design-async-image-decode.md)）：
   **L2** `ImageDecodeService` 工作线程（行级发布 + 引擎线程轮询，模式同 `MediaPipeline`），
-  paint 里 `decode=0`；**L3** 按显示尺寸解码（JPEG `scale_denom`，省 4–64× 像素，同时消掉
-  缩放采样和切片重采的 CPU）。L3 是下一个杠杆。
+  paint 里 `decode=0`。L2 之后引擎线程在工作线程解码期间完全不参与。
 - 验收：L2 后同页 `decode=0ms` 且反复导航/关窗 50 次无线程泄漏；L3 后大图 `decode` 降到 1/4 以下；
   `run_image_tests`、`run_layout_tests` 像素组、`fuzz_layer`、deepseek/v.qq smoke 不退化。
 

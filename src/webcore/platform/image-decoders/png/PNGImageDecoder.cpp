@@ -379,6 +379,9 @@ void PNGImageDecoder::rowAvailable(unsigned char* rowBuffer, unsigned rowIndex, 
         bytes.init(0x0);
         // Update our status to be partially complete.
         buffer.setStatus(PixelsBuffer::FramePartial);
+        /* PNG always decodes at the natural size (libpng has no DCT scaling);
+         * the buffer geometry still has to be published for ImageSource. */
+        buffer.setFrameSize(m_size.width(), m_size.height());
 
         // For PNGs, the frame always fills the entire image.
         buffer.setRect(IntRect(0, 0, m_size.width(), m_size.height()));

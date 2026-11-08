@@ -31,9 +31,10 @@
 
 #include <picasso/picasso.h>
 
+#include "IntSize.h"
+
 namespace WebCore {
 
-class IntSize;
 class SharedBuffer;
 
 class ImageDecoder;
@@ -48,6 +49,8 @@ public:
 		, index(0)
 		, width(0)
 		, height(0)
+		, naturalWidth(0)
+		, naturalHeight(0)
 		, pitch(0)
 		, transparent(false)
 		, colorkey(false)
@@ -60,8 +63,12 @@ public:
 
 	ImageSource* source;
 	size_t index;
+	/* Pixel-buffer geometry. With a scaled decode (L3) this can be smaller than
+	 * the image's natural size, which is what layout uses. */
 	int width;
 	int height;
+	int naturalWidth;
+	int naturalHeight;
 	int pitch;
 	bool transparent;
 	bool colorkey;
@@ -104,6 +111,16 @@ public:
     /* True while the decoder still owes rows for the frame: the owner should
      * come back for another slice (BitmapImage re-arms its timer). */
     bool frameHasMoreWork() const;
+
+    /* Tell the decoder how big the image is drawn, in device pixels, so formats
+     * that can decode smaller than natural (JPEG) stop wasting work (L3).
+     * Returns true when the already decoded frame is now too small for that
+     * display size, i.e. the caller should drop it and decode again. */
+    bool setScaleHint(const IntSize& displaySize);
+
+    /* Geometry of the pixels actually decoded (0x0 when nothing is decoded).
+     * Smaller than size() when the decoder used a scale (L3). */
+    IntSize decodedFrameSize(size_t index) const;
     
     float frameDurationAtIndex(size_t);
     bool frameHasAlphaAtIndex(size_t); // Whether or not the frame actually used any alpha.
@@ -112,7 +129,10 @@ public:
 	//macross added
 	NativeImageSourcePtr decoder(void) const { return m_decoder; }
 private:
+    void applyScaleHint();
+
     NativeImageSourcePtr m_decoder;
+    IntSize m_scaleHint; // Display size in device pixels (0x0 = natural size).
 };
 
 }

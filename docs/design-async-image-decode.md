@@ -112,19 +112,29 @@ agwEngineThread (src/webview_control/AgaveWebView.c)
 - 收益：paint 的 `decode=` 掉到 0，解码与 JS/布局完全并行；配合 L1 的切片，worker 也不会
   单次霸占 460ms（对大图更平滑）。
 
-### L3 按显示尺寸解码（待做，下一个杠杆）
+### L3 按显示尺寸解码（已实现，R137）
 
-- 收益现在更清楚了：L1 之后单帧停摆已经解决，剩下的痛点是**总量**——12MP 源即使只显示
-  400×300，也要解 12M 像素（≈450ms）+ 采样。按显示尺寸解码（`jpeg_start_decompress` 前设
-  `scale_denom` 1/2、1/4、1/8）把两者同时降到 1/16 甚至更多。
-- `BitmapImage::draw()` 知道 dst，第一次解码前把目标尺寸 hint 给 `ImageSource`：
-  long side ≤ dst*1.15（按 zoom 折算）。
-- JPEG：`jpeg_start_decompress` 之前设 `scale_num/scale_denom`（1/1,1/2,1/4,1/8）；
-  PNG：zlib inflate 省不了，但可以按行抽样写像素（省内存带宽和后续采样）。
-- `naturalWidth/Height` 仍报原尺寸（布局不变），只改像素缓冲尺寸；`ImagePS` 的
-  src→dst 映射改用缓冲实际尺寸（`ImageRef::width/height/pitch` 从 buffer 取）。
-- 只在需要的 scale 变化 ≥2× 时重解码（滞后），`AGB_IMG_NO_SCALE=1` 兜底。
-- 收益：12MP 显示 400×300 → libjpeg 工作量 ≈1/16；缩略图场景接近免费。
+- 收益：12MP JPEG 只解 1/8（500×375）→ decode 从 424ms 降到 **35ms**；采样、内存带宽、
+  切片重采的 CPU 一起消失（L1 的 +20% 总量回到基线以下）。
+- `BitmapImage::draw()` 在解码前算出 dst 的设备像素尺寸（`ps_world_to_viewport`），
+  `ImageSource::setScaleHint()` 存下来并转给解码器；JPEG 在 `jpeg_start_decompress` 之前
+  选 `scale_denom`（1/2、1/4、1/8 里"仍然覆盖显示尺寸"的最强那个），libjpeg 用缩小 IDCT
+  直接出小图。`size()`/`naturalWidth` 永远是原尺寸，布局不变。
+- 缓冲尺寸与图像尺寸不再相同：`PixelsBuffer` 带 `width()/fullHeight()`，`ImageRef` 同时带
+  缓冲尺寸和 natural 尺寸，`ImagePS` 画之前用 `bufferRectForSource()` 把 CSS/图像坐标映射到
+  缓冲坐标（缩放绘制、1:1 快路径、`drawPattern` 都走它）。
+- 重解码只在"已有缓冲比当前显示小"时发生（放大/缩放/窗口变大），且**不会超过 natural**
+  （否则显示比原图大的图会每帧重解码）；`AGB_IMG_NO_SCALE=1` 全局关闭（参考/对拍用）。
+- 重复背景（`drawPattern`）需要瓷砖按图像像素重复：这种图会切回 natural 解码
+  （`BitmapImage::m_useNaturalDecode`），避免瓷砖尺寸被缩小。
+- **依赖**：仓库自带的 libjpeg 默认把 `IDCT_SCALING_SUPPORTED` 关掉了（`dist/include/jmorecfg.h`
+  的 Mozilla 裁剪），所以之前设 `scale_denom` 完全无效。修法：`jmorecfg.h` 打开该宏 +
+  `dist/include/jconfig.h` 定义它 + 从 `vcproj/.../libjpeg-turbo-1.4.1/jidctred.c` 补回缺失的
+  `jidctred.c`（1/2、1/4、1/8 的 IDCT）。⚠ 这个源码树是按 glob 收文件的，新增 .cpp/.c 后要
+  重新跑一次 `cmake -S . -B build-zig-native`（`dist/allinone.cmake` 的 glob 没有
+  `CONFIGURE_DEPENDS`）。
+- 调试：`AGB_IMG_SCALE_DEBUG=1` 打 `[img-scale] jpeg natural=… display=… denom=… out=…`。
+
 
 ### 不建议的路线
 
@@ -139,6 +149,7 @@ agwEngineThread (src/webview_control/AgaveWebView.c)
 |---|---|---|
 | L0 | 1h | `AGB_PERF_LOG=1` 的 `[perf]` 行出现 `decode=`；大图页 `decode≈paint` ✅ |
 | L1 | ~0.5d | `debug/img_decode_block.html`：`paint<20ms`、rAF `maxgap<40ms`、像素与一次性解码逐字节一致 ✅（`run_image_tests.ps1`） |
+| L3 | ~1d | 大图按 1/8 解码后 `decode` 从 424ms 降到 35ms（`run_image_tests.ps1` 的 L3 组）✅ |
 | L2 | 1–2d | 同页 `[perf] ... decode=0ms`；`[img] ahead hit` 占多数；反复导航/关窗 50 次无线程泄漏或 UAF；`fuzz_layer` + v.qq/deepseek smoke |
 | L3 | ~1d | 大图按 1/8 解码后 `decode` 降至 1/4 以下；`getBoundingClientRect`/`naturalWidth` 不变；`AGB_IMG_NO_SCALE=1` 行为退化到 L2 |
 
