@@ -450,6 +450,13 @@ ant 自身 CLI / 基础设施的开关（`ANT_MANIFEST_URL`、`ANT_SANDBOX_*`、
   `JSON.stringify` 整页元素的长结果会腰斩（Chrome 侧完整，看着像 agave 少了一半字段）。
   只打关心的字段（`{left,top,width,height}` 通常就够），或按 800 字符分段打 `R0:`/`R1:` 再拼；
   回归脚本里更稳的是每条断言打一行短文本（`a.margin=ok`），见 `tools/pages/check_computed.js`。
+  ⚠ **光标 / `:focus` 在 headless 里默认看不到**：Chrome 侧加 `--focus-emulation`
+  （`Emulation.setFocusEmulationEnabled`，在脚本之前打开）让 `:focus` 与 `focus()` 真正生效；
+  但 headless 的 `Page.captureScreenshot` 不一定画光标（R127 实测没抓到），要量 Chrome 的
+  光标得看真浏览器。agave 侧加 `AGB_CARET_DEBUG=1`：它无视焦点和闪烁相位把光标画成**红色**，
+  `python tools/caret_check.py <png>` 量出 `x/y/height`。例：
+  `agave_shell.exe --probe <pg> --eval "document.getElementById('a').focus()" --shot build-zig-native/c.png --shot-rect 0,0,240,60`
+  （**别**在 `--eval` 里 `probeExit`，探针会先退出、截图不落盘）。
 - **布局对拍 Chrome**：`python tools/layout_diff.py tools/pages/layout/<page>.html [--tol 1]`
   —— 同一份 `tools/pages/layout/lib_measure.js` 在 agave 探针和 headless Chrome 里各跑一遍，
   两边视口都固定成 1084×800（agave = 1100 窗口减 16px 经典滚动条；Chrome = `--hide-scrollbars`

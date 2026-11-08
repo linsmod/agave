@@ -1003,6 +1003,8 @@ void SelectionController::paintCaret(GraphicsContext *p, const IntRect &rect)
         Element* element = rootEditableElement();
         if (element && element->renderer())
             caretColor = element->renderer()->style()->color();
+        if (getenv("AGB_CARET_DEBUG"))
+            caretColor = Color(255, 0, 0);   /* see Frame::paintCaret */
 
         p->fillRect(caret, caretColor);
     }

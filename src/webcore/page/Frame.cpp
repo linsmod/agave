@@ -687,6 +687,15 @@ void Frame::caretBlinkTimerFired(Timer<Frame>*)
 
 void Frame::paintCaret(GraphicsContext* p, const IntRect& rect) const
 {
+    /* AGB_CARET_DEBUG=1: paint the caret even when the frame is not focused and
+     * regardless of the blink phase. A headless probe never has window focus,
+     * so a screenshot otherwise has no caret in it at all; the debug colour is
+     * red so it cannot be confused with a border or with text ink. */
+    if (getenv("AGB_CARET_DEBUG")) {
+        selectionController()->paintCaret(p, rect);
+        return;
+    }
+
     if (d->m_caretPaint && d->m_caretVisible)
         selectionController()->paintCaret(p, rect);
 }

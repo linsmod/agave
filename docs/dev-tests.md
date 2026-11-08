@@ -25,7 +25,7 @@
 | `run_nav_tests.ps1` | `[nav]` 通道八项：链接点击 / 脚本跳转 / 历史后退 / meta refresh / `window.open` / 表单提交 / 302 / `AGB_NAV_LOG=0` 静音 | 自起 python http.server（8973） | `ALL NAV CHECKS PASSED (n cases)` |
 | `run_xhr_tests.ps1` | XHR 投递重入（R94）、`responseText` UTF-8 解码（R96）、响应头/`statusText`/`readyState`/`overrideMimeType` 与 Chrome 对拍（R97） | 自起静态服务（8991） | `ALL XHR CHECKS PASSED` |
 | `run_worker_tests.ps1` | Worker 九项：http worker、`importScripts`、blob、terminate、subclass、error 事件、structured clone | 自起服务（8971，可 `-Port`/`-KeepServer`） | `ALL WORKER CHECKS PASSED`；setup 失败 exit 2 |
-| `run_typing_tests.ps1` | 键盘/IME：走真实 `WM_KEYDOWN/WM_CHAR/WM_KEYUP` 与 `WM_IME_CHAR`（`--keys`/`--ime`） | 无 | `ALL TYPING CHECKS PASSED (n cases)` |
+| `run_typing_tests.ps1` | 键盘/IME：走真实 `WM_KEYDOWN/WM_CHAR/WM_KEYUP` 与 `WM_IME_CHAR`（`--keys`/`--ime`）；末尾两条量**光标几何**（`AGB_CARET_DEBUG=1` 红色光标 + `tools/caret_check.py`，输入框光标=文字高度而不是盒子高度） | 无 | `ALL TYPING CHECKS PASSED (n cases)` |
 | `run_jit_loop_tests.ps1` | 长 JIT 循环 + "引擎线程仍在跑 EVAL 时销毁视图"（R61 的 0xC0000005） | 无 | `ALL JIT LOOP CHECKS PASSED` |
 | `run_hang_recovery_tests.ps1` | 卡死页恢复：`--interrupt-after` 中断、排队导航中断卡死脚本、空闲页不误中断、慢页连续 reload 不被杀 | 自起服务（8982/8984） | `ALL HANG RECOVERY CHECKS PASSED` |
 | `run_script_mode_tests.ps1` | classic script 语义（顶层 `var`/`function` 进 `window`，R66）+ 热点循环性能 + `document.readyState`/`currentScript` | 无（Chrome 数值为注释里的基准） | `ALL SCRIPT MODE CHECKS PASSED` |

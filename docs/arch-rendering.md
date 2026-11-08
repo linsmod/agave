@@ -117,6 +117,11 @@ DOM attach（Element::attach / Text::attach）
   改了字体、字符或 `letter-spacing` 却没重排，先确认 `setPrefWidthsDirty()` 被调用。
 - 垂直对齐：`RenderObject::baselinePosition()` / `verticalPositionHint()`；行盒内由
   `InlineFlowBox::verticallyAlignBoxes()` 统一排。
+- **单行文本框的 placeholder 与光标都按「文字高度」而不是行盒/盒子高度**（R127）：placeholder 由
+  `RenderTextControl::paint()` 自绘，空控件没有行盒，基线要自己加 half-leading
+  （`(lineHeight - ascent - descent)/2`）；光标在空控件时走 `RenderTextControlInnerBlock::caretRect()`、
+  有文字时走 `RenderText::caretRect()`，两者对 `<input>` 都返回「基线 - ascent，高 ascent+descent」
+  （`<textarea>` 仍是行盒高度）。量它：`AGB_CARET_DEBUG=1` 把光标画红，`tools/caret_check.py` 读数。
 
 ### 3.5 flex（`RenderFlexibleBox`）
 

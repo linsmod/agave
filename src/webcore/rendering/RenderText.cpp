@@ -35,6 +35,7 @@
 #include "TextBreakIterator.h"
 #include "TextStyle.h"
 #include "break_lines.h"
+#include "HTMLNames.h"
 #include <wtf/AlwaysInline.h>
 
 using namespace std;
@@ -361,6 +362,31 @@ IntRect RenderText::caretRect(int offset, EAffinity affinity, int* extraWidthToE
 
     int height = box->root()->bottomOverflow() - box->root()->topOverflow();
     int top = box->root()->topOverflow();
+
+    /* A single-line text field paints the caret at the height of the text, not
+     * at the height of the line box: `input { height:25px; line-height:25px;
+     * font-size:14px }` has a ~17px caret in Chrome, while the line box (and
+     * the caret that RenderText would return here) is 25px tall. Multi-line
+     * controls (textarea) keep the line-box caret. */
+    {
+        Node* shadow = node() ? node()->shadowAncestorNode() : 0;
+
+        if (shadow && shadow->hasTagName(HTMLNames::inputTag)) {
+            const Font& font = style()->font();
+            /* The text box carries the half-leading: its yPos is where the
+             * glyphs start inside the line box (3px for a 25px line with a
+             * 19px font), its baseline is measured from there. */
+            int baseline = box->yPos() + box->baseline();
+
+            if (getenv("AGB_CARET_DEBUG"))
+                fprintf(stderr, "[caret] text boxY=%d boxBase=%d lineH=%d lineHeight=%d asc=%d desc=%d\n",
+                        box->yPos(), box->baseline(), box->height(), lineHeight(true),
+                        font.ascent(), font.descent());
+
+            top = baseline - font.ascent();
+            height = font.ascent() + font.descent();
+        }
+    }
 
     int left = box->positionForOffset(offset);
 

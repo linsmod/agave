@@ -63,6 +63,7 @@ public:
     RenderTextControlInnerBlock(Node* node) : RenderBlock(node) { }
 
     virtual bool nodeAtPoint(const HitTestRequest&, HitTestResult&, int x, int y, int tx, int ty, HitTestAction);
+    virtual IntRect caretRect(int offset, EAffinity, int* extraWidthToEndOfLine);
 };
 
 bool RenderTextControlInnerBlock::nodeAtPoint(const HitTestRequest& request, HitTestResult& result, int x, int y, int tx, int ty, HitTestAction hitTestAction)
@@ -70,6 +71,32 @@ bool RenderTextControlInnerBlock::nodeAtPoint(const HitTestRequest& request, Hit
     RenderTextControl* renderer = static_cast<RenderTextControl*>(node()->shadowAncestorNode()->renderer());
     
     return RenderBlock::nodeAtPoint(request, result, x, y, tx, ty, renderer->placeholderIsVisible() ? HitTestBlockBackground : hitTestAction);
+}
+
+/* An empty single-line control has no line box, so the caret comes from
+ * RenderFlow::caretRect()'s empty-block case, whose height is the line box
+ * (25px for DeepSeek's login input). Chrome paints a text field's caret at the
+ * height of the *text*: with line-height:25px and font-size:14px the caret is
+ * ~17px, sitting on the baseline. Keep the x/width and re-seat the rect. */
+IntRect RenderTextControlInnerBlock::caretRect(int offset, EAffinity affinity, int* extraWidthToEndOfLine)
+{
+    IntRect rect = RenderBlock::caretRect(offset, affinity, extraWidthToEndOfLine);
+
+    if (rect.isEmpty())
+        return rect;
+
+    Node* shadow = node()->shadowAncestorNode();
+
+    if (!shadow || !shadow->hasTagName(inputTag))   /* textarea keeps the line-box caret */
+        return rect;
+
+    const Font& font = style()->font();
+    int halfLeading = max(0, (rect.height() - (font.ascent() + font.descent())) / 2);
+    int baseline = rect.y() + halfLeading + font.ascent();
+
+    rect.setY(baseline - font.ascent());
+    rect.setHeight(font.ascent() + font.descent());
+    return rect;
 }
 
 RenderTextControl::RenderTextControl(Node* node, bool multiLine)
@@ -824,8 +851,18 @@ void RenderTextControl::paint(PaintInfo& paintInfo, int tx, int ty)
                 x = baseX + inner->xPos() + line->xPos();
                 y = baseY + inner->yPos() + line->yPos() + line->baseline();
             } else {
+                /* An empty control has no line box, so the placeholder has to
+                 * compute the baseline inline layout would use: the line box is
+                 * `line-height` tall and the glyphs are centred in it by the
+                 * half-leading. Using the bare ascent put the placeholder a few
+                 * pixels above the caret and above the value text - DeepSeek's
+                 * "请输入验证码" sat 4px high inside its 25px input, while
+                 * Chrome paints the placeholder on the text's own baseline. */
+                int lineHeight = inner->lineHeight(true, true);
+                int halfLeading = max(0, (lineHeight - (font.ascent() + font.descent())) / 2);
+
                 x = baseX + inner->xPos() + inner->paddingLeft();
-                y = baseY + inner->yPos() + inner->paddingTop() + font.ascent();
+                y = baseY + inner->yPos() + inner->paddingTop() + halfLeading + font.ascent();
             }
 
             IntRect clipRect(baseX + inner->xPos(), baseY + inner->yPos(), inner->width(), inner->height());

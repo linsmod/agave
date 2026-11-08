@@ -69,6 +69,46 @@ Run-Case 'ime emoji'     ''                 'probeExit(''value='' + text.value +
 # must end up after the surrogate pair, not before it.
 Run-Case 'emoji + text'  'a😀b'            'probeExit(reportTyping())' 'value=a😀b len=4'
 
+# Caret geometry: a text field's caret is as tall as the *text*, not as the
+# input box / line box (Chrome: 14px font with line-height:25px => ~17px caret,
+# not 25). AGB_CARET_DEBUG=1 paints it red regardless of focus and blink phase,
+# so the headless screenshot always has one; tools/caret_check.py measures it.
+Write-Host '== caret height (text height, not the line box)'
+$caretPage = 'file:///' + ((Join-Path $PSScriptRoot 'pages\cap_caret.html') -replace '\\', '/')
+$caretShot = Join-Path $root 'build-zig-native\caret_typing.png'
+
+function Test-Caret {
+    param([string]$Label, [object[]]$Extra, [string]$Expect)
+
+    $env:AGB_CARET_DEBUG = '1'
+    try {
+        $out = & $exe --probe $caretPage @Extra --wait 400 --settle 300 --timeout 25000 `
+            --shot $caretShot --shot-rect 0,0,240,120 2>&1
+    } finally {
+        Remove-Item Env:\AGB_CARET_DEBUG -ErrorAction SilentlyContinue
+    }
+
+    $script:cases++
+    $measured = ((& python (Join-Path $PSScriptRoot 'caret_check.py') $caretShot 2>&1) -join ' ').Trim()
+
+    if ($measured -match $Expect) {
+        "PASS  $Label   $measured"
+    } else {
+        $script:failures++
+        "FAIL  $Label   expected /$Expect/ got: $measured"
+        "      probe: $(($out | Out-String).Trim())"
+    }
+}
+
+# Empty control (placeholder path, RenderTextControlInnerBlock::caretRect):
+# line-height is 25px, so a 25px caret would mean the bug is back. 19px is the
+# 14px font's ascent+descent (the family substitution of R123 makes it YaHei).
+Test-Caret 'empty caret' @('--eval', "document.getElementById('a').focus()") `
+    'x=12 y=14\.\.32 height=19'
+# Typed text (RenderText::caretRect): same height, on the second input's line.
+Test-Caret 'typed caret' @('--pre-eval', "document.getElementById('b').focus()", '--keys', 'Hxg', '--eval', '1') `
+    'x=37 y=51\.\.69 height=19'
+
 ""
 if ($failures -eq 0) {
     "ALL TYPING CHECKS PASSED ($cases cases)"

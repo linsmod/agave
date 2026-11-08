@@ -179,6 +179,14 @@ async def run_chrome(args, script):
                 await asyncio.sleep(0.2)
         await asyncio.sleep(args.wait / 1000.0)
 
+        # Headless Chrome is not the active window: without this the page has no
+        # focus, so :focus never matches, focus() paints no caret and a
+        # screenshot of an input looks like an unfocused page. It has to be on
+        # before the script runs (the script may focus an element).
+        if args.focus_emulation:
+            await chrome.cmd("Emulation.setFocusEmulationEnabled", {"enabled": True})
+            await asyncio.sleep(0.1)
+
         if script:
             out = await chrome.evaluate(capture_console_script(script))
             print("== chrome ==")
@@ -299,6 +307,8 @@ def main():
     parser.add_argument("--props", help="comma separated property names to keep for --matched-styles")
     parser.add_argument("--platform-fonts", help="selector: dump the fonts Chrome actually uses (CSS.getPlatformFontsForNode)")
     parser.add_argument("--screenshot", help="write a Chrome screenshot (png)")
+    parser.add_argument("--focus-emulation", action="store_true",
+                        help="with --screenshot: emulate window focus so carets and :focus paint")
     parser.add_argument("--width", type=int, default=1084, help="viewport width (layout_diff uses 1084)")
     parser.add_argument("--height", type=int, default=800, help="viewport height")
     parser.add_argument("--wait", type=int, default=3000, help="ms to wait after load before evaluating")
