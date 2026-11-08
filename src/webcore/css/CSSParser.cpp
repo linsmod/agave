@@ -114,12 +114,12 @@ namespace {
 CSSParser* CSSParser::currentParser = 0;
 
 CSSParser::CSSParser(bool strictParsing)
-    : m_floatingMediaQuery(0)
-    , m_floatingMediaQueryExp(0)
-    , m_floatingMediaQueryExpList(0)
-    , m_valueDocument(0)
+    : m_valueDocument(0)
     , m_valueFontPx(0)
     , m_valueRootFontPx(0)
+    , m_floatingMediaQuery(0)
+    , m_floatingMediaQueryExp(0)
+    , m_floatingMediaQueryExpList(0)
 {
 #ifdef CSS_DEBUG
     kdDebug(6080) << "CSSParser::CSSParser this=" << this << endl;

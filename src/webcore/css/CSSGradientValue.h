@@ -30,9 +30,9 @@ public:
     float centerY() const { return m_centerY; }
 
     CSSGradientValue()
-        : m_angle(180.0f)     /* CSS angles: 0 = to top, 90 = to right, 180 = to bottom */
+        : m_type(Linear)
+        , m_angle(180.0f)     /* CSS angles: 0 = to top, 90 = to right, 180 = to bottom */
         , m_repeating(false)
-        , m_type(Linear)
         , m_centerX(0.5f)
         , m_centerY(0.5f)
     {
