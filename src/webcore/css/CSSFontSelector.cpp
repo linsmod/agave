@@ -59,12 +59,29 @@ static bool fontLogOn(void)
 
 CSSFontSelector::CSSFontSelector(Document* document)
 : m_document(document)
+, m_detached(false)
 {
     ASSERT(m_document);
 }
 
 CSSFontSelector::~CSSFontSelector()
 {}
+
+void CSSFontSelector::documentDetached()
+{
+    if (m_detached)
+        return;
+
+    m_detached = true;
+
+    /* Releasing the faces deletes their sources, and a source's destructor
+     * does `CachedFont::deref(this)` - i.e. this is the point where the font
+     * resource stops notifying this document. Names stay in the map until the
+     * HashMap is destroyed; clear it so getFontData() cannot hand out a face
+     * that no longer has sources. */
+    FONTLOG("documentDetached faces=%d\n", (int)m_fonts.size());
+    m_fonts.clear();
+}
 
 bool CSSFontSelector::isEmpty() const
 {
@@ -88,6 +105,11 @@ static String hashForFont(const String& familyName, bool bold, bool italic)
 
 void CSSFontSelector::addFontFaceRule(const CSSFontFaceRule* fontFaceRule)
 {
+    /* A detached document never lays out again: registering a face here would
+     * only make this selector a client of a font resource it cannot use. */
+    if (m_detached)
+        return;
+
     // Obtain the font-family property and the src property.  Both must be defined.
     const CSSMutableStyleDeclaration* style = fontFaceRule->style();
     RefPtr<CSSValue> fontFamily = style->getPropertyCSSValue(CSS_PROP_FONT_FAMILY);
@@ -214,15 +236,19 @@ void CSSFontSelector::addFontFaceRule(const CSSFontFaceRule* fontFaceRule)
 
 void CSSFontSelector::fontLoaded(CSSFontFace*)
 {
-    if (m_document->inPageCache())
+    if (m_detached || m_document->inPageCache())
         return;
     m_document->recalcStyle(Document::Force);
-    m_document->renderer()->setNeedsLayoutAndPrefWidthsRecalc();
+    /* recalcStyle() bails out for a detached document (no render tree), so
+     * this has to check the same thing: a font can finish after the document
+     * was detached, and the renderer is then null (R141). */
+    if (RenderObject* renderer = m_document->renderer())
+        renderer->setNeedsLayoutAndPrefWidthsRecalc();
 }
 
 FontData* CSSFontSelector::getFontData(const FontDescription& fontDescription, const AtomicString& familyName)
 {
-    if (m_fonts.isEmpty())
+    if (m_detached || m_fonts.isEmpty())
         return 0;
     
     bool bold = fontDescription.bold();

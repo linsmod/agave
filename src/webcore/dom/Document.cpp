@@ -1213,6 +1213,15 @@ void Document::detach()
      * playback here instead of waiting for their destructors. */
     stopMediaElements();
 
+    /* Font resources must stop notifying us too: a font that finishes loading
+     * after this point used to call CSSFontSelector::fontLoaded() on a
+     * document with no render tree (R141). The selector stays alive as part of
+     * the document, so the client has to be dropped explicitly. */
+    if (m_styleSelector) {
+        if (CSSFontSelector* fontSelector = m_styleSelector->fontSelector())
+            fontSelector->documentDetached();
+    }
+
     // indicate destruction mode,  i.e. attached() but renderer == 0
     setRenderer(0);
     

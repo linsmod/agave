@@ -30,6 +30,7 @@
 | `run_hang_recovery_tests.ps1` | 卡死页恢复：`--interrupt-after` 中断、排队导航中断卡死脚本、空闲页不误中断、慢页连续 reload 不被杀 | 自起服务（8982/8984） | `ALL HANG RECOVERY CHECKS PASSED` |
 | `run_script_mode_tests.ps1` | classic script 语义（顶层 `var`/`function` 进 `window`，R66）+ 热点循环性能 + `document.readyState`/`currentScript` | 无（Chrome 数值为注释里的基准） | `ALL SCRIPT MODE CHECKS PASSED` |
 | `run_realm_tests.ps1` | 每 frame 一个 realm（`design-per-frame-realm.md`）：先编译 `tools/ant_realm_probe.c` 直接测桥（一 isolate 三 realm），再走 iframe 页面 | 本机编译器（脚本自己编 `ant_realm_probe.exe`） | `ALL REALM CHECKS PASSED` |
+| `run_tab_lifecycle_tests.ps1` | 关 view/tab 的生命周期（R141，`design-tab-teardown.md`）：teardown 顺序 `pagehide → visibilitychange → unload → realm stop`、每个 `realm start` 都有 `realm stop`、**JS 创建的节点不 pin 住 Document**（无 `LEAK:` 行）、`window.open` popup 是独立 view context 且同样拆除、字体下载在途时销毁 view 不崩且 `documentDetached` 命中 | 自起 `tools/tab_lifecycle_server.py`（8979，`/slow.ttf` 延迟 1.5s） | `ALL TAB LIFECYCLE CHECKS PASSED (n cases)` |
 | `run_sticky_tests.ps1` | `position:sticky`：视口/内层滚动容器/containing block 边界、命中跟随（R82），几何 + 像素 | 无（期望值来自 Chrome） | `STICKY=PASS` |
 | `run_image_tests.ps1` | 图片解码（R136–R140）：切片解码与一次性解码**逐字节同像素**（JPEG + PNG）、**工作线程解出的帧与内联帧逐字节一致**且 paint 里不再解码、大图不再单帧停摆（paint 上限 / rAF gap）、L3 缩放解码的加速比、**拆文档时进行中的解码不崩且队列排空**、**零字节图片资源（204 / `Content-Length: 0` / 截断头）只算坏图不崩、且不会每帧重解**、`AGB_IMG_DECODE_MS=0`/`AGB_IMG_NO_SCALE`/`AGB_IMG_SAMPLE_MAX` 开关有效 | 无（脚本自己用 System.Drawing 生成 4000×3000 JPEG / 3000×2000 PNG 到 `build-zig-native/img_test`；零字节那组自起 `tools/empty_image_server.py`，随机空闲端口） | `IMAGE=PASS` |
 | `run_media_tests.ps1` | 媒体元素 API/几何/传输（play → timeupdate → ended）；有 ffmpeg 走真解码，没有则内部 ticker | 无（ffmpeg 可选） | `MEDIA=PASS` |
@@ -44,7 +45,8 @@
 | 渲染 / 布局 / CSS 解析 / 字体度量 | `run_layout_tests`（几何 + 像素全组）、`run_site_smoke` |
 | 命中测试 / layer / 绘制裁剪 / z-order | `run_layout_tests` 的像素组、`run_sticky_tests`、`run_inspector_tests` |
 | 图片解码 / 缩放绘制 / 图片在页面里的渐进出现 | `run_image_tests`、`run_layout_tests`（含图片的像素组）、`run_sticky_tests` |
-| DOM / JS 绑定 / 事件 / 生命周期 | `run_script_mode_tests`、`run_realm_tests`、`run_xhr_tests`、`run_jit_loop_tests` |
+| DOM / JS 绑定 / 事件 / 生命周期 | `run_script_mode_tests`、`run_realm_tests`、`run_xhr_tests`、`run_jit_loop_tests`、`run_tab_lifecycle_tests` |
+| 关 tab / 视图销毁 / 页面资源清理 | `run_tab_lifecycle_tests`、`run_nav_tests`、`run_jit_loop_tests`、`run_image_tests`（拆文档组） |
 | 导航 / 加载器 / 重定向 | `run_nav_tests`、`run_site_smoke` |
 | 输入（键盘 / IME / 焦点） | `run_typing_tests` |
 | 媒体元素 / 解码 | `run_media_tests`，改解码时加 `run_media_real_tests` |
@@ -57,7 +59,7 @@
 - **Chrome**：只有 `run_layout_tests.ps1` 需要（`layout_diff.py` 启动 `--headless=new` + 临时 profile
   + 1084×800 视口）。找不到 Chrome 会直接报错；换成别的浏览器对拍要先改 `layout_diff.py`。
 - **python**：所有对拍/像素工具都是 python；`layout_diff.py`/`chrome_probe.py` 还依赖 `websockets`。
-- **本地服务端口**：worker 8971、nav 8973、hang recovery 8982/8984、xhr 8991。脚本自己起停；
+- **本地服务端口**：worker 8971、nav 8973、tab lifecycle 8979、hang recovery 8982/8984、xhr 8991。脚本自己起停；
   并行跑多个套件时用 `-Port` 错开（worker 支持）。
 - **网络**：`run_site_smoke.ps1` 必须要；`run_media_real_tests.ps1` 的远程样片需要（`-SkipRemote` 关掉）。
   站点打不开时 exit 5/6 是网络问题，不是引擎问题（见脚本头注释），重跑再判断。

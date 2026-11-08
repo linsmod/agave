@@ -1,0 +1,12 @@
+<!doctype html>
+<html><head><title>tab-lifecycle-font</title>
+<style>
+@font-face { font-family: SlowFont; src: url(slow.ttf) format("truetype"); }
+body { font-family: SlowFont, monospace; font-size: 28px; }
+</style></head>
+<body>
+<h1>TAB FONT</h1>
+<p>The font is still downloading when the probe tears the view down: the old
+code destroyed the document on the host thread while its own download timer
+could still deliver into it (R141).</p>
+</body></html>

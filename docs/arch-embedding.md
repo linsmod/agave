@@ -70,6 +70,12 @@ exe 旁的 `prelude.js` / `polyfills.js`（运行时 JS 资产，可热替换）
 * 回调在引擎线程触发，**不要**在回调里做同步跨线程等待；下载状态是例外——控件深拷贝后
   `PostMessage`，`on_download` 在 UI 线程派发（见 [arch-downloads.md](arch-downloads.md) §7）；
 * `navigate` / `eval` / `set_zoom` 是入队操作，任何线程调用都安全；
+* `agave_webview_destroy` 可以从任何线程调用，但引擎侧（`MaCrossView`、WebCore、Ant
+  VM、surface 缓冲）**只在引擎线程拆**：调用方只标记 + 从活动表摘除 + 把控件挂进 reap
+  队列，引擎线程在每轮 `event_dispatch()` 之后 `agwReapViews()`；窗口按**创建它的线程**
+  销毁（tab 是宿主线程，popup 是引擎线程，跨线程时用 `AGW_MSG_RETIRE`）。控件销毁期间
+  宿主会等一次回收完成（2 s 上限，卡在页面脚本里时靠看门狗 abort）。设计记录见
+  [design-tab-teardown.md](design-tab-teardown.md)。
 * 每个控件独立：独立 `MaCrossView`、独立 DIB、独立进度与标题。
 
 ## 多控件

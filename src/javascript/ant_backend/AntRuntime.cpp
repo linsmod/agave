@@ -187,6 +187,10 @@ struct RuntimeState {
     int                docSlotCount;
     int                currentSlot;
     unsigned long      generation;      /* id of the realm (see nextGeneration) */
+    /* The generation whose pinned nodes the *next* teardown of this state
+     * releases. Per state, not process wide: one view's teardown must never
+     * release the nodes another live view still uses (R141). */
+    unsigned long      pinsPendingRelease;
     unsigned long      polyfillsGeneration; /* realm whose VM already got polyfills.js */
     /* Page Visibility: one flag per view, shared by every document in it (a
      * frame inherits the top-level state, like the spec). `viewHidden` is what
@@ -265,6 +269,9 @@ static void releasePinnedNodes(unsigned long generation)
     std::set<WebCore::Node*>* nodes = it->second;
 
     if (nodes) {
+        if (getenv("AGB_EVT_DEBUG"))
+            agbLog(AGB_LOG_EVT, "pins release gen=%lu nodes=%d", generation, (int)nodes->size());
+
         for (std::set<WebCore::Node*>::iterator n = nodes->begin(); n != nodes->end(); ++n)
             (*n)->deref();
 
@@ -2145,8 +2152,6 @@ int docCreateHTMLDocument(AntbEngine* engine, AntbValue*, AntbValue** args, int 
     if (!created)
         return 1;
 
-    created->ref();   /* the wrapper keeps it alive */
-
     {
         AntbValue* v = wrapNode(engine, created.get());
         if (v) {
@@ -3749,12 +3754,29 @@ void* createContext()
     }
 }
 
+/* Defined next to stopRealm(); declared early because destroyContext() (view
+ * teardown) has to run the same realm cleanup. */
+static void teardownRealm(RuntimeState* state);
+
 void destroyContext(void* context)
 {
     RuntimeState* state = (RuntimeState*)context;
 
     if (!state || state == &g_emptyState)
         return;
+
+    /* The view is going away. macross_view_destroy() normally ran the document
+     * teardown first (documentWillUnload: pagehide/unload + stopRealm); this is
+     * the fallback for a view that never bound a document, and the one place
+     * that releases everything left. Running it twice would only repeat the
+     * log line, so key it off the VM: a stopped realm has engine == 0. */
+    if (state->engine)
+        teardownRealm(state);
+
+    /* No successor realm will release this generation's pins: the view is
+     * gone, so release them now. */
+    releasePinnedNodes(state->generation);
+    state->pinsPendingRelease = 0;
 
     {
         std::vector<RuntimeState*>& states = runtimeStates();
@@ -3766,12 +3788,6 @@ void destroyContext(void* context)
             }
         }
     }
-
-    if (state->engine)
-        antb_engine_destroy(state->engine);
-
-    /* No realm teardown ran (view destroyed): drop the CSSOM refs now. */
-    cssomReleaseRefs(state);
 
     if (g_currentState == state)
         g_currentState = &g_emptyState;
@@ -4682,10 +4698,6 @@ static void loadPolyfills(void)
  *
  * The host keeps the context handle (the RuntimeState), so only the engine
  * inside the state is replaced - the Page -> context mapping stays valid. */
-/* The generation whose pins are waiting to be released. The nodes of the
- * outgoing document are still used by WebCore while the realm is torn down,
- * so they are released one generation later. */
-static unsigned long g_pinsPendingRelease = 0;
 
 /* Cancels every resource that belongs to the given realm (inclusive) and is
  * still in flight: XHR requests, module downloads and queued imports. Called
@@ -4724,15 +4736,23 @@ static void cancelInFlightResources(unsigned long generation)
  * waiting. */
 static volatile LONG g_teardownStart = 0;
 
-/* Stops the current realm: the page's JS world goes away with its document.
- * The VM is destroyed, so its globals, its module registry and its timers
- * cannot be seen by the next document. */
-static void stopRealm(void)
+/* Releases everything a realm owns: its in-flight resources, its pinned DOM
+ * nodes, its wrappers, its CSSOM refs and finally the VM. The VM is destroyed,
+ * so its globals, its module registry and its timers cannot be seen by the
+ * next document.
+ *
+ * `state` need not be the active state: a tab close tears down a view whose
+ * context is not the one the engine thread last activated. The g_* mirrors are
+ * pointed at `state` for the duration and restored afterwards, so the body
+ * below keeps operating on the right realm. Engine thread only. */
+static void teardownRealm(RuntimeState* state)
 {
-    RuntimeState* state = g_currentState;
+    RuntimeState* outer = g_currentState;
 
     if (!state || state == &g_emptyState)
         return;
+
+    g_currentState = state;
 
     agbLog(AGB_LOG_EVT, "realm stop gen=%lu url=%s",
            state->generation,
@@ -4744,10 +4764,10 @@ static void stopRealm(void)
 
     /* The nodes of the previous realm can be released now (their document
      * was replaced a generation ago). */
-    if (g_pinsPendingRelease)
-        releasePinnedNodes(g_pinsPendingRelease);
+    if (state->pinsPendingRelease)
+        releasePinnedNodes(state->pinsPendingRelease);
 
-    g_pinsPendingRelease = state->generation;
+    state->pinsPendingRelease = state->generation;
 
     /* Values owned by the old engine have to go before the engine does. */
     if (g_docObj) {
@@ -4843,6 +4863,19 @@ static void stopRealm(void)
 
     if (getenv("AGB_EVT_DEBUG"))
         agbLog(AGB_LOG_EVT, "realm stopped (generation=%lu)", state->generation);
+
+    /* A teardown of a non-active state must not leave the mirrors pointing at
+     * it: the engine thread may activate another view right after. When the
+     * state *is* the active one it stays active with engine == 0, so
+     * beginNewRealm() can rebuild it for the next document. */
+    if (outer != state)
+        g_currentState = outer;
+}
+
+/* Stops the current realm (the navigation path). */
+static void stopRealm(void)
+{
+    teardownRealm(g_currentState);
 }
 
 /* Starts a fresh realm (a new VM) for the next document. Called before the new
@@ -8969,10 +9002,10 @@ int docCreateElement(AntbEngine* engine, AntbValue* self, AntbValue** args, int 
     if (!element || ec)
         return 1;
 
-    /* The wrapper outlives the RefPtr: keep the node alive for the JS handle.
-     * The reference is never released (bounded by the document lifetime). */
-    element->ref();
-
+    /* No extra ref: wrapNode() pins the node for as long as this realm lives,
+     * which is exactly the lifetime the wrapper needs. A second, untracked ref
+     * here leaked the node (and, through Node::m_document, its whole document)
+     * on every tab close (R141). */
     {
         AntbValue* v = wrapNode(engine, element.get());
         if (v) {
@@ -9006,8 +9039,6 @@ int docCreateElementNS(AntbEngine* engine, AntbValue* self, AntbValue** args, in
     if (!node)
         return 1;
 
-    node->ref();
-
     {
         AntbValue* v = wrapNode(engine, node.get());
 
@@ -9037,8 +9068,6 @@ int docCreateTextNode(AntbEngine* engine, AntbValue* self, AntbValue** args, int
 
     if (!node)
         return 1;
-
-    node->ref();
 
     {
         AntbValue* v = wrapNode(engine, node.get());
@@ -9070,8 +9099,6 @@ int docCreateComment(AntbEngine* engine, AntbValue* self, AntbValue** args, int 
 
     if (!node)
         return 1;
-
-    node->ref();
 
     {
         AntbValue* v = wrapNode(engine, node.get());
@@ -9221,7 +9248,6 @@ int docCreateDocumentFragment(AntbEngine* engine, AntbValue* self, AntbValue**, 
     if (!fragment)
         return 1;
 
-    fragment->ref();
     {
         AntbValue* wrapped = wrapNode(engine, fragment.get());
         if (wrapped) {
@@ -9476,7 +9502,6 @@ int imageConstructor(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
     if (!img || ec)
         return 1;
 
-    img->ref();
     {
         AntbValue* wrapped = wrapNode(engine, img.get());
         if (wrapped) {
@@ -9670,7 +9695,6 @@ int nodeCloneNode(AntbEngine* engine, AntbValue* self, AntbValue** args, int arg
     if (!copy)
         return 1;
 
-    copy->ref();   /* the wrapper outlives this RefPtr */
     {
         AntbValue* wrapped = wrapNode(engine, copy.get());
         if (wrapped) {

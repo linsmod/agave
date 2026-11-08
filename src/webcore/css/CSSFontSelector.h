@@ -53,6 +53,12 @@ public:
 
     void fontLoaded(CSSFontFace*);
 
+    /* The document is being detached: drop every @font-face so this selector
+     * stops being a client of the CachedFont resources. Without it, a font
+     * that finishes after detach still calls back into a document that has no
+     * render tree (R141). */
+    void documentDetached();
+
     bool isEmpty() const;
 
     DocLoader* docLoader() const;
@@ -60,6 +66,7 @@ public:
 protected:
     Document* m_document; // No need to ref, since we will always get destroyed before the document does.
     HashMap<String, RefPtr<CSSFontFace> > m_fonts;
+    bool m_detached;
 };
 
 } // namespace WebCore

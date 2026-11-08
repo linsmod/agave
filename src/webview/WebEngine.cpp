@@ -104,6 +104,18 @@ MC_STATUS macross_view_destroy(MaCrossView* view)
 	if (view->view && view->view->page())
 		AntRuntime::registerPageContext(view->view->page(), 0);
 
+	/* The view is going away: run the same document teardown a navigation
+	 * runs (pagehide -> visibilitychange -> unload -> realm stop) while the
+	 * DOM and the VM are both still alive. It also cancels the realm's
+	 * in-flight resources and releases the nodes its JS wrapped; doing that
+	 * only in destroyContext() (after the DOM is gone) was the tab-close
+	 * lifecycle gap (R141). destroyContext() keeps it as the fallback for a
+	 * view that never bound a document. */
+	if (view->jscontext) {
+		AntRuntime::activateContext(view->jscontext);
+		AntRuntime::documentWillUnload();
+	}
+
 	/* Tear the DOM down first: destroying the VM before the frames can leave
 	 * frame teardown calling into a dead engine. */
 	delete view->view;

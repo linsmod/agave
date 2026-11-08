@@ -1,0 +1,18 @@
+<!doctype html>
+<html><head><title>tab-lifecycle-pins</title></head>
+<body>
+<script>
+/* Nodes created from JS used to take an untracked ref in the binding, so every
+ * one of them kept the document alive after the tab closed (R141). 300 divs
+ * with text children: the leak used to be ~600 nodes. */
+var i;
+for (i = 0; i < 300; i++) {
+  var d = document.createElement('div');
+  d.textContent = 'node-' + i;
+  d.setAttribute('data-i', String(i));
+  document.body.appendChild(d);
+  d.getBoundingClientRect();
+}
+document.title = 'pins-' + document.getElementsByTagName('div').length;
+</script>
+</body></html>

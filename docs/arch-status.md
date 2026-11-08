@@ -58,6 +58,10 @@ ant 的反直觉行为（字面量属性名、`typeof`、`delete` 等）见 [ref
   写盘发生在文档 teardown，可读要等下一次 engine 重建；导航类测试页需要跨文档状态时用 cookie。
 - **多控件共用一条引擎线程**：每个控件有独立 JS 上下文，但同一进程的控件不会真正并行；
   回调线程契约见 [arch-embedding.md](arch-embedding.md)。
+- **关 view/tab 是引擎线程上的异步拆除**：`agave_webview_destroy()` 只标记 + 入队，引擎线程在
+  `event_dispatch()` 之后跑 `documentWillUnload`（pagehide/visibilitychange/unload）→ realm
+  teardown → DOM/VM 销毁；宿主线程调用时等一次回收（2 s 上限）。文档级资源的清理挂在
+  `Document::detach()` 上（媒体、字体），见 R141 与 [design-tab-teardown.md](design-tab-teardown.md)。
 - **下载面板仍是普通 realm**（没有独立生命周期），面板每次打开重新读快照；后续见 [plan-roadmap.md](plan-roadmap.md)。
 
 ## 3. 怎么验证

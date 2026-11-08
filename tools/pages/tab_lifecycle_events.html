@@ -1,0 +1,13 @@
+<!doctype html>
+<html><head><title>tab-lifecycle-events</title>
+<script>
+/* Teardown listeners: the [evt] channel must show pagehide before unload and
+ * both before "realm stop". */
+window.addEventListener('pagehide', function () {});
+window.addEventListener('unload', function () {});
+document.addEventListener('visibilitychange', function () {});
+</script>
+</head>
+<body>
+<h1>tab-lifecycle-events</h1>
+</body></html>

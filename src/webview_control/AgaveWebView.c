@@ -62,6 +62,9 @@ static DWORD agwQueueWaitType(int* type);
 #define AGW_MSG_DOWNLOAD (WM_APP + 0x53)
 #define AGW_MSG_CONTEXT (WM_APP + 0x54)
 #define AGW_MSG_UNRESPONSIVE (WM_APP + 0x55)
+/* Destroy the control window on the thread that created it (see
+ * agave_webview_destroy: the engine thread may be the caller for popups). */
+#define AGW_MSG_RETIRE (WM_APP + 0x56)
 
 #define AGW_MAX_DOWNLOADS 32
 
@@ -206,6 +209,17 @@ struct AgaveWebView {
     volatile LONG      busy;
     DWORD              busySince;
 
+    /* The thread that created `hwnd`: DestroyWindow() must run there. Tabs are
+     * created by the host, popups by the engine thread (agwOnOpenWindow). */
+    DWORD              hwndThread;
+    /* Reap queue link (engine thread only). A destroyed view is torn down
+     * between engine iterations, never inside the host's destroy() call. */
+    struct AgaveWebView* reapNext;
+    /* Signalled when the engine thread has finished tearing the view down.
+     * destroy() waits on a duplicate of it, so a host that closes a tab and
+     * exits (the probe, the last window) still gets the full teardown. */
+    HANDLE             reapEvent;
+
     char               url[2048];
     char               title[512];
     char               status[512];
@@ -242,8 +256,14 @@ static int              g_queueTail;
 static int              g_nextViewId = 1;
 static volatile int     g_engineQuit;
 static HANDLE           g_engineThread;
+static DWORD            g_engineThreadId;
 static volatile int     g_engineStarted;
 static int              g_classRegistered;
+/* Views the host destroyed, waiting for the engine thread to tear them down
+ * (guarded by g_lock). The engine thread owns WebCore, the Ant VM and the
+ * surface buffers, so the teardown runs there - not in the host's thread while
+ * macross_event_dispatch() is firing that page's timers (R141). */
+static AgaveWebView*    g_reapHead;
 
 /* ------------------------------------------------------------------------- */
 /* small helpers                                                              */
@@ -290,25 +310,111 @@ static AgaveWebView* agwByView(MaCrossView* view)
 
 
 /* Frees the control once the engine thread is done with it. destroy() may be
- * called while the engine is inside macross_view_update on this item. */
+ * called while the engine is inside macross_view_update on this item, or while
+ * macross_event_dispatch() is firing that page's timers. */
 static void agwDestroySurface(AgaveWebView* item);
 
-static void agwFreeItem(AgaveWebView* item)
+/* Window destruction belongs to the thread that created it: tabs are created by
+ * the host, popups (agwOnOpenWindow) by the engine thread. A host that creates a
+ * tab and an engine that creates a popup therefore each get their own thread to
+ * run DestroyWindow() on. */
+static void agwRetireWindow(AgaveWebView* item)
 {
-    agwDestroySurface(item);
+    HWND hwnd = item->hwnd;
 
-    if (item->hwnd) {
-        SetWindowLongPtrW(item->hwnd, GWLP_USERDATA, 0);
-        DestroyWindow(item->hwnd);
-        item->hwnd = NULL;
+    if (!hwnd)
+        return;
+
+    item->hwnd = NULL;
+    SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+
+    if (GetCurrentThreadId() == item->hwndThread)
+        DestroyWindow(hwnd);
+    else
+        PostMessageW(hwnd, AGW_MSG_RETIRE, 0, 0);
+}
+
+/* Under g_lock: takes the item out of the reap list. Returns 1 when this
+ * caller now owns the teardown, so exactly one thread frees a view even when
+ * the host retires it while the reaper is looking at it. */
+static int agwClaimReapLocked(AgaveWebView* item)
+{
+    AgaveWebView** link = &g_reapHead;
+
+    while (*link) {
+        if (*link == item) {
+            *link = item->reapNext;
+            item->reapNext = NULL;
+            return 1;
+        }
+        link = &(*link)->reapNext;
+    }
+    return 0;
+}
+
+/* Engine thread, after the caller claimed it out of the reap list and refs
+ * reached 0: frees the engine view (DOM + JS + document teardown), the surface
+ * buffers and the control itself. */
+static void agwDestroyNow(AgaveWebView* item)
+{
+    if (g_lastActive == item)
+        g_lastActive = NULL;
+
+    if (item->view) {
+        macross_view_destroy(item->view);
+        item->view = NULL;
+    }
+
+    agwDestroySurface(item);
+    agwRetireWindow(item);
+
+    if (item->reapEvent) {
+        /* Wake a host blocked in agave_webview_destroy(). The waiter holds its
+         * own duplicate, so closing ours is safe even while it is waiting. */
+        SetEvent(item->reapEvent);
+        CloseHandle(item->reapEvent);
+        item->reapEvent = NULL;
     }
 
     free(item);
 }
 
+/* Engine thread: tears down every retired view the engine is not using right
+ * now. Called once per iteration after macross_event_dispatch(), so a view is
+ * never destroyed while its own timers are being fired. */
+static void agwReapViews(void)
+{
+    AgaveWebView* batch[AGW_MAX_VIEWS];
+    int count = 0;
+    int i;
+    AgaveWebView** link;
+
+    agwLock();
+    link = &g_reapHead;
+    while (*link) {
+        AgaveWebView* item = *link;
+
+        if (item->refs > 0) {
+            link = &item->reapNext;
+            continue;
+        }
+
+        if (count >= AGW_MAX_VIEWS)
+            break;
+
+        *link = item->reapNext;
+        item->reapNext = NULL;
+        batch[count++] = item;
+    }
+    agwUnlock();
+
+    for (i = 0; i < count; ++i)
+        agwDestroyNow(batch[i]);
+}
+
 static void agwRelease(AgaveWebView* item)
 {
-    int shouldFree = 0;
+    int destroy = 0;
 
     if (!item)
         return;
@@ -316,22 +422,14 @@ static void agwRelease(AgaveWebView* item)
     agwLock();
     if (--item->refs <= 0 && item->destroyed) {
         /* Last reference dropped and the host already asked for the control
-         * to go away: the engine view can be destroyed here. This runs on the
-         * engine thread, which is the only place it may be freed - the host
-         * thread can be inside macross_view_update() on it. */
-        if (g_lastActive == item)
-            g_lastActive = NULL;
-        if (item->view) {
-            macross_view_destroy(item->view);
-            item->view = NULL;
-        }
-        agwDestroySurface(item);
-        shouldFree = 1;
+         * to go away: this is the engine thread, the only place it may be
+         * freed, and nobody else may claim the teardown. */
+        destroy = agwClaimReapLocked(item);
     }
     agwUnlock();
 
-    if (shouldFree)
-        agwFreeItem(item);
+    if (destroy)
+        agwDestroyNow(item);
 }
 
 static void agwPost(int type, AgaveWebView* view, const char* text,
@@ -1421,6 +1519,8 @@ static DWORD WINAPI agwEngineThread(LPVOID param)
 {
     (void)param;
 
+    g_engineThreadId = GetCurrentThreadId();
+
     if (macross_initialize(PIXEL_FORMAT_BGRA32, 1024, 768) != MC_STATUS_SUCCESS)
         return 0;
 
@@ -1517,19 +1617,36 @@ static DWORD WINAPI agwEngineThread(LPVOID param)
             }
         }
 
+        /* Retired views are torn down here: after event dispatch (their timers
+         * have run) and after this iteration's paint (refs are dropped). */
+        agwReapViews();
+
         Sleep(active ? 6 : 12);
     }
 
-    agwLock();
-    for (; g_viewCount > 0; ) {
-        AgaveWebView* item = g_views[--g_viewCount];
+    /* Shutdown: views the host retired but nobody reaped yet go through the
+     * same teardown, then the ones still alive. */
+    agwReapViews();
+    for (;;) {
+        AgaveWebView* item = NULL;
 
-        if (item && item->view) {
-            macross_view_destroy(item->view);
-            item->view = NULL;
+        agwLock();
+        if (g_viewCount > 0) {
+            item = g_views[--g_viewCount];
+            if (item) {
+                item->destroyed = 1;
+                item->refs = 0;          /* nobody pins a view at shutdown */
+                item->reapNext = g_reapHead;
+                g_reapHead = item;
+            }
         }
+        agwUnlock();
+
+        if (!item)
+            break;
+
+        agwReapViews();
     }
-    agwUnlock();
 
     macross_shutdown();
     return 0;
@@ -1708,6 +1825,15 @@ static LRESULT CALLBACK agwProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
         return 0;
 
     case AGW_MSG_STATE:
+        return 0;
+
+    case AGW_MSG_RETIRE:
+        /* agave_webview_destroy() was called from a thread other than the one
+         * that created this window (popups live on the engine thread). Destroy
+         * it here, where DestroyWindow() is allowed. The user data is already
+         * cleared, so a later message for this window finds no control. */
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+        DestroyWindow(hwnd);
         return 0;
 
     case AGW_MSG_DOWNLOAD:
@@ -2207,6 +2333,8 @@ AgaveWebView* agave_webview_create(void* parent, int x, int y, int width, int he
     if (!item)
         return NULL;
 
+    item->reapEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+
     item->zoom = 100;
     item->wantWidth = width > 0 ? width : 1;
     item->wantHeight = height > 0 ? height : 1;
@@ -2228,6 +2356,7 @@ AgaveWebView* agave_webview_create(void* parent, int x, int y, int width, int he
     }
 
     SetWindowLongPtrW(item->hwnd, GWLP_USERDATA, (LONG_PTR)item);
+    item->hwndThread = GetCurrentThreadId();
 
     agwLock();
     if (g_viewCount < AGW_MAX_VIEWS) {
@@ -2244,41 +2373,55 @@ AgaveWebView* agave_webview_create(void* parent, int x, int y, int width, int he
 
 void agave_webview_destroy(AgaveWebView* item)
 {
+    HANDLE reap = NULL;
+    int id;
     int index;
-    int shouldFree = 0;
 
     if (!item)
         return;
 
+    id = item->id;
+
+    /* Everything WebCore / Ant owns is torn down on the engine thread, between
+     * frames. The host may call this while the engine thread is inside
+     * macross_event_dispatch() firing this page's timers, or inside a command
+     * for another view: tearing the engine view down here was R141 (a font
+     * load callback landed on a document the host had half destroyed). The
+     * window itself still belongs to the thread that created it. */
     agwLock();
+    if (item->destroyed) {
+        agwUnlock();
+        return;                     /* destroy() twice is a no-op */
+    }
     item->destroyed = 1;
 
     index = agwIndexOf(item);
     if (index >= 0)
         g_views[index] = g_views[--g_viewCount];
 
-    /* The engine thread may be inside macross_view_update() on this view
-     * right now (it holds a reference while it does), and freeing the view
-     * under it crashes the engine. With a reference in flight the view is
-     * destroyed by the engine thread instead (agwRelease). */
-    if (item->refs <= 0) {
-        if (item->view) {
-            macross_view_destroy(item->view);
-            item->view = NULL;
-        }
-        agwDestroySurface(item);
-        shouldFree = 1;
+    if (item->reapEvent && GetCurrentThreadId() != g_engineThreadId) {
+        /* Wait for the engine thread to finish the teardown, so the caller can
+         * release everything it owns (the probe exits right after this call;
+         * the shell frees the Tab slot). A duplicate keeps the handle valid if
+         * the reaper closes the item's own handle first. */
+        DuplicateHandle(GetCurrentProcess(), item->reapEvent,
+                        GetCurrentProcess(), &reap, 0, FALSE, DUPLICATE_SAME_ACCESS);
     }
+
+    item->reapNext = g_reapHead;
+    g_reapHead = item;
     agwUnlock();
 
-    if (item->hwnd) {
-        SetWindowLongPtrW(item->hwnd, GWLP_USERDATA, 0);
-        DestroyWindow(item->hwnd);
-        item->hwnd = NULL;
-    }
+    agwRetireWindow(item);
 
-    if (shouldFree)
-        agwFreeItem(item);
+    if (reap) {
+        /* A page whose unload handler never returns must not wedge the host:
+         * the reaper finishes the teardown when the script is aborted. */
+        if (WaitForSingleObject(reap, 2000) == WAIT_TIMEOUT)
+            agbLog(AGB_LOG_SHELL, "view destroy: engine did not reap id=%d in 2s", id);
+
+        CloseHandle(reap);
+    }
 }
 
 AgaveWebView* agave_webview_create_popup(AgaveWebView* from, const char* url)
