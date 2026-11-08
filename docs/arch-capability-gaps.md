@@ -218,6 +218,7 @@ bareMedia=2px schemeBg=rgb(0, 0, 200) mediaDark=1 mediaMin=1
 
 | `border-radius: 50%`（百分比半径） | 期望圆/椭圆；当前画成**方角** | **不支持**：`RenderStyle` 的四个角半径存的是 px `IntSize`，百分比在解析期就丢了（px 半径正常；半径和超过边长时按 CSS 缩小，见 R120）。本地 `debug/radius_test.html` 的 64×64 `#g` 复现。要支持得把半径改成 `Length`、布局后按盒子尺寸解算，再让 `scaledBorderRadii()` 接百分比结果 |
 
+| 字体选择与字体盒（`font-family` 回退、`line-height: normal`） | 行盒 = hhea 的 asc/desc/lineGap 各自四舍五入后相加（与 Chrome/Skia 一致） | **部分支持（R123）**：字体盒已按字体文件度量（YaHei 12/14/16/20 → 16/19/21/26，与 Chrome 逐项一致），`line-height: var(--x)` 也会在字体确定后展开。⚠ 两个已知缺口：①`FontCachePS::createFontPlatformData()` 把 arial/segoe ui/times/… **整个家族**替换成 Microsoft YaHei（为 CJK 缺字），所以西文也用雅黑渲染（“字显得大”的根因）；`AGB_FONT_NO_SUBST=1` 是临时对照开关，关掉后十组字体与 Chrome 全对，但混排行盒只按**主字体**度量（12px 中文 16 vs Chrome 20，需要按 run 的 fallback 字体取 max），且默认字体是 Times 而不是本机 Chrome 的 **Noto Sans SC**（calc_terms 因此仍差 3px）。②没有 web font 加载（`document.fonts` 只是桩） |
 已确认可用的（别再当缺口重开）：块/inline-block/float/绝对定位/margin auto/padding/border-radius/
 opacity/渐变（R11）、`var()` 含 fallback 与元素级级联（R39）、`box-sizing`（R39）、
 `prefers-color-scheme` 与 `matchMedia` 的尺寸/方向查询（R39）、flex 子元素 blockify（R39）、

@@ -163,20 +163,20 @@ gfx_font_adapter::gfx_font_adapter(const char* name, int charset, scalar height,
             if (omt.otmEMSquare > 0) {
                 scalar scale = height / INT_TO_SCALAR(omt.otmEMSquare);
 
-                /* Round the sum once and let descent carry the remainder:
-                 * rounding asc and desc separately turned a 1.0em font box
-                 * (asc 12.25 + desc 1.75 at 14px) into 12+1=13 against the
-                 * file's own 14 - the splits get truncated separately again
-                 * downstream (baseline int arithmetic). */
-                scalar scaledAsc = INT_TO_SCALAR(hAsc) * scale;
-                scalar scaledBox = INT_TO_SCALAR(hAsc - hDesc) * scale;
-                int box = iround(scaledBox);
-                int asc = iround(scaledAsc);
+                /* Round each metric on its own, like Skia/Chrome: the line box
+                 * is ascender + descender + lineGap, each rounded from the
+                 * file. Rounding the *sum* once (the old code) lost a pixel
+                 * whenever both halves round up - Microsoft YaHei at 14px is
+                 * 14.8 + 3.7, i.e. 15 + 4 = 19, but the sum was rounded to 18,
+                 * and Times New Roman's 1px line gap was dropped entirely. */
+                int asc = iround(INT_TO_SCALAR(hAsc) * scale);
+                int desc = iround(INT_TO_SCALAR(-hDesc) * scale);
+                int gap = iround(INT_TO_SCALAR(hGap) * scale);
 
                 m_impl->ascent = INT_TO_SCALAR(asc);
-                m_impl->descent = INT_TO_SCALAR(box - asc);
-                m_impl->leading = INT_TO_SCALAR(iround(INT_TO_SCALAR(hGap) * scale));
-                m_impl->height = INT_TO_SCALAR(box);
+                m_impl->descent = INT_TO_SCALAR(desc);
+                m_impl->leading = INT_TO_SCALAR(gap);
+                m_impl->height = INT_TO_SCALAR(asc + desc);
             }
             break;
         }

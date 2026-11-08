@@ -242,6 +242,10 @@ class StyledElement;
         Node *parentNode;
         RenderStyle::PseudoId pseudoStyle;
         CSSValue* m_lineHeightValue;
+        /* Raw text of a line-height declaration that still contains var():
+         * line-height is applied after the font is final, so the variable has
+         * to be expanded at that later point (applyExpandedProperty). */
+        String m_lineHeightRawValue;
         bool fontDirty;
         bool isXMLDoc;
         

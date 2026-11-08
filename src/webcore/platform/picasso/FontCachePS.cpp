@@ -184,17 +184,20 @@ FontPlatformData* FontCache::createFontPlatformData(const FontDescription& fontD
     const char* requested = (const char*)family.deprecatedString().ascii();
     const char* effective = requested;
 
-    for (int i = 0; latinOnly[i]; ++i) {
-        if (requested && !strcasecmp(requested, latinOnly[i])) {
-            effective = "Microsoft YaHei";
-            break;
+    bool substitute = !getenv("AGB_FONT_NO_SUBST");
+    if (substitute) {
+        for (int i = 0; latinOnly[i]; ++i) {
+            if (requested && !strcasecmp(requested, latinOnly[i])) {
+                effective = "Microsoft YaHei";
+                break;
+            }
         }
-    }
 
-    /* Anything else (a macOS/Android family, a typo, a face that exists but has
-     * no CJK glyphs) is checked with GDI and replaced when it cannot draw CJK. */
-    if (effective == requested && !faceDrawsCjk(effective))
-        effective = "Microsoft YaHei";
+        /* Anything else (a macOS/Android family, a typo, a face that exists but has
+         * no CJK glyphs) is checked with GDI and replaced when it cannot draw CJK. */
+        if (effective == requested && !faceDrawsCjk(effective))
+            effective = "Microsoft YaHei";
+    }
 
     ps_font* font = ps_font_create ((char*)effective, CHARSET_UNICODE,
                                 fontDescription.computedPixelSize(), blod, italic);

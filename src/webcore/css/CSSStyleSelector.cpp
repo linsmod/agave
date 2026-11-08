@@ -873,6 +873,7 @@ RenderStyle* CSSStyleSelector::styleForElement(Element* e, RenderStyle* defaultP
     // The order is (1) high-priority not important, (2) high-priority important, (3) normal not important
     // and (4) normal important.
     m_lineHeightValue = 0;
+    m_lineHeightRawValue = String();
 
     /* Custom properties first: every var() below resolves against them. */
     resolveCustomProperties(parentStyle == style ? 0 : parentStyle);
@@ -890,7 +891,18 @@ RenderStyle* CSSStyleSelector::styleForElement(Element* e, RenderStyle* defaultP
         updateFont();
 
     // Line-height is set when we are sure we decided on the font-size
-    if (m_lineHeightValue)
+    if (!m_lineHeightRawValue.isEmpty()) {
+        /* `line-height: var(--x)` kept its raw text because the variable can
+         * only be resolved here, after the font is final. Expanding earlier
+         * (or not at all) left the property at its initial `normal`, which is
+         * how DeepSeek's footer lost its 23px line box. */
+        String expanded = CSSParser::expandVariables(m_lineHeightRawValue, m_customProperties.get());
+
+        if (!expanded.isNull())
+            applyExpandedProperty(CSS_PROP_LINE_HEIGHT, expanded);
+        else if (m_lineHeightValue)
+            applyProperty(CSS_PROP_LINE_HEIGHT, m_lineHeightValue);
+    } else if (m_lineHeightValue)
         applyProperty(CSS_PROP_LINE_HEIGHT, m_lineHeightValue);
 
     // Now do the normal priority UA properties.
@@ -961,6 +973,7 @@ RenderStyle* CSSStyleSelector::pseudoStyleForElement(RenderStyle::PseudoId pseud
     style->noninherited_flags._styleType = pseudoStyle;
     
     m_lineHeightValue = 0;
+    m_lineHeightRawValue = String();
     // High-priority properties.
     applyDeclarations(true, false, 0, m_matchedDecls.size() - 1);
     applyDeclarations(true, true, firstAuthorRule, lastAuthorRule);
@@ -972,7 +985,18 @@ RenderStyle* CSSStyleSelector::pseudoStyleForElement(RenderStyle::PseudoId pseud
         updateFont();
 
     // Line-height is set when we are sure we decided on the font-size
-    if (m_lineHeightValue)
+    if (!m_lineHeightRawValue.isEmpty()) {
+        /* `line-height: var(--x)` kept its raw text because the variable can
+         * only be resolved here, after the font is final. Expanding earlier
+         * (or not at all) left the property at its initial `normal`, which is
+         * how DeepSeek's footer lost its 23px line box. */
+        String expanded = CSSParser::expandVariables(m_lineHeightRawValue, m_customProperties.get());
+
+        if (!expanded.isNull())
+            applyExpandedProperty(CSS_PROP_LINE_HEIGHT, expanded);
+        else if (m_lineHeightValue)
+            applyProperty(CSS_PROP_LINE_HEIGHT, m_lineHeightValue);
+    } else if (m_lineHeightValue)
         applyProperty(CSS_PROP_LINE_HEIGHT, m_lineHeightValue);
     
     // Now do the normal priority properties.
@@ -1984,6 +2008,7 @@ void CSSStyleSelector::applyDeclarations(bool applyFirst, bool isImportant,
                 switch(current.id()) {
                     case CSS_PROP_LINE_HEIGHT:
                         m_lineHeightValue = current.value();
+                        m_lineHeightRawValue = current.rawValue();
                         first = !applyFirst; // we apply line-height later
                         break;
                     case CSS_PROP_COLOR:
@@ -3844,6 +3869,7 @@ void CSSStyleSelector::applyProperty(int id, CSSValue *value)
             FontDescription fontDescription = parentStyle->fontDescription();
             style->setLineHeight(parentStyle->lineHeight());
             m_lineHeightValue = 0;
+            m_lineHeightRawValue = String();
             if (style->setFontDescription(fontDescription))
                 fontDirty = true;
         } else if (isInitial) {
@@ -3851,11 +3877,13 @@ void CSSStyleSelector::applyProperty(int id, CSSValue *value)
             fontDescription.setGenericFamily(FontDescription::StandardFamily);
             style->setLineHeight(RenderStyle::initialLineHeight());
             m_lineHeightValue = 0;
+            m_lineHeightRawValue = String();
             if (style->setFontDescription(fontDescription))
                 fontDirty = true;
         } else if (primitiveValue) {
             style->setLineHeight(RenderStyle::initialLineHeight());
             m_lineHeightValue = 0;
+            m_lineHeightRawValue = String();
             FontDescription fontDescription;
             theme()->systemFont(primitiveValue->getIdent(), fontDescription);
             // Double-check and see if the theme did anything.  If not, don't bother updating the font.

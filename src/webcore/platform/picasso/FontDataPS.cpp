@@ -48,12 +48,16 @@ void FontData::platformInit()
 
     m_lineGap = info.leading;
     m_unitsPerEm = info.unitsEM;
-    /* "normal" line height is the font box (ascender+descender), the way
-     * direct TTF readers (Chrome) compute it: adding the line gap inflated
-     * every font-normal inline box (an icon web font with hhea asc+desc
-     * = 1.0em measured 15px at font-size 14 against the file's own 14). The
-     * gap stays in m_lineGap for anything that needs the full spacing. */
-    m_lineSpacing = m_ascent + m_descent;
+    /* "normal" line height is ascender + descender + line gap, the three
+     * individually rounded - what Chrome/Skia report as the font's line box.
+     * Dropping the gap (all of it, since 774fc1d) made every font with a
+     * non-zero hhea lineGap 1px short: Times New Roman at 12/14/16px is
+     * 15/16/18 in Chrome, we produced 14/15/17. */
+    m_lineSpacing = m_ascent + m_descent + m_lineGap;
+    if (getenv("AGB_FONT_DEBUG"))
+        fprintf(stderr, "[fontdbg] size=%g ascent=%g descent=%g leading=%g unitsEm=%u xHeight=%g\n",
+                (double)m_font.size(), (double)m_ascent, (double)m_descent,
+                (double)info.leading, (unsigned)info.unitsEM, (double)m_xHeight);
 	ps_set_font(getGlobalContext(), f);
 }
 

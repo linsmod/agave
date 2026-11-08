@@ -207,6 +207,8 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
 | 页面 | `AGB_TITLE_DEBUG=1` / `AGB_SCRIPT_DEBUG=1` | `document.title` 轮询 / tokenizer 脚本加载 |
 | CSS/布局 | `AGB_CSS_DEBUG=1` / `AGB_LAYOUT_DEBUG=1` / `AGB_BG_DEBUG=1` | 未实现 CSS 属性日志 / 布局 / 背景层 |
 | flex | `AGB_FLEX_DEBUG=1` | 每个 `RenderFlexibleBox` 的 `[flex] lines`（inner/wrap/行数）、每子项 `base/min/max/final/extra`，以及 `block-end` 的 `w=/over=`（两者不一致 = 子项被当普通块重排过，R81） |
+| 字体 | `AGB_FONT_DEBUG=1` | 每个 `FontData::platformInit` 一行 `[fontdbg]`：size / ascent / descent / leading / unitsEm / xHeight（行盒 = asc+desc+leading，各独立 round，R123） |
+| 字体 | `AGB_FONT_NO_SUBST=1` | **临时对照开关**：不把 arial/times/segoe ui 等家族替换成 Microsoft YaHei（R123 的缺口诊断用；关掉后西文与 Chrome 逐字体一致，但混排行盒只有主字体度量） |
 | sticky | `AGB_STICKY_DEBUG=1` | 每次 `RenderBox::stickyPositionOffset()`：`top/bottom`、box/scrollport/containing block 的矩形与最终 `d=(dx,dy)`（R82）。滚动后没有这行 = 没人重算（没重绘） |
 | CSS/视口 | `AGB_VIEWPORT_DEBUG=1` | 打印 vw/vh 变量注册（`-agb-vwunit-…`）与每个变量在当前视口下的 px 值，以及含 vw/vh 的 `calc` 模板代入结果（R69） |
 | 配色方案 | `AGB_COLOR_SCHEME=dark` / `light` / `auto` | `prefers-color-scheme` 的答案。**默认 light**（不跟随系统）；`auto` 才读注册表 `AppsUseLightTheme`；`dark`/`light` 钉死（R86） |

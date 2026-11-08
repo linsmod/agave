@@ -1,0 +1,12 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>font metrics</title><style>
+  html, body { margin: 0; padding: 0; }
+  .row { display: block; width: 300px; background: #eee; margin-bottom: 4px;
+         font-family: 'Microsoft YaHei'; line-height: normal; }
+</style></head><body>
+<!-- Line boxes use the font's own hhea metrics, each rounded on its own plus
+     the line gap (Chrome/Skia): 13+3, 15+4, 17+4, 22+5 at 12/14/16/20px. -->
+<div class="row" style="font-size: 12px" data-case="yh12">Hg</div>
+<div class="row" style="font-size: 14px" data-case="yh14">Hg</div>
+<div class="row" style="font-size: 16px" data-case="yh16">Hg</div>
+<div class="row" style="font-size: 20px" data-case="yh20">Hg</div>
+</body></html>
