@@ -119,7 +119,9 @@ if (OPT_SHELL AND WIN32)
     add_executable(agave_shell WIN32 ${PROJ_ROOT}/examples/browser_shell/main.c)
     target_include_directories(agave_shell PRIVATE ${PROJ_ROOT}/include ${PROJ_OUT})
     target_compile_definitions(agave_shell PRIVATE AGW_USE_DLL)
-    target_link_libraries(agave_shell PRIVATE ${LIB_NAME} user32 gdi32 shell32 comdlg32)
+    # dist carries the vendored libpng/zlib: the probe writes --shot .png files
+    # itself (libagave links dist privately, which does not reach an exe).
+    target_link_libraries(agave_shell PRIVATE ${LIB_NAME} dist user32 gdi32 shell32 comdlg32)
 
     add_executable(agave_embed WIN32 ${PROJ_ROOT}/examples/embed_demo/main.c)
     target_include_directories(agave_embed PRIVATE ${PROJ_ROOT}/include ${PROJ_OUT})

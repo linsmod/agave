@@ -49,8 +49,14 @@ agave_shell.exe --probe <url> [--eval <js>] [--wait ms] [--settle ms] [--timeout
 **无头语义**：`--probe` 在创建任何窗口之前解析命令行，命中就直奔 `probeRun()`——不建浏览器主窗口、
 不建工具栏、不读/写 session/bookmark 文件。唯一的窗口是 `WS_POPUP|WS_EX_TOOLWINDOW` 的**隐藏**父窗口。
 stderr 会打一行 `[probe] headless window hidden, AGB_PROBE_SHOW=1 to show (pid <pid>)`。
-`--shot <bmp>` 抓的是控件自己的 mirror 缓冲（引擎线程每帧写的那份），**不需要**显示窗口；
-可以和 `--eval`/`--eval-file` 同用：探针先跑脚本、等 `--settle`，再等一帧才抓（否则拿到的是
+`--shot <png|bmp>` 抓的是控件自己的 mirror 缓冲（引擎线程每帧写的那份），**不需要**显示窗口。
+扩展名决定编码：`.png` 由壳自己用 libpng 写（默认，不用再转图），`.bmp` 是 32 位 bottom-up
+原始 DIB（`pixel_check.py` 一直读的那个），其它扩展名直接报错而不是写错格式。
+`--shot-rect x,y,w,h` 把捕获裁到一条矩形（**CSS 像素**，原点在视口左上角）——直接抓单个元素：
+`--eval` 里 `scrollIntoView()` 后把 `getBoundingClientRect()` 的四个值传进去即可（`--zoom` 下会自动
+换算成设备像素，所以文件尺寸是 `rect × zoom`）；超出视口的部分会被裁掉，整块都在视口外则报错退出
+（不会留一张看起来像渲染 bug 的空白图）。
+--shot 可以和 `--eval`/`--eval-file` 同用：探针先跑脚本、等 `--settle`，再等一帧才抓（否则拿到的是
 eval 之前的像素，滚动/改 DOM 后的效果看不到，R82）。典型用法是「脚本给元素画框/上色 → 截图」，
 R119 的 SVG 对位就是这么量出来的。
 `AGB_PROBE_SHOW=1` 才 ShowWindow，只在调试「窗口可见时行为不同」的路径时才用。
@@ -409,9 +415,10 @@ ant 自身 CLI / 基础设施的开关（`ANT_MANIFEST_URL`、`ANT_SANDBOX_*`、
   `transform_repaint.html` 做像素断言、对 `scrollbar_hidden.html` 断言 `::-webkit-scrollbar`
   隐藏后的视口宽度，输出 `LAYOUT=PASS`。加几何页不用改脚本（滚动条页没有 `data-case`，
   由专用断言覆盖）。
-- **像素断言**：`python tools/pixel_check.py <bmp> 250,150,ff0000 450,150,ffffff [--tol 8]`
-  —— 读探针 `--shot` 的 BMP（32/24 位、bottom-up），`x,y,RRGGBB` 是截图坐标（左上原点）。
-  绘制类回归（裁剪、变换、placeholder 消失）用它，几何用 `layout_diff.py`。
+- **像素断言**：`python tools/pixel_check.py <png|bmp> 250,150,ff0000 450,150,ffffff [--tol 8]`
+  —— 读探针 `--shot` 的图（PNG 8 位 RGB/RGBA 或 BMP 32/24 位，两种都直接读），`x,y,RRGGBB`
+  是截图坐标（左上原点）。绘制类回归（裁剪、变换、placeholder 消失）用它，几何用 `layout_diff.py`。
+  图是从 `--shot-rect` 裁出来的，坐标就相对那块矩形。
 - **点查 Chrome 的固定套路（`tools/chrome_probe.py`）**：几何之外的"Chrome 到底怎么算的"
   一律走这一条命令，别再手写 CDP 脚本（手写的容易连到用户自己的浏览器、漏 `Emulation`、
   忘了 enable 需要的域）：
@@ -447,8 +454,13 @@ ant 自身 CLI / 基础设施的开关（`ANT_MANIFEST_URL`、`ANT_SANDBOX_*`、
   （`data-props` 指定要读的计算属性）。加页面：`tools/pages/layout/*.html`，一套跑多个：
   `python tools/layout_diff.py tools/pages/layout/*.html`。
 - **一条命令截图**：`pwsh -File tools/screenshot.ps1 -Url <url> -Out <png> -Wait 12000`
-  —— 内部就是 `agave_shell.exe --probe <url> --shot <bmp>`：探针窗口是隐藏的 `WS_POPUP`，
+  —— 内部就是 `agave_shell.exe --probe <url> --shot <png>`：探针窗口是隐藏的 `WS_POPUP`，
   从不 `ShowWindow`，抓的是控件的 mirror 缓冲（`agave_webview_paint_to`），所以屏幕上什么都不会出现。
+  `-Out` 写 `.png`/`.bmp` 时探针直接落盘（PNG 由壳编码，**没有** BMP 中转），`.jpg/.gif/.tif` 才在
+  脚本里转一次。
+  只要页面上某个元素：`-Rect x,y,w,h` 透传给 `--shot-rect`（CSS 像素，可直接用
+  `getBoundingClientRect()`；输出按 `--zoom` 换算成设备像素），输出的图就是那块，不必事后裁。例：
+  `pwsh -File tools/screenshot.ps1 -Url file:///E:/mybrowsers/agave/debug/shot_page.html -Out build-zig-native/box.png -Rect 0,0,440,200`
   不要启动 GUI 壳截图、不要 `SetForegroundWindow`、不要抓屏（会抓到任务视图/别的窗口，也会打扰用户）。
   需要像素时优先用它；能只看数字就别截图。
 - **画面"少了一块"（文字/图标不见了）先分清是布局还是绘制**：三步定死，别猜。

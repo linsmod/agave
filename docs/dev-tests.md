@@ -78,8 +78,10 @@
 - 只放**当前行为**的断言：修 bug 时先写页面看它红，再改代码看它绿。
 
 **像素**：在 `run_layout_tests.ps1` 里加一段仿照现成 `== paint: …` 的组：
-`--probe <页面> --shot build-zig-native\xxx.bmp`，再用 `python tools/pixel_check.py <bmp> x,y,RRGGBB [...]`
-或区域计数规格 `x0,y0,x1,y1,RRGGBB,MIN`。截图坐标是左上原点。
+`--probe <页面> --shot build-zig-native\xxx.png`，再用 `python tools/pixel_check.py <png|bmp> x,y,RRGGBB [...]`
+或区域计数规格 `x0,y0,x1,y1,RRGGBB,MIN`。截图坐标是左上原点；PNG/BMP 都直接读。
+只想看某个元素时加 `--shot-rect x,y,w,h`（CSS 像素，也就是 `getBoundingClientRect()` 的值），
+坐标就相对那块矩形。
 
 **单点/规则/字体**：不写新脚本，用
 `python tools/chrome_probe.py --url <url> --js-file debug/x.js --agave`（同一段 JS 两边跑）、

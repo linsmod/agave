@@ -54,6 +54,7 @@ agave 是**从零移植的浏览器**：WebKit 2008 的 WebCore（解析/布局/
 - **不要求**：不要求每个提交写 changelog，不要求为纯重构补文档，也不把细节搬进 `AGENTS.md`。
 
 ## rules
+PowerShell doesn't support heredoc.  DONT USE `<<` IN PWSH
 
 DON'T CLEAN THE BUILD UNLESS YOU MUST.
 
@@ -87,9 +88,9 @@ WHEN USER REPLY A QUESTION MARK[?] ONLY, MAY BE RETRY CONNECTION. IF MUTI QUESTI
    改Ant核心需要在ant repo中添加测试，改完后任务收尾时要提交。
 3. **重编前先停掉正在跑的 `agave_shell`**：旧进程占着 `antjsb.dll` 时链接静默失败，跑的还是旧 dll。
 4. `prelude.js` / `polyfills.js` 是**运行时**从 exe 旁加载的：拷到 `build-zig-native\` 即生效，**不用重链**。
-5. 探针默认**真无头**（不建浏览器窗口）；要像素用 `--shot <bmp>`（抓控件自己的 mirror 缓冲），`AGB_PROBE_SHOW=1` 只在调试「窗口可见时行为不同」的路径时才用。
+5. 探针默认**真无头**（不建浏览器窗口）；要像素用 `--shot <png|bmp>`（抓控件自己的 mirror 缓冲；`.png` 由壳自己编码、不用再转，`.bmp` 留给 pixel_check），`--shot-rect x,y,w,h` 直接裁到某块；`AGB_PROBE_SHOW=1` 只在调试「窗口可见时行为不同」的路径时才用。
 6. **不要 rebase** ant 的 `agave-bridge`：基线是冻结 tag，落后上游 54 个 commit，同步另外安排。
-7. **截图不许打扰用户**：用 `tools/screenshot.ps1`（= `--probe ... --shot`，窗口从不 `ShowWindow`，不抢焦点、不上任务栏）；不要启动 GUI 壳截图、不要 `SetForegroundWindow`、不要截屏抓桌面。能用探针数字判断的，就不要截图。
+7. **截图不许打扰用户**：用 `tools/screenshot.ps1`（= `--probe ... --shot [-rect x,y,w,h]`，窗口从不 `ShowWindow`，不抢焦点、不上任务栏）；不要启动 GUI 壳截图、不要 `SetForegroundWindow`、不要截屏抓桌面。能用探针数字判断的，就不要截图。
 
 ## 三个最常用命令
 

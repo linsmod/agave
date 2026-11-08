@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
-"""Assert pixels in a probe screenshot (BMP, 32/24-bit, bottom-up).
+"""Assert pixels in a probe screenshot (BMP 32/24-bit, or PNG 8-bit RGB/RGBA).
 
 Usage:
-    python tools/pixel_check.py shot.bmp 250,150,ff0000 450,150,ffffff --tol 8
+    python tools/pixel_check.py shot.png 250,150,ff0000 450,150,ffffff --tol 8
     python tools/pixel_check.py shot.bmp 0,0,55,139,ffffff,100
+
+The probe writes PNG directly (`--shot x.png`) and BMP for the older pixel
+suites (`--shot x.bmp`); both are read here, so no conversion is needed either
+way. PNG support is deliberately small (non-interlaced, 8-bit, no palette) -
+it exists to read screenshots, not to be an image library.
 
 Two spec forms (screenshot coordinates, origin top-left):
 
@@ -18,12 +23,82 @@ Exit code 1 when any spec fails, so this doubles as a paint regression check
 """
 import struct
 import sys
+import zlib
+
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 
-def load_bmp(path):
-    with open(path, "rb") as f:
-        data = f.read()
+def load_png(data, path):
+    pos = len(PNG_SIGNATURE)
+    idat = b""
+    width = height = depth = color_type = interlace = None
 
+    while pos + 8 <= len(data):
+        length = struct.unpack_from(">I", data, pos)[0]
+        kind = data[pos + 4:pos + 8]
+        chunk = data[pos + 8:pos + 8 + length]
+        pos += 12 + length
+
+        if kind == b"IHDR":
+            width, height, depth, color_type, _, _, interlace = struct.unpack(">IIBBBBB", chunk)
+        elif kind == b"IDAT":
+            idat += chunk
+        elif kind == b"IEND":
+            break
+
+    if width is None:
+        raise SystemExit("%s: PNG without IHDR" % path)
+    if depth != 8 or color_type not in (2, 6) or interlace != 0:
+        raise SystemExit("%s: unsupported PNG (depth=%d color=%d interlace=%d); "
+                         "want non-interlaced 8-bit RGB/RGBA" % (path, depth, color_type, interlace))
+
+    bpp = 3 if color_type == 2 else 4
+    stride = width * bpp
+    raw = zlib.decompress(idat)
+    rows = []
+    prev = bytearray(stride)
+    offset = 0
+
+    for _ in range(height):
+        filter_type = raw[offset]
+        offset += 1
+        line = bytearray(raw[offset:offset + stride])
+        offset += stride
+
+        if filter_type == 1:            # Sub
+            for x in range(bpp, stride):
+                line[x] = (line[x] + line[x - bpp]) & 0xFF
+        elif filter_type == 2:          # Up
+            for x in range(stride):
+                line[x] = (line[x] + prev[x]) & 0xFF
+        elif filter_type == 3:          # Average
+            for x in range(stride):
+                left = line[x - bpp] if x >= bpp else 0
+                line[x] = (line[x] + ((left + prev[x]) >> 1)) & 0xFF
+        elif filter_type == 4:          # Paeth
+            for x in range(stride):
+                left = line[x - bpp] if x >= bpp else 0
+                up = prev[x]
+                upleft = prev[x - bpp] if x >= bpp else 0
+                p = left + up - upleft
+                pa, pb, pc = abs(p - left), abs(p - up), abs(p - upleft)
+                pred = left if (pa <= pb and pa <= pc) else (up if pb <= pc else upleft)
+                line[x] = (line[x] + pred) & 0xFF
+        elif filter_type != 0:
+            raise SystemExit("%s: bad PNG filter %d" % (path, filter_type))
+
+        rows.append(line)
+        prev = line
+
+    def pixel_at(x, y):
+        row = rows[y]
+        off = x * bpp
+        return row[off], row[off + 1], row[off + 2]
+
+    return width, height, pixel_at
+
+
+def load_bmp(data, path):
     if data[:2] != b"BM":
         raise SystemExit("%s: not a BMP" % path)
 
@@ -49,6 +124,15 @@ def load_bmp(path):
     return width, height, pixel
 
 
+def load_image(path):
+    with open(path, "rb") as f:
+        data = f.read()
+
+    if data.startswith(PNG_SIGNATURE):
+        return load_png(data, path)
+    return load_bmp(data, path)
+
+
 def main():
     if len(sys.argv) < 3:
         raise SystemExit(__doc__)
@@ -66,7 +150,7 @@ def main():
         specs.append(args[i])
         i += 1
 
-    width, height, pixel = load_bmp(path)
+    width, height, pixel = load_image(path)
     failures = 0
 
     def close(got, want):

@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<!--
+  shot_rect.html - fixture for the probe's capture path (tools/run_layout_tests.ps1).
+
+  Two stacked 200x100 blocks with flat colours: asserting a pixel tells you
+  exactly which client row the capture started at, so --shot-rect offsets,
+  crop height and the PNG/BMP encoders are all verifiable without a font.
+-->
+<html><head><meta charset="utf-8"><title>shot rect</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #ffffff; }
+  #top    { position: absolute; left: 0; top: 0;   width: 200px; height: 100px; background: #c02020; }
+  #bottom { position: absolute; left: 0; top: 100px; width: 200px; height: 100px; background: #2050c0; }
+</style></head>
+<body><div id="top"></div><div id="bottom"></div></body></html>

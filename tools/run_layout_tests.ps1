@@ -24,6 +24,8 @@
     * flexom    - getComputedStyle(el).flex / .flexGrow / .flexShrink /
                   .flexBasis, compared with the strings headless Chrome reports
                   for the same page (cap_flex_cssom.html, R115).
+    * shot      - the probe's capture path: --shot writes PNG itself and
+                  --shot-rect crops in client pixels (shot_rect.html).
     * lifecycle - document.readyState is loading/interactive/complete as the
                   parser advances, and document.body is null (not undefined)
                   until <body> exists - the branch bilibili's log-reporter
@@ -36,10 +38,10 @@
 #>
 $ErrorActionPreference = 'Stop'
 
-# Scratch BMPs go next to the executable, not into debug/: the headless probe
-# writes them from inside its sandbox, whose only writable tree is the build
-# directory (the same reason run_media_tests.ps1 keeps its shots there). With
-# them under debug/ every shot silently fails and three pixel groups report
+# Scratch captures (BMP/PNG) go next to the executable, not into debug/: the
+# headless probe writes them from inside its sandbox, whose only writable tree is
+# the build directory (the same reason run_media_tests.ps1 keeps its shots there).
+# With them under debug/ every shot silently fails and the pixel groups report
 # "probe failed".
 $root = Split-Path -Parent $PSScriptRoot
 Push-Location $root
@@ -130,6 +132,45 @@ try {
         # be the black border.
         & python tools/pixel_check.py $bmp `
             21,21,ffffff 120,44,f9fafb 20,90,000000 120,112,3964fe
+        if ($LASTEXITCODE -ne 0) { $failed++ }
+    }
+
+    Write-Host '== shot: PNG output + --shot-rect crop'
+    # Pins the capture path itself: the probe encodes PNG by itself (no BMP
+    # round trip) and --shot-rect crops in client pixels. shot_rect.html is
+    # red on rows 0..99 and blue on 100..199, so a cropped capture proves the
+    # offset, the height AND the encoder at once.
+    function Get-PngSize([string]$Path) {
+        $b = [System.IO.File]::ReadAllBytes($Path)
+        $w = ([int]$b[16] -shl 24) -bor ([int]$b[17] -shl 16) -bor ([int]$b[18] -shl 8) -bor [int]$b[19]
+        $h = ([int]$b[20] -shl 24) -bor ([int]$b[21] -shl 16) -bor ([int]$b[22] -shl 8) -bor [int]$b[23]
+        return "${w}x${h}"
+    }
+    $url = 'file:///' + (Join-Path $root 'tools/pages/shot_rect.html').Replace('\', '/')
+    $full = Join-Path $root 'build-zig-native\shot_full.png'
+    & (Join-Path $root 'build-zig-native\agave_shell.exe') --probe $url `
+        --wait 800 --settle 100 --timeout 30000 --shot $full | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host 'shot png: probe failed'
+        $failed++
+    } else {
+        $size = Get-PngSize $full
+        if ($size -ne '1100x800') { Write-Host "shot png: size $size, want 1100x800"; $failed++ }
+        & python tools/pixel_check.py $full 10,10,c02020 10,150,2050c0 500,500,ffffff
+        if ($LASTEXITCODE -ne 0) { $failed++ }
+    }
+
+    $crop = Join-Path $root 'build-zig-native\shot_rect.png'
+    & (Join-Path $root 'build-zig-native\agave_shell.exe') --probe $url `
+        --wait 800 --settle 100 --timeout 30000 --shot $crop --shot-rect 0,50,200,100 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host 'shot rect: probe failed'
+        $failed++
+    } else {
+        $size = Get-PngSize $crop
+        if ($size -ne '200x100') { Write-Host "shot rect: size $size, want 200x100"; $failed++ }
+        # Rows 0..49 of the crop are still red, 50..99 are already blue.
+        & python tools/pixel_check.py $crop 10,10,c02020 10,49,c02020 10,50,2050c0 10,90,2050c0 199,0,c02020
         if ($LASTEXITCODE -ne 0) { $failed++ }
     }
 

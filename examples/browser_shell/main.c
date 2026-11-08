@@ -16,6 +16,10 @@
 #include <string.h>
 #include <wchar.h>
 
+/* libpng, from the vendored copy the engine already builds (dist/): the probe
+ * writes PNG directly instead of leaving a BMP for the caller to convert. */
+#include <png.h>
+
 #include "agave_webview.h"
 #include "../../src/webview/AgbLog.h"
 
@@ -2594,7 +2598,9 @@ static int g_probePollCount;      /* readyState polls in the current round  */
 static int g_probeRoundsDone;     /* every round finished -> OK exit code   */
 static char g_probeToken[64];     /* per-reload marker for the NEW document */
 static int  g_probeVisible;       /* AGB_PROBE_SHOW: the window is on screen  */
-static char g_probeShot[512];     /* --shot: write a BMP here, then exit     */
+static char g_probeShot[512];     /* --shot: capture here, then exit        */
+static int  g_probeShotRect[4];   /* --shot-rect x,y,w,h (client pixels)     */
+static int  g_probeShotRectSet;   /* a rect was given (else the whole view) */
 static int  g_probeShotSettled;   /* one frame elapsed since --eval          */
 static char g_probeKeys[512];     /* --keys: typed into the page before eval */
 static int  g_probeKeysDone;      /* the --keys list was typed out             */
@@ -2612,7 +2618,182 @@ static int  g_probeZoomDone;
 /* Offscreen capture. A hidden window gets no WM_PAINT, so PrintWindow has
  * nothing to render; the control keeps its own mirror buffer, and
  * agave_webview_paint_to() blits that into our DIB. Nothing is ever shown, so
- * a screenshot cannot disturb the user (iron law 7). */
+ * a screenshot cannot disturb the user (iron law 7).
+ *
+ * The extension picks the encoding: .bmp is the raw 32-bit bottom-up DIB that
+ * pixel_check.py has always read, .png goes straight out through the libpng
+ * copy the engine already links (dist/) - no post-processing step needed.
+ * --shot-rect crops the grab to a client-pixel rect, so one element can be
+ * captured without cropping the image afterwards. */
+
+#define PROBE_SHOT_BMP     0
+#define PROBE_SHOT_PNG     1
+#define PROBE_SHOT_UNKNOWN (-1)
+
+static int probeShotFormat(const char* path)
+{
+    const char* dot = strrchr(path, '.');
+    const char* slash = strrchr(path, '\\');
+    const char* fwd = strrchr(path, '/');
+
+    if (fwd && (!slash || fwd > slash))
+        slash = fwd;
+
+    /* A dot in a directory name is not an extension; no extension at all is
+     * still an unambiguous "give me an image", so it means PNG. */
+    if (!dot || (slash && dot < slash))
+        return PROBE_SHOT_PNG;
+
+    if (!_stricmp(dot, ".bmp"))
+        return PROBE_SHOT_BMP;
+    if (!_stricmp(dot, ".png"))
+        return PROBE_SHOT_PNG;
+
+    return PROBE_SHOT_UNKNOWN;
+}
+
+/* Writes the (rx,ry,rw,rh) crop of a bottom-up 32-bit BGRA frame as a
+ * top-down RGB PNG. Alpha is dropped on purpose: the DIB section keeps none
+ * (BI_RGB, alpha byte unused), and a screenshot with a transparent background
+ * would be worse than one without an alpha channel. */
+static int probeWritePng(const char* path, const unsigned char* bits,
+                         int w, int h, int stride,
+                         int rx, int ry, int rw, int rh)
+{
+    FILE* f;
+    png_structp png;
+    png_infop info = NULL;
+    unsigned char* row;
+    int y, ok = 0;
+
+    f = fopen(path, "wb");
+    if (!f) {
+        agbLog(AGB_LOG_PROBE, "shot: cannot open %s (errno %d)", path, errno);
+        return 0;
+    }
+
+    row = (unsigned char*)malloc((size_t)rw * 3);
+    if (!row) {
+        fclose(f);
+        return 0;
+    }
+
+    png = png_create_write_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
+    if (!png) {
+        free(row);
+        fclose(f);
+        return 0;
+    }
+    info = png_create_info_struct(png);
+    if (!info) {
+        png_destroy_write_struct(&png, NULL);
+        free(row);
+        fclose(f);
+        return 0;
+    }
+
+    /* libpng reports failures (write error, allocation) by longjmp'ing here.
+     * f/png/info/row are set before this point and never reassigned, so their
+     * values are still valid on the error path. */
+    if (setjmp(png_jmpbuf(png))) {
+        png_destroy_write_struct(&png, &info);
+        free(row);
+        fclose(f);
+        remove(path);
+        return 0;
+    }
+
+    png_init_io(png, f);
+    png_set_IHDR(png, info, (png_uint_32)rw, (png_uint_32)rh, 8,
+                 PNG_COLOR_TYPE_RGB, PNG_INTERLACE_NONE,
+                 PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
+    png_write_info(png, info);
+
+    for (y = 0; y < rh; ++y) {
+        /* PNG rows run top-down; the DIB is bottom-up, so client row
+         * (ry + y) lives at DIB row (h - 1 - (ry + y)). */
+        const unsigned char* src = bits
+            + (size_t)(h - 1 - (ry + y)) * (size_t)stride + (size_t)rx * 4;
+        int x;
+
+        for (x = 0; x < rw; ++x) {
+            row[x * 3 + 0] = src[x * 4 + 2];
+            row[x * 3 + 1] = src[x * 4 + 1];
+            row[x * 3 + 2] = src[x * 4 + 0];
+        }
+        png_write_row(png, row);
+    }
+
+    png_write_end(png, NULL);
+    png_destroy_write_struct(&png, &info);
+    free(row);
+    ok = ferror(f) ? 0 : 1;
+    fclose(f);
+    if (!ok)
+        remove(path);
+    return ok;
+}
+
+/* BMP stays exactly what it always was (bottom-up, 32-bit): pixel_check.py and
+ * the pixel-assertion suites read it. The crop is written bottom-up too, so a
+ * full-frame capture is byte-identical to the old output. */
+static int probeWriteBmp(const char* path, const unsigned char* bits,
+                         int w, int h, int stride,
+                         int rx, int ry, int rw, int rh)
+{
+    BITMAPFILEHEADER fh;
+    BITMAPINFOHEADER bh;
+    int rowBytes = rw * 4;
+    int y, ok;
+    FILE* f;
+
+    f = fopen(path, "wb");
+    if (!f) {
+        agbLog(AGB_LOG_PROBE, "shot: cannot open %s (errno %d)", path, errno);
+        return 0;
+    }
+
+    memset(&bh, 0, sizeof(bh));
+    bh.biSize = sizeof(BITMAPINFOHEADER);
+    bh.biWidth = rw;
+    bh.biHeight = rh;               /* bottom-up: the BMP order */
+    bh.biPlanes = 1;
+    bh.biBitCount = 32;
+    bh.biCompression = BI_RGB;
+
+    memset(&fh, 0, sizeof(fh));
+    fh.bfType = 0x4D42;             /* 'BM' */
+    fh.bfOffBits = (DWORD)(sizeof(fh) + sizeof(BITMAPINFOHEADER));
+    fh.bfSize = fh.bfOffBits + (DWORD)((size_t)rowBytes * (size_t)rh);
+
+    fwrite(&fh, sizeof(fh), 1, f);
+    fwrite(&bh, sizeof(BITMAPINFOHEADER), 1, f);
+    for (y = 0; y < rh; ++y) {
+        /* Bottom-up crop row y is client row (ry + rh - 1 - y); the DIB is
+         * bottom-up as well, so its row index is (h - ry - rh + y). */
+        const unsigned char* src = bits
+            + (size_t)(h - ry - rh + y) * (size_t)stride + (size_t)rx * 4;
+        fwrite(src, (size_t)rowBytes, 1, f);
+    }
+
+    ok = ferror(f) ? 0 : 1;
+    fclose(f);
+    if (!ok)
+        remove(path);
+    return ok;
+}
+
+/* CSS px -> client (device) px at the probe's zoom, rounding half away from
+ * zero. The mirror buffer is device px, while getBoundingClientRect() - the
+ * thing a --shot-rect value comes from - is CSS px: at --zoom 125 a 100px box
+ * covers 125 mirror pixels. */
+static int probeRectCssToClient(int value, int zoomPercent)
+{
+    long v = (long)value * zoomPercent;
+
+    return (int)((v >= 0 ? v + 50 : v - 50) / 100);
+}
+
 static int probeCapture(const char* path)
 {
     HWND target = (HWND)agave_webview_hwnd(g_probeView);
@@ -2620,9 +2801,9 @@ static int probeCapture(const char* path)
     HDC mdc;
     HBITMAP dib;
     BITMAPINFO bi;
-    BITMAPFILEHEADER fh;
     unsigned char* bits = NULL;
-    int w, h, rowBytes, ok = 0;
+    int w, h, stride, fmt, ok = 0;
+    int rx = 0, ry = 0, rw, rh;
 
     if (!target || !GetClientRect(target, &rc))
         return 0;
@@ -2631,6 +2812,46 @@ static int probeCapture(const char* path)
     h = (int)(rc.bottom - rc.top);
     if (w <= 0 || h <= 0)
         return 0;
+
+    fmt = probeShotFormat(path);
+    if (fmt == PROBE_SHOT_UNKNOWN) {
+        agbLog(AGB_LOG_PROBE, "shot: unknown extension in %s (use .png or .bmp)", path);
+        return 0;
+    }
+
+    /* --shot-rect is in CSS px, origin at the viewport's top-left: exactly what
+     * getBoundingClientRect() reports for an element scrolled into view, at any
+     * --zoom. Both edges are converted before subtracting so a fractional zoom
+     * cannot shrink the crop by a pixel. Clamp instead of failing: a stale rect
+     * still yields the part that is on screen, and a rect fully outside is
+     * reported as a failure, not a blank file that looks like a rendering bug. */
+    rw = w;
+    rh = h;
+    if (g_probeShotRectSet) {
+        int zoom = g_probeZoom > 0 ? g_probeZoom : 100;
+        int x0 = probeRectCssToClient(g_probeShotRect[0], zoom);
+        int y0 = probeRectCssToClient(g_probeShotRect[1], zoom);
+        int x1 = probeRectCssToClient(g_probeShotRect[0] + g_probeShotRect[2], zoom);
+        int y1 = probeRectCssToClient(g_probeShotRect[1] + g_probeShotRect[3], zoom);
+
+        rx = x0;
+        ry = y0;
+        rw = x1 - x0;
+        rh = y1 - y0;
+
+        if (rx < 0) { rw += rx; rx = 0; }
+        if (ry < 0) { rh += ry; ry = 0; }
+
+        if (rx >= w || ry >= h || rw <= 0 || rh <= 0) {
+            agbLog(AGB_LOG_PROBE, "shot: rect %d,%d,%d,%d (css px) is outside the %dx%d view",
+                   g_probeShotRect[0], g_probeShotRect[1],
+                   g_probeShotRect[2], g_probeShotRect[3],
+                   (w * 100 + zoom / 2) / zoom, (h * 100 + zoom / 2) / zoom);
+            return 0;
+        }
+        if (rx + rw > w) rw = w - rx;
+        if (ry + rh > h) rh = h - ry;
+    }
 
     memset(&bi, 0, sizeof(bi));
     bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
@@ -2653,23 +2874,15 @@ static int probeCapture(const char* path)
 
     agave_webview_paint_to(g_probeView, mdc, w, h);
 
-    rowBytes = w * 4;
-    {
-        FILE* f = fopen(path, "wb");
+    stride = w * 4;
+    if (fmt == PROBE_SHOT_BMP)
+        ok = probeWriteBmp(path, bits, w, h, stride, rx, ry, rw, rh);
+    else
+        ok = probeWritePng(path, bits, w, h, stride, rx, ry, rw, rh);
 
-        if (f) {
-            memset(&fh, 0, sizeof(fh));
-            fh.bfType = 0x4D42;     /* 'BM' */
-            fh.bfOffBits = (DWORD)(sizeof(fh) + sizeof(BITMAPINFOHEADER));
-            fh.bfSize = fh.bfOffBits + (DWORD)((size_t)rowBytes * (size_t)h);
-            fwrite(&fh, sizeof(fh), 1, f);
-            fwrite(&bi.bmiHeader, sizeof(BITMAPINFOHEADER), 1, f);
-            fwrite(bits, (size_t)rowBytes * (size_t)h, 1, f);
-            fclose(f);
-            ok = 1;
-            agbLog(AGB_LOG_PROBE, "shot %dx%d -> %s", w, h, path);
-        }
-    }
+    if (ok)
+        agbLog(AGB_LOG_PROBE, "shot %dx%d at %d,%d %s -> %s",
+               rw, rh, rx, ry, fmt == PROBE_SHOT_BMP ? "bmp" : "png", path);
 
     DeleteObject(dib);
     DeleteDC(mdc);
@@ -3622,11 +3835,21 @@ static void probeUsage(void)
             "  --nav-after <ms> [--nav-url <url>]  navigate while the page is busy\n"
             "  --hide-after <ms> / --show-after <ms>  Page Visibility change\n"
             "            (document.hidden + visibilitychange) without a GUI tab switch\n"
-            "  --shot <path>  write a BMP of what the page painted and exit; the\n"
-            "            window stays hidden, so this is the headless screenshot\n"
-            "            path (no focus stealing, nothing on screen). Combine it\n"
-            "            with --eval/--eval-file to capture what the script changed\n"
+            "  --shot <path>  capture what the page painted and exit; the extension\n"
+            "            picks the format: .png (written directly, no conversion\n"
+            "            step) or .bmp (raw 32-bit bottom-up, what pixel_check.py\n"
+            "            reads); any other extension is refused. The window stays\n"
+            "            hidden, so this is the headless screenshot path (no focus\n"
+            "            stealing, nothing on screen). Combine it with\n"
+            "            --eval/--eval-file to capture what the script changed\n"
             "            (the capture waits for the script and --settle)\n"
+            "  --shot-rect <x,y,w,h>  crop the capture to a CSS-pixel rect\n"
+            "            (origin at the viewport's top-left, i.e. the values\n"
+            "            getBoundingClientRect() reports for an element scrolled\n"
+            "            into view): --shot-rect 10,10,320,200 captures one\n"
+            "            element. The file stays device pixels, so with --zoom 125\n"
+            "            a 100px rect comes out 125px wide. Parts outside the\n"
+            "            viewport are clamped to what is on screen\n"
             "  --keys <text>  type into the page before --eval, through the real\n"
             "            WM_KEYDOWN/WM_CHAR/WM_KEYUP path (the page must focus its\n"
             "            own control; {backspace} {enter} {tab} {left} {right}\n"
@@ -3731,6 +3954,23 @@ static void parseShellArgv(void)
         } else if (!strcmp(argv[i], "--shot") && i + 1 < argc) {
             strncpy(g_probeShot, argv[++i], sizeof(g_probeShot) - 1);
             g_probeShot[sizeof(g_probeShot) - 1] = 0;
+        } else if (!strcmp(argv[i], "--shot-rect") && i + 1 < argc) {
+            int rx = 0, ry = 0, rw = 0, rh = 0;
+
+            /* x,y,w,h in client pixels (origin at the viewport's top-left). */
+            if (sscanf(argv[++i], "%d,%d,%d,%d", &rx, &ry, &rw, &rh) == 4
+                && rw > 0 && rh > 0) {
+                g_probeShotRect[0] = rx;
+                g_probeShotRect[1] = ry;
+                g_probeShotRect[2] = rw;
+                g_probeShotRect[3] = rh;
+                g_probeShotRectSet = 1;
+            } else {
+                fprintf(stderr, "[shell] --shot-rect wants x,y,w,h (e.g. 10,10,320,200), got %s\n",
+                        argv[i]);
+                g_argError = 1;
+                return;
+            }
         } else if (!strcmp(argv[i], "--keys") && i + 1 < argc) {
             strncpy(g_probeKeys, argv[++i], sizeof(g_probeKeys) - 1);
             g_probeKeys[sizeof(g_probeKeys) - 1] = 0;
