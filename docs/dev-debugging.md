@@ -412,6 +412,33 @@ ant 自身 CLI / 基础设施的开关（`ANT_MANIFEST_URL`、`ANT_SANDBOX_*`、
 - **像素断言**：`python tools/pixel_check.py <bmp> 250,150,ff0000 450,150,ffffff [--tol 8]`
   —— 读探针 `--shot` 的 BMP（32/24 位、bottom-up），`x,y,RRGGBB` 是截图坐标（左上原点）。
   绘制类回归（裁剪、变换、placeholder 消失）用它，几何用 `layout_diff.py`。
+- **点查 Chrome 的固定套路（`tools/chrome_probe.py`）**：几何之外的"Chrome 到底怎么算的"
+  一律走这一条命令，别再手写 CDP 脚本（手写的容易连到用户自己的浏览器、漏 `Emulation`、
+  忘了 enable 需要的域）：
+
+  ```powershell
+  # 同一段 JS 在两边跑：脚本末尾 console.log('RESULT ' + JSON.stringify(...))
+  python tools/chrome_probe.py --url <url> --js-file debug/x.js --agave --wait-load
+
+  # 哪条 CSS 规则真的命中、值是什么（CDP CSS.getMatchedStylesForNode）
+  python tools/chrome_probe.py --url <url> --matched-styles .ds-input --props margin
+
+  # 实际用的是哪个字体家族（CDP CSS.getPlatformFontsForNode）
+  python tools/chrome_probe.py --url <url> --platform-fonts '#a'
+
+  # Chrome 参考截图（和探针 --shot 对拍）
+  python tools/chrome_probe.py --url file:///E:/... --screenshot build-zig-native/chrome.png
+  ```
+
+  内部固定：`--headless=new` + 临时 `--user-data-dir` + 独立 `--remote-debugging-port`
+  （不碰用户会话）、`Page/DOM/CSS/Runtime.enable`、`Emulation.setDeviceMetricsOverride`
+  （默认 1084×800，与 `layout_diff.py` 一致）。agave 侧复用 `--probe --eval-file` 并只解析
+  `[con-log]` 行，所以同一个 JS 文件两边都能跑。
+  ⚠ 视口对齐：agave 探针默认 1100×800（16px 经典滚动条），要对 Chrome 的 1084 就用
+  `--agave-resize 1084x800`；本地页面用 `file:///E:/...`（正斜杠）。
+  ⚠ 字体：Chrome 本机（zh-CN）默认字体是 **Noto Sans SC**，agave 默认 Times 且会把
+  arial/times/segoe ui 整族替换成 Microsoft YaHei（R123，`AGB_FONT_NO_SUBST=1` 可对照），
+  字体相关的差异先看这一条再怀疑布局。
 - **布局对拍 Chrome**：`python tools/layout_diff.py tools/pages/layout/<page>.html [--tol 1]`
   —— 同一份 `tools/pages/layout/lib_measure.js` 在 agave 探针和 headless Chrome 里各跑一遍，
   两边视口都固定成 1084×800（agave = 1100 窗口减 16px 经典滚动条；Chrome = `--hide-scrollbars`
