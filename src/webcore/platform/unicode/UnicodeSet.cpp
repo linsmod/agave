@@ -378,11 +378,12 @@ UBool UnicodeString::allocate(int32_t capacity) {
 
 UnicodeString &
 UnicodeString::copyFrom(const UnicodeString &src, UBool fastCopy) {
-  if(this == 0 || this == &src) {
+  /* this/&src can never be null in well-defined C++. */
+  if(this == &src) {
     return *this;
   }
 
-  if(&src == 0 || src.isBogus()) {
+  if(src.isBogus()) {
     setToBogus();
     return *this;
   }

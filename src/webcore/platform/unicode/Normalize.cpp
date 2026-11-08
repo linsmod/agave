@@ -985,10 +985,8 @@ UNormalizationCheckResult unorm_getQuickCheck(USChar32 c, UNormalizationMode mod
 
 uint16_t unorm_getFCD16FromCodePoint(USChar32 c) 
 {
-    UErrorCode errorCode;
     uint16_t fcd;
 
-    errorCode=U_ZERO_ERROR;
     if(
         fcdTrie.index==NULL
     ) {
@@ -1444,7 +1442,7 @@ static const UnicodeSet * internalGetSerializedNX(int32_t options, int32_t nxInd
     UMTX_CHECK(NULL, (UBool)(nxCache[options]!=NULL), isCached);
 
     if( !isCached &&
-        canonStartSets!=NULL &&
+        /* canonStartSets is a generated static array, never NULL. */
         canonStartSets[nxIndex]!=0 && canonStartSets[nxIndex+1]>canonStartSets[nxIndex]
     ) {
         USerializedSet sset;

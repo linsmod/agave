@@ -1608,7 +1608,11 @@ int NextWordBreak(const UChar* text, int textlength, WORD_BREAK* pwordinfo)
 }
 
 
-#define   MAX_CCH     1
+/* Line-break classification works on a window of up to four characters: the
+ * pair table (findLineBrk) needs the current and the next one, and the
+ * CJK rules look one more ahead. It must stay >= 2: FirstLineBreak and
+ * NextLineBreak read lbclsmg[1] to advance. */
+#define   MAX_CCH     4
 
 // Define some short-cuts for the table
 #define oo DIRECT_BRK               // '_' break allowed
@@ -1752,10 +1756,10 @@ static  BREAKCLASS  classifyofCodePoint(unsigned int codepoint)
     
     bkClass =FindinDB(CHINESE_START1,CHINESE_END1,codepoint);    //first look up chinese area
     
-    if(XX ==bkClass)
+    if(FXX ==bkClass)
     {
         bkClass =FindinDB(CHINESE_START2,CHINESE_END2,codepoint);    //second look up high chinese area
-        if(XX ==bkClass)
+        if(FXX ==bkClass)
         {
             bkClass =FindinDB(0,BREAKDATA_NUM,codepoint);      //look up all the database
         }
@@ -1953,6 +1957,9 @@ int FirstLineBreak(const UChar* text, int textlength, LINE_BREAK* pLBKinfo)
             }
         }
 
+        if (len <= 1)
+            break;      /* only one character left: no pair, nothing to scan */
+
         processed = lbclsmg[1].pos;
         if (processed +lbclsmg[1].length >=textlength)
             break;
@@ -2022,6 +2029,9 @@ int NextLineBreak(const UChar* text, int textlength, LINE_BREAK* pLBKinfo)
             }
         }
         
+        if (len <= 1)
+            break;      /* only one character left: no pair, nothing to scan */
+
         processed = lbclsmg[1].pos;
         if(processed +lbclsmg[1].length >=textlength)
             break;
@@ -2067,7 +2077,7 @@ int PreviousLineBreak(const UChar* text, int textlength, LINE_BREAK* pLBKinfo)
 {
     const UChar* mchar = text;
     unsigned int wc;
-    int ch_len,index,len,i,breakpos,processed,j;
+    int ch_len,index,len,i,processed,j;
     LINE_BREAK   lbclsmg[MAX_CCH];
     BREAKACTION   lbrks[MAX_CCH];
     BREAKCLASS    lbcls[MAX_CCH];
@@ -2106,7 +2116,7 @@ int PreviousLineBreak(const UChar* text, int textlength, LINE_BREAK* pLBKinfo)
             lbcls[j] =lbclsmg[j].mlbkClass;
 
         //get line breaks of four characters
-        breakpos = findLineBrk(lbcls,lbrks,i,0);
+        findLineBrk(lbcls,lbrks,i,0);
 
         if (lbrks[0] !=COMBINING_PROHIBITED_BRK && lbrks[0] !=PROHIBITED_BRK) {
             pLBKinfo->mlbkClass =lbclsmg[0].mlbkClass;

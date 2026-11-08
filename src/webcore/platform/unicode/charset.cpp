@@ -574,6 +574,9 @@ static int utf8_conv_from_uchar (unsigned short wc, unsigned char* mchar)
 {
     int first, len;
 
+    /* The charset_ops contract takes an unsigned short (a BMP code unit), so
+     * a character is at most 0xFFFF and encodes in three bytes; the old
+     * 4/5/6-byte branches could never be reached. */
     if (wc < 0x80) {
         first = 0;
         len = 1;
@@ -582,30 +585,12 @@ static int utf8_conv_from_uchar (unsigned short wc, unsigned char* mchar)
         first = 0xC0;
         len = 2;
     }
-    else if (wc < 0x10000) {
+    else {
         first = 0xE0;
         len = 3;
     }
-    else if (wc < 0x200000) {
-        first = 0xF0;
-        len = 4;
-    }
-    else if (wc < 0x400000) {
-        first = 0xF8;
-        len = 5;
-    }
-    else {
-        first = 0xFC;
-        len = 6;
-    }
 
     switch (len) {
-        case 6:
-            mchar [5] = (wc & 0x3f) | 0x80; wc >>= 6; /* Fall through */
-        case 5:
-            mchar [4] = (wc & 0x3f) | 0x80; wc >>= 6; /* Fall through */
-        case 4:
-            mchar [3] = (wc & 0x3f) | 0x80; wc >>= 6; /* Fall through */
         case 3:
             mchar [2] = (wc & 0x3f) | 0x80; wc >>= 6; /* Fall through */
         case 2:
