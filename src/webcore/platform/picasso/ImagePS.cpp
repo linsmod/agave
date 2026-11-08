@@ -410,9 +410,7 @@ void BitmapImage::draw(GraphicsContext* context, const FloatRect& dst, const Flo
         if (m_source.hasDecodedFrame() && displayWidth > 0
             && m_source.setScaleHint(IntSize(displayWidth, displayHeight))) {
             /* Zoomed in past the decoded buffer: drop it and decode again. */
-            m_source.clearDecodedFrame();
-            m_frames.clear();
-            m_decodedSize = 0;
+            dropAdoptedFrame();
         }
         if (!m_source.hasDecodedFrame()) {
             requestAsyncDecode(IntSize(displayWidth, displayHeight));

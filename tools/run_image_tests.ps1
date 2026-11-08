@@ -274,6 +274,51 @@ if (-not $scaledMs.Count -or -not $naturalMs.Count) {
     Pass ("L3: scaled decode {0:N0}ms vs natural {1:N0}ms" -f $scaledMs.Sum, $naturalMs.Sum)
 }
 
+# 2c. tearing the document down while workers are decoding must not crash and
+#     must not leave jobs stuck (the service drops their results; the async
+#     counters must end with live=0). The memory cache usually keeps the images
+#     themselves alive after navigation, so dropped=0 is fine - what matters is
+#     the process surviving and the queue draining.
+$tdImgs = @()
+1..6 | ForEach-Object {
+    $copy = Join-Path $tmp ("td_img{0}.png" -f $_)
+    Copy-Item $png $copy -Force
+    $tdImgs += "td_img{0}.png" -f $_
+}
+$tdTarget = Join-Path $tmp 'td_target.html'
+Write-Page $tdTarget 'big_image.jpg' $false
+$tdPage = Join-Path $tmp 'td.html'
+$tdHtml = @"
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>teardown</title>
+<style>html,body{margin:0;padding:0}img{width:400px;height:260px;display:inline-block;margin:2px}</style>
+</head><body>
+<script>
+for (var i = 1; i <= 6; i++) {
+    var img = document.createElement('img');
+    img.src = 'td_img' + i + '.png';
+    document.body.appendChild(img);
+}
+setTimeout(function () { location.href = 'td_target.html'; }, 120);
+</script>
+</body></html>
+"@
+Set-Content -Path $tdPage -Value $tdHtml -Encoding utf8
+$tdUrl = "file:///$($tdPage -replace '\\', '/')"
+$rTd = Run-Probe $tdUrl $null 3000 @{ AGB_IMG_ASYNC_DEBUG = '1' }
+$tdLog = Get-Content -Raw $rTd.Log
+$tdCrash = $tdLog -match '\[crash\]'
+$tdLive = [regex]::Matches($tdLog, 'live=(\d+)') | ForEach-Object { [int]$_.Groups[1].Value }
+if ($rTd.Exit -ne 0 -and $rTd.Exit -ne 4) {
+    Fail ("teardown mid-decode: probe exit {0}" -f $rTd.Exit)
+} elseif ($tdCrash) {
+    Fail 'teardown mid-decode crashed'
+} elseif ($tdLive.Count -and ($tdLive | Select-Object -Last 1) -ne 0) {
+    Fail ("teardown mid-decode left jobs in flight (live trail: {0})" -f ($tdLive -join ','))
+} else {
+    Pass 'teardown mid-decode: no crash, decode queue drained'
+}
+
 # 3. AGB_IMG_DECODE_MS=0 restores the one-shot path (with L3 disabled, otherwise
 #    the frame is small enough to be cheap even in one shot)
 $r4 = Run-Probe $timerUrl $null 3000 @{ AGB_PERF_LOG = '1'; AGB_IMG_DECODE_MS = '0'; AGB_IMG_NO_SCALE = '1'; AGB_IMG_ASYNC = '0' }

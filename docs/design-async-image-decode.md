@@ -114,6 +114,25 @@ agwEngineThread (src/webview_control/AgaveWebView.c)
   绝不缓存半帧。重复背景（`drawPattern`）仍然同步按 natural 尺寸解（瓷砖要按图像像素重复）。
 - 动画（GIF 等）仍走原来的逐帧同步路径：服务只产出单帧。
 - 开关：`AGB_IMG_ASYNC=0` 回到内联解码（L1 + L3 仍然生效）。
+- **拆文档 / 图被销毁时的进行中解码**（R139）：
+  * `~Image` → `ImageDecodeService::cancel(this)`：把该图的槽位置空；worker 从不解引用
+    `Image`，结果回来时 `poll()` 发现槽位是空 → 删掉 `PixelsBuffer` 并丢弃。
+  * `poll()` 同时挂在 `macross_event_dispatch()`（引擎循环每轮都跑）和 `paintView()`：
+    文档拆掉以后即使**再没有一次 paint**，结果也会被收掉，不会把一个几十 MB 的帧留在服务里。
+  * `m_live` 里 `cancel()` 留下的空槽在每次 `poll()` 末尾压缩；`shutdown()` 会把
+    `m_finished` 的帧 delete、`m_queue` 清空、`request()` 在 `m_stopping` 后直接返回 false。
+  * 解码内存记账跟着 adopt 走：adopt 时计入 `decodedSize`（即使这张图再也不画，cache 也能正确
+    prune）；`cacheFrame()` 对 adopt 帧不再重复计；`destroyDecodedData()` 按 **实际缓冲尺寸**
+    减（L3 之后缓冲≠natural），adopt 帧只减一次；`BitmapImage::dropAdoptedFrame()` 负责
+    "放大到超过已解尺寸"时的扣除。
+  * `cacheFrame()` 的 `ASSERT(m_decodedSize == 0 || numFrames > 1)` 放宽为允许 adopt 帧
+    （单帧图在首次 cacheFrame 之前就可能有 decodedSize——拆文档中途 adopt 正是这样：
+    修之前直接 `0xbbadbeef` 崩溃）。
+  * 诊断：`AGB_IMG_ASYNC_DEBUG=1` 每次 `poll()` 交活时打
+    `[img-async] requests=… completed=… dropped=… live=…`；`AGB_CACHE_LOG=1` 还会在丢弃时打
+    `img decode dropped: image gone`。正常收尾应当看到 `live` 归零。
+    ⚠ 现有 fixture 下 `dropped` 一般是 0（内存缓存会保住 `CachedImage`，图不会随文档立刻销毁）；
+    这条分支真正被走到是 cache 淘汰/关 tab 时。
 - 实测（4000×3000 JPEG，400×300 显示）：`[perf]` 里不再有 `decode=`（paint 里 0 解码），
   图像由工作线程解好后**逐字节同像素**出现（`run_image_tests.ps1` 的 "off-thread" 组）；
   8 张大图 + 3 次 reload 的压测无崩溃、无新增泄漏；deepseek 登录页（iframe + 二维码）不退化。

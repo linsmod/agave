@@ -215,6 +215,7 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
 | 图片解码 | `AGB_IMG_SAMPLE_MAX=4` | 缩放绘制的盒式滤波每轴采样上限（大图缩小时精确盒=100 taps/像素）。**完整帧**用这个值，未完成帧固定 2；`0` = 精确盒（参考截图/像素对拍用） |
 | 图片解码 | `AGB_IMG_NO_SCALE=1` | 关掉 L3 的"按显示尺寸解码"（JPEG 用 libjpeg IDCT scaling 只解 1/2、1/4、1/8）。参考截图、像素对拍、怀疑缩放解码画质时用（R137） |
 | 图片解码 | `AGB_IMG_ASYNC=0` | 关掉 L2 的"工作线程解码"（`ImageDecodeService`），回到 paint 内联解码（L1+L3 仍然生效）。排查线程、对照像素、跑 canvas 相关问题时用（R138） |
+| 图片解码 | `AGB_IMG_ASYNC_DEBUG=1` | 每次 `poll()` 交活时打 `[img-async] requests=… completed=… dropped=… live=…`。`dropped>` 表示结果到达时图已经销毁（拆文档/cache 淘汰）；`live` 收尾应归零，不归零说明有 job 卡住（R139） |
 | 图片解码 | `AGB_IMG_SCALE_DEBUG=1` | 打 `[img-scale] jpeg natural=WxH display=WxH denom=N out=WxH`：确认 hint 传到了解码器、libjpeg 真的缩小了输出 |
 | 图片解码 | `[perf] ... decode=Nms` | `AGB_PERF_LOG=1` 时 `[perf]` 行里的 `decode=` 是本帧花在 libjpeg/libpng 里的时间；一帧只要解过码就会打（渐进解码会连续出现多帧） |
 | 性能 | `AGB_PROFILE=1` / `AGB_PERF_LOG=1` | RIP 采样直方图（退出时 dump `[profjs]`，用 `tools/cdb_stack.ps1 -Symbolize` 前先把 `module+0x` 聚合成 `#NN` 行）/ 帧耗时（layout+paint > 100ms 才打，**带 `rect=WxH@x,y` 与 `decode=`**：脏矩形等于视口 = 正常，等于整篇文档 = 失效路径在放大重绘（R135），`decode=` 接近 `paint=` 时是图片解码跑在 paint 里（[design-async-image-decode.md](design-async-image-decode.md)）） |

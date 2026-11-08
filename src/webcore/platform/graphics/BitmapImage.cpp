@@ -83,41 +83,56 @@ void BitmapImage::destroyDecodedData(bool incremental)
     resetFrameProgress();
     cancelAsyncDecode();
 
-    // Destroy the cached images and release them.
-    if (m_frames.size()) {
-        int sizeChange = 0;
-        int frameSize = m_size.width() * m_size.height() * pixelPerBytes();
-        for (unsigned i = incremental ? m_frames.size() - 1 : 0; i < m_frames.size(); i++) {
-            if (m_frames[i].m_frame) {
-                sizeChange -= frameSize;
-                m_frames[i].clear();
-            }
-        }
+    int sizeChange = 0;
 
-        // We just always invalidate our platform data, even in the incremental case.
-        // This could be better, but it's not a big deal.
-        m_isSolidColor = false;
-        invalidatePlatformData();
-        
-        if (sizeChange) {
-            m_decodedSize += sizeChange;
-            if (imageObserver())
-                imageObserver()->decodedSizeChanged(this, sizeChange);
+    // Destroy the cached images and release them.
+    for (unsigned i = incremental ? m_frames.size() - 1 : 0; i < m_frames.size(); i++) {
+        if (m_frames[i].m_frame) {
+            /* A cached ImageRef that views the adopted buffer is not extra
+             * memory: the adopted buffer was counted when it was delivered (see
+             * below). Only inline-decoded frames are counted here. */
+            if (!m_source.hasDecodedFrame())
+                sizeChange -= m_frames[i].m_frame->width * m_frames[i].m_frame->height * pixelPerBytes();
+            m_frames[i].clear();
         }
-        
-        if (!incremental) {
-            // Reset the image source, since Image I/O has an underlying cache that it uses
-            // while animating that it seems to never clear.
-            m_source.clear();
-            m_source.setData(m_data.get(), m_allDataReceived);
-        }
+    }
+
+    /* An adopted frame (L2) is counted by didDecodeFrame() before any ImageRef
+     * exists, so it has to be accounted for here exactly once. */
+    if (!incremental && m_source.hasDecodedFrame()) {
+        IntSize adopted = m_source.decodedFrameSize(0);
+
+        sizeChange -= adopted.width() * adopted.height() * pixelPerBytes();
+    }
+
+    // We just always invalidate our platform data, even in the incremental case.
+    // This could be better, but it's not a big deal.
+    m_isSolidColor = false;
+    invalidatePlatformData();
+
+    if (sizeChange) {
+        int newSize = (int)m_decodedSize + sizeChange;
+
+        m_decodedSize = newSize < 0 ? 0 : (unsigned)newSize;
+        if (imageObserver())
+            imageObserver()->decodedSizeChanged(this, sizeChange);
+    }
+
+    if (!incremental) {
+        // Reset the image source, since Image I/O has an underlying cache that it uses
+        // while animating that it seems to never clear.
+        m_source.clear();
+        m_source.setData(m_data.get(), m_allDataReceived);
     }
 }
 
 void BitmapImage::cacheFrame(size_t index)
 {
     size_t numFrames = frameCount();
-    ASSERT(m_decodedSize == 0 || numFrames > 1);
+    /* A single-frame image can have decodedSize before it is cached when the
+     * frame came from ImageDecodeService (L2 counts the adopted buffer at
+     * delivery so the cache can prune correctly). */
+    ASSERT(m_decodedSize == 0 || numFrames > 1 || m_source.hasDecodedFrame());
     
     if (!m_frames.size() && shouldAnimate()) {            
         // Snag the repetition count.
@@ -139,7 +154,10 @@ void BitmapImage::cacheFrame(size_t index)
     
     int sizeChange = m_frames[index].m_frame
         ? m_frames[index].m_frame->width * m_frames[index].m_frame->height * pixelPerBytes() : 0;
-    if (sizeChange) {
+    /* A frame adopted from ImageDecodeService already reported its size in
+     * didDecodeFrame() (the cache has to account for it even if the image never
+     * gets painted again); counting it twice would make decodedSize grow. */
+    if (sizeChange && !m_source.hasDecodedFrame()) {
         m_decodedSize += sizeChange;
         if (imageObserver())
             imageObserver()->decodedSizeChanged(this, sizeChange);
@@ -243,10 +261,65 @@ void BitmapImage::didDecodeFrame(PixelsBuffer* frame, unsigned generation)
     }
 
     m_decodePending = false;
+
+    /* Replace whatever we are showing. The ImageRefs are views into the old
+     * buffer; if that buffer came from *this* path it was counted at delivery
+     * (below), so clearing the refs adds nothing - but it MUST happen before the
+     * buffer goes away. */
+    int sizeChange = 0;
+
+    if (m_source.hasDecodedFrame()) {
+        IntSize old = m_source.decodedFrameSize(0);
+
+        sizeChange -= old.width() * old.height() * pixelPerBytes();
+    }
+    for (unsigned i = 0; i < m_frames.size(); ++i) {
+        if (!m_frames[i].m_frame)
+            continue;
+        if (!m_source.hasDecodedFrame())
+            sizeChange -= m_frames[i].m_frame->width * m_frames[i].m_frame->height * pixelPerBytes();
+        m_frames[i].clear();
+    }
+
+    int bytes = (int)frame->width() * (int)frame->fullHeight() * pixelPerBytes();
+
     m_source.adoptDecodedFrame(frame);
+    sizeChange += bytes;
+
+    if (sizeChange) {
+        int newSize = (int)m_decodedSize + sizeChange;
+
+        m_decodedSize = newSize < 0 ? 0 : (unsigned)newSize;
+        if (imageObserver())
+            imageObserver()->decodedSizeChanged(this, sizeChange);
+    }
 
     if (imageObserver())
         imageObserver()->imageFrameReady(this);
+}
+
+/* Zoomed past what the worker decoded: forget that frame (with its decoded-size
+ * accounting) so draw() can request a bigger one. */
+void BitmapImage::dropAdoptedFrame()
+{
+    if (!m_source.hasDecodedFrame())
+        return;
+
+    IntSize adopted = m_source.decodedFrameSize(0);
+    int bytes = adopted.width() * adopted.height() * pixelPerBytes();
+
+    for (unsigned i = 0; i < m_frames.size(); ++i)
+        m_frames[i].clear(); /* views into the buffer: no extra memory */
+
+    m_source.clearDecodedFrame();
+
+    if (bytes) {
+        int newSize = (int)m_decodedSize - bytes;
+
+        m_decodedSize = newSize < 0 ? 0 : (unsigned)newSize;
+        if (imageObserver())
+            imageObserver()->decodedSizeChanged(this, -bytes);
+    }
 }
 
 size_t BitmapImage::frameCount()

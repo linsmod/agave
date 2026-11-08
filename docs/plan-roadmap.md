@@ -279,6 +279,8 @@
 - 剩余：GIF/APNG 逐帧同步解码；PNG 无缩放解码（只挪到 worker）；**canvas `drawImage(<img>)`
   画不出东西**（既有缺口，见 [arch-capability-gaps.md](arch-capability-gaps.md)）；
   `img.decode()` 仍是立即 resolve 的 stub（`CachedImage::imageFrameReady` 是可用的挂点）。
+  拆文档/关 tab 时进行中的 job 已经处理（cancel + 结果丢弃 + 队列排空 + 记账，见 R139）：
+  `macross_event_dispatch()` 也 poll，`live` 收尾归零；`dropped` 分支要 cache 淘汰才会走到。
 - 验收：L2 后同页 `decode=0ms` 且反复导航/关窗 50 次无线程泄漏；L3 后大图 `decode` 降到 1/4 以下；
   `run_image_tests`、`run_layout_tests` 像素组、`fuzz_layer`、deepseek/v.qq smoke 不退化。
 

@@ -942,6 +942,12 @@ void macross_shutdown(void)
 void macross_event_dispatch(void)
 {
 	if (g_initialize) {
+		/* Drain finished image decodes here as well as in paintView(): a page (or
+		 * a whole document) can be torn down while a worker is decoding, and with
+		 * no paint happening the finished frame would sit in the service holding
+		 * its pixels. The engine loop pumps this every iteration. */
+		WebCore::ImageDecodeService::shared().poll();
+
 		WebCore::eventDispatch();
 	}
 }

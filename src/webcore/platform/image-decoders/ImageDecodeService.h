@@ -102,6 +102,12 @@ private:
     int m_threadCount;
     bool m_stopping;
     int m_enabled; // -1 unknown, 0 disabled, 1 enabled
+
+    /* Diagnostics (AGB_IMG_ASYNC_DEBUG=1 prints them at shutdown): jobs queued,
+     * delivered, and dropped because the image died first (document teardown). */
+    unsigned m_statRequests;
+    unsigned m_statCompleted;
+    unsigned m_statDropped;
 };
 
 }

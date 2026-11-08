@@ -16,6 +16,9 @@
 #include "ImageDecoder.h"
 #include <stdlib.h>
 
+/* The one diagnostics sink (src/webview/AgbLog.h, header-only). */
+#include "../../../webview/AgbLog.h"
+
 namespace WebCore {
 
 /* Declared in ImageSourcePS.cpp: sniff the bytes and build the right decoder. */
@@ -36,6 +39,9 @@ ImageDecodeService::ImageDecodeService()
     : m_threadCount(0)
     , m_stopping(false)
     , m_enabled(-1)
+    , m_statRequests(0)
+    , m_statCompleted(0)
+    , m_statDropped(0)
 #if defined(_WIN32) || defined(WIN32)
     , m_wake(0)
 #endif
@@ -180,10 +186,14 @@ bool ImageDecodeService::request(Image* image, const Vector<char>& data, const I
 {
     if (!image || data.isEmpty() || !enabled())
         return false;
+    if (m_stopping)
+        return false; /* no workers left to run it */
 
 #if defined(_WIN32) || defined(WIN32)
     if (!isLive(image))
         m_live.append(image);
+
+    m_statRequests++;
 
     WorkItem item;
     item.image = image;
@@ -217,21 +227,43 @@ unsigned ImageDecodeService::poll()
     LeaveCriticalSection(&m_lock);
 
     for (unsigned i = 0; i < finished.size(); ++i) {
-        /* The image may have been destroyed (cancel() nulled its slot): then
-         * the frame is just dropped. The worker never dereferenced the Image. */
-        if (!isLive(finished[i].image)) {
-            delete finished[i].frame;
-            continue;
-        }
+        /* Drop the image's slot: the job is done, delivered or not. cancel()
+         * leaves null slots behind (the image died before its result arrived),
+         * so match on the pointer instead of testing isLive() alone. */
+        bool live = false;
 
         for (unsigned j = 0; j < m_live.size(); ++j) {
             if (m_live[j] == finished[i].image) {
                 m_live.remove(j);
+                live = true;
                 break;
             }
         }
+
+        /* The image may have been destroyed (cancel() nulled its slot): then
+         * the frame is just dropped. The worker never dereferenced the Image. */
+        if (!live) {
+            m_statDropped++;
+            agbLog(AGB_LOG_CACHE, "img decode dropped: image gone (document torn down?)");
+            delete finished[i].frame;
+            continue;
+        }
+
+        m_statCompleted++;
         finished[i].image->didDecodeFrame(finished[i].frame, finished[i].generation);
     }
+
+    /* Compact the slots cancel() blanked: an image that died while its job was
+     * in flight leaves a null entry, and those must not accumulate for the life
+     * of the process. */
+    for (int i = (int)m_live.size() - 1; i >= 0; --i) {
+        if (!m_live[i])
+            m_live.remove(i);
+    }
+
+    if (finished.size() && getenv("AGB_IMG_ASYNC_DEBUG"))
+        fprintf(stderr, "[img-async] requests=%u completed=%u dropped=%u live=%u\n",
+                m_statRequests, m_statCompleted, m_statDropped, (unsigned)m_live.size());
     return finished.size();
 #else
     return 0;
@@ -262,6 +294,20 @@ void ImageDecodeService::shutdown()
         CloseHandle(m_wake);
         m_wake = 0;
     }
+
+    /* Nothing will poll any more: free what the workers produced and drop the
+     * jobs they never started (their encoded-byte copies would leak too). */
+    EnterCriticalSection(&m_lock);
+    for (unsigned i = 0; i < m_finished.size(); ++i)
+        delete m_finished[i].frame;
+    m_finished.clear();
+    m_queue.clear();
+    LeaveCriticalSection(&m_lock);
+
+    if (getenv("AGB_IMG_ASYNC_DEBUG"))
+        fprintf(stderr, "[img-async] requests=%u completed=%u dropped=%u live=%u\n",
+                m_statRequests, m_statCompleted, m_statDropped, (unsigned)m_live.size());
+    m_live.clear();
 #endif
 }
 

@@ -138,6 +138,7 @@ private:
      * through didDecodeFrame() on the engine thread. */
     void requestAsyncDecode(const IntSize& displaySize);
     virtual void didDecodeFrame(PixelsBuffer* frame, unsigned generation);
+    void dropAdoptedFrame();
     bool asyncDecodingAllowed();
     void cancelAsyncDecode();
     bool m_decodePending;
