@@ -25,6 +25,7 @@
 #include "Debug.h"
 
 #include "WebCallback.h"
+#include "ChromeClientMC.h"
 #include "WebView.h"
 #include "WebEngine.h"
 
@@ -48,6 +49,8 @@ PopupMenu::PopupMenu(PopupMenuClient* client)
     : m_popupClient(client)
     , m_scrollBar(0)
     , m_popup(0)
+    , m_ownedPopup(0)
+    , m_webView(0)
 	, m_view(0)
     , m_wasClicked(false)
     , m_itemHeight(0)
@@ -63,9 +66,12 @@ PopupMenu::PopupMenu(PopupMenuClient* client)
 
 PopupMenu::~PopupMenu()
 {
+    if (m_webView && m_webView->activePopup() == this)
+        m_webView->setActivePopup(0);
 	delete m_view;
-    if (m_popup && cb_destroy_popup_menu)
+    if (m_popup && cb_destroy_popup_menu && !m_ownedPopup)
       	cb_destroy_popup_menu(m_popup);
+    delete m_ownedPopup;
 }
 
 void PopupMenu::updateRect(int x, int y, int width, int height)
@@ -81,48 +87,163 @@ void PopupMenu::scrollRect(int sx, int sy, int x, int y, int width, int height)
     updateRect(x, y, width, height);
 }
 
+/* ------------------------------------------------------------------------- */
+/* in-view popup: the engine owns the _mc_popup_menu, the view paints it       */
+/* ------------------------------------------------------------------------- */
+
+static WebView* webViewForFrameView(FrameView* v)
+{
+    if (!v || !v->frame() || !v->frame()->page())
+        return 0;
+
+    ChromeClientMC* client = static_cast<ChromeClientMC*>(v->frame()->page()->chrome()->client());
+    return client ? client->webView() : 0;
+}
+
+void PopupMenu::invalidateAll()
+{
+    if (!m_webView)
+        return;
+
+    const IntRect& r = m_windowRect;
+    m_webView->updateRect(r.x(), r.y(), r.width(), r.height());
+}
+
+static void ownedShow(_mc_popup_menu* m)
+{
+    PopupMenu* popup = static_cast<PopupMenu*>(m->handle);
+    if (popup)
+        popup->invalidateAll();
+}
+
+static void ownedHide(_mc_popup_menu* m)
+{
+    PopupMenu* popup = static_cast<PopupMenu*>(m->handle);
+    if (!popup)
+        return;
+
+    if (popup->view() && popup->view()->activePopup() == popup)
+        popup->view()->setActivePopup(0);
+    popup->invalidateAll();
+}
+
+static void ownedMove(_mc_popup_menu* m, const MC_RECT* r)
+{
+    m->rect = *r;
+}
+
+static void ownedCapture(_mc_popup_menu* m)
+{
+}
+
+static void ownedUpdate(_mc_popup_menu* m)
+{
+    PopupMenu* popup = static_cast<PopupMenu*>(m->handle);
+    if (popup && popup->view())
+        popup->view()->updateViewNow();
+}
+
+static void ownedDirty(_mc_popup_menu* m, const MC_RECT* r)
+{
+    PopupMenu* popup = static_cast<PopupMenu*>(m->handle);
+    if (!popup || !popup->view())
+        return;
+
+    if (!r) {
+        popup->invalidateAll();
+        return;
+    }
+
+    const IntRect& pr = popup->windowRect();
+    popup->view()->updateRect(pr.x() + r->x, pr.y() + r->y, r->w, r->h);
+}
+
+bool PopupMenu::createOwnPopup(FrameView* v)
+{
+    m_webView = webViewForFrameView(v);
+    if (!m_webView)
+        return false;
+
+    m_ownedPopup = new _mc_popup_menu;
+    memset(m_ownedPopup, 0, sizeof(_mc_popup_menu));
+    m_ownedPopup->handle = this;
+    m_ownedPopup->show = ownedShow;
+    m_ownedPopup->hide = ownedHide;
+    m_ownedPopup->move = ownedMove;
+    m_ownedPopup->capture = ownedCapture;
+    m_ownedPopup->update = ownedUpdate;
+    m_ownedPopup->dirty = ownedDirty;
+    m_popup = m_ownedPopup;
+    return true;
+}
+
 void PopupMenu::show(const IntRect& r, FrameView* v, int index)
 {
-	if (cb_create_popup_menu) {
-    	calculatePositionAndSize(r, v);
-    	if (clientRect().isEmpty())
-        	return;
+	calculatePositionAndSize(r, v);
+	if (clientRect().isEmpty())
+    	return;
 
-        if (!m_popup) {
-			_mc_rect rc = {r.x(), r.y(), r.width(), r.height()};
+    if (!m_popup) {
+		_mc_rect rc = {r.x(), r.y(), r.width(), r.height()};
+
+		if (cb_create_popup_menu) {
 			m_popup = cb_create_popup_menu(&rc);
-
-			if(!m_popup)
+			if (!m_popup)
 				return;
-
 			m_popup->handle = this;
-		}
-
-    	if (!m_scrollBar)
-        	if (visibleItems() < client()->listSize()) {
-            // We need a scroll bar
-            	m_scrollBar = new PlatformScrollbar(this, VerticalScrollbar, SmallScrollbar);
-            	m_scrollBar->setContainingView(m_view);
-        	}
-	
-        if (m_popup->move) {
-			_mc_rect mrc = {m_windowRect.x(), m_windowRect.y(), 
-											m_windowRect.width(), m_windowRect.height()};
-			m_popup->move(m_popup, &mrc);
-		}
-
-		if (m_popup->show)
-   			m_popup->show(m_popup);
-
-		if (m_popup->capture)
-   			m_popup->capture(m_popup);
-
-		if (client()) {
-			int index = client()->selectedIndex();
-			if (index >= 0)
-				setFocusedIndex(index);
+		} else if (!createOwnPopup(v)) {
+			/* No host window and no view to draw into: tell the client the
+			 * popup is not open, or the <select> stays "open" forever and the
+			 * next click only toggles the flag (that was the dead dropdown). */
+			if (m_popupClient)
+				m_popupClient->hidePopup();
+			return;
 		}
 	}
+
+	if (!m_scrollBar)
+		if (visibleItems() < client()->listSize()) {
+		// We need a scroll bar
+			m_scrollBar = new PlatformScrollbar(this, VerticalScrollbar, SmallScrollbar);
+			m_scrollBar->setContainingView(m_view);
+		}
+
+	if (m_popup->move) {
+		_mc_rect mrc = {m_windowRect.x(), m_windowRect.y(), 
+										m_windowRect.width(), m_windowRect.height()};
+		m_popup->move(m_popup, &mrc);
+	}
+
+	if (m_popup->show)
+   		m_popup->show(m_popup);
+
+	if (m_popup->capture)
+   		m_popup->capture(m_popup);
+
+	if (client()) {
+		int index = client()->selectedIndex();
+		if (index >= 0)
+			setFocusedIndex(index);
+	}
+
+	if (m_ownedPopup) {
+		resizeScrollbar(m_windowRect.width(), m_windowRect.height());
+		m_webView->setActivePopup(this);
+		invalidateAll();
+	}
+}
+
+void PopupMenu::resizeScrollbar(int width, int height)
+{
+    if (!m_scrollBar)
+        return;
+
+    m_scrollBar->setRect(IntRect(width - m_scrollBar->width(), 0,
+                                m_scrollBar->width(), height));
+    int visibleItems = this->visibleItems();
+    m_scrollBar->setEnabled(visibleItems < client()->listSize());
+    m_scrollBar->setSteps(1, max(1, visibleItems - 1));
+    m_scrollBar->setProportion(visibleItems, client()->listSize());
 }
 
 void PopupMenu::hide()
@@ -461,6 +582,143 @@ IntRect PopupMenu::windowClientRect() const
 	if (m_popup)
 		return IntRect(0, 0, m_popup->rect.w, m_popup->rect.h);	
 	return IntRect();
+}
+
+/* Mouse handling shared by both modes. Points are in popup-local coordinates
+ * (the host window's client area, or the view point minus windowRect() for the
+ * in-view popup). Moved here from macross_menu_mouse_event so the overlay can
+ * reuse it. */
+void PopupMenu::handleMouseEvent(const MC_MOUSE_EVENT& event)
+{
+    if (!m_popup)
+        return;
+
+    switch (event.type) {
+        case EVT_MOUSE_MOVE:
+            {
+                IntPoint mousePoint(event.point.x, event.point.y);
+                if (m_scrollBar) {
+                    IntRect scrollBarRect = m_scrollBar->frameGeometry();
+                    if (m_scrollbarCapturingMouse || scrollBarRect.contains(mousePoint)) {
+                        // Put the point into coordinates relative to the scroll bar
+                        mousePoint.move(-scrollBarRect.x(), -scrollBarRect.y());
+                        PlatformMouseEvent mevent(MouseEventMoved,
+                                    _get_mouse_button(event.button), mousePoint, event.modifier);
+                        m_scrollBar->handleMouseMoveEvent(mevent);
+                        break;
+                    }
+                }
+
+                IntRect bounds = windowClientRect();
+                if (bounds.contains(mousePoint.x(), mousePoint.y()))
+                    setFocusedIndex(listIndexAtPoint(mousePoint), true);
+            }
+            break;
+        case EVT_MOUSE_UP:
+            {
+                IntPoint mousePoint(event.point.x, event.point.y);
+                if (m_scrollBar) {
+                    IntRect scrollBarRect = m_scrollBar->frameGeometry();
+                    if (m_scrollbarCapturingMouse || scrollBarRect.contains(mousePoint)) {
+                        setScrollbarCapturingMouse(false);
+                        // Put the point into coordinates relative to the scroll bar
+                        mousePoint.move(-scrollBarRect.x(), -scrollBarRect.y());
+                        PlatformMouseEvent mevent(MouseEventReleased,
+                                    _get_mouse_button(event.button), mousePoint, event.modifier);
+                        m_scrollBar->handleMouseReleaseEvent(mevent);
+                        // FIXME: This is a hack to work around PlatformScrollbar not
+                        // invalidating correctly when it doesn't have a parent widget
+                        IntRect r = scrollBarRect;
+                        updateRect(r.x(), r.y(), r.width(), r.height());
+                        break;
+                    }
+                }
+                IntRect bounds = windowClientRect();
+                if (client() && bounds.contains(mousePoint.x(), mousePoint.y())) {
+                    client()->hidePopup();
+                    int index = focusedIndex();
+                    if (index >= 0)
+                        client()->valueChanged(index);
+                }
+            }
+            break;
+        case EVT_MOUSE_DOWN:
+            {
+                IntPoint mousePoint(event.point.x, event.point.y);
+                if (m_scrollBar) {
+                    IntRect scrollBarRect = m_scrollBar->frameGeometry();
+                    if (scrollBarRect.contains(mousePoint)) {
+                        // Put the point into coordinates relative to the scroll bar
+                        mousePoint.move(-scrollBarRect.x(), -scrollBarRect.y());
+                        PlatformMouseEvent mevent(MouseEventPressed,
+                                    _get_mouse_button(event.button), mousePoint, event.modifier);
+                        m_scrollBar->handleMousePressEvent(mevent);
+                        setScrollbarCapturingMouse(true);
+                        break;
+                    }
+                }
+
+                IntRect bounds = windowClientRect();
+                if (client() && bounds.contains(mousePoint.x(), mousePoint.y()))
+                    setFocusedIndex(listIndexAtPoint(mousePoint), true);
+                else if (client())
+                    client()->hidePopup();
+            }
+            break;
+        default:
+            break;
+    }
+}
+
+void PopupMenu::handleKeyEvent(const MC_KEY_EVENT& event)
+{
+    if (!client() || event.type != EVT_KEY_DOWN)
+        return;
+
+    switch (event.key) {
+        case KEY_UP:
+            up();
+            break;
+        case KEY_DOWN:
+            down();
+            break;
+        case KEY_HOME:
+            focusFirst();
+            break;
+        case KEY_END:
+            focusLast();
+            break;
+        case KEY_PAGEUP:
+            {
+                if (focusedIndex() != scrollOffset()) {
+                    int firstVisibleItem = scrollOffset();
+                    up(focusedIndex() - firstVisibleItem);
+                } else
+                    up(visibleItems());
+            }
+            break;
+        case KEY_PAGEDOWN:
+            {
+                int lastVisibleItem = scrollOffset() + visibleItems() - 1;
+                if (focusedIndex() != lastVisibleItem) {
+                    down(lastVisibleItem - focusedIndex());
+                } else
+                    down(visibleItems());
+            }
+            break;
+        case KEY_ENTER:
+            {
+                client()->hidePopup();
+                int index = focusedIndex();
+                client()->valueChanged(index);
+            }
+            break;
+        case KEY_ESCAPE:
+            client()->hidePopup();
+            break;
+        default:
+            break;
+    }
 }
 
 }

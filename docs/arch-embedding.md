@@ -90,3 +90,6 @@ exe 旁的 `prelude.js` / `polyfills.js`（运行时 JS 资产，可热替换）
 * `macross_initialize` 是进程级、只初始化一次；模块会话、`DownloadManager`、generation 计数器
   等少量资源是进程级共享的；
 * 控件不处理右键菜单，宿主可以自己弹（或等我们补）。
+* `<select>` 的下拉菜单**不需要宿主窗口**：引擎把菜单画进 view 自己的 surface，输入由
+  `WebView` 优先路由给它（`macross_menu_*` 只留给注册了 `cb_create_popup_menu` 的老宿主）。
+  细节与限制见 [design-select-popup.md](design-select-popup.md)。

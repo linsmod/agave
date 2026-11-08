@@ -79,6 +79,9 @@ namespace WebCore { bool prefersDarkColorScheme(); }
 #include "Text.h"
 #include "Comment.h"
 #include "HTMLInputElement.h"
+#include "HTMLSelectElement.h"
+#include "HTMLOptionElement.h"
+#include "HTMLOptGroupElement.h"
 #include "BeforeTextInsertedEvent.h"
 #include "PlatformKeyboardEvent.h"
 #include "TextEvent.h"
@@ -8073,6 +8076,71 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
             } else if (element->hasTagName(WebCore::HTMLNames::textareaTag)) {
                 WebCore::String s = static_cast<WebCore::HTMLTextAreaElement*>(element)->value();
                 v = antb_make_string(engine, s.utf8().data());
+            } else if (element->hasTagName(WebCore::HTMLNames::selectTag)) {
+                WebCore::String s = static_cast<WebCore::HTMLSelectElement*>(element)->value();
+                v = antb_make_string(engine, s.utf8().data());
+            } else if (element->hasTagName(WebCore::HTMLNames::optionTag)) {
+                WebCore::String s = static_cast<WebCore::HTMLOptionElement*>(element)->value();
+                v = antb_make_string(engine, s.utf8().data());
+            } else {
+                return 0;
+            }
+        } else {
+            return 0;
+        }
+    } else if (!strcmp(name, "selectedIndex") || !strcmp(name, "selected")
+               || !strcmp(name, "index") || !strcmp(name, "text")
+               || !strcmp(name, "options") || !strcmp(name, "length")) {
+        /* <select>/<option>: the form-control state pages actually read
+         * (css3test's filter.js does `evt.target.value`; libraries walk
+         * `select.options`). Nothing here existed before: every one of these
+         * names came back undefined, so a <select> was paint-only. */
+        if (!n->isElementNode())
+            return 0;
+
+        WebCore::Element* element = static_cast<WebCore::Element*>(n);
+
+        if (element->hasTagName(WebCore::HTMLNames::selectTag)) {
+            WebCore::HTMLSelectElement* select = static_cast<WebCore::HTMLSelectElement*>(element);
+
+            if (!strcmp(name, "selectedIndex")) {
+                v = antb_make_number(engine, (double)select->selectedIndex());
+            } else if (!strcmp(name, "options")) {
+                const Vector<WebCore::HTMLElement*>& items = select->listItems();
+                AntbValue* arr = antb_make_array(engine);
+
+                if (!arr)
+                    return 0;
+                for (unsigned i = 0; i < items.size(); ++i) {
+                    if (!items[i]->hasTagName(WebCore::HTMLNames::optionTag))
+                        continue;
+                    AntbValue* w = wrapNode(engine, items[i]);
+                    if (w) {
+                        antb_array_push(engine, arr, w);
+                        antb_value_release(w);
+                    }
+                }
+                v = arr;
+            } else if (!strcmp(name, "length")) {
+                unsigned count = 0;
+                const Vector<WebCore::HTMLElement*>& items = select->listItems();
+
+                for (unsigned i = 0; i < items.size(); ++i)
+                    if (items[i]->hasTagName(WebCore::HTMLNames::optionTag))
+                        ++count;
+                v = antb_make_number(engine, (double)count);
+            } else {
+                return 0;
+            }
+        } else if (element->hasTagName(WebCore::HTMLNames::optionTag)) {
+            WebCore::HTMLOptionElement* option = static_cast<WebCore::HTMLOptionElement*>(element);
+
+            if (!strcmp(name, "selected")) {
+                v = antb_make_number(engine, option->selected() ? 1 : 0);
+            } else if (!strcmp(name, "index")) {
+                v = antb_make_number(engine, (double)option->index());
+            } else if (!strcmp(name, "text")) {
+                v = antb_make_string(engine, option->text().utf8().data());
             } else {
                 return 0;
             }
@@ -8300,6 +8368,13 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
         if (!b)
             return 0;
         v = b;
+    } else if (!strcmp(name, "type") && n->isElementNode()
+               && static_cast<WebCore::Element*>(n)->hasTagName(WebCore::HTMLNames::selectTag)) {
+        /* <select> has no type attribute: the property is select-one /
+         * select-multiple (the attribute reflection below would answer ""). */
+        v = antb_make_string(engine,
+                static_cast<WebCore::HTMLSelectElement*>(n)->multiple()
+                    ? "select-multiple" : "select-one");
     } else if (!strcmp(name, "id") || !strcmp(name, "className") || !strcmp(name, "href")
                || !strcmp(name, "src") || !strcmp(name, "srcset") || !strcmp(name, "alt")
                || !strcmp(name, "placeholder") || !strcmp(name, "poster")
@@ -8447,6 +8522,48 @@ int nodeSetter(AntbEngine* engine, AntbValue* self, const char* name, const Antb
             && mediaElementSetProperty(static_cast<WebCore::HTMLMediaElement*>(
                    static_cast<WebCore::Element*>(n)), name, value))
         return 1;
+
+    /* <select>/<option> state. Setting `value` must not fire change (the DOM
+     * says the property write is silent); selectedIndex goes through
+     * setSelectedIndex(index, true, true) because *that* one does dispatch
+     * change, and css3test's filter.js listens for it. */
+    if (n && n->isElementNode() && value) {
+        WebCore::Element* element = static_cast<WebCore::Element*>(n);
+
+        if (element->hasTagName(WebCore::HTMLNames::selectTag)) {
+            WebCore::HTMLSelectElement* select = static_cast<WebCore::HTMLSelectElement*>(element);
+
+            if (!strcmp(name, "selectedIndex")) {
+                select->setSelectedIndex((int)antb_to_number(value), true, true);
+                return 1;
+            }
+            if (!strcmp(name, "value")) {
+                char* text = antb_to_utf8(value);
+
+                if (text) {
+                    select->setValue(WebCore::String::fromUTF8(text));
+                    antb_free(text);
+                }
+                return 1;
+            }
+        } else if (element->hasTagName(WebCore::HTMLNames::optionTag)) {
+            WebCore::HTMLOptionElement* option = static_cast<WebCore::HTMLOptionElement*>(element);
+
+            if (!strcmp(name, "selected")) {
+                option->setSelected(antb_to_boolean(value) != 0);
+                return 1;
+            }
+            if (!strcmp(name, "value")) {
+                char* text = antb_to_utf8(value);
+
+                if (text) {
+                    option->setValue(WebCore::String::fromUTF8(text));
+                    antb_free(text);
+                }
+                return 1;
+            }
+        }
+    }
 
     /* Reflected attributes: `el.hidden = true`, `el.tabIndex = 3`,
      * `el.dir = 'rtl'` are attribute writes, and reading them back must agree

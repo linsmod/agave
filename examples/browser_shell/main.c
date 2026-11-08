@@ -2604,6 +2604,10 @@ static int  g_probeShotRectSet;   /* a rect was given (else the whole view) */
 static int  g_probeShotSettled;   /* one frame elapsed since --eval          */
 static char g_probeKeys[512];     /* --keys: typed into the page before eval */
 static int  g_probeKeysDone;      /* the --keys list was typed out             */
+#define PROBE_MAX_CLICKS 8
+static int  g_probeClickList[PROBE_MAX_CLICKS][2]; /* --click: viewport points  */
+static int  g_probeClickCount;
+static int  g_probeClickIndex;    /* next --click to deliver                   */
 static char g_probePreScript[2048]; /* --pre-eval: runs once before --keys     */
 static char g_probeIme[512];        /* --ime: posted as WM_IME_CHAR           */
 static int  g_probePreDone;       /* --pre-eval was executed                   */
@@ -3513,6 +3517,28 @@ static int probeRun(const char* url)
                     continue;
                 }
 
+                /* --click x,y: one real click per tick before --keys/--eval.
+                 * Posted to the control window so it takes the same WndProc ->
+                 * engine command path as a user's click (that is what opens a
+                 * <select> menu: mousedown on the control). */
+                if (g_probeClickIndex < g_probeClickCount) {
+                    HWND target = (HWND)agave_webview_hwnd(g_probeView);
+                    int cx = g_probeClickList[g_probeClickIndex][0];
+                    int cy = g_probeClickList[g_probeClickIndex][1];
+
+                    ++g_probeClickIndex;
+                    if (target) {
+                        LPARAM at = MAKELPARAM(cx, cy);
+
+                        agbLog(AGB_LOG_PROBE, "click %d,%d", cx, cy);
+                        PostMessageA(target, WM_MOUSEMOVE, 0, at);
+                        PostMessageA(target, WM_LBUTTONDOWN, MK_LBUTTON, at);
+                        PostMessageA(target, WM_LBUTTONUP, 0, at);
+                    }
+                    SetTimer(g_probeWnd, PROBE_TIMER_EVAL, 400, NULL);
+                    continue;
+                }
+
                 /* --keys / --ime run before the eval: one key per tick so the
                  * character of a key is processed before the next key, then a
                  * short pause for the last one, then the eval. */
@@ -3854,6 +3880,9 @@ static void probeUsage(void)
             "            WM_KEYDOWN/WM_CHAR/WM_KEYUP path (the page must focus its\n"
             "            own control; {backspace} {enter} {tab} {left} {right}\n"
             "            {up} {down} {home} {end} {delete} {esc} name a key)\n"
+            "  --click <x,y>  click at a CSS pixel of the viewport before --eval,\n"
+            "            through the real WM_MOUSEMOVE/WM_LBUTTONDOWN/WM_LBUTTONUP\n"
+            "            path (what opens a <select> menu, focuses a field, ...)\n"
             "  --pre-eval <js>  short snippet run once before --keys (focus a\n"
             "            field: \"document.querySelector('input').focus()\")\n"
             "  --ime <text>  deliver text the way an IME does: WM_IME_CHAR per\n"
@@ -3974,6 +4003,19 @@ static void parseShellArgv(void)
         } else if (!strcmp(argv[i], "--keys") && i + 1 < argc) {
             strncpy(g_probeKeys, argv[++i], sizeof(g_probeKeys) - 1);
             g_probeKeys[sizeof(g_probeKeys) - 1] = 0;
+        } else if (!strcmp(argv[i], "--click") && i + 1 < argc) {
+            int cx = 0, cy = 0;
+
+            if (sscanf(argv[++i], "%d,%d", &cx, &cy) == 2 && cx >= 0 && cy >= 0
+                    && g_probeClickCount < PROBE_MAX_CLICKS) {
+                g_probeClickList[g_probeClickCount][0] = cx;
+                g_probeClickList[g_probeClickCount][1] = cy;
+                ++g_probeClickCount;
+            } else {
+                fprintf(stderr, "[shell] --click wants x,y (e.g. 100,220), got %s\n", argv[i]);
+                g_argError = 1;
+                return;
+            }
         } else if (!strcmp(argv[i], "--pre-eval") && i + 1 < argc) {
             strncpy(g_probePreScript, argv[++i], sizeof(g_probePreScript) - 1);
             g_probePreScript[sizeof(g_probePreScript) - 1] = 0;

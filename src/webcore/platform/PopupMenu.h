@@ -31,6 +31,10 @@
 #include "macross.h"
 #include "WidgetView.h"
 
+namespace MaCross {
+class WebView;   /* the view that owns the page (src/webview/WebView.h) */
+}
+
 namespace WebCore {
 
 class FrameView;
@@ -76,6 +80,18 @@ public:
 
     void paint(const IntRect& damageRect, GraphicsContext*);
 
+    /* In-view popups. MaCross lets the host own the popup as a native window
+     * (cb_create_popup_menu), but agave's host has no such window: the engine
+     * draws the menu into the view's own surface and the view routes input to
+     * it (WebView::setActivePopup). The same object drives both modes, so the
+     * painting / hit-testing code below is shared. */
+    bool isOwnPopup() const { return m_ownedPopup != 0; }
+    MaCross::WebView* view() const { return m_webView; }
+    void handleMouseEvent(const MC_MOUSE_EVENT&);
+    void handleKeyEvent(const MC_KEY_EVENT&);
+    void resizeScrollbar(int width, int height);
+    void invalidateAll();
+
     _mc_popup_menu* popupHandle() const { return m_popup; }
 
     void setWasClicked(bool b = true) { m_wasClicked = b; }
@@ -103,9 +119,14 @@ private:
 
     void calculatePositionAndSize(const IntRect&, FrameView*);
     void invalidateItem(int index);
+    bool createOwnPopup(FrameView*);
 
     RefPtr<PlatformScrollbar> m_scrollBar;
     _mc_popup_menu* m_popup;
+    /* Set only in the in-view mode: the _mc_popup_menu is ours (no window) and
+     * m_webView is the view that paints it and forwards input. */
+    _mc_popup_menu* m_ownedPopup;
+    MaCross::WebView* m_webView;
 	_mc_view *m_view;
     bool m_wasClicked;
     IntRect m_windowRect;

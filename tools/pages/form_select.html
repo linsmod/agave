@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>select menu</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #fff; }
+  #s { position: absolute; left: 20px; top: 20px; width: 120px; font: 12px sans-serif; }
+  #log { position: absolute; left: 20px; top: 220px; font: 12px monospace; }
+</style>
+</head>
+<body>
+  <!-- A menu-list <select> (size=1): clicking it opens the engine-drawn menu
+       (no host window), clicking an item picks it and fires change. The
+       regression group in run_layout_tests.ps1 drives it with --click/--keys. -->
+  <select id="s">
+    <option value="one">One</option>
+    <option value="two">Two</option>
+    <option value="three">Three</option>
+  </select>
+  <pre id="log">none</pre>
+<script>
+  var s = document.getElementById('s');
+  s.addEventListener('change', function () {
+      document.getElementById('log').textContent =
+          'change=' + s.value + ' idx=' + s.selectedIndex;
+  });
+</script>
+</body>
+</html>

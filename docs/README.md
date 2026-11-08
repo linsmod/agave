@@ -32,6 +32,7 @@
 | [design-per-frame-realm.md](design-per-frame-realm.md) | **每 frame 一个 realm**（设计记录）：ant realm 机制、影响面、S0–S5 迁移与验收 | 改 realm / iframe 隔离 / window 身份 |
 | [design-realm-document-binding.md](design-realm-document-binding.md) | **realm 级 document 绑定**（设计记录，未实施）：`g_document` 环境读错、按对象解析、location/history 对象化、B0–B4 迁移 | 改 iframe 里的 document/location/history，或同类“跨 realm 读错文档” |
 | [design-elem-fastpath.md](design-elem-fastpath.md) | **元素访问快路径**（设计记录）：稀疏下标/字符串键 140–200 ns 实测、shape 索引表与站点 IC、验收阈值 | 改 `obj[key]` 性能 / VM 卡死 / P1-g |
+| [design-select-popup.md](design-select-popup.md) | **`<select>` 下拉菜单**（设计记录）：为什么画在 view 自己的 surface 上、PopupMenu 双模式、输入路由、已知限制 | 改下拉菜单 / 表单控件输入 / 加原生 popup |
 | [dev-onboarding.md](dev-onboarding.md) | 代码在哪、**我要改 X 去哪**、症状→先查哪 | 第一次改代码，或换子系统 |
 | [dev-build-and-run.md](dev-build-and-run.md) | 工具链、构建路径、改什么重编什么、产物拓扑、环境坑 | 编不动 / 跑不起来 |
 | [dev-debugging.md](dev-debugging.md) | 无头探针、日志、环境变量全表、cdb、噪音对照、A/B、Chrome 对拍 | 页面不对、崩了、卡住、想查 Chrome 怎么算 |

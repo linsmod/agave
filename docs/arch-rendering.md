@@ -218,6 +218,10 @@ DOM attach（Element::attach / Text::attach）
   `src/webcore/platform/picasso/GraphicsContextPS.cpp`（Picasso），坐标是设备像素。
   页面 zoom 在样式里折算（`RenderStyle::setZoom` / `effectiveZoom`，`Document::recalcStyle(Force)`
   时写入），渲染树坐标就是输出坐标，绘制阶段不再整体缩放。
+- 打开的 `<select>` 菜单在**页面之后**由 `WebView::paintView()` 合成到同一块 surface：
+  `PopupMenu::windowRect()` 区域先填白，再 `translate` 到菜单原点画条目，最后描 1px 灰边。
+  菜单不是独立窗口（宿主没有 `cb_create_popup_menu`），所以它同时出现在无头截图里；
+  输入也由 `WebView` 优先路由给它。设计与限制见 [design-select-popup.md](design-select-popup.md)。
 - 判据：`AGB_PAINT_FULL=1` 后正常 = 失效/裁剪问题；仍不对 = 布局/样式问题
   （详见 [dev-debugging.md](dev-debugging.md) §4）。
 

@@ -11,6 +11,7 @@
 
 #include "Page.h"
 #include "Frame.h"
+#include "PopupMenu.h"
 #include "HTMLInputElement.h"
 #include "HTMLTextAreaElement.h"
 #include "HTMLNames.h"
@@ -68,7 +69,7 @@ public:
 	WebViewPrivate(struct _mc_view* v, unsigned char* buf, int w, int h, int p)
 		: m_view(v), m_buffer(buf), m_width(w), m_height(h), m_mode(0), m_txtanti(false)
 		, m_canvas(0), m_context(0), m_drawRect(0, 0, 0, 0), m_minLayoutSize(0, 0), m_oldLayoutSize(0, 0)
-		, m_swallowNextText(false)
+		, m_activePopup(0), m_swallowNextText(false)
 	{
 		m_canvas = ps_canvas_create_with_data(buf, pixelFormat(), w, h, p);
 		m_context = ps_context_create(m_canvas, 0);
@@ -109,6 +110,8 @@ public:
 	IntSize m_oldLayoutSize;
     RefPtr<Frame> m_frame;
     RefPtr<FrameView> m_frameView;
+    /* Open <select> menu, painted over the page (see setActivePopup). */
+    PopupMenu* m_activePopup;
     /* A keydown the page cancelled (preventDefault) must not turn into text:
      * Win32 delivers the character in a separate WM_CHAR, long after the page
      * said no. Set by keyDown(), consumed by textInput(). */
@@ -304,10 +307,64 @@ void WebView::paintView(void)
 			fprintf(stderr, "[perf] layout=%.0fms paint=%.0fms total=%.0fms\n",
 			        layoutMs, paintMs, layoutMs + paintMs);
 	}
+
+	/* An open <select> menu is composited on top of the page, into this view's
+	 * own surface: there is no host popup window (see PopupMenu::createOwnPopup).
+	 * The menu's own dirty() call has already unioned its rect into m_drawRect,
+	 * so a page repaint never leaves it half erased. */
+	if (d->m_activePopup) {
+		IntRect pr = d->m_activePopup->windowRect();
+		GraphicsContext gc(d->m_context);
+
+		gc.save();
+		gc.clip(IntRect(0, 0, d->m_width, d->m_height));
+		gc.fillRect(pr, Color(255, 255, 255));
+		gc.translate(pr.x(), pr.y());
+		d->m_activePopup->paint(d->m_activePopup->clientRect(), &gc);
+		gc.restore();
+
+		// 1px frame, so the menu reads as a popup and not as part of the page.
+		gc.save();
+		gc.setStrokeColor(Color(160, 160, 160));
+		gc.strokeRect(FloatRect(pr.x() + 0.5f, pr.y() + 0.5f,
+		                        pr.width() - 1.0f, pr.height() - 1.0f), 1.0f);
+		gc.restore();
+	}
+}
+
+void WebView::setActivePopup(PopupMenu* popup)
+{
+	d->m_activePopup = popup;
+}
+
+PopupMenu* WebView::activePopup(void) const
+{
+	return d->m_activePopup;
+}
+
+/* The open <select> menu takes the input: points arrive in view coordinates and
+ * the menu hit-tests in its own client coordinates (see PopupMenu::handleMouseEvent,
+ * which is also what the host-window API macross_menu_mouse_event calls). */
+static void popupMouseEvent(PopupMenu* popup, MC_MOUSE_EVENT_TYPE type,
+                            _mc_mouse_btn btn, unsigned modifier, int x, int y)
+{
+	IntRect pr = popup->windowRect();
+	MC_MOUSE_EVENT e;
+	e.type = type;
+	e.button = btn;
+	e.point.x = x - pr.x();
+	e.point.y = y - pr.y();
+	e.modifier = modifier;
+	popup->handleMouseEvent(e);
 }
 
 bool WebView::mouseUp(_mc_mouse_btn btn, unsigned m, int x, int y)
 {
+	if (d->m_activePopup) {
+		popupMouseEvent(d->m_activePopup, EVT_MOUSE_UP, btn, m, x, y);
+		return true;
+	}
+
 	IntPoint p(x, y);
 	PlatformMouseEvent mouseEvent(MouseEventReleased, _get_mouse_button(btn), p, m);
     return d->m_frame->eventHandler()->handleMouseReleaseEvent(mouseEvent);
@@ -315,6 +372,11 @@ bool WebView::mouseUp(_mc_mouse_btn btn, unsigned m, int x, int y)
 
 bool WebView::mouseDown(_mc_mouse_btn btn, unsigned m, int x, int y)
 {
+	if (d->m_activePopup) {
+		popupMouseEvent(d->m_activePopup, EVT_MOUSE_DOWN, btn, m, x, y);
+		return true;
+	}
+
 	IntPoint p(x, y);
 	PlatformMouseEvent mouseEvent(MouseEventPressed, _get_mouse_button(btn), p, m);
     return d->m_frame->eventHandler()->handleMousePressEvent(mouseEvent);
@@ -322,6 +384,11 @@ bool WebView::mouseDown(_mc_mouse_btn btn, unsigned m, int x, int y)
 
 bool WebView::mouseMove(_mc_mouse_btn btn, unsigned m, int x, int y)
 {
+	if (d->m_activePopup) {
+		popupMouseEvent(d->m_activePopup, EVT_MOUSE_MOVE, btn, m, x, y);
+		return true;
+	}
+
 	IntPoint p(x, y);
 	PlatformMouseEvent mouseEvent(MouseEventMoved, _get_mouse_button(btn), p, m);
     return d->m_frame->eventHandler()->handleMouseMoveEvent(mouseEvent);
@@ -329,6 +396,11 @@ bool WebView::mouseMove(_mc_mouse_btn btn, unsigned m, int x, int y)
 
 bool WebView::mouseWheel(_mc_mouse_btn btn, unsigned m, int x, int y)
 {
+	/* Chrome closes the menu and lets the page scroll (the menu list itself is
+	 * not wheel-scrollable here: macross_menu_mouse_event has no wheel case). */
+	if (d->m_activePopup && d->m_activePopup->client())
+		d->m_activePopup->client()->hidePopup();
+
     int delta = 0;
     /* WebKit's convention: a positive delta means "scrolling up" (the mac
      * port fed NSEvent.deltaY straight in). ScrollView::wheelEvent() scrolls
@@ -348,6 +420,10 @@ bool WebView::mouseWheel(_mc_mouse_btn btn, unsigned m, int x, int y)
 
 bool WebView::keyUp(_mc_key_sym key, unsigned m)
 {
+	/* An open <select> menu owns the keyboard; nothing is left for the page. */
+	if (d->m_activePopup)
+		return true;
+
 	PlatformKeyboardEvent keyEvent(false, (unsigned)key, m);
 	Frame* frame = d->m_frame->page()->focusController()->focusedOrMainFrame();
 	return frame->eventHandler()->keyEvent(keyEvent);
@@ -355,6 +431,15 @@ bool WebView::keyUp(_mc_key_sym key, unsigned m)
 
 bool WebView::keyDown(_mc_key_sym key, unsigned m)
 {
+	if (d->m_activePopup) {
+		MC_KEY_EVENT e;
+		e.type = EVT_KEY_DOWN;
+		e.key = (MC_VIRTUAL_KEY)(unsigned)key;
+		e.modifier = m;
+		d->m_activePopup->handleKeyEvent(e);
+		return true;
+	}
+
 	PlatformKeyboardEvent keyEvent(true, (unsigned)key, m);
 	Frame* frame = d->m_frame->page()->focusController()->focusedOrMainFrame();
 
@@ -405,6 +490,12 @@ void WebView::setFocus(void)
 void WebView::killFocus(void)
 {
     ChromeClientMC * client = static_cast<ChromeClientMC *>(d->m_frame->page()->chrome()->client());
+
+	/* Leaving the view closes an open menu (the host window used to get
+	 * WM_KILLFOCUS and do this). */
+	if (d->m_activePopup && d->m_activePopup->client())
+		d->m_activePopup->client()->hidePopup();
+
 	if (!d->m_frame->document())
 		return;
 	if (client->isFocused()) {
@@ -726,6 +817,12 @@ bool WebView::textInput(const char* text)
 	String str = String::fromUTF8(text);
 	if (str.isEmpty() || str.isNull())
 		return false;
+
+    if (d->m_activePopup) {
+        /* An open <select> menu swallows the text: there is no type-ahead. */
+        d->m_swallowNextText = false;
+        return false;
+    }
 
     if (d->m_swallowNextText) {
         /* The page cancelled the keydown of this character. */

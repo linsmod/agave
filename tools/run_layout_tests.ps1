@@ -155,6 +155,50 @@ try {
         if ($LASTEXITCODE -ne 0) { $failed++ }
     }
 
+    Write-Host '== paint: <select> menu (in-view popup, opened by --click)'
+    # The menu is drawn by the engine into the view's own surface (there is no
+    # host popup window), so a headless capture can see it.
+    $bmp = Join-Path $root 'build-zig-native\layout_select.bmp'
+    $url = 'file:///' + (Join-Path $root 'tools/pages/form_select.html').Replace('\', '/')
+    & (Join-Path $root 'build-zig-native\agave_shell.exe') --probe $url `
+        --click 30,28 --wait 500 --settle 300 --timeout 30000 --shot $bmp | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host 'select menu: probe failed'
+        $failed++
+    } else {
+        # The 120px control sits at (20,20); the menu opens under it at y=39.
+        # The first item is highlighted (the theme's selection colour), the
+        # other rows are white, the frame is grey and the page stays white.
+        & python tools/pixel_check.py $bmp `
+            30,40,9db7cf 60,45,9db7cf 20,45,a0a0a0 130,60,ffffff 60,90,a0a0a0 5,5,ffffff
+        if ($LASTEXITCODE -ne 0) { $failed++ }
+    }
+
+    Write-Host '== <select>: value / selectedIndex / options / change'
+    # The form-control properties used to be undefined (the control was
+    # paint-only) and the menu could not open at all. Both routes are covered:
+    # keyboard ({down}{enter}) and mouse (a second --click on the third row).
+    $js = Join-Path $root 'tools/pages/check_form_select.js'
+    foreach ($case in @(
+            @{ Name = 'keys';  Clicks = @('30,28');        Want = 'v=two;i=1;n=3;t=Three;type=select-one;log=change=two idx=1' },
+            @{ Name = 'mouse'; Clicks = @('30,28','30,79'); Want = 'v=three;i=2;n=3;t=Three;type=select-one;log=change=three idx=2' })) {
+        $clickArgs = @()
+        foreach ($c in $case.Clicks) { $clickArgs += @('--click', $c) }
+        if ($case.Name -eq 'keys') { $keyArgs = @('--keys', '{down}{enter}') } else { $keyArgs = @() }
+        $out = & (Join-Path $root 'build-zig-native\agave_shell.exe') --probe $url `
+            @clickArgs @keyArgs --eval-file $js --wait 400 --settle 300 --timeout 30000 2>&1
+        $text = $out -join "`n"
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host ('select ' + $case.Name + ': probe failed')
+            $failed++
+        } elseif ($text -notmatch [regex]::Escape($case.Want)) {
+            Write-Host ('select ' + $case.Name + ': want ' + $case.Want)
+            $failed++
+        } else {
+            Write-Host ('select ' + $case.Name + ': ok')
+        }
+    }
+
     Write-Host '== shot: PNG output + --shot-rect crop'
     # Pins the capture path itself: the probe encodes PNG by itself (no BMP
     # round trip) and --shot-rect crops in client pixels. shot_rect.html is

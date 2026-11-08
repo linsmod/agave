@@ -24,6 +24,12 @@ agave_shell.exe --probe <url> [--eval <js>] [--wait ms] [--settle ms] [--timeout
   `--ime "<text>"` 走**输入法**那条路：每个 UTF-16 码元发一条 `WM_IME_CHAR`（星平面字符是两个，
   即代理对），用来复测中文/emoji 输入；`--keys` 则走 `WM_KEYDOWN → TranslateMessage → WM_CHAR`。
   回归：`pwsh -File tools/run_typing_tests.ps1`（8 个用例，页面 `tools/pages/cap_typing.html`）。
+- `--click <x,y>`：eval 之前在该视口坐标点一下，走真实的
+  `WM_MOUSEMOVE → WM_LBUTTONDOWN → WM_LBUTTONUP`（PostMessage 到控件窗口，和用户点击同一条
+  WndProc → 引擎命令路径），一个 tick 一次；可以给多次（`--click 750,228 --click 750,280`
+  = 点开 `<select>` 再点第二项）。这是唯一能复测"点开下拉/点中某一项/点空白关闭"的方式
+  （`new MouseEvent()` 还是空壳，见 [arch-capability-gaps.md](arch-capability-gaps.md) §1）。
+  回归：`tools/pages/form_select.html`（`run_layout_tests.ps1` 的 select 两组）。
 - `--resize WxH`：页面 settle 后把控件（连同隐藏的父窗口）改成新尺寸，等 400ms 再跑 eval ——
   复测"窗口变化时页面怎么反应"（重排、百分比、`innerWidth`、`vw/vh`、`@media` 断点、`resize` 事件）。
   这正是拖窗口走的 `WM_SIZE → AGW_CMD_RESIZE → macross_view_resize` 路径，只是窗口从不显示。

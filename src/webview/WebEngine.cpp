@@ -596,15 +596,9 @@ MC_STATUS macross_menu_resize(MC_POPUP_MENU* menu, int width, int height)
 		return MC_STATUS_FAILED;
 
     PopupMenu * popup = (PopupMenu *)menu->handle;
-    if (popup && popup->scrollBar()) {
-		IntSize size(width, height);
-		popup->scrollBar()->setRect(IntRect(size.width() - popup->scrollBar()->width(), 0,
-					popup->scrollBar()->width(), size.height()));
-		int visibleItems = popup->visibleItems();
-		popup->scrollBar()->setEnabled(visibleItems < popup->client()->listSize());
-		popup->scrollBar()->setSteps(1, max(1, visibleItems - 1));
-		popup->scrollBar()->setProportion(visibleItems, popup->client()->listSize());
-	}
+    if (popup)
+        popup->resizeScrollbar(width, height);
+
 	return MC_STATUS_SUCCESS;
 }
 
@@ -650,53 +644,10 @@ MC_STATUS macross_menu_keyboard_event(MC_POPUP_MENU* menu, const MC_KEY_EVENT* e
 	if (!menu || !event)
 		return MC_STATUS_FAILED;
 
-	PopupMenu * popup = (PopupMenu *)menu->handle;
-	if (popup && popup->client() && (event->type == EVT_KEY_DOWN)) {
-		switch (event->key) {
-			case KEY_UP:
-				popup->up();
-				break;
-			case KEY_DOWN:
-				popup->down();
-				break;
-			case KEY_HOME:
-				popup->focusFirst();
-				break;
-			case KEY_END:
-				popup->focusLast();
-				break;
-			case KEY_PAGEUP:
-				{
-					if (popup->focusedIndex() != popup->scrollOffset()) {
-						int firstVisibleItem = popup->scrollOffset();
-						popup->up(popup->focusedIndex() - firstVisibleItem);
-					} else
-						popup->up(popup->visibleItems());
-				}
-				break;
-			case KEY_PAGEDOWN:
-				{
-					int lastVisibleItem = popup->scrollOffset() + popup->visibleItems() - 1;
-					if (popup->focusedIndex() != lastVisibleItem) {
-						popup->down(lastVisibleItem - popup->focusedIndex());
-					} else
-						popup->down(popup->visibleItems());
-				}
-				break;
-			case KEY_ENTER:
-				{
-					popup->client()->hidePopup();
-					int index = popup->focusedIndex();
-					popup->client()->valueChanged(index);
-				}
-				break;
-			case KEY_ESCAPE:
-				popup->client()->hidePopup();
-				break;
-			default:
-				break;
-		}
-	}
+    /* Shared with the in-view popup: see PopupMenu::handleKeyEvent. */
+    PopupMenu * popup = (PopupMenu *)menu->handle;
+    if (popup)
+        popup->handleKeyEvent(*event);
 
 	return MC_STATUS_SUCCESS;
 }
@@ -706,86 +657,11 @@ MC_STATUS macross_menu_mouse_event(MC_POPUP_MENU* menu, const MC_MOUSE_EVENT* ev
 	if (!menu || !event)
 		return MC_STATUS_FAILED;
 
+    /* Shared with the in-view popup: see PopupMenu::handleMouseEvent. */
     PopupMenu * popup = (PopupMenu *)menu->handle;
-    if (popup) {
-		switch (event->type) {
-			case EVT_MOUSE_MOVE:
-				{
-					IntPoint mousePoint(event->point.x, event->point.y);
-					if (popup->scrollBar()) {
-						IntRect scrollBarRect = popup->scrollBar()->frameGeometry();
-						if (popup->scrollbarCapturingMouse() || scrollBarRect.contains(mousePoint)) {
-                        // Put the point into coordinates relative to the scroll bar
-                        	mousePoint.move(-scrollBarRect.x(), -scrollBarRect.y());
-                        	PlatformMouseEvent mevent(MouseEventMoved, 
-										_get_mouse_button(event->button), mousePoint, event->modifier);
-                        	popup->scrollBar()->handleMouseMoveEvent(mevent);
-							break;
-						}
-                    }
+    if (popup)
+        popup->handleMouseEvent(*event);
 
-					IntRect bounds = popup->windowClientRect();
-					if (bounds.contains(mousePoint.x(), mousePoint.y())){
-						popup->setFocusedIndex(popup->listIndexAtPoint(mousePoint), true);
-					}
-				}
-				break;
-			case EVT_MOUSE_UP:
-				{
-					IntPoint mousePoint(event->point.x, event->point.y);
-					if (popup->scrollBar()) {
-						IntRect scrollBarRect = popup->scrollBar()->frameGeometry();
-						if (popup->scrollbarCapturingMouse() || scrollBarRect.contains(mousePoint)) {
-							popup->setScrollbarCapturingMouse(false);
-							// Put the point into coordinates relative to the scroll bar
-							mousePoint.move(-scrollBarRect.x(), -scrollBarRect.y());
-							PlatformMouseEvent mevent(MouseEventReleased, 
-										_get_mouse_button(event->button), mousePoint, event->modifier);
-							popup->scrollBar()->handleMouseReleaseEvent(mevent);
-							// FIXME: This is a hack to work around PlatformScrollbar not 
-							// invalidating correctly when it doesn't have a parent widget
-							IntRect r = scrollBarRect;
-							popup->updateRect(r.x(), r.y(), r.width(), r.height());
-							break;
-						}
-					}
-					IntRect bounds = popup->windowClientRect();
-					if (popup->client() && bounds.contains(mousePoint.x(), mousePoint.y())) {
-						popup->client()->hidePopup();
-						int index = popup->focusedIndex();
-						if (index >= 0)
-							popup->client()->valueChanged(index);
-					}
-				}
-				break;
-			case EVT_MOUSE_DOWN:
-				{
-					IntPoint mousePoint(event->point.x, event->point.y);
-					if (popup->scrollBar()) {
-						IntRect scrollBarRect = popup->scrollBar()->frameGeometry();
-						if (scrollBarRect.contains(mousePoint)) {
-							// Put the point into coordinates relative to the scroll bar
-							mousePoint.move(-scrollBarRect.x(), -scrollBarRect.y());
-							PlatformMouseEvent mevent(MouseEventPressed,
-										_get_mouse_button(event->button), mousePoint, event->modifier);
-							popup->scrollBar()->handleMousePressEvent(mevent);
-							popup->setScrollbarCapturingMouse(true);
-							break;
-						}
-					}
-
-					IntRect bounds = popup->windowClientRect();
-					if (popup->client() && bounds.contains(mousePoint.x(), mousePoint.y())) {
-						popup->setFocusedIndex(popup->listIndexAtPoint(mousePoint), true);
-					} else {
-						popup->client()->hidePopup();
-					}
-				}
-				break;
-			default:
-				break;
-		}
-	}
 	return MC_STATUS_SUCCESS;
 }
 

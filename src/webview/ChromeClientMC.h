@@ -13,6 +13,7 @@
 #include "Element.h"
 
 #include "macross.h"
+#include "WebEngine.h"   /* struct _mc_view: webView() needs the body */
 
 namespace WebCore {
 
@@ -75,6 +76,10 @@ public:
 
     void setFocused(bool b) { m_focused = b; }
     bool isFocused(void) const { return m_focused; }
+
+    /* The MaCross view that owns this page. PopupMenu needs it to paint an open
+     * <select> menu into the view's surface and to route input there. */
+    WebView* webView(void) const { return m_view ? m_view->view : 0; }
 
 	void focusChangedRect(const IntRect&);
 

@@ -22,6 +22,7 @@ namespace WebCore {
     class EditorClientMC;
     class ChromeClientMC;
     class FrameLoaderClientMC;
+    class PopupMenu;
 }
 
 namespace MaCross {
@@ -43,6 +44,12 @@ public:
 	void contentsPosChanged(int old_x, int old_y, int new_x, int new_y);
 
 	void setDirtyRect(int x, int y, int width, int heignt);
+
+	/* The open <select> menu. The engine draws it into this view's own surface
+	 * (no host window: agave never registers cb_create_popup_menu), so the view
+	 * paints it on top of the page and forwards input to it while it is set. */
+	void setActivePopup(WebCore::PopupMenu*);
+	WebCore::PopupMenu* activePopup(void) const;
 
 	void setMinLayoutSize(int w, int h);
 	void clearMinLayoutSize(void);
