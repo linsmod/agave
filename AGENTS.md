@@ -66,12 +66,16 @@ FOR SOME BUGS OR REQUIREMENTS THAT REQUIRE INFRASTRUCTURE ADJUSTMENTS, MAKE A DE
 
 MAKE HELPER SCRIPTS REUSABLE; WHEN A SCRIPT IS HIGH-FREQUENCY USED, PLACE IT IN THE PROJECT.
 
-`全部做好` MEANS PLAN IT FIRST, WRITE DOCS, THEN DO IT BY BATCH OR STEP, TEST, CLEAN AND COMMIT.
+USER SAY `都要` AFTER YOUR STEP-BY-STEP WAVES MEANS A DEV PIPELINE.
 
-任务中经历的本该优化的阻塞点，可以临时用脚本方式绕过，但需要记录并提示延后处置。
+FULL DEV PIPELINE: PLAN IT FIRST, WRITE DOCS, THEN DO IT BY BATCH OR STEP, TEST, CLEAN AND COMMIT.
+
+NOT ALL MESSAGES FROM USER IS ASK YOU TO START A FULL DEV PIPELINE. SOME JUST QUESTIONS, YOU EXPLORER, AND ANSWER.
+
+任务中经历的本该优化的阻塞点，可以临时用一些方法绕过，但需要记录并提示延后处置。
 
 **发现缺口必须记录并反馈**：凡是发现能力缺口、半成品路径、与现代浏览器不一致的行为（不只是这次修的那个 bug），
-在对话中反馈并提供修复建议。
+在对话中附加反馈并提供建议。
 如果有修复，修完把结论写回`docs/arch-*.md` / `docs/hist-lessons.md`；
 
 WHEN USER REPLY A DOT[.] ONLY, MEANS OK/DONE/DO_AS_YOU_SAY/YES/GO_ON/ACCEPT/...
@@ -85,12 +89,13 @@ WHEN USER REPLY A QUESTION MARK[?] ONLY, MAY BE RETRY CONNECTION. IF MUTI QUESTI
    再 relink `libagave`。agave 里不再保留桥的副本。
 2. **改 ant 内核也走同一个脚本**：`pwsh -File tools/build_antjsb.ps1` 会先编 `libant.a`
    再链 `antjsb.dll`；只改本仓库 C++ 时才需要 `cmake --build build-zig-native`。
-   改Ant核心需要在ant repo中添加测试，改完后任务收尾时要提交。
+   - 改Ant核心需要在ant repo中添加测试，改完后任务收尾时要提交。
 3. **重编前先停掉正在跑的 `agave_shell`**：旧进程占着 `antjsb.dll` 时链接静默失败，跑的还是旧 dll。
 4. `prelude.js` / `polyfills.js` 是**运行时**从 exe 旁加载的：拷到 `build-zig-native\` 即生效，**不用重链**。
 5. 探针默认**真无头**（不建浏览器窗口）；要像素用 `--shot <png|bmp>`（抓控件自己的 mirror 缓冲；`.png` 由壳自己编码、不用再转，`.bmp` 留给 pixel_check），`--shot-rect x,y,w,h` 直接裁到某块；`AGB_PROBE_SHOW=1` 只在调试「窗口可见时行为不同」的路径时才用。
 6. **不要 rebase** ant 的 `agave-bridge`：基线是冻结 tag，落后上游 54 个 commit，同步另外安排。
-7. **截图不许打扰用户**：用 `tools/screenshot.ps1`（= `--probe ... --shot [-rect x,y,w,h]`，窗口从不 `ShowWindow`，不抢焦点、不上任务栏）；不要启动 GUI 壳截图、不要 `SetForegroundWindow`、不要截屏抓桌面。能用探针数字判断的，就不要截图。
+7. **截图用无头模式**：用 `tools/screenshot.ps1`（= `--probe ... --shot [-rect x,y,w,h]`，窗口从不 `ShowWindow`，不抢焦点、不上任务栏）；不要启动 GUI 壳截图、不要 `SetForegroundWindow`、不要截屏抓桌面。能用探针数字判断的，就不要截图。
+8. **页面资源需要对接页面生命周期**：新增或重构各种页面资源无论图片，字体，样式，JS，其他与页面有关的资源，按情况在拆页（doc）时挂上恰当的资源销毁或清理函数。
 
 ## 三个最常用命令
 
@@ -104,3 +109,7 @@ agave_shell.exe --probe <url> --eval "probeExit(...)" --wait 3000 --settle 1000 
 # Worker 回归（起本地 http server → 跑九项 → 收服务）
 pwsh -File tools\run_worker_tests.ps1
 ```
+
+## TOOLS
+[Search Local Machine Files](c:/Users/linswin/.agents/skills/everything-search/SKILL.md)
+[Sandbox Bypass](c:/Users/linswin/.agents/skills/traycmd/SKILL.md) Section:一次性/临时命令
