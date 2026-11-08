@@ -1575,6 +1575,141 @@ static void splitSelectorList(const String& list, Vector<String>& out)
     }
 }
 
+/* ':-webkit-any()' is Chrome's legacy spelling of ':is()' (the CSS-in-JS
+ * compiler behind the DeepSeek login page still emits it). Normalise it first
+ * so the rest of the rewrite only has to know about ':is()'. */
+static String normalizeAnyPseudo(const String& selector)
+{
+    const String anyPseudo(":-webkit-any(");
+    String result;
+    unsigned length = selector.length();
+
+    for (unsigned i = 0; i < length; ++i) {
+        if (i + anyPseudo.length() <= length && selector.substring(i, anyPseudo.length()) == anyPseudo) {
+            result += ":is(";
+            i += anyPseudo.length() - 1;
+            continue;
+        }
+        result.append(selector[i]);
+    }
+
+    return result;
+}
+
+/* ':not(:is(a, b))' -> ':not(a):not(b)'.
+ *
+ * Selectors 4 allows a selector list inside :not(); the 2008 grammar only takes
+ * one simple selector, and the current ':is()' expansion skips anything nested
+ * in another pseudo-class. A generated stylesheet writes logical properties as
+ *   .x:not(:is(:lang(ae), :lang(ar), ...)) { margin-right: 12px }
+ * (the :lang() list is the RTL exclusion). Without distribution the parser
+ * rejects the selector and silently drops the declaration - DeepSeek's
+ * verify-code divider lost its 12px gap that way.
+ *
+ * Only the form where :not() holds exactly the functional pseudo-class is
+ * rewritten; anything else is left untouched. */
+static bool expandNotIsOnce(const String& selector, String& result)
+{
+    const String notPseudo(":not(");
+    unsigned length = selector.length();
+
+    for (unsigned i = 0; i + notPseudo.length() <= length; ++i) {
+        if (selector.substring(i, notPseudo.length()) != notPseudo)
+            continue;
+
+        unsigned argStart = i + notPseudo.length();
+
+        while (argStart < length && (selector[argStart] == ' ' || selector[argStart] == '\t' || selector[argStart] == '\n'))
+            ++argStart;
+
+        bool isIs = selector.substring(argStart, 4) == String(":is(");
+        bool isWhere = selector.substring(argStart, 7) == String(":where(");
+
+        if (!isIs && !isWhere)
+            continue;
+
+        unsigned innerStart = argStart + (isIs ? 4 : 7);
+        int depth = 1;
+        unsigned close = innerStart;
+
+        for (; close < length && depth > 0; ++close) {
+            if (selector[close] == '(')
+                ++depth;
+            else if (selector[close] == ')')
+                --depth;
+        }
+        if (depth != 0)
+            return false;
+
+        unsigned notClose = close;
+
+        while (notClose < length && (selector[notClose] == ' ' || selector[notClose] == '\t' || selector[notClose] == '\n'))
+            ++notClose;
+        if (notClose >= length || selector[notClose] != ')')
+            continue;               /* :not() holds more than the pseudo-class */
+
+        String inner = selector.substring(innerStart, close - 1 - innerStart);
+        Vector<String> parts;
+        splitSelectorList(inner, parts);
+
+        if (parts.isEmpty())
+            return false;
+
+        for (unsigned k = 0; k < parts.size(); ++k)
+            for (unsigned j = 0; j < parts[k].length(); ++j)
+                if (isCombinatorChar(parts[k][j]))
+                    return false;   /* complex argument: not supported */
+
+        String distributed;
+
+        for (unsigned k = 0; k < parts.size(); ++k) {
+            distributed += ":not(";
+            distributed += parts[k].stripWhiteSpace();
+            distributed += ")";
+        }
+
+        result = selector.substring(0, i) + distributed + selector.substring(notClose + 1);
+        return true;
+    }
+
+    return false;
+}
+
+/* Runs expandNotIsOnce over a whole selector list until none is left. */
+static String expandNotIsList(const String& list)
+{
+    String current = list;
+
+    for (int guard = 0; guard < 8; ++guard) {
+        Vector<String> selectors;
+        splitSelectorList(current, selectors);
+
+        bool changed = false;
+        String rebuilt;
+
+        for (unsigned i = 0; i < selectors.size(); ++i) {
+            String expanded;
+
+            if (expandNotIsOnce(selectors[i], expanded)) {
+                if (i)
+                    rebuilt += ", ";
+                rebuilt += expanded;
+                changed = true;
+            } else {
+                if (i)
+                    rebuilt += ", ";
+                rebuilt += selectors[i];
+            }
+        }
+
+        if (!changed)
+            break;
+        current = rebuilt;
+    }
+
+    return current;
+}
+
 /* Expands every ':is()'/':where()' of one selector (which may become several).
  * Returns true when something was expanded. */
 static bool expandOneSelector(const String& selector, String& result)
@@ -1721,6 +1856,44 @@ static String expandSelectorList(const String& prelude)
     return list;
 }
 
+/* Removes comments from a selector prelude before the text-based rewrites run.
+ * Those rewrites parse quotes, and an apostrophe inside a comment
+ * ("/* DeepSeek's verify-code divider *\/") looks like a string start: the
+ * splitter swallowed the selector that followed and the rule silently vanished.
+ * Comments carry no meaning in a prelude. */
+static String stripCommentsFromSelector(const String& selector)
+{
+    String result;
+    unsigned length = selector.length();
+
+    for (unsigned i = 0; i < length; ++i) {
+        if (selector[i] == '/' && i + 1 < length && selector[i + 1] == '*') {
+            i += 2;
+            while (i + 1 < length && !(selector[i] == '*' && selector[i + 1] == '/'))
+                ++i;
+            ++i;                    /* the loop's ++i moves past the '/' */
+            result.append(' ');
+            continue;
+        }
+        if (selector[i] == '"' || selector[i] == '\'') {
+            UChar quote = selector[i];
+
+            result.append(selector[i]);
+            for (++i; i < length && selector[i] != quote; ++i) {
+                if (selector[i] == '\\' && i + 1 < length)
+                    result.append(selector[i++]);
+                result.append(selector[i]);
+            }
+            if (i < length)
+                result.append(selector[i]);
+            continue;
+        }
+        result.append(selector[i]);
+    }
+
+    return result;
+}
+
 /* ':is(sel, sel)' and ':where(sel, sel)' (Selectors 4).
  *
  * The 2008 selector grammar has no production for a selector list inside a
@@ -1736,7 +1909,7 @@ static String expandSelectorList(const String& prelude)
  * not match - the same failure mode as before. */
 static String rewriteIsWhereSelectors(const String& css)
 {
-    if (!css.contains(":is(") && !css.contains(":where("))
+    if (!css.contains(":is(") && !css.contains(":where(") && !css.contains(":-webkit-any("))
         return css;
 
     /* Walk the sheet and rewrite only rule preludes (the text between a block
@@ -1785,10 +1958,17 @@ static String rewriteIsWhereSelectors(const String& css)
             continue;
         }
         if (c == '{') {
-            String prelude(&text[segmentStart], i - segmentStart);
+            String prelude = stripCommentsFromSelector(String(&text[segmentStart], i - segmentStart));
 
-            if (prelude.contains(":is(") || prelude.contains(":where(")) {
-                String rewritten = expandSelectorList(prelude);
+            if (prelude.contains(":is(") || prelude.contains(":where(") || prelude.contains(":-webkit-any(")) {
+                String rewritten = prelude;
+
+                if (rewritten.contains(":-webkit-any("))
+                    rewritten = normalizeAnyPseudo(rewritten);
+                if (rewritten.contains(":not(") && (rewritten.contains(":is(") || rewritten.contains(":where(")))
+                    rewritten = expandNotIsList(rewritten);
+                if (rewritten.contains(":is(") || rewritten.contains(":where("))
+                    rewritten = expandSelectorList(rewritten);
 
                 for (unsigned k = 0; k < rewritten.length(); ++k)
                     out.push_back(rewritten[k]);

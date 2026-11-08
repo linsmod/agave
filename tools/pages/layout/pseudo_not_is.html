@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>pseudo not is</title>
+<style>
+  html, body { margin: 0; padding: 0; }
+  #stage { font-size: 0; background: #eee; }
+  .item { display: inline-block; width: 20px; height: 10px; background: #333; }
+  /* Generated logical-property guards: ':not(:is(:lang(..)))' (and the
+     -webkit-any alias) must distribute into ':not(:lang(..)):not(:lang(..))',
+     otherwise the 2008 selector grammar rejects the whole rule and the margin
+     silently disappears (DeepSeek's verify-code divider, R121). */
+  .item:not(:is(:lang(ar), :lang(he))) { margin-right: 12px; }
+  .item.any:not(:-webkit-any(:lang(ar), :lang(he))) { margin-right: 20px; }
+</style>
+</head>
+<body>
+<div id="stage"><div class="item" data-case="a"></div><div class="item" data-case="b"></div><div class="item any" data-case="c"></div></div>
+</body>
+</html>
