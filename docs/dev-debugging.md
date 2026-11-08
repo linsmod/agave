@@ -240,6 +240,7 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
   ③core-js/modernizr 的特性探测会故意抛错并自己 catch，这类 `[snippet]` 是**正常噪音**。
 - **DOM 节点属性读出 undefined**：先查桥（`wrapNode` / 类属性表 / catch-all getter），再怀疑页面。
 - **Vue "missing template or render function"** ≈ `container.innerHTML` 拿到 undefined。
+- **元素高度在加载后跳变**：先判断**会不会回落**——骨架屏/图片/字体会让内容短暂变高（DeepSeek 登录页的二维码块就是：骨架屏层与 iframe 层并存约 1.2 s，块 302 → 526 → 302）。回落 = 页面自己的过渡，**不回落**才是布局 bug（R113：auto 高度的 flex 容器把上一次布局的高度当成了可用高度）。量法：`--inject inspector` 后分别在加载中、稳定后各点一次 `Copy element info` 对比 `getBoundingClientRectInPage`。
 - **`<template>` 内容惰性**（HTML5）：`Node::createRendererIfNeeded` 对 `localName=="template"` 返回，
   子树没有 renderer、不渲染；children 仍在 DOM（`innerHTML`/script 访问不变）。**别删**。
 - **`on_progress finished=1` 不代表加载成功**：用 `agave_webview_url` 比对 host 判断是否真提交
