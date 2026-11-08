@@ -86,6 +86,14 @@ void RenderBox::setStyle(RenderStyle* newStyle)
 
     setInline(newStyle->isDisplayInlineType());
 
+    /* Clear all three positioning bits before re-deciding: a RenderStyle can be
+     * replaced with one whose position is static/relative, and a bit left over
+     * from the previous style (sticky was never cleared at all) would keep
+     * requiresLayer() true and shift this box's paint/hit-test position. */
+    setPositioned(false);
+    setRelPositioned(false);
+    setStickyPositioned(false);
+
     switch (newStyle->position()) {
         case AbsolutePosition:
         case FixedPosition:
@@ -97,8 +105,6 @@ void RenderBox::setStyle(RenderStyle* newStyle)
             setStickyPositioned(true);
             break;
         default:
-            setPositioned(false);
-
             if (newStyle->isFloating())
                 setFloating(true);
 
@@ -177,10 +183,12 @@ void RenderBox::destroy()
      * removeLayers() while the document is being destroyed, so a layer can still
      * be in its parent's sibling chain here; freeing it in place left a dangling
      * pointer that the next RenderLayer::updateLayerPositions() walked — that is
-     * the "clicked reload while the page was loading" crash (hist-lessons R89). */
+     * the "clicked reload while the page was loading" crash (hist-lessons R89).
+     * Leftover children are re-parented at the same time: render-tree surgery
+     * that does not touch the layer tree (removeLeftoverAnonymousBlock) can leave
+     * live child layers hanging off this one (R134). */
     if (layer)
-        if (RenderLayer* layerParent = layer->parent())
-            layerParent->removeChild(layer);
+        layer->removeFromParentAndReparentChildren();
 
     RenderObject::destroy();
 

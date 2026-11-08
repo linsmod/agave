@@ -70,6 +70,9 @@
 #include "SVGNames.h"
 #endif
 
+#include <stdio.h>
+#include <stdlib.h>
+
 #define MIN_INTERSECT_FOR_REVEAL 32
 
 using namespace std;
@@ -81,6 +84,62 @@ using namespace HTMLNames;
 
 #ifndef NDEBUG
 static bool inRenderLayerDestroy;
+static unsigned g_nextLayerDbgId = 1;
+
+/* Teardown debugging. Every layer carries a unique id plus the reason it was
+ * created, because the renderer it belongs to may already be gone by the time
+ * the layer is freed (RenderWidget::destroy frees the renderer first). Set
+ * AGB_LAYER_TRACE=1 to log every birth / link / unlink / free; the ids make
+ * the log readable across arena pointer reuse. */
+enum { LayerKindOther, LayerKindWidget, LayerKindText, LayerKindAnonBlock, LayerKindNamedBlock,
+       LayerKindInline, LayerKindTable, LayerKindReplaced, LayerKindView };
+
+static bool layerTrace()
+{
+    static int on = -1;
+    if (on < 0) on = getenv("AGB_LAYER_TRACE") ? 1 : 0;
+    return on != 0;
+}
+
+static unsigned char layerKindOf(RenderObject* o)
+{
+    if (!o) return LayerKindOther;
+    if (o->isRenderView()) return LayerKindView;
+    if (o->isWidget()) return LayerKindWidget;
+    if (o->isText()) return LayerKindText;
+    if (o->isTable()) return LayerKindTable;
+    if (o->isAnonymousBlock()) return LayerKindAnonBlock;
+    if (o->isBlockFlow()) return LayerKindNamedBlock;
+    if (o->isInline()) return LayerKindInline;
+    if (o->isReplaced()) return LayerKindReplaced;
+    return LayerKindOther;
+}
+
+static const char* layerKindName(unsigned char k)
+{
+    switch (k) {
+    case LayerKindWidget: return "widget";
+    case LayerKindText: return "text";
+    case LayerKindAnonBlock: return "anon-block";
+    case LayerKindNamedBlock: return "block";
+    case LayerKindInline: return "inline";
+    case LayerKindTable: return "table";
+    case LayerKindReplaced: return "replaced";
+    case LayerKindView: return "view";
+    default: return "other";
+    }
+}
+
+/* why: 1 relative, 2 absolute/fixed, 4 overflow clip, 8 transparent, 16 sticky,
+ * 32 root, 64 view, 0xfe renderer style not set yet. */
+static unsigned char layerWhyOf(RenderObject* o)
+{
+    if (!o->style()) return 0xfe;
+    return (unsigned char)((o->isRelPositioned() ? 1 : 0) | (o->isPositioned() ? 2 : 0) |
+                           (o->hasOverflowClip() ? 4 : 0) | (o->isTransparent() ? 8 : 0) |
+                           (o->isStickyPositioned() ? 16 : 0) | (o->isRoot() ? 32 : 0) |
+                           (o->isRenderView() ? 64 : 0));
+}
 #endif
 
 const RenderLayer::ScrollAlignment RenderLayer::gAlignCenterIfNeeded = { RenderLayer::noScroll, RenderLayer::alignCenter, RenderLayer::alignToClosestEdge };
@@ -148,6 +207,23 @@ RenderLayer::RenderLayer(RenderObject* object)
     , m_staticX(0)
     , m_staticY(0)
 {
+#ifndef NDEBUG
+    m_dbgId = g_nextLayerDbgId++;
+    /* The style is not necessarily installed yet when the layer is created
+     * (RenderBox::setStyle runs first in the normal path, but not always), and
+     * every predicate below reads it. */
+    if (object->style()) {
+        m_dbgKind = layerKindOf(object);
+        m_dbgWhy = layerWhyOf(object);
+    } else {
+        m_dbgKind = 0xff;
+        m_dbgWhy = 0xfe;
+    }
+    if (layerTrace())
+        fprintf(stderr, "[lay] birth id=%u layer=%p kind=%s why=%02x obj=%p anon=%d\n",
+                m_dbgId, static_cast<void*>(this), layerKindName(m_dbgKind), m_dbgWhy,
+                static_cast<void*>(object), object->isAnonymous() ? 1 : 0);
+#endif
     if (!object->firstChild() && object->style()) {
         m_visibleContentStatusDirty = false;
         m_hasVisibleContent = object->style()->visibility() == VISIBLE;
@@ -463,6 +539,22 @@ void RenderLayer::operator delete(void* ptr, size_t sz)
 void RenderLayer::destroy(RenderArena* renderArena)
 {
 #ifndef NDEBUG
+    /* Teardown invariant: a layer is freed only after it has been unlinked.
+     * Every caller is supposed to detach first (RenderBox::destroy does; the
+     * destacking path removeOnlyThisLayer() does). If this fires, the layer
+     * tree keeps a raw pointer to freed memory and any later walk (addChild /
+     * removeChild / updateLayerPositions) reads a recycled block. */
+    if (m_parent || m_first || m_next || m_previous)
+        fprintf(stderr, "[lay] DESTROY-WHILE-LINKED id=%u layer=%p kind=%s why=%02x obj=%p parent=%p first=%p last=%p next=%p prev=%p\n",
+                m_dbgId, static_cast<void*>(this), layerKindName(m_dbgKind), m_dbgWhy,
+                static_cast<void*>(m_object),
+                static_cast<void*>(m_parent), static_cast<void*>(m_first),
+                static_cast<void*>(m_last), static_cast<void*>(m_next),
+                static_cast<void*>(m_previous));
+    if (layerTrace())
+        fprintf(stderr, "[lay] free id=%u kind=%s why=%02x parent=%p first=%p\n",
+                m_dbgId, layerKindName(m_dbgKind), m_dbgWhy,
+                static_cast<void*>(m_parent), static_cast<void*>(m_first));
     inRenderLayerDestroy = true;
 #endif
     delete this;
@@ -492,6 +584,11 @@ void RenderLayer::addChild(RenderLayer *child, RenderLayer* beforeChild)
         setLastChild(child);
    
     child->setParent(this);
+#ifndef NDEBUG
+    if (layerTrace())
+        fprintf(stderr, "[lay] LINK child=%u parent=%u before=%p\n",
+                child->m_dbgId, m_dbgId, static_cast<void*>(beforeChild));
+#endif
 
     if (child->isOverflowOnly())
         dirtyOverflowList();
@@ -511,6 +608,11 @@ void RenderLayer::addChild(RenderLayer *child, RenderLayer* beforeChild)
 
 RenderLayer* RenderLayer::removeChild(RenderLayer* oldChild)
 {
+#ifndef NDEBUG
+    if (layerTrace())
+        fprintf(stderr, "[lay] UNLINK child=%u from=%u childParent=%p\n",
+                oldChild->m_dbgId, m_dbgId, static_cast<void*>(oldChild->parent()));
+#endif
     // remove the child
     if (oldChild->previousSibling())
         oldChild->previousSibling()->setNextSibling(oldChild->nextSibling());
@@ -542,6 +644,43 @@ RenderLayer* RenderLayer::removeChild(RenderLayer* oldChild)
         childVisibilityChanged(false);
     
     return oldChild;
+}
+
+void RenderLayer::removeFromParentAndReparentChildren()
+{
+    RenderLayer* layerParent = m_parent;
+    if (!layerParent) {
+        /* No parent to adopt them: they are no longer reachable from any root,
+         * so they will leak, but clearing the back pointers keeps a later
+         * destroy from calling removeChild() on this freed layer. */
+        for (RenderLayer* current = m_first; current; ) {
+            RenderLayer* next = current->nextSibling();
+            current->setParent(0);
+            current->setPreviousSibling(0);
+            current->setNextSibling(0);
+            current = next;
+        }
+        return;
+    }
+
+    /* Our renderer is going away, but the layers below us may belong to
+     * renderers that outlive it: RenderContainer::removeLeftoverAnonymousBlock()
+     * adopts an anonymous block's render children and only then destroys the
+     * block, and the raw render-tree link surgery there (and in
+     * RenderBlock::makeChildrenNonInline) never touches the layer tree. Hand the
+     * children to our parent layer, in our place: freeing them in place left
+     * those children's m_parent pointing at released memory, and the next
+     * removeChild()/stackingContext() walk dereferenced it (hist-lessons R134). */
+    RenderLayer* beforeChild = m_next;
+    RenderLayer* current = m_first;
+    while (current) {
+        RenderLayer* next = current->nextSibling();
+        removeChild(current);
+        layerParent->addChild(current, beforeChild);
+        current = next;
+    }
+
+    layerParent->removeChild(this);
 }
 
 void RenderLayer::removeOnlyThisLayer()

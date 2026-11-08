@@ -165,6 +165,16 @@ DOM attach（Element::attach / Text::attach）
   `RenderObject::absoluteBoundingBoxRect`（`getBoundingClientRect` 与脏矩形）；sticky 会建 layer，
   滚动时 `ScrollView::valueChanged` 在文档有 sticky 内容时整视口重绘而不是 blit（否则会被滚走）。
   它**不是** positioned：`isPositioned()` 仍为 false，不参与 `m_positionedObjects`。
+- 三个定位位（`m_positioned` / `m_relPositioned` / `m_stickyPositioned`）必须**始终描述当前
+  style**：`RenderBox::setStyle()` 进 position switch 之前统一清掉再由新 style 置位。sticky 是
+  位字段，漏初始化的后果不是“sticky 不生效”而是随机盒子 `requiresLayer()` 为真（R134）。
+- 层树的拆除不变量：**释放一个 RenderLayer 之前它必须已经和父层解链**，并且它残留的子层要交给
+  父层（`RenderLayer::removeFromParentAndReparentChildren()`，`RenderBox::destroy()` /
+  `RenderWidget::destroy()` 都走它）。render 树里有 raw 改链的地方（`removeLeftoverAnonymousBlock()`、
+  `makeChildrenNonInline()` 的 `moveChildNode()`）不动层树，所以不能假设“子层一定先于父层被销毁”。
+  层树里出现指向已释放层的 `m_parent` 时，下一次 `removeChild()` / `stackingContext()` 就是 AV
+  （R89 是同一族：只摘自己、不处理子层）。排查用 `AGB_LAYER_TRACE=1` + Debug 版的
+  `[lay] DESTROY-WHILE-LINKED`（见 [dev-debugging.md](dev-debugging.md)）。
 
 ### 3.8 尺寸从哪来
 

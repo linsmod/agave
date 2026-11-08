@@ -88,9 +88,13 @@ if ($probe.Code -ne 0 -or $missing.Count -gt 0) {
 
 # 2. paint: scroll to 500 in --eval, then capture. Red header must be at the
 #    top, the spacer under it, the blue footer at the bottom edge.
+#    The script must NOT call probeExit(): that posts __agb_exit__ and closes
+#    the probe window before --shot can run, so the capture never happens and
+#    this group fails with "no such file". Letting --settle finish is what
+#    reaches the shot path.
 $shot = Join-Path $tmp 'sticky.bmp'
 $scrollJs = Join-Path $tmp 'scroll.js'
-"window.scrollTo(0, 500); probeExit('sy=' + window.scrollY);" |
+"window.scrollTo(0, 500);" |
     Set-Content -Path $scrollJs -Encoding ascii
 
 $stdout = Join-Path $tmp 'shotout.txt'

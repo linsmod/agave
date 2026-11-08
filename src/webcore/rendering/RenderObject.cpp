@@ -186,6 +186,7 @@ RenderObject::RenderObject(Node* node)
     , m_floating(false)
     , m_positioned(false)
     , m_relPositioned(false)
+    , m_stickyPositioned(false)
     , m_paintBackground(false)
     , m_isAnonymous(node == node->document())
     , m_isText(false)
@@ -2306,6 +2307,12 @@ void RenderObject::setStyle(RenderStyle* style)
             m_floating = false;
             m_positioned = false;
             m_relPositioned = false;
+            /* Sticky is a positioning bit like the other two: leaving it set
+             * keeps requiresLayer() true (an anonymous block that inherited a
+             * garbage bit got a layer, which is how removeLeftoverAnonymousBlock
+             * ended up freeing a layer that still parented live ones) and shifts
+             * paint/hit-test positions by a stale sticky offset. */
+            m_stickyPositioned = false;
         }
         m_paintBackground = false;
         m_hasOverflowClip = false;

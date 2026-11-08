@@ -93,6 +93,18 @@ void RenderWidget::destroy()
     if (layer)
         layer->clearClipRect();
 
+    /* Unlink before freeing, for the same reason RenderBox::destroy() does:
+     * RenderContainer::removeChildNode() skips removeLayers() while the
+     * document is being torn down, so the layer can still be sitting in its
+     * parent's sibling chain. Freeing it in place left the parent (or any
+     * later walk of the chain, e.g. stackingContext()/updateLayerPositions())
+     * staring at a recycled block - the layer half of R89, which only got
+     * fixed in RenderBox::destroy(). The renderer is still alive here, so
+     * removeChild() can dereference m_object safely; it must stay before
+     * deref(arena). */
+    if (layer)
+        layer->removeFromParentAndReparentChildren();
+
     setNode(0);
     deref(arena);
 

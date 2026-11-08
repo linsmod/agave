@@ -195,6 +195,10 @@ public:
     void addChild(RenderLayer* newChild, RenderLayer* beforeChild = 0);
     RenderLayer* removeChild(RenderLayer*);
 
+    /* Unlink this layer and hand any children it still has to the parent layer,
+     * so freeing it cannot leave a live layer pointing at freed memory. */
+    void removeFromParentAndReparentChildren();
+
     void removeOnlyThisLayer();
     void insertOnlyThisLayer();
 
@@ -462,6 +466,16 @@ protected:
     // Cached normal flow values for absolute positioned elements with static left/top values.
     int m_staticX;
     int m_staticY;
+
+#ifndef NDEBUG
+public:
+    /* Teardown debugging: a unique id plus the reason this layer exists.
+     * Reading them back is safe even when the renderer they belong to has
+     * already been freed, which is exactly the case in RenderWidget::destroy. */
+    unsigned m_dbgId;
+    unsigned char m_dbgKind;
+    unsigned char m_dbgWhy;
+#endif
 };
 
 } // namespace WebCore

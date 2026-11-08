@@ -209,6 +209,7 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
 | JS 绑定 | `AGB_DOM_DEBUG=1` / `AGB_STYLE_DEBUG=1` / `AGB_EVT_DEBUG=1` | DOM 绑定 / style 访问 / realm·teardown 事件 |
 | 事件派发链 | `AGB_EVT_TRACE=1` | 每次派发沿冒泡链打印 `[evt-trace] <type> node=<ptr> listeners=<n>`：看某个监听器到底在不在链上、有没有被调用（R45 就是靠它确认 React 的委托监听器确实执行了） |
 | 崩溃 | `AGB_TRACE_CRASH=1` | 记录最近 256 条内部 trace（崩溃后能回看走到哪） |
+| 渲染树/层树 | `AGB_LAYER_TRACE=1` | 每层出生/挂接/摘链/释放各打一行（`[lay] birth id=… kind=… why=…`、`LINK`、`UNLINK`、`free`）。Debug 构建里 `RenderLayer::destroy()` 发现层还挂在链上时**无条件**打 `[lay] DESTROY-WHILE-LINKED`（带 id/kind/why/parent/first）——看到它基本就是层树拆除的 use-after-free（R134），配 `tools/pages/fuzz_layer.html` 复现 |
 | 性能 | `AGB_PROFILE=1` / `AGB_PERF_LOG=1` | RIP 采样直方图（退出时 dump `[profjs]`，用 `tools/cdb_stack.ps1 -Symbolize` 前先把 `module+0x` 聚合成 `#NN` 行）/ 帧耗时（layout+paint > 100ms 才打，**带 `rect=WxH@x,y`**：脏矩形等于视口 = 正常，等于整篇文档 = 失效路径在放大重绘，见 R135） |
 | 性能 | `AGB_LAYOUT_DEBUG=1` | 每 5 次 layout 打 `[layout] calls= total= ms`：区分"真的在反复布局"和"只是在重绘"。整页 layout 在长文档上是 60–100ms 量级（R135） |
 | 性能 | 页面内 rAF 计时 | 探针里跑 `debug/fps_paint.js` 那种脚本（每帧改一个内联样式 + 数 rAF）能量出"每帧 JS+样式+布局+绘制"的真实帧率；只数 rAF 不改样式会把布局/绘制全跳过，数字虚高 |

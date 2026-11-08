@@ -95,5 +95,6 @@
 | `tools/pages/layout/*.html` | 几何/像素回归页（自动进 `run_layout_tests`），配套 `lib_measure.js` |
 | `tools/pages/*.html` + `check_*.js` | 各专项套件的页面与断言脚本（typing/xhr/worker/nav/realm/媒体…） |
 | `tools/pages/**`（served） | nav/xhr/worker 等需要 http 语义的页面，由套件自己起服务 |
+| `tools/pages/fuzz_layer.html` | 确定性 DOM/样式变异 fuzz（position/overflow/opacity/float/iframe/table/select，每步强制 layout），专打层树拆除；探针跑 10 轮应 0 崩溃 0 `[lay] DESTROY-WHILE-LINKED`（R134） |
 | `debug/**` | 临时复现页与诊断页（不进套件；`debug/` 在 `.gitignore` 里） |
 | `tools/ant_*.c` | 直接打桥的 C 探针（realm/pin/loop 复现） |

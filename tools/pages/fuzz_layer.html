@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>layer fuzz</title>
+<style>
+  html, body { margin: 0; padding: 0; }
+  #host { position: absolute; left: 0; top: 0; width: 800px; }
+</style></head>
+<body>
+<div id="host"></div>
+<pre id="report">not run</pre>
+<script>
+/* Deterministic DOM-mutation fuzzer aimed at the layer tree. It builds nested
+ * boxes with the styles that give renderers a RenderLayer (position, overflow,
+ * opacity, floats) plus the renderers with their own destroy paths (iframes,
+ * tables, lists, replaced elements), then rips subtrees out again.
+ *
+ * Run headless:
+ *   agave_shell.exe --probe file:///.../fuzz_layer.html --wait 8000 --timeout 60000
+ * A crash reproduces a layer-teardown use-after-free; the exit code stays 0
+ * (no [exit] needed - the page reports through the DOM) so watch for the
+ * crash file / lost process instead.
+ */
+var seed = 0x12345678;
+function rnd() { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed; }
+function pick(a) { return a[rnd() % a.length]; }
+
+var host = document.getElementById('host');
+var made = 0, mutated = 0, replaced = 0;
+var TAG = ['div', 'div', 'div', 'span', 'p', 'table', 'ul', 'iframe', 'img', 'select'];
+var STYLE = [
+  '', '', '',
+  'position:relative',
+  'position:relative;overflow:hidden',
+  'position:absolute;left:5px;top:5px;width:60px;height:20px',
+  'opacity:0.5',
+  'float:left;width:80px',
+  'overflow:hidden',
+  'position:fixed;right:0;top:0',
+  'position:relative;z-index: 3',
+  'position:sticky;top:0',
+  'position:sticky;top:2px;overflow:hidden'
+];
+var LEAF = ['text', 'one', 'two', 'three', 'a b c'];
+
+function makeNode(depth) {
+    var tag = pick(TAG);
+    var el = document.createElement(tag);
+    var st = pick(STYLE);
+    if (st) el.setAttribute('style', st);
+    if (tag === 'table') {
+        var tb = document.createElement('tbody');
+        var tr = document.createElement('tr');
+        var td = document.createElement('td');
+        td.setAttribute('style', pick(STYLE));
+        td.textContent = pick(LEAF);
+        tr.appendChild(td);
+        tb.appendChild(tr);
+        el.appendChild(tb);
+        return el;
+    }
+    if (tag === 'ul') {
+        var li = document.createElement('li');
+        li.setAttribute('style', pick(STYLE));
+        li.textContent = pick(LEAF);
+        el.appendChild(li);
+        return el;
+    }
+    if (tag === 'iframe' || tag === 'img') {
+        if (tag === 'iframe') el.setAttribute('src', 'about:blank');
+        return el;
+    }
+    if (tag === 'select') {
+        var o1 = document.createElement('option'); o1.textContent = 'AA';
+        var o2 = document.createElement('option'); o2.textContent = 'BB';
+        el.appendChild(o1); el.appendChild(o2);
+        return el;
+    }
+    var n = depth > 0 ? 1 + (rnd() % 3) : 0;
+    for (var i = 0; i < n; i++) el.appendChild(makeNode(depth - 1));
+    if (n === 0) el.textContent = pick(LEAF);
+    return el;
+}
+
+function allElements() {
+    var out = [];
+    function walk(n) {
+        for (var c = n.firstChild; c; c = c.nextSibling) {
+            if (c.nodeType === 1) { out.push(c); walk(c); }
+        }
+    }
+    walk(host);
+    return out;
+}
+
+for (var round = 0; round < 60; round++) {
+    /* Build a fresh forest. */
+    while (host.firstChild) host.removeChild(host.firstChild);
+    var trees = 1 + (rnd() % 3);
+    for (var t = 0; t < trees; t++) {
+        var tree = makeNode(4);
+        host.appendChild(tree);
+        made++;
+    }
+    void host.offsetHeight;   /* layout: layers + anonymous boxes exist */
+
+    /* Rip it apart in random order, mixing detach kinds. */
+    for (var step = 0; step < 40; step++) {
+        var els = allElements();
+        if (!els.length) break;
+        var el = els[rnd() % els.length];
+        var kind = rnd() % 7;
+        if (kind === 0) {                     /* textContent on a container  */
+            el.textContent = 'x' + step;
+            mutated++;
+        } else if (kind === 1) {              /* rebuild inline HTML         */
+            el.innerHTML = '<div style="position:relative"><div style="overflow:hidden">' +
+                           '<div style="position:relative"><span>r' + step + '</span></div>' +
+                           '</div></div>';
+            replaced++;
+        } else if (kind === 2) {              /* remove from the tree        */
+            if (el.parentNode) el.parentNode.removeChild(el);
+            mutated++;
+        } else if (kind === 3) {              /* toggle a layer-creating style */
+            var cycle = ['relative', 'sticky', 'static'];
+            var at = cycle.indexOf(el.style.position);
+            el.style.position = cycle[(at + 1) % cycle.length];
+            if (el.style.position === 'sticky') el.style.top = '0px';
+            mutated++;
+        } else if (kind === 4) {              /* toggle overflow             */
+            el.style.overflow = (el.style.overflow === 'hidden') ? 'visible' : 'hidden';
+            mutated++;
+        } else if (kind === 5) {              /* move the subtree elsewhere   */
+            if (el.parentNode && el.parentNode !== host) host.appendChild(el);
+            mutated++;
+        } else {                              /* replace with fresh forest   */
+            if (el.parentNode) {
+                el.parentNode.replaceChild(makeNode(3), el);
+                replaced++;
+            }
+        }
+        void host.offsetHeight;   /* force layout after every mutation */
+    }
+}
+
+var els = allElements();
+document.getElementById('report').textContent =
+    'ok rounds=60 built=' + made + ' mutated=' + mutated + ' replaced=' + replaced +
+    ' left=' + els.length + ' height=' + host.offsetHeight;
+</script>
+</body></html>
