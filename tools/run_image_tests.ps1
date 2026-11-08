@@ -10,7 +10,10 @@
 #   3. AGB_IMG_DECODE_MS=0 still restores the old one-shot behaviour, so the
 #      knob itself is tested;
 #   4. the sampling cap (AGB_IMG_SAMPLE_MAX) must actually change the output,
-#      otherwise the scaled-draw path is dead and the numbers above are lying.
+#      otherwise the scaled-draw path is dead and the numbers above are lying;
+#   5. an image whose resource completes with no body at all (HTTP 204,
+#      Content-Length: 0, a truncated header) must be a broken image, not a
+#      crash - and the async path must not re-decode it on every paint.
 #
 # The fixture is generated with System.Drawing (seeded, so two runs are
 # byte-identical) instead of committing a 550 KB JPEG.
@@ -144,12 +147,13 @@ $staticUrl = "file:///$($staticPage -replace '\\', '/')"
 $timerUrl = "file:///$($timerPage -replace '\\', '/')"
 $pngUrl = "file:///$($pngPage -replace '\\', '/')"
 
-function Run-Probe($url, $shot, $wait, [hashtable]$envs) {
+function Run-Probe($url, $shot, $wait, [hashtable]$envs, [string]$evalFile = $null) {
     foreach ($k in $envs.Keys) { Set-Item -Path "Env:$k" -Value $envs[$k] }
     try {
         $log = Join-Path $tmp ('run_' + [guid]::NewGuid().ToString('N') + '.log')
         $args = @('--probe', $url, '--wait', "$wait", '--settle', '400', '--timeout', '60000')
         if ($shot) { $args += @('--shot', $shot) }
+        if ($evalFile) { $args += @('--eval-file', $evalFile) }
         Push-Location (Split-Path -Parent $exe)
         try {
             & $exe @args *> $log
@@ -317,6 +321,71 @@ if ($rTd.Exit -ne 0 -and $rTd.Exit -ne 4) {
     Fail ("teardown mid-decode left jobs in flight (live trail: {0})" -f ($tdLive -join ','))
 } else {
     Pass 'teardown mid-decode: no crash, decode queue drained'
+}
+
+# 2d. an image resource that completes with no body at all (HTTP 204,
+#     Content-Length: 0, a truncated header) is a broken image, not a crash:
+#     the null SharedBuffer used to reach ImageSource::setData() through
+#     CachedImage::error() -> clear() -> destroyDecodedData() (R140). The valid
+#     image next to the broken ones must still decode, and the async path must
+#     not re-request it forever (adoptDecodedFrame() stored natural 0x0, so
+#     setScaleHint() dropped + re-decoded on every paint).
+$pageDir = Join-Path $root 'tools/pages'
+$port = 0
+$listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+$listener.Start()
+$port = $listener.LocalEndpoint.Port
+$listener.Stop()
+
+$emptyServer = Start-Process -WindowStyle Hidden python -PassThru `
+    -ArgumentList (Join-Path $root 'tools\empty_image_server.py'), "$port"
+
+try {
+    $ready = $false
+    for ($i = 0; $i -lt 40; $i++) {
+        Start-Sleep -Milliseconds 150
+        try {
+            $r = Invoke-WebRequest -Uri "http://127.0.0.1:$port/cap_empty_image.html" `
+                -UseBasicParsing -TimeoutSec 2
+            if ($r.StatusCode -eq 200) { $ready = $true; break }
+        } catch { }
+    }
+
+    if (-not $ready) {
+        Fail "empty-image: test server did not come up on port $port"
+    } else {
+        $crashFile = Join-Path (Split-Path -Parent $exe) 'agb_crash.txt'
+        Remove-Item $crashFile -Force -ErrorAction SilentlyContinue
+
+        $rEmpty = Run-Probe "http://127.0.0.1:$port/cap_empty_image.html" $null 1500 `
+            @{ AGB_IMG_ASYNC_DEBUG = '1' } (Join-Path $pageDir 'check_empty_image.js')
+        $emptyLog = Get-Content -Raw $rEmpty.Log
+
+        $payload = [regex]::Match($emptyLog, '\[exit\] ([^\r\n]*)').Groups[1].Value.Trim()
+
+        if ($rEmpty.Exit -ne 0) {
+            Fail ("empty-image: probe exit {0} (payload '{1}')" -f $rEmpty.Exit, $payload)
+        } elseif ($emptyLog -match '\[crash\]' -or (Test-Path $crashFile)) {
+            Fail 'empty-image: crashed on a resource with no body'
+        } elseif ($payload -ne 'empty=1/0 nocontent=1/0 truncated=1/0 ok=1/1') {
+            Fail ("empty-image: broken images not reported as broken ('{0}')" -f $payload)
+        } else {
+            $requests = [regex]::Matches($emptyLog, 'requests=(\d+)') |
+                ForEach-Object { [int]$_.Groups[1].Value }
+            $maxRequests = 0
+            if ($requests.Count) { $maxRequests = ($requests | Measure-Object -Maximum).Maximum }
+
+            if ($maxRequests -gt 4) {
+                Fail ("empty-image: async decode re-requested {0} times (repaint loop)" -f $maxRequests)
+            } else {
+                Pass ("empty-image: no-body images are broken, not fatal (async requests={0})" -f $maxRequests)
+            }
+        }
+    }
+} finally {
+    if ($emptyServer -and -not $emptyServer.HasExited) {
+        Stop-Process -Id $emptyServer.Id -Force -ErrorAction SilentlyContinue
+    }
 }
 
 # 3. AGB_IMG_DECODE_MS=0 restores the one-shot path (with L3 disabled, otherwise

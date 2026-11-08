@@ -122,7 +122,10 @@ void BitmapImage::destroyDecodedData(bool incremental)
         // Reset the image source, since Image I/O has an underlying cache that it uses
         // while animating that it seems to never clear.
         m_source.clear();
-        m_source.setData(m_data.get(), m_allDataReceived);
+        /* An image that never got data (the resource completed with an empty
+         * body, see ImageSource::setData) has no decoder to rebuild. */
+        if (m_data)
+            m_source.setData(m_data.get(), m_allDataReceived);
     }
 }
 

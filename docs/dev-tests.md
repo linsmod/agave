@@ -31,7 +31,7 @@
 | `run_script_mode_tests.ps1` | classic script 语义（顶层 `var`/`function` 进 `window`，R66）+ 热点循环性能 + `document.readyState`/`currentScript` | 无（Chrome 数值为注释里的基准） | `ALL SCRIPT MODE CHECKS PASSED` |
 | `run_realm_tests.ps1` | 每 frame 一个 realm（`design-per-frame-realm.md`）：先编译 `tools/ant_realm_probe.c` 直接测桥（一 isolate 三 realm），再走 iframe 页面 | 本机编译器（脚本自己编 `ant_realm_probe.exe`） | `ALL REALM CHECKS PASSED` |
 | `run_sticky_tests.ps1` | `position:sticky`：视口/内层滚动容器/containing block 边界、命中跟随（R82），几何 + 像素 | 无（期望值来自 Chrome） | `STICKY=PASS` |
-| `run_image_tests.ps1` | 图片解码（R136–R139）：切片解码与一次性解码**逐字节同像素**（JPEG + PNG）、**工作线程解出的帧与内联帧逐字节一致**且 paint 里不再解码、大图不再单帧停摆（paint 上限 / rAF gap）、L3 缩放解码的加速比、**拆文档时进行中的解码不崩且队列排空**、`AGB_IMG_DECODE_MS=0`/`AGB_IMG_NO_SCALE`/`AGB_IMG_SAMPLE_MAX` 开关有效 | 无（脚本自己用 System.Drawing 生成 4000×3000 JPEG / 3000×2000 PNG 到 `build-zig-native/img_test`） | `IMAGE=PASS` |
+| `run_image_tests.ps1` | 图片解码（R136–R140）：切片解码与一次性解码**逐字节同像素**（JPEG + PNG）、**工作线程解出的帧与内联帧逐字节一致**且 paint 里不再解码、大图不再单帧停摆（paint 上限 / rAF gap）、L3 缩放解码的加速比、**拆文档时进行中的解码不崩且队列排空**、**零字节图片资源（204 / `Content-Length: 0` / 截断头）只算坏图不崩、且不会每帧重解**、`AGB_IMG_DECODE_MS=0`/`AGB_IMG_NO_SCALE`/`AGB_IMG_SAMPLE_MAX` 开关有效 | 无（脚本自己用 System.Drawing 生成 4000×3000 JPEG / 3000×2000 PNG 到 `build-zig-native/img_test`；零字节那组自起 `tools/empty_image_server.py`，随机空闲端口） | `IMAGE=PASS` |
 | `run_media_tests.ps1` | 媒体元素 API/几何/传输（play → timeupdate → ended）；有 ffmpeg 走真解码，没有则内部 ticker | 无（ffmpeg 可选） | `MEDIA=PASS` |
 | `run_media_real_tests.ps1` | 真解码回放：`currentTime` 走墙钟、暂停/续播、seek、`ended`、画面与 ffmpeg 同位置解码一致 | ffmpeg（缺失则跳过像素项）、网络（远程样片；`-SkipRemote` 可关） | `MEDIA-REAL=PASS (n skipped)` |
 | `run_site_smoke.ps1` | 真实站点冒烟：deepseek / baidu / vqq 的加载、JS 执行、DOM 规模（vqq 带 `AGB_GC_OFF=1`，见 R68） | **网络** | `ALL SITE SMOKE PASSED`；每站打印 `all=元素数` |
@@ -64,6 +64,9 @@
 - **ffmpeg**：`run_media_tests.ps1` 没有也能跑（内部 ticker 模拟时钟）；`run_media_real_tests.ps1`
   缺 ffmpeg 会跳过依赖画面的断言并报 `skipped`。
 - **BMP 输出必须落在 `build-zig-native\`**：探针沙箱只写这里，写 `debug\` 会静默 `shot failed`（exit 4）。
+  截图类套件（`run_sticky_tests` 等）用 `[IO.Path]::GetTempPath()` 建临时目录，在受限沙箱下要把
+  `TEMP`/`TMP` 指到工作区内再跑（`run_image_tests.ps1` 自己就这么做），否则报
+  `pixel_check.py ... FileNotFoundError: ...\Temp\agb-sticky-...\sticky.bmp`，看起来像像素回归其实是写盘被拒。
 - **跑套件时不要同时重编**：套件会起 `agave_shell.exe` 探针，占着 `libagave.dll` 会让链接失败
   （铁律 3）。
 - **临时复现页放 `debug/`，会进套件的放 `tools/pages/`**：`run_layout_tests` 会把

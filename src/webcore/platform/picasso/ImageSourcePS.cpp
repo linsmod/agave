@@ -224,9 +224,23 @@ void ImageSource::clear()
  * metadata. Takes ownership of `frame`. */
 void ImageSource::adoptDecodedFrame(PixelsBuffer* frame)
 {
+    /* size() answers with m_adoptedNaturalSize once a frame is adopted, so the
+     * natural size has to be read *before* the new frame is installed. Reading it
+     * afterwards stored 0x0 on the first adopt, and setScaleHint() then believed
+     * every draw was zoomed past the decoded frame: drop + request again on every
+     * paint, an endless re-decode loop (and a repaint storm). */
+    IntSize natural = m_adoptedFrame ? m_adoptedNaturalSize : IntSize();
+
+    if (!natural.width() || !natural.height()) {
+        if (m_decoder) {
+            m_decoder->isSizeAvailable(); /* header pass only, cheap */
+            natural = m_decoder->size();
+        }
+    }
+
     clearDecodedFrame();
     m_adoptedFrame = frame;
-    m_adoptedNaturalSize = size();
+    m_adoptedNaturalSize = natural;
 }
 
 void ImageSource::clearDecodedFrame()
@@ -244,6 +258,15 @@ bool ImageSource::initialized() const
 
 void ImageSource::setData(SharedBuffer* data, bool allDataReceived)
 {
+    /* A load can finish without a single byte (HTTP 204, Content-Length: 0, a
+     * revalidation): CachedImage::error() -> clear() -> destroyDecodedData()
+     * still gets here. There is nothing to sniff, and dereferencing the null
+     * buffer used to crash in createDecoder() (R140). */
+    if (!data) {
+        clear();
+        return;
+    }
+
     /* New bytes invalidate whatever a worker produced for the old data. */
     clearDecodedFrame();
 
@@ -285,7 +308,9 @@ bool ImageSource::setScaleHint(const IntSize& displaySize)
 
         if (width == 0)
             return false;
-        if (natural.width() > 0 && width >= (unsigned)natural.width())
+        if (natural.width() <= 0)
+            return false; /* natural size unknown: never thrash the decoder */
+        if (width >= (unsigned)natural.width())
             return false;
         return width < (unsigned)displaySize.width();
     }

@@ -104,6 +104,17 @@ agwEngineThread (src/webview_control/AgaveWebView.c)
 - 引擎侧：`ImageSource` 增加 adopt 模式（`adoptDecodedFrame()` / `hasDecodedFrame()`），
   画面、尺寸、alpha、动画元数据都从这块帧读；`size()`/`naturalWidth` 仍是原尺寸。
   `BitmapImage` 用 `m_decodePending`/`m_decodeGeneration` 防止重复请求、丢弃过期结果。
+- **采纳帧的 natural 尺寸**（R140）：`adoptDecodedFrame()` 必须**先**取 natural 再安装新帧。
+  `size()` 在 `m_adoptedFrame` 非空时返回 `m_adoptedNaturalSize`，先安装就永远读到 0×0；
+  `setScaleHint()` 的 "已解缓冲比显示小" 判断于是每帧都成立 → 每帧 `dropAdoptedFrame()` +
+  重新 request + 重绘，形成重绘风暴（像素本身是对的，像素比对测试看不出来）。拿不到 natural
+  时先让 decoder 走一次 header pass（`isSizeAvailable()`）再 `size()`。
+- **零字节资源**（R140）：图片请求以 `200 + Content-Length: 0`、204 或截断头收尾时
+  `ResourceLoader::resourceData()` 返回 null（native 后端的 `m_resourceData` 只在收到非空 chunk
+  时创建）。`CachedImage::data` 现在直接走 `error()`（不 `createImage()`、不把 null 交给
+  `Image::setData`），`ImageSource::setData` 与 `BitmapImage::destroyDecodedData` 也各自对 null
+  兜底；修之前 `CachedImage::error → clear → destroyDecodedData → ImageSource::setData` 会解引用
+  空 `SharedBuffer`（读地址 0x8）当场 AV。
 - 只对"绘制时"异步：`BitmapImage::draw` 里用 `imageDecodeStatsInFrame()` 判断是不是在 paint
   遍历里。canvas `drawImage()`、打印这些**没有后续重绘**的调用走内联同步路径，并且
   `ImageSource::setDecodeBudgetIgnored(true)` 绕过每帧预算，保证一次拿到整帧。

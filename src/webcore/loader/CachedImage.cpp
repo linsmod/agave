@@ -202,6 +202,20 @@ void CachedImage::data(PassRefPtr<SharedBuffer> data, bool allDataReceived)
 {
     m_data = data;
 
+    /* A resource can finish with no body at all: HTTP 204, Content-Length: 0,
+     * a 304 revalidation, or a body the loader decided not to buffer. That is a
+     * failed image, not an empty one - and the null buffer must not travel into
+     * BitmapImage::setData(): it used to reach ImageSource::setData() through
+     * clear() -> destroyDecodedData() and dereference null (R140). */
+    if (!m_data) {
+        if (allDataReceived) {
+            error();
+            if (inCache())
+                cache()->remove(this);
+        }
+        return;
+    }
+
     createImage();
 
     bool sizeAvailable = false;

@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<!--
+  An image resource can complete with no body at all: HTTP 204, 200 with
+  Content-Length: 0, or a body so short the header never finishes. None of them
+  may take the engine down - they are broken images, and the valid image next to
+  them must still decode (R140: the null SharedBuffer was dereferenced in
+  ImageSource::setData via CachedImage::error -> clear -> destroyDecodedData).
+
+  Served by tools/empty_image_server.py (python -m http.server always sends a
+  body, so it cannot produce these responses). Checked by
+  tools/pages/check_empty_image.js.
+-->
+<html><head><meta charset="utf-8"><title>image load failures</title>
+<style>
+html, body { margin: 0; background: #fff; }
+img { display: inline-block; width: 60px; height: 40px; border: 1px solid #ccc; }
+</style>
+</head><body>
+<img id="empty" src="/empty.png" alt="">
+<img id="nocontent" src="/nocontent.png" alt="">
+<img id="truncated" src="/truncated.png" alt="">
+<img id="ok" src="/cap_pixel.png" alt="">
+<pre id="out">running</pre>
+</body></html>
