@@ -216,6 +216,8 @@ bareMedia=2px schemeBg=rgb(0, 0, 200) mediaDark=1 mediaMin=1
 
 | `indexedDB.open(...)` | 请求异步 `onerror` | **桩实现（R57 诊断）**：`window.indexedDB` 不存在时直接引用会抛 `ReferenceError`，所以提供 open/deleteDatabase/databases 都异步失败的桩 + `IDBKeyRange`；站点走“失败回退内存存储”的分支，而不是在 Promise 链里炸掉。真正的 IDB 存储未做 |
 
+| `border-radius: 50%`（百分比半径） | 期望圆/椭圆；当前画成**方角** | **不支持**：`RenderStyle` 的四个角半径存的是 px `IntSize`，百分比在解析期就丢了（px 半径正常；半径和超过边长时按 CSS 缩小，见 R120）。本地 `debug/radius_test.html` 的 64×64 `#g` 复现。要支持得把半径改成 `Length`、布局后按盒子尺寸解算，再让 `scaledBorderRadii()` 接百分比结果 |
+
 已确认可用的（别再当缺口重开）：块/inline-block/float/绝对定位/margin auto/padding/border-radius/
 opacity/渐变（R11）、`var()` 含 fallback 与元素级级联（R39）、`box-sizing`（R39）、
 `prefers-color-scheme` 与 `matchMedia` 的尺寸/方向查询（R39）、flex 子元素 blockify（R39）、

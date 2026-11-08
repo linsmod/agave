@@ -1622,4 +1622,42 @@ const Vector<StyleDashboardRegion>& RenderStyle::noneDashboardRegions()
     return noneList;
 }
 
+
+/* CSS Backgrounds 3, 5.5: if the radii meeting on a side add up to more than
+ * that side, every radius is multiplied by the same factor (the smallest one
+ * that makes them fit). Painting must clamp here instead of dropping the
+ * rounding: with 28px radii in a 48px-tall box the border used to be drawn
+ * square while the background was clipped round. */
+void RenderStyle::scaledBorderRadii(int w, int h, IntSize& topLeft, IntSize& topRight,
+                                    IntSize& bottomLeft, IntSize& bottomRight) const
+{
+    float factor = 1.0f;
+    int sum;
+
+    sum = topLeft.width() + topRight.width();
+    if (sum > 0 && sum > w)
+        factor = min(factor, (float)w / sum);
+    sum = bottomLeft.width() + bottomRight.width();
+    if (sum > 0 && sum > w)
+        factor = min(factor, (float)w / sum);
+    sum = topLeft.height() + bottomLeft.height();
+    if (sum > 0 && sum > h)
+        factor = min(factor, (float)h / sum);
+    sum = topRight.height() + bottomRight.height();
+    if (sum > 0 && sum > h)
+        factor = min(factor, (float)h / sum);
+
+    if (factor >= 1.0f)
+        return;
+
+    topLeft = IntSize(static_cast<int>(topLeft.width() * factor + 0.5f),
+                      static_cast<int>(topLeft.height() * factor + 0.5f));
+    topRight = IntSize(static_cast<int>(topRight.width() * factor + 0.5f),
+                       static_cast<int>(topRight.height() * factor + 0.5f));
+    bottomLeft = IntSize(static_cast<int>(bottomLeft.width() * factor + 0.5f),
+                         static_cast<int>(bottomLeft.height() * factor + 0.5f));
+    bottomRight = IntSize(static_cast<int>(bottomRight.width() * factor + 0.5f),
+                          static_cast<int>(bottomRight.height() * factor + 0.5f));
+}
+
 }

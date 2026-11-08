@@ -1420,6 +1420,16 @@ public:
     IntSize borderBottomRightRadius() const { return surround->border.bottomRight; }
     bool hasBorderRadius() const { return surround->border.hasBorderRadius(); }
 
+    // CSS Backgrounds 3: when the radii on one side add up to more than that
+    // side, all four radii are scaled down by the same factor. Painting has to
+    // use the scaled values too, otherwise the sanity check in paintBorder()
+    // ("do the curves fit?") disables the border's rounding while the
+    // background (which has no such check) still gets a rounded clip - a pill
+    // shape with square border corners (DeepSeek's phone input, 28px radii in
+    // a 48px-tall box).
+    void scaledBorderRadii(int w, int h, IntSize& topLeft, IntSize& topRight,
+                           IntSize& bottomLeft, IntSize& bottomRight) const;
+
     unsigned short  borderLeftWidth() const { return surround->border.borderLeftWidth(); }
     EBorderStyle    borderLeftStyle() const { return surround->border.left.style(); }
     const Color&  borderLeftColor() const { return surround->border.left.color; }

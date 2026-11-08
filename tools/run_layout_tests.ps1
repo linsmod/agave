@@ -115,6 +115,24 @@ try {
         if ($LASTEXITCODE -ne 0) { $failed++ }
     }
 
+    Write-Host '== paint: border radius scaling (oversized radii)'
+    $bmp = Join-Path $root 'build-zig-native\layout_radius.bmp'
+    $url = 'file:///' + (Join-Path $root 'tools/pages/layout/border_radius.html').Replace('\', '/')
+    & (Join-Path $root 'build-zig-native\agave_shell.exe') --probe $url `
+        --wait 1000 --settle 100 --timeout 30000 --shot $bmp | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host 'border_radius: probe failed'
+        $failed++
+    } else {
+        # #overflow is a 200x48 pill at (20,20): the corner pixel inside the
+        # border box must stay white (a square border painted it grey), the
+        # centre keeps the fill. (20,90) is the control box's corner and must
+        # be the black border.
+        & python tools/pixel_check.py $bmp `
+            21,21,ffffff 120,44,f9fafb 20,90,000000 120,112,3964fe
+        if ($LASTEXITCODE -ne 0) { $failed++ }
+    }
+
     Write-Host '== custom properties (computed values + inline API)'
     $url = 'file:///' + (Join-Path $root 'tools/pages/layout/custom_props.html').Replace('\', '/')
     $out = & (Join-Path $root 'build-zig-native\agave_shell.exe') --probe $url `

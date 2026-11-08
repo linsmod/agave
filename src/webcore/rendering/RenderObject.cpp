@@ -1176,9 +1176,13 @@ bool RenderObject::paintBorderImage(GraphicsContext* graphicsContext, int tx, in
     bool clipped = false;
     if (style->hasBorderRadius()) {
         IntRect clipRect(tx, ty, w, h);
+        IntSize topLeft = style->borderTopLeftRadius();
+        IntSize topRight = style->borderTopRightRadius();
+        IntSize bottomLeft = style->borderBottomLeftRadius();
+        IntSize bottomRight = style->borderBottomRightRadius();
+        style->scaledBorderRadii(w, h, topLeft, topRight, bottomLeft, bottomRight);
         graphicsContext->save();
-        graphicsContext->addRoundedRectClip(clipRect, style->borderTopLeftRadius(), style->borderTopRightRadius(),
-                                            style->borderBottomLeftRadius(), style->borderBottomRightRadius());
+        graphicsContext->addRoundedRectClip(clipRect, topLeft, topRight, bottomLeft, bottomRight);
         clipped = true;
     }
 
@@ -1302,21 +1306,17 @@ void RenderObject::paintBorder(GraphicsContext* graphicsContext, int tx, int ty,
     bool renderRight = rs > BHIDDEN && end && !rt;
     bool renderBottom = bs > BHIDDEN && !bt;
 
-    // Need sufficient width and height to contain border radius curves.  Sanity check our border radii
-    // and our width/height values to make sure the curves can all fit. If not, then we won't paint
-    // any border radii.
-    bool renderRadii = false;
+    // Sanity check our border radii: the CSS says to scale them down when they
+    // do not fit (RenderStyle::scaledBorderRadii), which keeps the border's
+    // rounding in sync with the background's rounded clip. Dropping the
+    // rounding instead painted square corners over a round background.
     IntSize topLeft = style->borderTopLeftRadius();
     IntSize topRight = style->borderTopRightRadius();
     IntSize bottomLeft = style->borderBottomLeftRadius();
     IntSize bottomRight = style->borderBottomRightRadius();
+    style->scaledBorderRadii(w, h, topLeft, topRight, bottomLeft, bottomRight);
 
-    if (style->hasBorderRadius() &&
-        static_cast<unsigned>(w) >= static_cast<unsigned>(topLeft.width()) + static_cast<unsigned>(topRight.width()) &&
-        static_cast<unsigned>(w) >= static_cast<unsigned>(bottomLeft.width()) + static_cast<unsigned>(bottomRight.width()) &&
-        static_cast<unsigned>(h) >= static_cast<unsigned>(topLeft.height()) + static_cast<unsigned>(bottomLeft.height()) &&
-        static_cast<unsigned>(h) >= static_cast<unsigned>(topRight.height()) + static_cast<unsigned>(bottomRight.height()))
-        renderRadii = true;
+    bool renderRadii = style->hasBorderRadius() && w > 0 && h > 0;
 
     // Clip to the rounded rectangle.
     if (renderRadii) {
@@ -1636,6 +1636,7 @@ void RenderObject::paintBoxShadow(GraphicsContext* context, int tx, int ty, int 
         IntSize topRight = end ? s->borderTopRightRadius() : IntSize();
         IntSize bottomLeft = begin ? s->borderBottomLeftRadius() : IntSize();
         IntSize bottomRight = end ? s->borderBottomRightRadius() : IntSize();
+        s->scaledBorderRadii(w, h, topLeft, topRight, bottomLeft, bottomRight);
         context->clipOutRoundedRect(rect, topLeft, topRight, bottomLeft, bottomRight);
         context->fillRoundedRect(rect, topLeft, topRight, bottomLeft, bottomRight, Color::black);
     } else {

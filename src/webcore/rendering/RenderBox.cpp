@@ -652,12 +652,13 @@ void RenderBox::paintBackgroundExtended(GraphicsContext* context, const Color& c
 
     bool clippedToBorderRadius = false;
     if (style()->hasBorderRadius() && (includeLeftEdge || includeRightEdge)) {
+        IntSize radiusTL = includeLeftEdge ? style()->borderTopLeftRadius() : IntSize();
+        IntSize radiusTR = includeRightEdge ? style()->borderTopRightRadius() : IntSize();
+        IntSize radiusBL = includeLeftEdge ? style()->borderBottomLeftRadius() : IntSize();
+        IntSize radiusBR = includeRightEdge ? style()->borderBottomRightRadius() : IntSize();
+        style()->scaledBorderRadii(w, h, radiusTL, radiusTR, radiusBL, radiusBR);
         context->save();
-        context->addRoundedRectClip(IntRect(tx, ty, w, h),
-            includeLeftEdge ? style()->borderTopLeftRadius() : IntSize(),
-            includeRightEdge ? style()->borderTopRightRadius() : IntSize(),
-            includeLeftEdge ? style()->borderBottomLeftRadius() : IntSize(),
-            includeRightEdge ? style()->borderBottomRightRadius() : IntSize());
+        context->addRoundedRectClip(IntRect(tx, ty, w, h), radiusTL, radiusTR, radiusBL, radiusBR);
         clippedToBorderRadius = true;
     }
 
