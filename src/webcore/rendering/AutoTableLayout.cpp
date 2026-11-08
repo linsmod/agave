@@ -33,6 +33,12 @@ using namespace std;
 
 namespace WebCore {
 
+/* Column widths are clamped to half of INT_MAX so the float math below cannot
+ * overflow the int that layout stores. The explicit float conversion keeps
+ * -Wimplicit-const-int-float-conversion quiet without changing the value
+ * (INT_MAX rounds to 2^31 as a float, so the clamp is 2^30). */
+static const float kMaxAutoTableWidth = static_cast<float>(INT_MAX) / 2.0f;
+
 AutoTableLayout::AutoTableLayout(RenderTable* table)
     : TableLayout(table)
     , m_hasPercent(false)
@@ -288,8 +294,8 @@ void AutoTableLayout::calcPrefWidths(int& minWidth, int& maxWidth)
 
     if (scaleColumns) {
         maxNonPercent = maxNonPercent * 100 * percentScaleFactor / max(remainingPercent, epsilon);
-        maxWidth = max(maxWidth, static_cast<int>(min(maxNonPercent, INT_MAX / 2.0f)));
-        maxWidth = max(maxWidth, static_cast<int>(min(maxPercent, INT_MAX / 2.0f)));
+        maxWidth = max(maxWidth, static_cast<int>(min(maxNonPercent, kMaxAutoTableWidth)));
+        maxWidth = max(maxWidth, static_cast<int>(min(maxPercent, kMaxAutoTableWidth)));
     }
 
     maxWidth = max(maxWidth, spanMaxWidth);
@@ -481,7 +487,7 @@ int AutoTableLayout::calcEffectiveWidth()
     }
     m_effWidthDirty = false;
 
-    return static_cast<int>(min(tMaxWidth, INT_MAX / 2.0f));
+    return static_cast<int>(min(tMaxWidth, kMaxAutoTableWidth));
 }
 
 /* gets all cells that originate in a column and have a cellspan > 1
