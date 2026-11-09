@@ -93,6 +93,10 @@ v1 的 wire 结构体各多一个 `docEpoch`（`uint32_t`，追加在末尾，�
 - `COMMAND_DROPPED`（`a` = 命令 kind，`b` = 期望代数，`c` = 当前代数，`text` = 原因短语）：
   宿主把它变成 `on_command_dropped`。这是"命令要么执行、要么报错"的唯一出口。
 
+**右键菜单也要转发**（R161）：`cb_context_menu` 同样不会跟着命令跨进程走。guest 把
+`MC_CONTEXT_MENU_DATA` 按 `link + image + 选区文本` 拼成一个 blob（长度放在事件 `c/d` 里），
+以 `CONTEXT_MENU` 事件发上来，宿主建菜单；不要试图在 guest 里画菜单。
+
 **窗口生命周期也要转发**（R158）。guest 侧 `cb_open_window` / `window.open` 的 hook /
 `cb_close_window` 都不可能同步返回一个宿主进程里的 view，照 agave 的
 `examples/render_host/main.c` 做即可：

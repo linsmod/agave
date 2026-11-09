@@ -100,6 +100,7 @@ RVVM 后端用 guest 内存 + `virtpass_browser` 的 ecall；local 后端只是�
 | `TITLE` / `PROGRESS` / `URL` | `utf8` / `pct` | 与现有回调一致 |
 | `DOCUMENT` | `epoch` | 主 frame 提交了新文档（`Page::documentEpoch`）；宿主据此给后续命令盖章。**静态页面提交后可能没有任何其他事件**，缺了它宿主的代数会停在上一代 |
 | `COMMAND_DROPPED` | `kind, expected_epoch, current_epoch, reason` | 后端没能执行某条命令（文档已换 / 没有可用文档）。宿主转成 `on_command_dropped`；本地后端用 `submit` 返回 0 表达同一件事 |
+| `CONTEXT_MENU` | `x,y, link 长度, image 长度, text` | 引擎要弹右键菜单（`cb_context_menu`）；渲染进程没有窗口，只能把 link/image/选区文本交给宿主去建菜单（R161） |
 | `SERVICE_REQUEST` | `open_window/close_window`（v1 已接）/ `dialog/download/clipboard/file_picker`（待做） | 一级请求/应答（跨进程必须，ndk 路径没有）。`open_window` 的文本是 `"name\nurl"`：**具名窗口由控件登记**，后端只管把"页面要开一个窗口"传上去（R158） |
 | `UNRESPONSIVE` | `busy_ms` | 接现有看门狗，按 tab 报告（advisory） |
 | `EXIT` / `CRASH` | `code` | 后端死亡 → sad tab + reload 新实例 |

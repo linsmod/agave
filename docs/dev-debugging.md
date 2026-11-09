@@ -61,6 +61,10 @@ process 下 --shot 抓的是共享 canvas 拷进 mirror 的那一帧。
 AGB_IPC_STATS=1 打开 S3 的两条量化输出（stderr）：renderer 发布帧时打时间戳，控件每 2 s 汇总一行
 `[ipc] frames=<n> latency_avg_us=… max_us=…`（发布→poll 看到 FRAME 的延迟）；控件每次镜像拷贝打
 `[ipc] copy_us=…`（共享段 → 控件 mirror 的一次 memcpy，1100×800 约 430–700 µs、首帧冷启动 ~3.1 ms）。
+**右键菜单**（R161）：`on_context_menu` 在两个后端都会回调；探针用 `--right-click x,y` 走真实
+`WM_RBUTTONDOWN/UP`，`probeOnContextMenu` 会打一行 `[ctx] menu x=.. y=.. link=.. image=.. selection=<n>`
+到 stdout（套件靠它断言）。
+
 **渲染进程崩溃后看什么**（R160）：`on_crashed(view, code, report, user)` 的 `report` 是渲染进程
 临死前写的一份报告，shell 把它放在 "Page crashed" 页面的 `<pre>` 里。内容包括：
 `exception:`（异常码 + 读/写地址）、`fault:`、`context:`（后端/ipc/尺寸）、`cmdline`、`os:`（版本/CPU/内存）、
