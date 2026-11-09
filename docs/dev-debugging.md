@@ -71,6 +71,8 @@ stderr 会打一行 `[probe] headless window hidden, AGB_PROBE_SHOW=1 to show (p
 `--eval` 里 `scrollIntoView()` 后把 `getBoundingClientRect()` 的四个值传进去即可（`--zoom` 下会自动
 换算成设备像素，所以文件尺寸是 `rect × zoom`）；超出视口的部分会被裁掉，整块都在视口外则报错退出
 （不会留一张看起来像渲染 bug 的空白图）。
+⚠ 截图路径：`--shot` 由探针进程自己 `fopen` 写文件，**写 `%TEMP%` 下会 `errno 13`（权限）失败**
+（同一路径 PowerShell 能写），所以套件一律把图落到 `build-zig-native\` 或仓库内目录，别用 `$env:TEMP`。
 --shot 可以和 `--eval`/`--eval-file` 同用：探针先跑脚本、等 `--settle`，再等一帧才抓（否则拿到的是
 eval 之前的像素，滚动/改 DOM 后的效果看不到，R82）。典型用法是「脚本给元素画框/上色 → 截图」，
 R119 的 SVG 对位就是这么量出来的。

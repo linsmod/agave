@@ -749,6 +749,12 @@
   ⚠ 判据不是 `IsWindowVisible`：探针窗口永远是隐藏的，但它必须照常出像素（`--shot`），所以开关必须是
   宿主明确给出的 Page Visibility，而不是 OS 可见性。判据：`tools/run_hidden_view_tests.ps1`（隐藏期
   `[loop] paints=` 冻结、`skips=` 增长，定时器照跑，显示后首帧重绘）。
+- 已知缺口（下一步，便宜的第二个点）：**`requestAnimationFrame` 是 `setTimeout(16)` 垫片**
+  （`prelude.js`），所以隐藏 tab 的 rAF 循环仍在跑 JS（浏览器会把隐藏 tab 的 rAF 停掉/限速）。
+  绘制已经跳过，但 JS 还在烧引擎线程：后台动画页（css3test 那类 rAF 写样式的）依然会拖慢当前 tab。
+  动作：把 `requestAnimationFrame` 换成宿主的真 rAF（帧泵里按可见 view 出帧），或在垫片里按
+  `document.hidden` 把回调排队、`visibilitychange` 恢复时补发；判据：隐藏 tab 的 rAF 计数停止增长，
+  显示后恢复，`run_hidden_view_tests.ps1` 加一条。
 - 真正并行两条路，**都不是"加个线程"**：
   1. **引擎线程局部化**：先把进程级无锁全局拆掉 —— `AntRuntime` 的 `g_currentState`（当前 realm）、
      桥的 `g_wrappers`/`g_classes`/trampoline 表、ant 的 interned 字符串表；再做 per-view 线程 + 线程局部表。
