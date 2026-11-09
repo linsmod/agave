@@ -93,6 +93,18 @@ v1 的 wire 结构体各多一个 `docEpoch`（`uint32_t`，追加在末尾，�
 - `COMMAND_DROPPED`（`a` = 命令 kind，`b` = 期望代数，`c` = 当前代数，`text` = 原因短语）：
   宿主把它变成 `on_command_dropped`。这是"命令要么执行、要么报错"的唯一出口。
 
+**窗口生命周期也要转发**（R158）。guest 侧 `cb_open_window` / `window.open` 的 hook /
+`cb_close_window` 都不可能同步返回一个宿主进程里的 view，照 agave 的
+`examples/render_host/main.c` 做即可：
+
+- `cb_open_window(url, name, flags, rect)` → `SERVICE_REQUEST(kind=open_window, text="name\nurl")`，
+  返回 NULL；
+- `macross_set_open_window_hook(url, name)` → 同样的 `SERVICE_REQUEST`，返回 1（页面拿到 stub 窗口对象）；
+- `cb_close_window(view)` → `SERVICE_REQUEST(kind=close_window)`。
+
+具名窗口的复用、切 tab、`window.open` 的窗口对象都由宿主/控件负责，guest 不要自己维护注册表。
+`window.opener` 属于 S4 WindowProxy，v1 不做。
+
 新增字段：`interruptRequested`（`volatile LONG`，放在 `AgwIpcHeader` 保留区）。
 服务 kind 枚举 v1：`1 open_window, 2 dialog, 3 download, 4 clipboard, 5 file_picker,
 6 profile_get, 7 profile_set`（`profile_*` 对应 [design-render-backend.md](design-render-backend.md)

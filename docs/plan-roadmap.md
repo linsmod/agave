@@ -776,6 +776,10 @@
     → **引擎放进 VM 必须以 JIT 为前提**。
   - 分批：B0 接口 + local（行为零变化）→ B1 协议 v1 → B2 process 后端 → B3 rvvm 后端 →
     B4 服务通道 + `window.open` 异步（与 S4 WindowProxy 一起）→ B5 冻结/压测/profile 策略。
+  **B4 的最小一片已完成**（2026-11-09，R158）：`SERVICE_REQUEST(open_window/close_window)`，
+  `target=_blank` / 具名 target / `window.open` / `window.close` 在 local 与 process 两个后端一致，
+  具名窗口由控件注册表复用并回调 `on_activate_view`；判据 `tools/run_window_tests.ps1`（两后端各 5 项）。
+  剩下的服务（dialog/download/clipboard/file_picker）与 `window.opener` 仍挂在 B4/S4。
   **B3 的跨仓库接口已出**（2026-11-09）：`virtpass_browser v1` 规格见
   [ref-virtpass-browser.md](ref-virtpass-browser.md)（两跳拓扑、guest 分配共享控制块 + `BP_*` ecall、
   中断 50ms 轮询、帧搬运一次拷贝、RVVM 侧待实现清单与验收）；agave 侧 `AgwViewBackendRvvm` 与

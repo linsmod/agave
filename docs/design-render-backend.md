@@ -100,7 +100,7 @@ RVVM 后端用 guest 内存 + `virtpass_browser` 的 ecall；local 后端只是�
 | `TITLE` / `PROGRESS` / `URL` | `utf8` / `pct` | 与现有回调一致 |
 | `DOCUMENT` | `epoch` | 主 frame 提交了新文档（`Page::documentEpoch`）；宿主据此给后续命令盖章。**静态页面提交后可能没有任何其他事件**，缺了它宿主的代数会停在上一代 |
 | `COMMAND_DROPPED` | `kind, expected_epoch, current_epoch, reason` | 后端没能执行某条命令（文档已换 / 没有可用文档）。宿主转成 `on_command_dropped`；本地后端用 `submit` 返回 0 表达同一件事 |
-| `SERVICE_REQUEST` | `open_window/dialog/download/clipboard/file_picker/fetch?` | 一级请求/应答（跨进程必须，ndk 路径没有） |
+| `SERVICE_REQUEST` | `open_window/close_window`（v1 已接）/ `dialog/download/clipboard/file_picker`（待做） | 一级请求/应答（跨进程必须，ndk 路径没有）。`open_window` 的文本是 `"name\nurl"`：**具名窗口由控件登记**，后端只管把"页面要开一个窗口"传上去（R158） |
 | `UNRESPONSIVE` | `busy_ms` | 接现有看门狗，按 tab 报告（advisory） |
 | `EXIT` / `CRASH` | `code` | 后端死亡 → sad tab + reload 新实例 |
 
@@ -217,7 +217,7 @@ RVVM 后端用 guest 内存 + `virtpass_browser` 的 ecall；local 后端只是�
 | B1 | 协议 v1 结构体化（命令/事件/帧/ack），local 走协议 | ✅ 2026-11-09：`src/webview_control/AgwViewProtocol.h`（`AgwViewCommand`/`AgwViewEvent`/`AgwFrameBuffer`/`AgwFrameAck` + 命令/事件 kind + 能力位）；后端接口收成 `submit`/`submitBatch`/`poll`/`frameAck` + create/resize/update/pump；控件的命令 drain 只构造协议命令；local 的 `submit` 把它们映回 macross，`poll` 返回 0（事件仍走 macross 回调）、`frameAck` 空（本地直接画宿主 buffer）。全套件绿、`bench_hot` 不退化 |
 | B2 | `process` 后端（共享内存 + 管道 + 崩溃检测 + sad tab） | ✅ B2a 2026-11-09：`examples/render_host`（每 view 一个 `agave_render_host.exe`，无窗口、只写 BGRA）+ `AgwViewIpc.h`（命名共享段：canvas + 命令环 + 事件环 + 文本 arena，单生产者/消费者无锁；固定 2560×1600 canvas，pitch 固定，resize 只改 `width/height` 不重建映射）+ `AgwViewBackendProcess.c`（CreateProcess + 背压：`frameSeq==ackSeq` 才画下一帧；崩溃 = 进程句柄 signaled → `EXIT` 事件带退出码）。`observe`/`update`/`pump` 对远端是空操作（渲染进程自己有循环）；控件把共享 canvas **一次拷贝**进 mirror（跳过宿主 DIB）。`AGB_VIEW_BACKEND=process` 可跑通：页面 JS/title/定时器、`--shot` 像素、`--keys` 输入、渲染进程崩溃报 load error（probe 立即退出 5，不再等 `--timeout`）。套件 `tools/run_process_backend_tests.ps1`（5 项）。**B2b 已完成 2026-11-09**：①双 tab 响应性（`examples/multiview_probe`：A 跑 `while(true){}`，B 的命令 **31 ms** 得到回答；作为对照 local 后端 B 被阻塞、`blocked=1`）——这正是 S3 的验收 1；②per-view interrupt：控件把 `agave_webview_interrupt()` 变成渲染进程里的 `_int` 命名事件，renderer 用**独立 watchdog 线程**等它并调 `macross_interrupt_view()`（引擎线程卡在脚本里时只有另一条线程能到；ant 中断注册表加锁，R146）→ A 在 31 ms 内恢复。**B2c 已完成 2026-11-09**：③关掉卡死 tab **立即生效**（`closeView` 先 `SetEvent(_int)` 打断脚本再发 EXIT，宽限 300ms 后直接 `TerminateProcess`：实测 `destroy_ms=0`，原来是等 2s）；④**sad tab + respawn**：新增 `on_crashed` 回调（不设则退回 `on_error`），崩溃后控件销毁死后端并清空 `backendView`，宿主 `load_html`/`navigate`/`reload` 会把新渲染进程拉起来（`agwCreateBackendView` + `agwEnsureSurfaceEx(navigateIfUrl)`；`ensureSurface` 原来"surface 已存在就 return"导致崩溃后永远建不出新后端视图）。shell 在 `on_crashed` 里加载崩溃页（可点 Reload）。**剩余**：damage 矩形（现在整幅）、canvas 超过 2560×1600 的降级、renderer 与 shell 同退出的清理、local 后端下 `agavePostMessage` 的 view 归属（现在走 `g_lastActive`，多 view 会串） |
 | B3 | `rvvm` 后端（`virtpass_browser` + guest 渲染器，先零拷贝 damage） | 单 tab 出帧/输入；M1/M2/M5 达标 |
-| B4 | 服务通道（open/dialog/download/clipboard/file）+ window.open 异步（S4 WindowProxy） | 弹窗/下载/对话框跨后端可用 |
+| B4 | 服务通道（open/dialog/download/clipboard/file）+ window.open 异步（S4 WindowProxy） | 弹窗/下载/对话框跨后端可用。**2026-11-09 部分完成**：`SERVICE_REQUEST(open_window/close_window)` 已接，两个后端的 `target=_blank` / `window.open` / `window.close` 行为一致，具名窗口由控件注册表复用（R158，`run_window_tests.ps1` 两后端各 5 项）。**剩余**：dialog/download/clipboard/file_picker 的请求应答、`window.opener`（S4）、`rel=noopener/noreferrer` |
 | B5 | 冻结与压测（R150 对接）、多实例 profile 策略、`one-VM-multi-surface` 评估 | 验收表 1–5 |
 
 ## 9. 决策与未决问题

@@ -70,6 +70,9 @@ AGB_IPC_STATS=1 打开 S3 的两条量化输出（stderr）：renderer 发布帧
 （navigate 刚返回就 eval；配 `--nav-after` 可以覆盖"旧文档还在屏上"的那一半）。
 所有 renderer 都挂在一个 KILL_ON_JOB_CLOSE 的 Job Object 上：控制进程无论怎么结束，renderer 都会
 被一起收掉（正常关 tab 仍走 interrupt → EXIT → Terminate 的干净路径）。
+每个 renderer 的命令行带 `--owner <控制进程 pid>`（诊断）和 `--tag <AGB_RENDER_TAG>`（身份）：
+测试脚本每轮生成一个唯一 tag 并通过环境变量传给被测壳，只统计/清理带自己 tag 的 renderer，
+**别人的 renderer（你自己开着的 GUI 壳）永远不会被套件碰**（R159）。
 多 view 的并行判据用 uild-zig-native\agave_multiview_probe.exe：两个 view，A 跑
 while(true){}，B 的命令延迟 = pong_ms（process 后端几十毫秒；local 后端 pong_ms=-1 +
 locked=1，因为 eval 不是 watchdog 的"用户动作"，没人等就只按 advisory 报告）。

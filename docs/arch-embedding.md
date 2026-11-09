@@ -61,6 +61,13 @@ exe 旁的 `prelude.js` / `polyfills.js`（运行时 JS 资产，可热替换）
 `on_dialog`、`on_context_menu`、`on_close_window`、`on_unresponsive`、`on_command_dropped`、
 `on_download`、`on_new_window`（保留，引擎当前不触发）。
 
+**窗口生命周期**（R158）：`<a target>` / `<form target>` / `window.open(url, name)` 的判定在引擎
+（`HTMLAnchorElement`：中键、ctrl、cmd 等同 `_blank`；`_self`/`_top`/`_parent` 由 frame 树解析），
+**具名窗口由控件登记**（`windowName` + `on_new_window` / `on_activate_view`）：名字命中就导航那个
+view 并让宿主切过去，没命中才建新控件交给宿主开 tab。两个后端行为一致——process 后端里渲染进程
+把请求变成 `SERVICE_REQUEST(open_window/close_window)` 事件，控件在引擎线程上完成同样的动作。
+`window.close()` → `on_close_window`，宿主决定怎么关。
+
 **入队命令的契约**（R157）：`agave_webview_eval` 这类入队操作没有返回值，所以"没送到"必须能被听见——
 每条命令要么执行、要么回调一次 `on_command_dropped(view, kind, reason, user)`。原因只有三种：
 视图还没有页面（`no page yet`）、后端里没有可用文档（`no live document`）、命令等到导航提交之后才
