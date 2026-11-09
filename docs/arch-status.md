@@ -9,10 +9,10 @@
 
 | 领域 | 现在具备 | 证据 / 细节 |
 |---|---|---|
-| 页面与导航 | HTTP(S)/`file:` 加载、HTML/CSS 解析、`defer`/`async`/ESM、301/302、`about:blank`、iframe、`agave://` 内部页、前进后退 | R44–R49；[hist-lessons.md](hist-lessons.md) |
+| 页面与导航 | HTTP(S)/`file:` 加载、HTML/CSS 解析、`defer`/`async`/ESM、301/302、`about:blank`、iframe、`agave://` 内部页、前进后退；文档编码按 **BOM > HTTP `Content-Type` charset > `<meta charset>` > 默认** 决定（R164） | R44–R49；[hist-lessons.md](hist-lessons.md) |
 | JS / DOM | ant VM、DOM 桥、事件（鼠标/键盘/IME/输入）、computed style、选择器、`history` state、真实 DOM 集合、每 frame 一个 Window 代理；页面脚本按 **classic script** 语义执行（顶层 `var`/`function` 落到 `window`，R66）；**每 frame 一个 realm**（iframe 独立全局/intrinsics/wrapper，`var` 不串帧；`AGB_PER_FRAME_REALM=0` 回退旧模型）；`location`/`history` 是 document-scoped（R132：子 frame 读自己的 URL/历史，`document.location === window.location`，`parent.location` 读父文档）；文档生命周期 `document.readyState` 是真实状态（`loading`/`interactive`/`complete`，R93），`document.currentScript` 指向正在执行的 `<script>`（R95） | R27/R31/R34–R37/R45/R66/R67/R93/R95/R132 + [design-per-frame-realm.md](design-per-frame-realm.md) |
 | 模块加载 | 入口 module 单槽等待（等待期间到达的数据不提前解析，R50）、解析调用栈内求值、延迟模块 flush；三条泳道时序 | [arch-module-loading.md](arch-module-loading.md) |
-| CSS | 自定义属性/`var()`、`display:flex`/blockify、`gap`、`aspect-ratio`、`:is()`/`:where()`、媒体查询与深色模式、`box-shadow`、常量 `calc()`、圆角裁剪 | R39–R43；能力矩阵见 [arch-capability-gaps.md](arch-capability-gaps.md) §2 |
+| CSS | 自定义属性/`var()`、`display:flex`/blockify、`gap`、`aspect-ratio`、`:is()`/`:where()`、媒体查询与深色模式、`box-shadow`、常量 `calc()`、圆角裁剪、长度单位含 `rem`/`em`（R165） | R39–R43；能力矩阵见 [arch-capability-gaps.md](arch-capability-gaps.md) §2 |
 | 网络 | WinHTTP 后端、HTTP 缓存、代理解析、重定向、MIME/下载决策、`[netlog]` | [dev-debugging.md](dev-debugging.md) |
 | Worker / wasm | 真 Worker（独立线程 + isolate）、wasm 解释执行（导入/内存/表/全局/SIMD） | R19/R22 |
 | 下载 | 进程级 `DownloadManager`、`.part` 后 rename、三层状态 API、`agave://downloads` 面板 | [arch-downloads.md](arch-downloads.md) |
@@ -74,6 +74,14 @@ ant 的反直觉行为（字面量属性名、`typeof`、`delete` 等）见 [ref
   `event_dispatch()` 之后跑 `documentWillUnload`（pagehide/visibilitychange/unload）→ realm
   teardown → DOM/VM 销毁；宿主线程调用时等一次回收（2 s 上限）。文档级资源的清理挂在
   `Document::detach()` 上（媒体、字体），见 R141 与 [design-tab-teardown.md](design-tab-teardown.md)。
+- **默认根字号 14px（Chrome 是 16px）**：`Settings::m_defaultFontSize` 的初始值就是 14。页面自己写了
+  `html{font-size:…}` 时没有影响；没写的站点，`rem`/`medium` 相关的尺寸整体比 Chrome 小约 12.5%
+  （R165 顺带发现）。改默认值会动到所有字体度量与既有 layout 回归，单独排期。
+- **`@media` 里的 `rem` 仍不求值**：声明中的 `rem` 已按根字号折叠（R165），但
+  `@media (min-width: 48rem)` 走的是媒体查询解析，阈值仍是未识别的 `DIMEN`。
+- **块盒的 computed `margin-right` 是 used 填充值**：1100 宽容器里 `width:100px; margin:0 20px`
+  的元素，`getComputedStyle().marginRight` 报 `980px`（Chrome 报 `20px`），`marginLeft` 正常；
+  布局几何正确，只是 computed 读值不同。
 - **下载面板仍是普通 realm**（没有独立生命周期），面板每次打开重新读快照；后续见 [plan-roadmap.md](plan-roadmap.md)。
 
 ## 3. 怎么验证

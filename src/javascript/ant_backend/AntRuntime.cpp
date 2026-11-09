@@ -2386,9 +2386,22 @@ int titleGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue
         return 1;
     }
 
-    if (!strcmp(name, "referrer") || !strcmp(name, "domain") || !strcmp(name, "characterSet")
-            || !strcmp(name, "charset") || !strcmp(name, "compatMode")) {
+    if (!strcmp(name, "referrer") || !strcmp(name, "domain") || !strcmp(name, "compatMode")) {
         AntbValue* v = antb_make_string(engine, strcmp(name, "compatMode") == 0 ? "CSS1Compat" : "");
+        if (!v)
+            return 0;
+        antb_value_assign(out, v);
+        antb_value_release(v);
+        return 1;
+    }
+
+    /* The decoder really knows this one now (transport charset / meta / BOM).
+     * Sites and test harnesses branch on it to detect mojibake, and the empty
+     * string this used to return made that impossible; inputEncoding was not
+     * even answered here (undefined). */
+    if (!strcmp(name, "characterSet") || !strcmp(name, "charset") || !strcmp(name, "inputEncoding")) {
+        WebCore::String encoding = d->inputEncoding();
+        AntbValue* v = antb_make_string(engine, encoding.utf8().data());
         if (!v)
             return 0;
         antb_value_assign(out, v);

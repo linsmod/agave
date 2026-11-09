@@ -17,7 +17,7 @@
 ### 全部跑一遍
 
 ```powershell
-pwsh -File tools/run_all_tests.ps1                          # 17 个离线套件，退出码 0 = 全绿
+pwsh -File tools/run_all_tests.ps1                          # 18 个离线套件，退出码 0 = 全绿
 pwsh -File tools/run_all_tests.ps1 -Only process            # 名字含 process 的
 pwsh -File tools/run_all_tests.ps1 -Skip run_layout_tests,run_media_tests
 pwsh -File tools/run_all_tests.ps1 -IncludeNetwork -IncludeReal   # 加上真站点 / ffmpeg 套件
@@ -39,7 +39,8 @@ pwsh -File tools/run_all_tests.ps1 -IncludeNetwork -IncludeReal   # 加上真站
 | `run_hidden_view_tests` | 9 s | `run_realm_tests` | 9 s |
 | `run_inspector_tests` | 9 s | `run_tab_lifecycle_tests` | 7 s |
 | `run_worker_tests` | 6 s | `run_media_tests` | 6 s |
-| `run_sticky_tests` | 4 s | **合计 17 套件** | **~350 s** |
+| `run_sticky_tests` | 4 s | `run_encoding_tests` | 9 s |
+| **合计 18 套件** | **~360 s** | | |
 
 规则（软基线，靠人/Agent 判断，不做程序化对比）：集中跑的时候除了看 PASS，还看
 `run_all_tests.ps1` 打出的每套件秒数——**比基线慢 30 s 以上就在对话里提示**（AGENTS rule 9），
@@ -60,6 +61,7 @@ pwsh -File tools/run_all_tests.ps1 -IncludeNetwork -IncludeReal   # 加上真站
 | `run_inspector_tests.ps1` | 注入 `inspector.js`：菜单项、行命中、元素信息 JSON、剪贴板；真实 `WM_RBUTTONDOWN/UP`（页面 contextmenu 必须被取消、壳的原生菜单不弹）与真实左键点击 | 无 | `inspector: 26/26 checks passed` |
 | `run_nav_tests.ps1` | `[nav]` 通道八项：链接点击 / 脚本跳转 / 历史后退 / meta refresh / `window.open` / 表单提交 / 302 / `AGB_NAV_LOG=0` 静音 | 自起 python http.server（8973） | `ALL NAV CHECKS PASSED (n cases)` |
 | `run_xhr_tests.ps1` | XHR 投递重入（R94）、`responseText` UTF-8 解码（R96）、响应头/`statusText`/`readyState`/`overrideMimeType` 与 Chrome 对拍（R97） | 自起静态服务（8991） | `ALL XHR CHECKS PASSED` |
+| `run_encoding_tests.ps1` | 文档编码优先级（R164）：BOM > HTTP `Content-Type` charset > `<meta charset>`/`@charset` > 默认；`document.characterSet` 报真实规范名 | 自起 `tools/encoding_server.py`（8993，`-Port` 可换） | `ALL ENCODING CHECKS PASSED (5 cases)`，约 9 s |
 | `run_worker_tests.ps1` | Worker 九项：http worker、`importScripts`、blob、terminate、subclass、error 事件、structured clone | 自起服务（8971，可 `-Port`/`-KeepServer`） | `ALL WORKER CHECKS PASSED`；setup 失败 exit 2 |
 | `run_typing_tests.ps1` | 键盘/IME：走真实 `WM_KEYDOWN/WM_CHAR/WM_KEYUP` 与 `WM_IME_CHAR`（`--keys`/`--ime`）；末尾两条量**光标几何**（`AGB_CARET_DEBUG=1` 红色光标 + `tools/caret_check.py`，输入框光标=文字高度而不是盒子高度） | 无 | `ALL TYPING CHECKS PASSED (n cases)` |
 | `run_jit_loop_tests.ps1` | 长 JIT 循环 + "引擎线程仍在跑 EVAL 时销毁视图"（R61 的 0xC0000005） | 无 | `ALL JIT LOOP CHECKS PASSED` |
@@ -86,6 +88,7 @@ pwsh -File tools/run_all_tests.ps1 -IncludeNetwork -IncludeReal   # 加上真站
 | 图片解码 / 缩放绘制 / 图片在页面里的渐进出现 | `run_image_tests`、`run_layout_tests`（含图片的像素组）、`run_sticky_tests` |
 | DOM / JS 绑定 / 事件 / 生命周期 | `run_script_mode_tests`、`run_realm_tests`、`run_xhr_tests`、`run_jit_loop_tests`、`run_tab_lifecycle_tests` |
 | 关 tab / 视图销毁 / 页面资源清理 | `run_tab_lifecycle_tests`、`run_nav_tests`、`run_jit_loop_tests`、`run_image_tests`（拆文档组） |
+| 编码 / charset 解码 / `<meta>` 处理 | `run_encoding_tests`、`run_site_smoke` |
 | 导航 / 加载器 / 重定向 | `run_nav_tests`、`run_site_smoke` |
 | 输入（键盘 / IME / 焦点） | `run_typing_tests` |
 | 媒体元素 / 解码 | `run_media_tests`，改解码时加 `run_media_real_tests` |
@@ -98,7 +101,7 @@ pwsh -File tools/run_all_tests.ps1 -IncludeNetwork -IncludeReal   # 加上真站
 - **Chrome**：只有 `run_layout_tests.ps1` 需要（`layout_diff.py` 启动 `--headless=new` + 临时 profile
   + 1084×800 视口）。找不到 Chrome 会直接报错；换成别的浏览器对拍要先改 `layout_diff.py`。
 - **python**：所有对拍/像素工具都是 python；`layout_diff.py`/`chrome_probe.py` 还依赖 `websockets`。
-- **本地服务端口**：worker 8971、nav 8973、tab lifecycle 8979、hang recovery 8982/8984、xhr 8991。脚本自己起停；
+- **本地服务端口**：worker 8971、nav 8973、tab lifecycle 8979、hang recovery 8982/8984、xhr 8991、encoding 8993。脚本自己起停；
   并行跑多个套件时用 `-Port` 错开（worker 支持）。
 - **网络**：`run_site_smoke.ps1` 必须要；`run_media_real_tests.ps1` 的远程样片需要（`-SkipRemote` 关掉）。
   站点打不开时 exit 5/6 是网络问题，不是引擎问题（见脚本头注释），重跑再判断。
@@ -139,6 +142,7 @@ pwsh -File tools/run_all_tests.ps1 -IncludeNetwork -IncludeReal   # 加上真站
 | 目录 | 用途 |
 |---|---|
 | `tools/pages/layout/*.html` | 几何/像素回归页（自动进 `run_layout_tests`），配套 `lib_measure.js` |
+| `tools/pages/encoding/*.html` | 编码优先级页（UTF-8 源文件；GBK/BOM 由 `encoding_server.py` 在发送时变换），配套 `check_encoding.js` |
 | `tools/pages/*.html` + `check_*.js` | 各专项套件的页面与断言脚本（typing/xhr/worker/nav/realm/媒体…） |
 | `tools/pages/**`（served） | nav/xhr/worker 等需要 http 语义的页面，由套件自己起服务 |
 | `tools/pages/fuzz_layer.html` | 确定性 DOM/样式变异 fuzz（position/overflow/opacity/float/iframe/table/select，每步强制 layout），专打层树拆除；探针跑 10 轮应 0 崩溃 0 `[lay] DESTROY-WHILE-LINKED`（R134） |

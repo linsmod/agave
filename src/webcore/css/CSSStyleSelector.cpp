@@ -1924,30 +1924,36 @@ void CSSStyleSelector::resolveCustomProperties(RenderStyle* parentStyle)
  * repeats across elements and rules. */
 void CSSStyleSelector::applyExpandedProperty(int propId, const String& text)
 {
-    String key = String::number(propId) + "|" + text;
+    /* calc() kept back because it has em/rem terms needs this element's font
+     * size; a stylesheet parse has no style in hand (R88). A bare rem length
+     * needs the *root* font size instead (root-relative units); the root
+     * element itself must use its own (inherited/initial) size, otherwise
+     * `html{font-size:1.25rem}` drifts by 25% on every restyle. */
+    double emPx = style ? style->fontSize() : 0.0;
+    double rootPx = emPx;
+
+    if (m_document && m_document->documentElement()
+        && (!element || element != m_document->documentElement())) {
+        if (RenderStyle* rootStyle = m_document->documentElement()->computedStyle())
+            rootPx = rootStyle->fontSize();
+    }
+
+    /* The folded value depends on those sizes, so two elements with a
+     * different font size must not share a cache entry. */
+    String key = String::number(propId) + "|" + String::number(emPx) + "|"
+               + String::number(rootPx) + "|" + text;
     RefPtr<CSSMutableStyleDeclaration> parsed = m_expandedValues.get(key);
 
     if (!parsed) {
         parsed = new CSSMutableStyleDeclaration(0);
         {
             CSSParser parser;
+
             /* Relative URLs in the expanded text (background-image etc.) need
              * the document base; without it they resolve to an empty URL and
              * the image is never requested (hist-lessons R85). */
             parser.setValueDocument(m_document);
-            /* calc() kept back because it has em/rem terms needs this element's
-             * font size; a stylesheet parse has no style in hand (R88). */
-            {
-                double emPx = style ? style->fontSize() : 0.0;
-                double rootPx = emPx;
-
-                if (m_document && m_document->documentElement()) {
-                    if (RenderStyle* rootStyle = m_document->documentElement()->computedStyle())
-                        rootPx = rootStyle->fontSize();
-                }
-
-                parser.setValueFont(emPx, rootPx);
-            }
+            parser.setValueFont(emPx, rootPx);
             parser.parseValue(parsed.get(), propId, text, false);
         }
 

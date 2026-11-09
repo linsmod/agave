@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>rem units</title>
+<!-- Root font size is pinned so the numbers do not depend on the browser's
+     default font size (agave's default is 14px, Chrome's is 16px). Every
+     expected value below is an integer at 20px so both sides agree exactly. -->
+<style>
+  html { font-size: 20px; }
+  body { margin: 0; }
+  .box { width: 100px; background: #ccc; }
+  .gap { height: 10px; }
+
+  #h    { height: 2.25rem; }                          /* 45px */
+  #p    { height: 0; padding: 1rem 2rem; }            /* 40 tall, 180 wide */
+  #m    { height: 1rem; margin: 0.5rem 1rem; }        /* 20 tall, 10/20 margins.
+                                                        margin-right is not asserted: this engine's
+                                                        computed marginRight() returns the used fill
+                                                        value on block boxes (a separate, pre-existing
+                                                        gap), while Chrome reports the specified 20px. */
+  #mx   { height: 1000px; max-height: 24rem; }        /* clamped to 480px */
+  #w    { height: 10px; width: 1.5rem; }              /* 30 wide */
+  #neg  { height: 10px; margin-left: -1rem; }         /* -20px */
+  #lh   { font-size: 10px; line-height: 1.5rem; }     /* 30px, no box */
+  #bd   { height: 10px; border-top: 0.25rem solid #000; } /* 5px border */
+  #fs   { font-size: 2rem; height: 1em; }             /* font 40px, height 40px */
+  #cw   { width: 500px; background: #eee; }
+  #calc { height: 10px; width: calc(100% - 2rem); }   /* 500 - 40 = 460 */
+  #sh   { height: 10px; padding: 0.5rem 0; }          /* 10px top/bottom */
+  #sh2  { height: 10px; margin: 0 0 0 -1rem; }        /* -20px left */
+  :root { --rem-h: 2rem; --rem-p: 1rem; }
+  #cp   { height: var(--rem-h); padding-top: var(--rem-p); } /* 40 + 20 */
+</style>
+</head>
+<body>
+<div id="h"    class="box" data-case="rem-height"      data-props="height"></div>
+<div id="p"    class="box" data-case="rem-padding"     data-props="padding-top,padding-bottom,padding-left,padding-right,height"></div>
+<div id="m"    class="box" data-case="rem-margin"      data-props="margin-top,margin-bottom,margin-left"></div>
+<div id="mx"   class="box" data-case="rem-maxheight"   data-props="max-height,height"></div>
+<div id="w"    class="box" data-case="rem-width"       data-props="width"></div>
+<div id="neg"  class="box" data-case="rem-negative"    data-props="margin-left"></div>
+<div id="lh"   class="box" data-case="rem-lineheight"  data-props="line-height"></div>
+<div id="bd"   class="box" data-case="rem-border"      data-props="border-top-width"></div>
+<div id="fs"   class="box" data-case="rem-fontsize"    data-props="font-size,height"></div>
+<div id="cw">
+  <div id="calc" class="box" data-case="rem-calc"      data-props="width"></div>
+</div>
+<div id="sh"   class="box" data-case="rem-shorthand"   data-props="padding-top,padding-bottom"></div>
+<div id="sh2"  class="box" data-case="rem-negative-shorthand" data-props="margin-left"></div>
+<div id="cp"   class="box" data-case="rem-custom-property" data-props="height,padding-top"></div>
+<div class="gap"></div>
+</body>
+</html>

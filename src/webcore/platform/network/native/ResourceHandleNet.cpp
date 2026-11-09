@@ -10,6 +10,7 @@
 #include "ResourceHandleInternal.h"
 #include "ResourceHandleManagerNet.h"
 #include "HttpCache.h"
+#include "HTTPParsers.h"
 #include "NetLog.h"
 
 #include "ResourceError.h"
@@ -141,6 +142,14 @@ void fillResponse(ResourceResponse& out, const KURL& url, const Net::Response& i
         in.statusText.empty() ? defaultStatusText(in.status) : in.statusText.c_str()));
     out.setMimeType(mimeTypeOf(in));
     out.setExpectedContentLength(contentLengthOf(in));
+    /* The charset in Content-Type is the transport-layer encoding, and it wins
+     * over a <meta charset> inside the document (TextResourceDecoder enforces
+     * that priority). The curl backend has always set this; the native backend
+     * did not, so the document decoder fell back to Latin-1 and any UTF-8 page
+     * whose <meta> was missing from the first bytes was mojibake
+     * (www.163.com article pages). */
+    out.setTextEncodingName(extractCharsetFromMediaType(
+        String::fromUTF8(in.header("Content-Type").c_str())));
 
     for (size_t i = 0; i < in.headers.size(); ++i) {
         out.setHTTPHeaderField(String::fromUTF8(in.headers[i].first.c_str()),

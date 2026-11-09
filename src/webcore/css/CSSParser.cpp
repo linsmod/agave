@@ -2248,6 +2248,174 @@ static const char* cssUnitSuffix(int unit)
     }
 }
 
+/* ---- rem lengths --------------------------------------------------------
+ * `rem` is relative to the *root* element's font size, which a stylesheet
+ * parse does not have (no style object exists yet). The 2008 grammar also has
+ * no rem unit at all: `{num}{ident}` arrives as a CSS_DIMENSION token that
+ * every length branch rejects, so the whole declaration was dropped. Every
+ * Tailwind-style utility is this shape (`h-9{height:2.25rem}`,
+ * `py-5{padding-top:1.25rem}`), which is why modern pages rendered their
+ * images at natural size and lost their padding.
+ *
+ * Such declarations are kept as raw text (addRawValueProperty) and parsed
+ * again per element by CSSStyleSelector::applyExpandedProperty(), where the
+ * root font size is known; rewriteRemLengths() folds them to px there. This
+ * is the same route font-relative calc() takes (hist-lessons R88).
+ *
+ * With rootPx <= 0 the text is left untouched and the return value only
+ * reports whether a bare rem length is present. Strings, comments and url()
+ * are copied verbatim. */
+static bool rewriteRemLengths(const String& css, double rootPx, String& result)
+{
+    unsigned len = css.length();
+    std::vector<UChar> out;
+    bool found = false;
+
+    out.reserve(len + 16);
+
+    unsigned i = 0;
+    while (i < len) {
+        UChar c = css[i];
+
+        if (c == '/' && i + 1 < len && css[i + 1] == '*') {
+            while (i < len) {
+                out.push_back(css[i]);
+                if (css[i] == '*' && i + 1 < len && css[i + 1] == '/') {
+                    out.push_back(css[i + 1]);
+                    i += 2;
+                    break;
+                }
+                ++i;
+            }
+            continue;
+        }
+
+        if (c == '"' || c == '\'') {
+            UChar quote = c;
+            out.push_back(c);
+            ++i;
+            while (i < len) {
+                UChar d = css[i];
+                out.push_back(d);
+                ++i;
+                if (d == '\\' && i < len) {
+                    out.push_back(css[i]);
+                    ++i;
+                } else if (d == quote) {
+                    break;
+                }
+            }
+            continue;
+        }
+
+        if ((c == 'u' || c == 'U') && i + 3 < len
+            && (css[i + 1] == 'r' || css[i + 1] == 'R')
+            && (css[i + 2] == 'l' || css[i + 2] == 'L') && css[i + 3] == '(') {
+            int parens = 0;
+            while (i < len) {
+                UChar d = css[i];
+                out.push_back(d);
+                ++i;
+                if (d == '(') ++parens;
+                else if (d == ')' && --parens == 0) break;
+            }
+            continue;
+        }
+
+        bool startsNumber = (c >= '0' && c <= '9')
+            || (c == '.' && i + 1 < len && css[i + 1] >= '0' && css[i + 1] <= '9');
+        bool startsSigned = (c == '-' || c == '+') && i + 1 < len
+            && ((css[i + 1] >= '0' && css[i + 1] <= '9')
+                || (css[i + 1] == '.' && i + 2 < len && css[i + 2] >= '0' && css[i + 2] <= '9'));
+
+        if (startsNumber || startsSigned) {
+            bool tokenStart = (i == 0)
+                || (!isUnitChar(css[i - 1]) && css[i - 1] != '.' && css[i - 1] != '%');
+            unsigned numberStart = i;
+
+            if (startsSigned)
+                ++i;
+            while (i < len && ((css[i] >= '0' && css[i] <= '9') || css[i] == '.'))
+                ++i;
+            unsigned numberEnd = i;
+
+            if (tokenStart && numberEnd > numberStart + (startsSigned ? 1u : 0u)
+                && i + 3 <= len
+                && toASCIILower(css[i]) == 'r' && toASCIILower(css[i + 1]) == 'e'
+                && toASCIILower(css[i + 2]) == 'm'
+                && (i + 3 == len || !isUnitChar(css[i + 3]))) {
+                found = true;
+
+                if (rootPx > 0) {
+                    double number = css.substring(numberStart, numberEnd - numberStart)
+                                       .deprecatedString().toDouble();
+                    String px;
+
+                    appendCssNumber(px, number * rootPx);
+                    px += "px";
+                    for (unsigned k = 0; k < px.length(); ++k)
+                        out.push_back(px[k]);
+                } else {
+                    for (unsigned k = numberStart; k < i + 3; ++k)
+                        out.push_back(css[k]);
+                }
+                i += 3;
+                continue;
+            }
+
+            for (unsigned k = numberStart; k < numberEnd; ++k)
+                out.push_back(css[k]);
+            continue;
+        }
+
+        out.push_back(c);
+        ++i;
+    }
+
+    result = out.empty() ? css : String(&out[0], (unsigned)out.size());
+    return found;
+}
+
+/* True when a parsed value carries a bare rem length. DIMEN is
+ * `{num}{ident}`, so the unit is the tail of the dimension's text. */
+static bool valueListHasRemLength(ValueList* list);
+
+static bool valueIsRemLength(const Value* value)
+{
+    if (!value)
+        return false;
+
+    if (value->unit == CSSPrimitiveValue::CSS_DIMENSION) {
+        String text = domString(value->string).lower();
+
+        if (text.length() < 4)
+            return false;
+
+        UChar beforeUnit = text[text.length() - 4];
+
+        return text.substring(text.length() - 3) == "rem"
+            && ((beforeUnit >= '0' && beforeUnit <= '9') || beforeUnit == '.');
+    }
+
+    if (value->unit == Value::QFunction && value->function)
+        return valueListHasRemLength(value->function->args);
+
+    return false;
+}
+
+static bool valueListHasRemLength(ValueList* list)
+{
+    if (!list)
+        return false;
+
+    for (unsigned i = 0; i < list->size(); ++i) {
+        if (valueIsRemLength(list->valueAt(i)))
+            return true;
+    }
+
+    return false;
+}
+
 String CSSParser::valueText(ValueList* list)
 {
     String out;
@@ -2296,7 +2464,12 @@ String CSSParser::valueText(ValueList* list)
             out += "#";
             out += domString(v->string);
         } else if (v->unit == CSSPrimitiveValue::CSS_DIMENSION) {
-            /* "10px" arrives as one dimension token; its text is the value. */
+            /* "10px" arrives as one dimension token; its text is the value.
+             * A unary '-' cannot be stored in fValue (DIMEN has none), so the
+             * grammar keeps it in isInt and it has to be re-emitted here;
+             * otherwise raw declarations (`margin: -1rem`) drop the sign. */
+            if (v->isInt)
+                out += "-";
             out += domString(v->string);
         } else if (v->unit == CSSPrimitiveValue::CSS_UNKNOWN) {
             /* Unicoderange and friends: nothing sensible to serialize. */
@@ -2530,12 +2703,30 @@ bool CSSParser::parseValue(CSSMutableStyleDeclaration *declaration, int _id, con
         String text = foldCalcConstants(rewriteCustomPropertyNames(rewriteViewportUnits(rewriteHexAlphaColors(string, true), document())),
                                         m_valueFontPx, m_valueRootFontPx);
 
+        /* Fold bare rem lengths when the root font size is available (the
+         * per-element pass and inline styles do know it). A stylesheet parse
+         * keeps the text raw below. */
+        String remFolded;
+        bool hasRem = rewriteRemLengths(text, m_valueRootFontPx, remFolded);
+        if (m_valueRootFontPx > 0)
+            text = remFolded;
+
         /* `calc(100% - 1em)` needs the element's font size, which a stylesheet
          * parse does not have; keep the declaration so the per-element pass
          * (CSSStyleSelector::applyExpandedProperty) can fold it with the style
          * in hand. Without this the grammar dropped the whole declaration and
          * the element fell back to `none` (hist-lessons R88). */
         if (text.contains("calc(") && hasFontRelativeCalc(text) && m_valueFontPx <= 0) {
+            addRawValueProperty(_id, text, String(), _important);
+            declaration->addParsedProperties(parsedProperties, numParsedProperties);
+            clearProperties();
+            return true;
+        }
+
+        /* A bare rem length needs the root font size, which a stylesheet parse
+         * does not have: keep the raw text now, fold it per element (see
+         * rewriteRemLengths()). */
+        if (hasRem && m_valueRootFontPx <= 0) {
             addRawValueProperty(_id, text, String(), _important);
             declaration->addParsedProperties(parsedProperties, numParsedProperties);
             clearProperties();
@@ -3118,6 +3309,15 @@ bool CSSParser::parseValue(int propId, bool important)
         return false;
 
     stripAlignmentOverflowKeywords(valueList, propId);
+
+    /* A bare rem length cannot be resolved here (a stylesheet parse has no
+     * root font size): keep the whole declaration raw and let the element
+     * pass fold it. Without this the grammar rejects the CSS_DIMENSION token
+     * and the property silently disappears. */
+    if (m_valueRootFontPx <= 0 && valueListHasRemLength(valueList)) {
+        addRawValueProperty(propId, valueText(valueList), String(), important);
+        return true;
+    }
 
     Value *value = valueList->current();
 

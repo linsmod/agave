@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<html>
+<head>
+<!-- The server prepends a UTF-8 BOM while sending `charset=gbk` and this file
+     keeps a gbk meta: a BOM outranks both. -->
+<meta http-equiv="Content-Type" content="text/html; charset=gbk">
+<meta name="expect-title" content="BOM-WINS-标题">
+<meta name="expect-charset" content="UTF-8">
+<title>BOM-WINS-标题</title>
+</head>
+<body><p>正文-BOM 优先</p></body>
+</html>

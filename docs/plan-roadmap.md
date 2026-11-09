@@ -816,6 +816,24 @@
   `WM_ERASEBKGND` 保持返回 1（原实现已有，避免重复擦除）。
 - 验收：GUI 里刷新时箭头不再闪；回归 `run_hang_recovery_tests.ps1` 六条全绿（布局代码不影响探针）。
 
+### P2 文字尺寸对齐的三个小缺口（2026-11-09 发现，未修）
+
+修 `rem`（R165）和 163 编码（R164）时顺带量的，都不属于那一批，单独排：
+
+- **默认根字号 14px vs Chrome 16px**：`Settings::init()` 里 `m_defaultFontSize = 14`，
+  而 Chrome/WebKit 默认是 16。页面不写 `html{font-size}` 时，`rem` 与 `medium` 派生的
+  字号/行高整体小 12.5%（`debug/rem_probe.html` 实测 `root=14px`）。影响面是所有站点，不只是 rem。
+  下一步：先把默认值改成 16，跑 `run_layout_tests`（字体相关页要用固定根字号）、`run_site_smoke`
+  与几张贴图对比；`config.ini`/设置页里用户的显式字号要继续优先。
+- **`@media (min-width: 48rem)` 的 rem 不求值**：声明里的 rem 现在按根字号折成 px（R165），
+  媒体查询前导仍走 2008 的媒体查询语法（`40rem` 是未识别的 `DIMEN`）。Tailwind v4 的断点是 rem 的，
+  所以响应式站点在阈值附近会差一档。修法：解析 `@media` 前导时用根字号（或初始 16px）把 rem 折成 px，
+  再交给现有媒体查询求值；判据是 `rem_units.html` 增加一个 `@media` 断点 case。
+- **块盒 computed `margin-right` 返回 used 填充值**：`CSSComputedStyleDeclaration` 在有 renderer 时
+  用 `renderer->marginRight()`；1100 宽容器里 `width:100px;margin:0 20px` 报 `980px`，Chrome 报 `20px`
+  （`marginLeft` 正常）。修法：computed 走 `style->marginRight()`，与 Chrome 的"指定值优先"一致；
+  判据是 `tools/pages/layout/rem_units.html` 的 `rem-margin` 把 `margin-right` 加回 `data-props`。
+
 ### P1-x deepseek 内联监控脚本抛 `undefined is not a function`（站点兼容，**未修**）
 
 - 现象：`https://chat.deepseek.com/` 与 `/sign_in` 的**第一段内联脚本**（`_sriCk` / volcengine 监控，

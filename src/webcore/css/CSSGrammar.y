@@ -1133,8 +1133,8 @@ term:
       $$.string = $1;
   }
   /* We might need to actually parse the number from a dimension, but we can't just put something that uses $$.string into unary_term. */
-  | DIMEN maybe_space { $$.id = 0; $$.string = $1; $$.unit = CSSPrimitiveValue::CSS_DIMENSION }
-  | unary_operator DIMEN maybe_space { $$.id = 0; $$.string = $2; $$.unit = CSSPrimitiveValue::CSS_DIMENSION }
+  | DIMEN maybe_space { $$.id = 0; $$.isInt = false; $$.string = $1; $$.unit = CSSPrimitiveValue::CSS_DIMENSION }
+  | unary_operator DIMEN maybe_space { $$.id = 0; /* isInt carries the unary sign: DIMEN has no fValue to negate, so valueText() re-emits the '-' from it (see CSSParser::valueText). */ $$.isInt = ($1 < 0); $$.string = $2; $$.unit = CSSPrimitiveValue::CSS_DIMENSION }
   | URI maybe_space { $$.id = 0; $$.string = $1; $$.unit = CSSPrimitiveValue::CSS_URI; }
   | UNICODERANGE maybe_space { $$.id = 0; $$.iValue = 0; $$.unit = CSSPrimitiveValue::CSS_UNKNOWN;/* ### */ }
   | hexcolor { $$.id = 0; $$.string = $1; $$.unit = CSSPrimitiveValue::CSS_RGBCOLOR; }

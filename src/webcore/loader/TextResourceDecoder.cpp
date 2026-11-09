@@ -388,7 +388,9 @@ void TextResourceDecoder::checkForBOM(const char* data, size_t len)
 
 bool TextResourceDecoder::checkForCSSCharset(const char* data, size_t len, bool& movedDataToBuffer)
 {
-    if (m_source != DefaultEncoding && m_source != EncodingFromHTTPHeader) {
+    /* A transport-layer charset (BOM / HTTP header) is authoritative; @charset
+     * only decides when neither of those did. */
+    if (m_source != DefaultEncoding) {
         m_checkedForCSSCharset = true;
         return true;
     }
@@ -467,7 +469,13 @@ static inline void skipComment(const char*& ptr, const char* pEnd)
 
 bool TextResourceDecoder::checkForHeadCharset(const char* data, size_t len, bool& movedDataToBuffer)
 {
-    if (m_source != DefaultEncoding && m_source != EncodingFromHTTPHeader) {
+    /* The transport layer wins: BOM (AutoDetectedEncoding), the HTTP header's
+     * charset, or a user override is final. A <meta> (or XML declaration) only
+     * fills in when the source is still the default. renjian.163.com serves
+     * UTF-8 bytes with `Content-Type: text/html; charset=utf-8` but keeps a
+     * stale `<meta charset=gbk>`; letting the meta override the header decoded
+     * the whole page as GBK. */
+    if (m_source != DefaultEncoding) {
         m_checkedForHeadCharset = true;
         return true;
     }

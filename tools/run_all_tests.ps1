@@ -24,7 +24,7 @@
 #   pwsh -File tools/run_all_tests.ps1 -IncludeNetwork -IncludeReal
 #
 # Expected duration: docs/dev-tests.md §1 has the per-suite soft baseline
-# (17 suites ≈ 350 s on a 16-core machine).
+# (18 suites ≈ 360 s on a 16-core machine).
 
 param(
     [string]$Only = '',
@@ -55,6 +55,7 @@ $suites = @(
     'run_typing_tests',
     'run_sticky_tests',
     'run_xhr_tests',
+    'run_encoding_tests',
     'run_worker_tests',
     'run_image_tests',
     'run_layout_tests',

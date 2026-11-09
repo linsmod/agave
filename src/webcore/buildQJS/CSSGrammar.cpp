@@ -3270,14 +3270,14 @@ yyreduce:
 
 /* Line 1806 of yacc.c  */
 #line 1058 "/home/zhangjipeng/macross-browser/source/webcore/css/CSSGrammar.y"
-    { (yyval.value).id = 0; (yyval.value).string = (yyvsp[(1) - (2)].string); (yyval.value).unit = CSSPrimitiveValue::CSS_DIMENSION ;}
+    { (yyval.value).id = 0; (yyval.value).isInt = false; (yyval.value).string = (yyvsp[(1) - (2)].string); (yyval.value).unit = CSSPrimitiveValue::CSS_DIMENSION ;}
     break;
 
   case 155:
 
 /* Line 1806 of yacc.c  */
 #line 1059 "/home/zhangjipeng/macross-browser/source/webcore/css/CSSGrammar.y"
-    { (yyval.value).id = 0; (yyval.value).string = (yyvsp[(2) - (3)].string); (yyval.value).unit = CSSPrimitiveValue::CSS_DIMENSION ;}
+    { (yyval.value).id = 0; (yyval.value).isInt = ((yyvsp[(1) - (3)].i) < 0); (yyval.value).string = (yyvsp[(2) - (3)].string); (yyval.value).unit = CSSPrimitiveValue::CSS_DIMENSION ;}
     break;
 
   case 156:

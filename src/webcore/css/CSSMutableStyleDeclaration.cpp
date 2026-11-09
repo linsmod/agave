@@ -586,11 +586,21 @@ bool CSSMutableStyleDeclaration::setProperty(int propertyID, const String& value
     // Firefox preserves the position, and MSIE moves the property to the beginning.
     CSSParser parser(useStrictParsing());
     /* Inline styles are parsed with the element font in hand, so
-     * `calc(100% - 1em)` folds here (a stylesheet parse defers that to the
-     * per-element pass, R88). */
+     * `calc(100% - 1em)` and bare `rem` lengths fold here (a stylesheet parse
+     * defers that to the per-element pass, R88/R165). rem is relative to the
+     * root element, not to this one. */
     if (m_node) {
-        if (RenderStyle* nodeStyle = m_node->computedStyle())
-            parser.setValueFont(nodeStyle->fontSize(), nodeStyle->fontSize());
+        if (RenderStyle* nodeStyle = m_node->computedStyle()) {
+            double rootPx = nodeStyle->fontSize();
+
+            if (Document* document = m_node->document()) {
+                if (Element* root = document->documentElement()) {
+                    if (RenderStyle* rootStyle = root->computedStyle())
+                        rootPx = rootStyle->fontSize();
+                }
+            }
+            parser.setValueFont(nodeStyle->fontSize(), rootPx);
+        }
     }
     bool success = parser.parseValue(this, propertyID, value, important);
     if (!success) {
