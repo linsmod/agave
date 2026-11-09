@@ -744,7 +744,8 @@
   `AGB_PROFILE` 的采样热点在 Picasso 的 pattern 填充（`wrap_mode_repeat`）与字形绘制。
 - 可选动作（按性价比）：
   1. **字形光栅缓存**：同一 (font, glyph, 缩放) 只栅格化一次，按字形 bitmap 复用
-     （现在是 1-bit mono，`Font::drawGlyphs()` 每次重画）；
+     （R167 起文字默认走 AA outline，每次绘制都要重新光栅化；整视口文字重绘因此比
+     1-bit mono 慢约 19%：`debug/text_paint.html` + `debug/fps_paint.js` 10.6→8.6 FPS）；
   2. **平铺背景缓存**：把 pattern 填充的整块结果缓存成一张 tile 图（尺寸/phase 变了才重做），
      `RenderBox::paintBackgroundExtended()` 只 blit；
   3. **分块失效**：现在 html/body 样式变化会 `view()->repaint()`（WebKit 的 canvas 规则），
@@ -822,7 +823,8 @@
 
 - **默认根字号 14px vs Chrome 16px**：`Settings::init()` 里 `m_defaultFontSize = 14`，
   而 Chrome/WebKit 默认是 16。页面不写 `html{font-size}` 时，`rem` 与 `medium` 派生的
-  字号/行高整体小 12.5%（`debug/rem_probe.html` 实测 `root=14px`）。影响面是所有站点，不只是 rem。
+  字号/行高整体小 12.5%（`debug/rem_probe.html` 实测 `root=14px`）。**字体本身**已在 R168 换成
+  Chrome 的 Noto Sans SC（随构建打包），所以现在只剩字号这一项。影响面是所有站点，不只是 rem。
   下一步：先把默认值改成 16，跑 `run_layout_tests`（字体相关页要用固定根字号）、`run_site_smoke`
   与几张贴图对比；`config.ini`/设置页里用户的显式字号要继续优先。
 - **`@media (min-width: 48rem)` 的 rem 不求值 → 已修（R166）**：`CSSParser::rewriteMediaQueryRem()`

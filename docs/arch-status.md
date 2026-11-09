@@ -16,7 +16,7 @@
 | 网络 | WinHTTP 后端、HTTP 缓存、代理解析、重定向、MIME/下载决策、`[netlog]` | [dev-debugging.md](dev-debugging.md) |
 | Worker / wasm | 真 Worker（独立线程 + isolate）、wasm 解释执行（导入/内存/表/全局/SIMD） | R19/R22 |
 | 下载 | 进程级 `DownloadManager`、`.part` 后 rename、三层状态 API、`agave://downloads` 面板 | [arch-downloads.md](arch-downloads.md) |
-| 宿主 / UI | 标签页、地址栏、查找、书签、popup、下载面板、无头探针与无头截图、Unicode/IME | `examples/browser_shell`、[dev-debugging.md](dev-debugging.md) |
+| 宿主 / UI | 标签页、地址栏、查找、书签、popup、下载面板、无头探针与无头截图、Unicode/IME、灰度文字抗锯齿（R167，`AGB_FONT_AA=0` 回退 1-bit mono）、默认字体 Noto Sans SC（R168，`fonts/` 随构建拷贝并进程内注册） | `examples/browser_shell`、[dev-debugging.md](dev-debugging.md) |
 
 **已经被检查过、别再当缺陷重开**：ant 的 Worker 是真的（R22）、wasm 是真的（R19）、
 渐变/`var()`/flex 大多可用（R11/R39）、滚动与 hover 重绘正确（R13/R14/R40）、

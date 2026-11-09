@@ -232,6 +232,36 @@ else()
     message(WARNING "prelude.js not found at ${AGB_PRELUDE}; pages will run without the window shims")
 endif()
 
+# Fonts: the default family and the CJK fallback are Noto Sans SC, shipped in
+# fonts/. The engine registers whatever *.ttf sits in <exedir>/fonts privately
+# with GDI at startup (FontCachePS::registerBundledFonts), so the browser does
+# not depend on the face being installed system-wide. Copy the directory next
+# to the binaries; the .ttf files are ~10 MB each, copy_if_different per file
+# keeps incremental builds cheap.
+file(GLOB AGB_FONT_FILES ${PROJ_ROOT}/fonts/*.ttf)
+if (AGB_FONT_FILES)
+    set(AGB_FONT_OUTPUTS)
+    foreach (agb_font ${AGB_FONT_FILES})
+        get_filename_component(agb_font_name ${agb_font} NAME)
+        add_custom_command(
+            OUTPUT ${PROJ_OUT}/fonts/${agb_font_name}
+            COMMAND ${CMAKE_COMMAND} -E make_directory ${PROJ_OUT}/fonts
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different ${agb_font} ${PROJ_OUT}/fonts/${agb_font_name}
+            DEPENDS ${agb_font}
+            COMMENT "Copying ${agb_font_name} next to the binaries"
+            VERBATIM)
+        list(APPEND AGB_FONT_OUTPUTS ${PROJ_OUT}/fonts/${agb_font_name})
+    endforeach()
+    add_custom_target(fonts ALL DEPENDS ${AGB_FONT_OUTPUTS})
+    foreach (agb_target agave_shell agave_embed agave_view_host touchweb)
+        if (TARGET ${agb_target})
+            add_dependencies(${agb_target} fonts)
+        endif()
+    endforeach()
+else()
+    message(WARNING "no fonts/*.ttf found; the default Noto Sans SC family will be substituted by Microsoft YaHei")
+endif()
+
 # internal.js / downloads.html: the internal page runtime (agave://downloads).
 # internal.js is evaluated only for an agave:// document (AntRuntime::
 # bindDocument), downloads.html is served by WebView::loadUrl for

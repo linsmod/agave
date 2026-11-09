@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>font anti-aliasing</title>
+<!-- Text-only page for the anti-aliasing check in run_layout_tests.ps1
+     (tools/font_aa_check.py): with the old 1-bit mono path the region has only
+     the glyph and background luminances; grayscale AA adds intermediate
+     levels. Not under tools/pages/layout/ because layout_diff compares
+     Chrome geometry and font metrics differ. -->
+<style>
+  html, body { margin: 0; padding: 0; background: #ffffff; color: #000000;
+               font-family: Arial, sans-serif; }
+  div { margin: 0; padding: 0 4px; }
+  #a { font-size: 14px; line-height: 18px; }
+  #b { font-size: 20px; line-height: 26px; }
+  #c { font-size: 32px; line-height: 40px; }
+</style>
+</head>
+<body>
+<div id="a">Agave 字体渲染 ClearType 12345</div>
+<div id="b">Agave 字体渲染 ClearType 12345</div>
+<div id="c">Agave 字体渲染</div>
+</body>
+</html>

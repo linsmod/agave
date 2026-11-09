@@ -20,14 +20,15 @@ build-zig-native\agave_shell.exe --probe <url> [--eval <js>] [--wait ms] [--sett
 - `--offline`：模块只从磁盘缓存取，未命中立刻失败；先在线跑一次暖缓存，再确定性重放模块图。
 - `--keys "<text>"`：eval **之前**把文字打进页面，走真实的 `WM_KEYDOWN → WM_CHAR → WM_KEYUP`
   （PostMessage 到控件窗口，由宿主循环的 `TranslateMessage` 生成字符；一个 tick 一个键，
-  保证字符在下一个键之前处理完）。页面自己负责聚焦（`autofocus` / `el.focus()`）。
+  最后一个键后停 800 ms 再 eval，机器忙时也能把队列排空——300 ms 在灰度抗锯齿（R167）的
+  慢首帧下会偶发丢键）。页面自己负责聚焦（`autofocus` / `el.focus()`）。
   `{backspace} {enter} {tab} {esc} {delete} {left} {right} {up} {down} {home} {end}` 表示功能键；
   非 ASCII 直接以 `WM_CHAR` 发送。窗口始终隐藏，不打扰用户（铁律 7）。
   `--pre-eval "<js>"` 在第一个键之前跑一次短脚本（聚焦控件、关掉弹层）：
   `--pre-eval "document.querySelector('input').focus()" --keys "13800138000"` 就能在真实站点上验证输入。
   `--ime "<text>"` 走**输入法**那条路：每个 UTF-16 码元发一条 `WM_IME_CHAR`（星平面字符是两个，
   即代理对），用来复测中文/emoji 输入；`--keys` 则走 `WM_KEYDOWN → TranslateMessage → WM_CHAR`。
-  回归：`pwsh -File tools/run_typing_tests.ps1`（8 个用例，页面 `tools/pages/cap_typing.html`）。
+  回归：`pwsh -File tools/run_typing_tests.ps1`（10 个用例，页面 `tools/pages/cap_typing.html` / `cap_caret.html`）。
 - `--click <x,y>`：eval 之前在该视口坐标点一下，走真实的
   `WM_MOUSEMOVE → WM_LBUTTONDOWN → WM_LBUTTONUP`（PostMessage 到控件窗口，和用户点击同一条
   WndProc → 引擎命令路径），一个 tick 一次；可以给多次（`--click 750,228 --click 750,280`
@@ -292,7 +293,8 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
 | CSS/布局 | `AGB_CSS_DEBUG=1` / `AGB_LAYOUT_DEBUG=1` / `AGB_BG_DEBUG=1` | 未实现 CSS 属性日志 / 布局 / 背景层 |
 | flex | `AGB_FLEX_DEBUG=1` | 每个 `RenderFlexibleBox` 的 `[flex] lines`（inner/wrap/行数）、每子项 `base/min/max/final/extra`，以及 `block-end` 的 `w=/over=`（两者不一致 = 子项被当普通块重排过，R81） |
 | 字体 | `AGB_FONT_DEBUG=1` | 每个 `FontData::platformInit` 一行 `[fontdbg]`：size / ascent / descent / leading / unitsEm / xHeight（行盒 = asc+desc+leading，各独立 round，R123） |
-| 字体 | `AGB_FONT_NO_SUBST=1` | **临时对照开关**：不把 arial/times/segoe ui 等家族替换成 Microsoft YaHei（R123 的缺口诊断用；关掉后西文与 Chrome 逐字体一致，但混排行盒只有主字体度量） |
+| 字体 | `AGB_FONT_NO_SUBST=1` | **临时对照开关**：关掉字体替换（默认把 arial/times/segoe ui 等族换成 Noto Sans SC，缺字时退回 Microsoft YaHei）。R123 的缺口诊断用；关掉后西文与 Chrome 逐字体一致，但混排行盒只有主字体度量 |
+| 字体 | `AGB_FONT_AA=0` | 关掉文字的灰度抗锯齿，回到 picasso 的 1-bit mono 路径（R167）。默认开；A/B 画质与整视口重绘帧率时用（文字为主的重绘 AA off→on 约 10.6→8.6 FPS） |
 | sticky | `AGB_STICKY_DEBUG=1` | 每次 `RenderBox::stickyPositionOffset()`：`top/bottom`、box/scrollport/containing block 的矩形与最终 `d=(dx,dy)`（R82）。滚动后没有这行 = 没人重算（没重绘） |
 | CSS/视口 | `AGB_VIEWPORT_DEBUG=1` | 打印 vw/vh 变量注册（`-agb-vwunit-…`）与每个变量在当前视口下的 px 值，以及含 vw/vh 的 `calc` 模板代入结果（R69） |
 | 配色方案 | `AGB_COLOR_SCHEME=dark` / `light` / `auto` | `prefers-color-scheme` 的答案。**默认 light**（不跟随系统）；`auto` 才读注册表 `AppsUseLightTheme`；`dark`/`light` 钉死（R86） |
@@ -530,9 +532,9 @@ ant 自身 CLI / 基础设施的开关（`ANT_MANIFEST_URL`、`ANT_SANDBOX_*`、
   `[con-log]` 行，所以同一个 JS 文件两边都能跑。
   ⚠ 视口对齐：agave 探针默认 1100×800（16px 经典滚动条），要对 Chrome 的 1084 就用
   `--agave-resize 1084x800`；本地页面用 `file:///E:/...`（正斜杠）。
-  ⚠ 字体：Chrome 本机（zh-CN）默认字体是 **Noto Sans SC**，agave 默认 Times 且会把
-  arial/times/segoe ui 整族替换成 Microsoft YaHei（R123，`AGB_FONT_NO_SUBST=1` 可对照），
-  字体相关的差异先看这一条再怀疑布局。
+  ⚠ 字体：Chrome 本机（zh-CN）默认字体是 **Noto Sans SC**，agave 现在也是（R168：`fonts/`
+  随构建拷到 exe 旁并在启动时进程内注册；替换目标同样是 Noto，缺失时退回 Microsoft YaHei），
+  但**默认字号仍是 14px**（Chrome 16px）。字体相关的差异先看这一条再怀疑布局。
   ⚠ **agave 侧的 `RESULT` 会被截断**：`[con-log]` 单行大约 2 KiB 封顶，一次
   `JSON.stringify` 整页元素的长结果会腰斩（Chrome 侧完整，看着像 agave 少了一半字段）。
   只打关心的字段（`{left,top,width,height}` 通常就够），或按 800 字符分段打 `R0:`/`R1:` 再拼；

@@ -101,13 +101,14 @@ function Test-Caret {
 }
 
 # Empty control (placeholder path, RenderTextControlInnerBlock::caretRect):
-# line-height is 25px, so a 25px caret would mean the bug is back. 19px is the
-# 14px font's ascent+descent (the family substitution of R123 makes it YaHei).
+# line-height is 25px, so a 25px caret would mean the bug is back. 17px is the
+# 14px default font's ascent+descent (default family is the bundled Noto Sans SC
+# now, R168; these numbers follow its metrics).
 Test-Caret 'empty caret' @('--eval', "document.getElementById('a').focus()") `
-    'x=12 y=14\.\.32 height=19'
+    'x=12 y=15\.\.31 height=17'
 # Typed text (RenderText::caretRect): same height, on the second input's line.
 Test-Caret 'typed caret' @('--pre-eval', "document.getElementById('b').focus()", '--keys', 'Hxg', '--eval', '1') `
-    'x=37 y=51\.\.69 height=19'
+    'x=36 y=52\.\.68 height=17'
 
 ""
 if ($failures -eq 0) {

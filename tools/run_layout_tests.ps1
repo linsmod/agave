@@ -89,10 +89,29 @@ try {
         # rotated (an unrotated 140x56 box stops at y=56); (120,20) only blue
         # when it did not. The rect specs count ink: white glyphs inside the
         # tab, ink near the far end of the run (collapsed advances leave the
-        # top of the column empty) and the doubled glyph area of #scale.
+        # top of the column empty) and the doubled glyph area of #scale. The
+        # ink counts depend on the face (`monospace` resolves to the default
+        # Noto Sans SC now), so the thresholds keep ~20% slack; the positional
+        # checks above are what pins the rotation.
         & python tools/pixel_check.py $bmp `
             8,8,204080 20,120,204080 120,20,ffffff `
-            0,0,55,139,ffffff,700 0,40,55,59,ffffff,250 280,20,360,100,000000,600
+            0,0,55,139,ffffff,400 0,40,55,59,ffffff,170 280,20,360,100,000000,600
+        if ($LASTEXITCODE -ne 0) { $failed++ }
+    }
+
+    Write-Host '== paint: text anti-aliasing (grayscale glyphs, not 1-bit)'
+    $png = Join-Path $root 'build-zig-native\layout_font_aa.png'
+    Remove-Item $png -ErrorAction SilentlyContinue
+    $url = 'file:///' + (Join-Path $root 'tools/pages/font_antialias.html').Replace('\', '/')
+    & (Join-Path $root 'build-zig-native\agave_shell.exe') --probe $url `
+        --wait 800 --settle 300 --timeout 30000 --shot $png 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host 'font_antialias: probe failed'
+        $failed++
+    } else {
+        # 1-bit glyphs leave mid=0; grayscale coverage gives hundreds of
+        # intermediate-luminance pixels over the three text sizes.
+        & python tools/font_aa_check.py $png 0,0,420,100 --min-mid 500
         if ($LASTEXITCODE -ne 0) { $failed++ }
     }
 
@@ -169,8 +188,10 @@ try {
         # The 120px control sits at (20,20); the menu opens under it at y=39.
         # The first item is highlighted (the theme's selection colour), the
         # other rows are white, the frame is grey and the page stays white.
+        # The menu's height follows the item font (12px sans-serif -> the
+        # default Noto Sans SC), so the bottom frame is at y=82.
         & python tools/pixel_check.py $bmp `
-            30,40,9db7cf 60,45,9db7cf 20,45,a0a0a0 130,60,ffffff 60,90,a0a0a0 5,5,ffffff
+            30,40,9db7cf 60,45,9db7cf 20,45,a0a0a0 130,60,ffffff 60,82,a0a0a0 5,5,ffffff
         if ($LASTEXITCODE -ne 0) { $failed++ }
     }
 

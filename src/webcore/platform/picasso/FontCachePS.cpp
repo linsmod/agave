@@ -29,6 +29,47 @@ namespace WebCore
 namespace {
 
 #if defined(_WIN32)
+/* The build copies `fonts/` next to the executable (fonts/NotoSansSC-*.ttf)
+ * and the default family points at it. Register those files with GDI privately
+ * so the browser does not depend on the face being installed system-wide;
+ * FR_PRIVATE keeps them inside this process. Missing directory/files are not an
+ * error: GDI falls back to its own default and createFontPlatformData() still
+ * substitutes a CJK-capable face. Must run before the first CreateFontA. */
+void registerBundledFonts()
+{
+    char exe[MAX_PATH];
+    DWORD len = ::GetModuleFileNameA(0, exe, MAX_PATH);
+    char* slash;
+    char pattern[MAX_PATH];
+    WIN32_FIND_DATAA data;
+    HANDLE find;
+
+    if (!len || len >= MAX_PATH)
+        return;
+
+    slash = strrchr(exe, '\\');
+    if (!slash)
+        return;
+    *(slash + 1) = 0;
+
+    snprintf(pattern, sizeof(pattern), "%sfonts\\*.ttf", exe);
+
+    find = ::FindFirstFileA(pattern, &data);
+    if (find == INVALID_HANDLE_VALUE)
+        return;
+
+    do {
+        if (!(data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+            char path[MAX_PATH];
+
+            snprintf(path, sizeof(path), "%sfonts\\%s", exe, data.cFileName);
+            ::AddFontResourceExA(path, FR_PRIVATE, 0);
+        }
+    } while (::FindNextFileA(find, &data));
+
+    ::FindClose(find);
+}
+
 struct FaceCacheEntry {
     char name[LF_FACESIZE];
     bool usable;
@@ -103,11 +144,21 @@ bool faceDrawsCjk(const char*)
 }
 #endif
 
+/* The default CJK family. Noto Sans SC is what Chrome resolves the default
+ * (and `sans-serif`) to on this platform and it ships in fonts/; Microsoft
+ * YaHei is the system fallback when the bundle is missing. */
+const char* preferredCjkFamily()
+{
+    return faceDrawsCjk("Noto Sans SC") ? "Noto Sans SC" : "Microsoft YaHei";
+}
+
 } /* namespace */
 
 void FontCache::platformInit()
 {
-    notImplemented();
+#if defined(_WIN32)
+    registerBundledFonts();
+#endif
 }
 
 const FontData* FontCache::getFontDataForCharacters(const Font& font, const UChar* characters, int length)
@@ -116,7 +167,7 @@ const FontData* FontCache::getFontDataForCharacters(const Font& font, const UCha
      * glyphs and picasso has no fontconfig style fallback on this platform, so
      * every non-Latin character used to be drawn as a missing-glyph box. Route
      * them to a family that does have the glyphs. */
-    static AtomicString cjkFamily("Microsoft YaHei");
+    AtomicString cjkFamily(preferredCjkFamily());
 
     if (!characters || length <= 0)
         return 0;
@@ -151,10 +202,12 @@ bool FontCache::fontExists(const FontDescription&, const AtomicString& family)
 
 FontPlatformData* FontCache::getLastResortFallbackFont(const FontDescription& fontDescription)
 {
-    // FIXME: Would be even better to somehow get the user's default font here.  For now we'll pick
-    // the default that the user would get without changing any prefs.
-    static AtomicString timesStr("Times New Roman");
-    return getCachedFontPlatformData(fontDescription, timesStr);
+    /* No page font and no usable family: this is the default page font. Noto
+     * Sans SC (bundled in fonts/ and registered privately at startup) is the
+     * face Chrome picks for a zh-CN default; Times New Roman used to make every
+     * unstyled page look serif and shifted default line boxes. */
+    static AtomicString fallbackStr("Noto Sans SC");
+    return getCachedFontPlatformData(fontDescription, fallbackStr);
 }
 
 FontPlatformData* FontCache::createFontPlatformData(const FontDescription& fontDescription, const AtomicString& family)
@@ -188,7 +241,7 @@ FontPlatformData* FontCache::createFontPlatformData(const FontDescription& fontD
     if (substitute) {
         for (int i = 0; latinOnly[i]; ++i) {
             if (requested && !strcasecmp(requested, latinOnly[i])) {
-                effective = "Microsoft YaHei";
+                effective = preferredCjkFamily();
                 break;
             }
         }
@@ -196,7 +249,7 @@ FontPlatformData* FontCache::createFontPlatformData(const FontDescription& fontD
         /* Anything else (a macOS/Android family, a typo, a face that exists but has
          * no CJK glyphs) is checked with GDI and replaced when it cannot draw CJK. */
         if (effective == requested && !faceDrawsCjk(effective))
-            effective = "Microsoft YaHei";
+            effective = preferredCjkFamily();
     }
 
     ps_font* font = ps_font_create ((char*)effective, CHARSET_UNICODE,

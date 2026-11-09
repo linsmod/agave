@@ -25,6 +25,7 @@
 
 #include "config.h"
 #include "Settings.h"
+#include <stdlib.h>
 
 #include "Frame.h"
 #include "FrameTree.h"
@@ -111,7 +112,19 @@ void Settings::init(void)
         Settings::m_autoDetectEncoding = true;
         Settings::m_showAllAtOnce = false;
 #if PLATFORM(WIN32)
-		Settings::m_textAntialias = false;
+		/* Grayscale glyph anti-aliasing. With this off picasso renders text
+		 * from FreeType's 1-bit monochrome bitmap, which is the main reason
+		 * page text looked jagged; with it on, the FreeType adapter
+		 * decomposes the glyph outline and runs it through the AA rasterizer
+		 * (gfx_font_adapter_freetype2.cpp, `m_impl->antialias`). This is not
+		 * ClearType/subpixel rendering - just grayscale coverage, which is
+		 * enough to stop the "1-bit" look. `AGB_FONT_AA=0` keeps the old mono
+		 * path for A/B and for the rare case where the extra fill cost
+		 * matters. */
+		{
+			const char* fontAA = getenv("AGB_FONT_AA");
+			Settings::m_textAntialias = !(fontAA && fontAA[0] == '0');
+		}
 #else
 		Settings::m_textAntialias = true;
 #endif
@@ -126,8 +139,14 @@ void Settings::init(void)
         Settings::m_forceFTPDirectoryListings = false;
         Settings::m_developerExtrasEnabled = false;
 
-        Settings::m_standardFontFamily = AtomicString("Arial");
-        Settings::m_sansSerifFontFamily = AtomicString("Arial");
+        /* The default page font and the sans-serif generic map to the bundled
+         * Noto Sans SC (fonts/, registered privately by
+         * FontCachePS::platformInit). Chrome resolves both to Noto Sans SC on a
+         * zh-CN Windows install, so unstyled pages now match its look instead
+         * of falling back to Times New Roman; FontCachePS substitutes
+         * Microsoft YaHei when the bundled face is missing. */
+        Settings::m_standardFontFamily = AtomicString("Noto Sans SC");
+        Settings::m_sansSerifFontFamily = AtomicString("Noto Sans SC");
         Settings::m_fixedFontFamily = AtomicString("Courier New");
         Settings::m_serifFontFamily = AtomicString("Times New Roman");
         Settings::m_defaultTextEncodingName = String("ISO8859-1");

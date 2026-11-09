@@ -109,7 +109,9 @@ $p = Start-Process -FilePath $exe -NoNewWindow -PassThru -Wait -ArgumentList @(
     '--shot', $shot, '--timeout', '60000'
 ) -RedirectStandardOutput $stdout -RedirectStandardError $stderr
 
-$specs = @('10,10,cc0000', '300,20,cc0000', '10,300,eeeeee', '10,780,0000cc')
+# Footer ink sits at the left edge ("FOOT", no padding); sample the solid blue
+# away from the glyphs so anti-aliased text edges (R167) cannot decide the test.
+$specs = @('10,10,cc0000', '300,20,cc0000', '10,300,eeeeee', '500,780,0000cc')
 & python $pixel $shot @specs 2>&1 | ForEach-Object { $_.ToString() }
 if ($LASTEXITCODE -ne 0) {
     $failures++
