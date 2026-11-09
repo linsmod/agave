@@ -52,6 +52,7 @@
 |---|---|---|
 | 宿主壳 | `examples/browser_shell/main.c` | 标签页/地址栏/查找/书签；`--probe` 真无头探针。只做 UI，不碰引擎 |
 | Win32 控件 | `src/webview_control/AgaveWebView.c` | 控件窗口、引擎线程、`AGW_CMD_*` 队列、剪贴板/IME、下载表；编进 `libagave.dll` |
+| 渲染后端 seam | `src/webview_control/AgwViewBackend.h/.c` | 控件与"谁在跑页面"之间的接口（v1 只有 `local` = 进程内 macross）；`AGB_VIEW_BACKEND` 选后端，设计见 [design-render-backend.md](design-render-backend.md) |
 | 视图适配 | `src/webview/` | MaCross `Page`/`Frame`/`WebView`、帧泵、`FrameLoaderClientMC`（willClose/commit/DCL/load）、`DownloadManager`、内部页、`AgbLog.h` |
 | WebCore 移植 | `src/webcore/` | WebKit 2008：HTML/CSS 解析、DOM、布局、绘制、网络 |
 | JS 门面 | `src/javascript/ant_backend/AntRuntime.cpp` | 每 view `RuntimeState`、realm 生命周期、DOM 桥外观、XHR/模块/定时器/history、加载 prelude/polyfills/internal.js |

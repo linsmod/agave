@@ -109,7 +109,8 @@ if (OPT_SHELL AND WIN32)
     # The Win32 control is part of libagave now: one DLL exports both the
     # MaCross engine API and the agave_webview_* control API.
     target_sources(${LIB_NAME} PRIVATE
-        ${PROJ_ROOT}/src/webview_control/AgaveWebView.c)
+        ${PROJ_ROOT}/src/webview_control/AgaveWebView.c
+        ${PROJ_ROOT}/src/webview_control/AgwViewBackend.c)
     set_source_files_properties(
         ${PROJ_ROOT}/src/webview_control/AgaveWebView.c
         PROPERTIES COMPILE_DEFINITIONS AGW_BUILD_DLL)

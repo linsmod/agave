@@ -33,7 +33,10 @@ UI 线程只做合成与输入归一化。验收：
 - 桥引擎表加锁、可中断 `Atomics.wait`（R146）；桥回调 activate/leave 成对（R149）；
 - 隐藏 view 跳过布局/绘制（R150）——多进程的"冻结后台 tab"就是它的延伸；
 - 控制面已经是"全入队 + mirror 出像素"（[include/agave_webview.h](../include/agave_webview.h)），
-  `examples/view_host` 是不建控件的现成宿主，probe 是它的测试契约。
+  `examples/view_host` 是不建控件的现成宿主，probe 是它的测试契约；
+- **渲染后端 seam 已存在（B0，2026-11-09）**：`src/webview_control/AgwViewBackend.h/.c` 定义
+  `AgwViewBackend`（3 个进程级 + 22 个 view 级 ops），`AgaveWebView` 的 per-view 调用全部走
+  `backend->op(backendView)`；v1 只有 `local`，`AGB_VIEW_BACKEND` 里未实现的名字会警告并回退。
 
 ## 3. 决策：不是"加个线程"，是"渲染后端可插拔"
 
@@ -180,7 +183,7 @@ RVVM 后端用 guest 内存 + `virtpass_browser` 的 ecall；local 后端只是�
 
 | 批 | 内容 | 验收 |
 |---|---|---|
-| B0 | `ViewBackend` 接口 + local 后端（行为零变化，纯重构） | 全部套件绿；`AGB_VIEW_BACKEND=local` 默认不变 |
+| B0 | `ViewBackend` 接口 + local 后端（行为零变化，纯重构） | ✅ 2026-11-09：`src/webview_control/AgwViewBackend.h/.c`（25 个 ops：3 个进程级 + 22 个 view 级），`AgaveWebView` 的 per-view 调用全部改走 `backend->op(backendView)`；`AGB_VIEW_BACKEND=local` 默认，未实现的名字**打一行警告并回退 local**；其余全套件绿 |
 | B1 | 协议 v1 结构体化（命令/事件/帧/ack），local 走协议 | 隐藏 view/输入/缩放/导航套件绿；`bench_hot` 不退化 |
 | B2 | `process` 后端（共享内存 + 管道 + 崩溃检测 + sad tab） | 双 tab：一个 `while(true)`，另一个 <200 ms；reload/close 压测 |
 | B3 | `rvvm` 后端（`virtpass_browser` + guest 渲染器，先零拷贝 damage） | 单 tab 出帧/输入；M1/M2/M5 达标 |

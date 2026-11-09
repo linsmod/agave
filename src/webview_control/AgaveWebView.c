@@ -21,6 +21,7 @@
 #include "AntBridge.h"   /* antb_interrupt_all_engines: abort a stuck page script */
 #include "../webview/AgbLog.h"
 #include "../webview/AgbRuntime.h"   /* agb_teardown_started_ms: budget the teardown */
+#include "AgwViewBackend.h"          /* the render-backend seam (S3) */
 
 /* Defined next to the command drain loop; needed here because agwPost() is the
  * single choke point every host call goes through. */
@@ -181,7 +182,12 @@ typedef struct {
 
 struct AgaveWebView {
     HWND               hwnd;
-    MaCrossView*       view;
+    MaCrossView*       view;        /* local engine view (callback identity) */
+    /* Render backend (docs/design-render-backend.md). v1 is always `local`;
+     * backendView is the backend-opaque view handle, which for local is the
+     * same MaCrossView*. Every per-view call goes through backend->op(). */
+    const AgwViewBackend* backend;
+    void*              backendView;
     MC_BYTE*           bits;
     HBITMAP            bitmap;
     HDC                memdc;
@@ -271,6 +277,9 @@ static volatile int     g_engineQuit;
 static HANDLE           g_engineThread;
 static DWORD            g_engineThreadId;
 static volatile int     g_engineStarted;
+/* The process-level backend chosen for this control (engine loop). NULL until
+ * the engine thread resolves it from AGB_VIEW_BACKEND. */
+static const AgwViewBackend* g_processBackend;
 static int              g_classRegistered;
 /* Views the host destroyed, waiting for the engine thread to tear them down
  * (guarded by g_lock). The engine thread owns WebCore, the Ant VM and the
@@ -373,9 +382,10 @@ static void agwDestroyNow(AgaveWebView* item)
     if (g_lastActive == item)
         g_lastActive = NULL;
 
-    if (item->view) {
-        macross_view_destroy(item->view);
+    if (item->backendView) {
+        item->backend->destroy(item->backendView);
         item->view = NULL;
+        item->backendView = NULL;
     }
 
     agwDestroySurface(item);
@@ -770,7 +780,7 @@ static void agwOnError(int err, const char* failedUrl)
     for (i = 0; i < g_viewCount; ++i) {
         AgaveWebView* item = g_views[i];
 
-        if (!item || !item->view)
+        if (!item || !item->backendView)
             continue;
 
         agwLock();
@@ -985,19 +995,22 @@ static void agwEnsureSurface(AgaveWebView* item, int width, int height)
     if (!created)
         return;
 
-    if (item->view) {
-        macross_view_resize(item->view, item->bits, width, height, width * 4);
+    if (item->backendView) {
+        item->backend->resize(item->backendView, item->bits, width, height, width * 4);
     } else {
-        item->view = macross_view_create(item->bits, width, height, width * 4, item);
+        item->backendView = item->backend->create(item, item->bits, width, height, width * 4);
+        /* Local: the same pointer; kept for the callback lookups (agwByView)
+         * and for macross's own user_data convention. */
+        item->view = (MaCrossView*)item->backendView;
 
-        if (item->view) {
+        if (item->backendView) {
             if (item->zoom != 100)
-                macross_view_set_scale_factor(item->view, item->zoom);
+                item->backend->setScaleFactor(item->backendView, item->zoom);
 
             /* A queued CMD_NAVIGATE will load the URL; doing it here as well made
              * every first navigation fetch the page twice. */
             if (item->url[0] && !item->navigatePending)
-                macross_view_open_url(item->view, item->url);
+                item->backend->navigate(item->backendView, item->url);
         }
     }
 
@@ -1301,10 +1314,10 @@ static AgaveWebView* agwBusyViewLocked(void)
     for (i = 0; i < g_viewCount; ++i) {
         AgaveWebView* item = g_views[i];
 
-        if (!item || item->destroyed || !item->view)
+        if (!item || item->destroyed || !item->backendView)
             continue;
 
-        if (macross_view_js_context(item->view) != context)
+        if (item->backend->jsContext(item->backendView) != context)
             continue;
 
         if (!item->hwnd || !item->callbacks.on_unresponsive)
@@ -1608,8 +1621,8 @@ static void agwDrainCommands(void)
         case AGW_CMD_NAVIGATE:
             item->navigatePending = 0;
 
-            if (item->view) {
-                macross_view_open_url(item->view, payload);
+            if (item->backendView) {
+                item->backend->navigate(item->backendView, payload);
             } else {
                 strncpy(item->url, payload, sizeof(item->url) - 1);
                 item->url[sizeof(item->url) - 1] = 0;
@@ -1618,19 +1631,18 @@ static void agwDrainCommands(void)
             break;
 
         case AGW_CMD_LOAD_HTML:
-            if (item->view)
-                macross_view_load_html(item->view, payload,
-                                       payload[0] ? NULL : NULL);
+            if (item->backendView)
+                item->backend->loadHtml(item->backendView, payload, NULL);
             break;
 
-        case AGW_CMD_BACK:    if (item->view) macross_view_backward(item->view); break;
-        case AGW_CMD_FORWARD: if (item->view) macross_view_forward(item->view);  break;
-        case AGW_CMD_RELOAD:  if (item->view) macross_view_reload(item->view);   break;
-        case AGW_CMD_STOP:    if (item->view) macross_view_stop(item->view);     break;
+        case AGW_CMD_BACK:    if (item->backendView) item->backend->back(item->backendView); break;
+        case AGW_CMD_FORWARD: if (item->backendView) item->backend->forward(item->backendView); break;
+        case AGW_CMD_RELOAD:  if (item->backendView) item->backend->reload(item->backendView); break;
+        case AGW_CMD_STOP:    if (item->backendView) item->backend->stop(item->backendView); break;
 
         case AGW_CMD_EVAL:
-            if (item->view)
-                macross_view_eval_script(item->view, payload);
+            if (item->backendView)
+                item->backend->eval(item->backendView, payload);
             break;
 
         case AGW_CMD_VISIBLE:
@@ -1645,14 +1657,14 @@ static void agwDrainCommands(void)
                 if (item->visible)
                     item->forceFullPaint = 1;
             }
-            if (item->view)
-                macross_view_set_visible(item->view, command.a ? 1 : 0);
+            if (item->backendView)
+                item->backend->setVisible(item->backendView, command.a ? 1 : 0);
             break;
 
         case AGW_CMD_ZOOM:
             item->zoom = command.a > 0 ? command.a : 100;
-            if (item->view)
-                macross_view_set_scale_factor(item->view, item->zoom);
+            if (item->backendView)
+                item->backend->setScaleFactor(item->backendView, item->zoom);
             if (item->hwnd)
                 InvalidateRect(item->hwnd, NULL, FALSE);
             break;
@@ -1685,7 +1697,7 @@ static void agwDrainCommands(void)
             break;
 
         case AGW_CMD_MOUSE:
-            if (item->view) {
+            if (item->backendView) {
                 MC_MOUSE_EVENT event;
 
                 memset(&event, 0, sizeof(event));
@@ -1693,48 +1705,47 @@ static void agwDrainCommands(void)
                 event.button = (MC_MOUSE_BUTTON)command.b;
                 event.point.x = command.x;
                 event.point.y = command.y;
-                macross_mouse_event(item->view, &event);
+                item->backend->mouseEvent(item->backendView, &event);
             }
             break;
 
         case AGW_CMD_KEY:
-            if (item->view) {
+            if (item->backendView) {
                 MC_KEY_EVENT event;
 
                 memset(&event, 0, sizeof(event));
                 event.type = (MC_KEY_EVENT_TYPE)command.a;
                 event.key = (MC_VIRTUAL_KEY)command.x;
                 event.modifier = command.b;
-                macross_keyboard_event(item->view, &event);
+                item->backend->keyEvent(item->backendView, &event);
             }
             break;
 
         case AGW_CMD_CHAR:
-            if (item->view)
-                macross_view_input_text(item->view, payload);
+            if (item->backendView)
+                item->backend->inputText(item->backendView, payload);
             break;
 
         case AGW_CMD_FOCUS:
-            if (item->view)
-                macross_view_set_focus(item->view);
+            if (item->backendView)
+                item->backend->setFocus(item->backendView);
             break;
 
         case AGW_CMD_SEARCH:
-            if (item->view && payload[0])
-                macross_view_search_text(item->view, payload,
-                                         command.a ? TRUE : FALSE,
-                                         command.b ? TRUE : FALSE, TRUE);
+            if (item->backendView && payload[0])
+                item->backend->searchText(item->backendView, payload,
+                                          command.a ? 1 : 0, command.b ? 1 : 0);
             break;
 
         case AGW_CMD_CONTEXT:
-            if (item->view) {
+            if (item->backendView) {
                 MC_CONTEXT_EVENT event;
 
                 memset(&event, 0, sizeof(event));
                 event.point.x = command.x;
                 event.point.y = command.y;
                 event.modifier = (unsigned int)command.a;
-                macross_context_menu_event(item->view, &event);
+                item->backend->contextMenu(item->backendView, &event);
             }
             break;
 
@@ -1758,7 +1769,14 @@ static DWORD WINAPI agwEngineThread(LPVOID param)
 
     g_engineThreadId = GetCurrentThreadId();
 
-    if (macross_initialize(PIXEL_FORMAT_BGRA32, 1024, 768) != MC_STATUS_SUCCESS)
+    /* The process-level half of the backend: engine init, the global timer/
+     * network pump, shutdown. `local` initializes macross and pumps its event
+     * queue; a backend with its own instance will own those instead. */
+    g_processBackend = agwBackendByName(getenv("AGB_VIEW_BACKEND"));
+    if (!g_processBackend)
+        g_processBackend = agwBackendLocal();
+
+    if (!g_processBackend->processInit(1024, 768))
         return 0;
 
     for (;;) {
@@ -1782,7 +1800,7 @@ static DWORD WINAPI agwEngineThread(LPVOID param)
         agwDrainCommands();
         agwApplyPendingResizes();
 
-        macross_event_dispatch();
+        g_processBackend->processPump();
 
         /* Snapshot the live views under the lock, then update them *without* it:
          * a slow paint (heavy page) used to block the host's UI thread, which
@@ -1795,7 +1813,7 @@ static DWORD WINAPI agwEngineThread(LPVOID param)
             for (i = 0; i < g_viewCount; ++i) {
                 AgaveWebView* item = g_views[i];
 
-                if (!item || !item->view || item->destroyed)
+                if (!item || !item->backendView || item->destroyed)
                     continue;
 
                 item->refs++;
@@ -1828,15 +1846,15 @@ static DWORD WINAPI agwEngineThread(LPVOID param)
                             full.y = 0;
                             full.w = item->width;
                             full.h = item->height;
-                            macross_view_update(item->view, &full);
+                            item->backend->update(item->backendView, &full);
                             item->forceFullPaint = 0;
                         } else {
-                            macross_view_update(item->view, NULL);
+                            item->backend->update(item->backendView, NULL);
                         }
 
                         item->painted++;
                     } else {
-                        macross_view_pump(item->view);
+                        item->backend->pump(item->backendView);
                         item->skippedPaints++;
                     }
 
@@ -1919,7 +1937,8 @@ static DWORD WINAPI agwEngineThread(LPVOID param)
         agwReapViews();
     }
 
-    macross_shutdown();
+    if (g_processBackend)
+        g_processBackend->processShutdown();
     return 0;
 }
 
@@ -2615,6 +2634,15 @@ AgaveWebView* agave_webview_create(void* parent, int x, int y, int width, int he
      * active; the probe never calls set_visible). */
     item->visible = 1;
 
+    /* Which backend runs the page (AGB_VIEW_BACKEND, default local). A name
+     * that is not built yet logs and falls back rather than silently running
+     * something else. */
+    {
+        const AgwViewBackend* backend = agwBackendByName(getenv("AGB_VIEW_BACKEND"));
+
+        item->backend = backend ? backend : agwBackendLocal();
+    }
+
     if (callbacks)
         item->callbacks = *callbacks;
 
@@ -2773,7 +2801,14 @@ void agave_webview_forward(AgaveWebView* item) { agwPost(AGW_CMD_FORWARD, item, 
  * the queue a stuck script never drains. */
 void agave_webview_interrupt(AgaveWebView* item)
 {
-    (void)item;
+    /* Per-view through the backend: local can only abort every engine (one
+     * engine thread runs them all); a backend with its own instance aborts
+     * exactly its own (docs/design-render-backend.md). */
+    if (item && item->backend && item->backendView) {
+        item->backend->interrupt(item->backendView);
+        return;
+    }
+
     antb_interrupt_all_engines();
 }
 
