@@ -73,6 +73,14 @@ view 并让宿主切过去，没命中才建新控件交给宿主开 tab。两�
 把请求变成 `SERVICE_REQUEST(open_window/close_window)` 事件，控件在引擎线程上完成同样的动作。
 `window.close()` → `on_close_window`，宿主决定怎么关。
 
+**命令投递的返回值**（R163）：`agave_webview_eval()` 返回 `AgwCommandStatus`——`AGW_CMD_OK` 表示
+**已入队**（不是"已执行"），另有 `ERR_BAD_ARGS` / `ERR_NO_VIEW` / `ERR_QUEUE_FULL`。入队之后仍可能
+不执行（排到队首时文档已被换掉），那种情况走 `on_command_dropped`，`reason` 是
+`agave_webview.h` 里的 `AGW_REASON_*` 文本（`no page yet` / `no live document` /
+`document replaced by a navigation` / `renderer refused the command`）——文本是稳定字符串，宿主可以
+比较也可以只打日志。控件**不做超时/重试**：什么时候投递、失败后要不要重试，宿主用自己已有的
+加载信号（`on_progress(finished)`、`--wait`）决定。
+
 **入队命令的契约**（R157）：`agave_webview_eval` 这类入队操作没有返回值，所以"没送到"必须能被听见——
 每条命令要么执行、要么回调一次 `on_command_dropped(view, kind, reason, user)`。原因只有三种：
 视图还没有页面（`no page yet`）、后端里没有可用文档（`no live document`）、命令等到导航提交之后才

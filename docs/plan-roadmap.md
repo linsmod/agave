@@ -597,16 +597,19 @@
 - 异步写、并发上限、断点续传、另存为、`<a download>`、`agave://history`。
 - 验收：见 [arch-downloads.md](arch-downloads.md) §11；P2 每项需要独立探针。
 
-### P1-ac `load_html` 文档上的 eval 会走进遗留 KJS 世界（新发现，2026-11-09）
+### P1-ac eval 掉进遗留 KJS 世界（2026-11-09 已修，R163）
 
-- 现象：崩溃页测试里给 `agave_webview_load_html()` 出来的文档发一段**带 `setTimeout`** 的 eval，
-  渲染进程崩在 `KJS::IfNode::execute` → `JSDOMWindow::getValueProperty` → `DOMWindow::document`
-  （写 `0xbbadbeef`，即对象已析构）。同一段脚本去掉定时器就不崩。
-- 说明：`load_html` 的文档在渲染进程里似乎没有 ant realm 绑定，脚本被遗留 KJS 执行；遗留世界里
-  `document.body` 的 DOMWindow 是坏的。
-- 动作：确认 `load_html` 后 `AntRuntime::bindDocument`/realm 是否挂上；判据——`load_html` 后的文档上
-  eval（含 `setTimeout`/`requestAnimationFrame` 回调）与正常导航文档行为一致，且 `document.body` 可用。
-- 临时规避：宿主不要在 `load_html` 之后立刻 eval 带定时器的脚本（崩溃页的读回因此改成"落盘 HTML 再加载"）。
+- 现象：加载失败的 view / `load_html()` 之后立刻 eval（新文档还没提交）会崩在
+  `DOMWindow::document()` 的断言，随后写 `0xbbadbeef`；栈是 `KJS::IfNode::execute` →
+  `JSDOMWindow::getValueProperty` → `DOMWindow::document`。
+- 根因：`KJSProxy::evaluate()` 的 ant 分支后面那段遗留解释器**不在 `#else` 里**，守卫一假就换引擎；
+  遗留世界用 `Window::retrieve()` 造出没有文档的 JSDOMWindow。
+- 修法：`ENABLE(ANTJS)` 下守卫失败 = 什么都不跑（`m_lastEvaluateRan=false` → `on_command_dropped`），
+  遗留解释器只留给 `#else` 的构建；`DOMWindow::document()` 返回 0 不再 ASSERT；属性 handler 在没有文档时
+  不建延迟 listener。判据：`run_process_backend_tests.ps1` 的 "early eval after load_html" 用例——
+  `dropped=1 kind=eval reason=no live document` 且无 ASSERT/崩溃。
+- 遗留（不在本项范围）：属性 handler（`<body onload=…>`）仍跑在遗留 KJS 世界，见 `arch-capability-gaps.md`
+  的"HTML 属性事件 handler"行，立场仍是"不推进"。
 
 ### P2 静默坑优先级（原 `todo.txt` 折叠）
 
