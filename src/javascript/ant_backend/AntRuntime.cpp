@@ -230,6 +230,12 @@ struct RuntimeState {
     /* Last document activated for this view: `activateState()` restores it when
      * the engine thread switches views. */
     DocumentRuntime*   activeDocument;
+    /* Documents saved by contextActivate() while a bridged callback runs, in
+     * call order. ant switches realms per function call but the host mirror is
+     * switched once on entry, so a callback that belongs to another realm (a
+     * child frame calling a node method of the parent realm's class) must put
+     * the caller's document back on the way out - see contextLeave(). */
+    std::vector<DocumentRuntime*>* bindStack;
     int                nextFrameSlot;
 };
 
@@ -2950,12 +2956,57 @@ static void contextActivate(AntbEngine* engine)
         activateState(state);
 
     /* ant switches realms per function call without telling the host: a
-     * callback of one realm must see that realm's document. */
+     * callback of one realm must see that realm's document. The document that
+     * was current on entry is saved for contextLeave(): ant switched to the
+     * *callee's* realm, which for an engine-scoped class method is the realm
+     * that created the class, not the realm the calling script runs in. */
     if (perFrameRealmEnabled()) {
         AntbRealm* realm = antb_realm_current(engine);
 
+        if (!state->bindStack)
+            state->bindStack = new std::vector<DocumentRuntime*>();
+
+        state->bindStack->push_back(g_currentDocument);
         applyRealmBinding(realm);
     }
+}
+
+/* Runs after that callback returns (antb_set_context_leave). Puts the
+ * document binding back to the one the *calling* script had: without this a
+ * child frame that called one node method (a method of the main realm's class)
+ * left the host mirror on the parent document until the next callback - the
+ * window in which document-scoped host functions (setTimeout, fetch, new
+ * Image) would land on the parent document (R148 / roadmap P1-aa). */
+static void contextLeave(AntbEngine* engine)
+{
+    RuntimeState* state;
+    DocumentRuntime* previous;
+
+    assertContextThread("contextLeave");
+
+    if (!engine)
+        return;
+
+    state = stateForEngine(engine);
+
+    if (!state || !state->bindStack || state->bindStack->empty())
+        return;
+
+    previous = state->bindStack->back();
+    state->bindStack->pop_back();
+
+    /* The document may have been torn down inside the callback (a navigation
+     * from a handler): only restore a record that still belongs to the view. */
+    if (!previous)
+        return;
+
+    if (previous == &g_emptyDocument) {
+        activateDocument(NULL);
+        return;
+    }
+
+    if (documentRuntimeOf(state, previous->document) == previous)
+        activateDocument(previous);
 }
 
 /* URL of the script currently being evaluated; used as the base for the
@@ -4108,6 +4159,7 @@ bool start()
 
     activateState(createRuntimeState(engine));
     antb_set_context_activate(contextActivate);
+    antb_set_context_leave(contextLeave);
     antb_set_module_fetcher(moduleFetch);
 
     /* Unhandled promise rejections must be logged, not fatal: one bad page
@@ -4140,6 +4192,7 @@ void* createContext()
          * installed lazily by bindDocument(), but the dispatch funnel must be
          * registered before any script runs. */
         antb_set_context_activate(contextActivate);
+        antb_set_context_leave(contextLeave);
         activateState(createRuntimeState(engine));
         agbLog(AGB_LOG_EVT, "realm start gen=%lu engine=%p (view context)",
                g_currentState ? g_currentState->generation : 0UL, (void*)engine);
@@ -4201,6 +4254,7 @@ void destroyContext(void* context)
     if (g_currentState == state)
         activateState(&g_emptyState);
 
+    delete state->bindStack;
     delete state;
 }
 
@@ -5316,7 +5370,11 @@ static void teardownRealm(RuntimeState* state)
     g_currentSlot = -1;
 
     /* Drop every document of this view (main + frames) while the engine that
-     * owns their values is still alive. */
+     * owns their values is still alive. The saved bindings point at those
+     * documents: drop them first, nothing may restore a dead record. */
+    if (state->bindStack)
+        state->bindStack->clear();
+
     forgetDocuments(state, true);
 
     if (state->engine) {

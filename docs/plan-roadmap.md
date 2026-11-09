@@ -409,7 +409,7 @@
   `window.length`（全局自己的属性）本来就正常。
 
 
-### P1-aa 跨 realm 桥回调的 document 镜像（新发现，2026-11-09）
+### P1-aa 跨 realm 桥回调的 document 镜像（已完成 2026-11-09）
 
 - 现状：`contextActivate()` 在每个桥方法回调前用**被调函数所在 realm**去 `applyRealmBinding()`，
   但 ant 的 C builtin（node class 的方法，engine 级创建）带的是**创建它的 realm**（通常主 realm）：
@@ -418,12 +418,12 @@
 - 症状：`AGB_REALM_CHECK=1` 下探针报
   `realm-mismatch document.title self=<child> current=<parent>`；这段窗口内**无 receiver 的
   document 级宿主函数**（`setTimeout`/`fetch`/`new Image()`）会落到父文档（R128 那一类）。
-- 动作（bridge + agave，二选一）：①桥在方法 trampoline 里成对调用 `contextActivate`/`contextLeave`，
-  宿主用 per-view 的 document 栈在 leave 时还原（`runListenersFor()` 已经是这个模式：
-  `antb_realm_enter(prev)` + `applyRealmBinding(prev)`）；②让 ant 在 realm 切换时通知宿主
-  （enter/leave 带 realm），宿主按"调用方 realm"绑定而不是按被调方。
-- 验收：`tools/pages/realm_child.html` 的 `byOwner` 检查（`parent.document.getElementById('fr')
-  .contentWindow === window`）重新打开后，两种 realm 模式下 `AGB_REALM_CHECK=1` 都 0 条 mismatch。
+- 修法：桥的方法 trampoline 成对调用 `contextActivate`/`contextLeave`（`antb_set_context_leave`，
+  native 返回 0 的路径也调）；宿主在 activate 时把当时的 `g_currentDocument` 压进
+  `RuntimeState::bindStack`，leave 时弹回并 `activateDocument()`（记录已被拆掉的文档不还原）。
+  ant 侧判据 `tests/test_bridge_context_hooks.c`（meson `test-bridge-context-hooks`，enter/leave 必须
+  成对、not-handled 也成对）；agave 侧 `run_realm_tests.ps1` 的 `childFramesByOwner` 重新启用，
+  两种 realm 模式下 `AGB_REALM_CHECK=1` 均 0 条 mismatch。✅ 2026-11-09
 
 ### P1-d worker 里的网络
 

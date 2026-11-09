@@ -55,6 +55,7 @@ probeExit([
   'framesLen=' + window.length,
   'childFramesByIndex=' + (cw && cw.__framesMe ? cw.__framesMe.byIndex : 'n/a'),
   'childFramesByName=' + (cw && cw.__framesMe ? cw.__framesMe.byName : 'n/a'),
+  'childFramesByOwner=' + (cw && cw.__framesMe ? cw.__framesMe.byOwner : 'n/a'),
   'childOwnFrames=' + (cw && cw.__framesMe
       ? cw.__framesMe.ownLen + ':' + cw.__framesMe.ownIndex : 'n/a'),
   'sameBody=' + (cd && cd.body && cw && cw.__selfBody
@@ -178,6 +179,7 @@ if ($perFrame.Code -ne 0) {
         @{ Name = 'window.length is frame count'; Want = 'framesLen=1';           Ok = ($perFrameText -match 'framesLen=1') },
         @{ Name = 'child sees itself in parent.frames'; Want = 'childFramesByIndex=true'; Ok = ($perFrameText -match 'childFramesByIndex=true') },
         @{ Name = 'child found by name/id';   Want = 'childFramesByName=true';    Ok = ($perFrameText -match 'childFramesByName=true') },
+        @{ Name = 'child found via contentWindow'; Want = 'childFramesByOwner=true'; Ok = ($perFrameText -match 'childFramesByOwner=true') },
         @{ Name = 'child own frames empty';   Want = 'childOwnFrames=0:undefined'; Ok = ($perFrameText -match 'childOwnFrames=0:undefined') },
         @{ Name = 'frame DOMContentLoaded';   Want = 'childDcl=1';               Ok = ($perFrameText -match 'childDcl=1') },
         @{ Name = 'parent DCL ran once';      Want = 'parentDcl=1';              Ok = ($perFrameText -match 'parentDcl=1') },

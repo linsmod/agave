@@ -92,6 +92,12 @@ git -C H:\ant-v16 rev-parse HEAD
 - 每个 view 一个 `RuntimeState`，每个文档一个新 engine（`beginNewRealm`/`stopRealm`），
   回调进来前靠 `antb_set_context_activate` 切状态（细节见
   [design-per-view-js-context.md](design-per-view-js-context.md)）。
+- **activate/leave 是成对的**：`antb_set_context_activate` 在桥方法回调前跑，
+  `antb_set_context_leave` 在回调返回后跑（native 返回 0 的路径也跑）。宿主在 activate 里把
+  "当前 document 镜像"压栈、leave 里弹回；ant 的 realm 是在回调返回**之后**才还原的，宿主看不到
+  那个时刻，所以不能在 activate 里切完就不管（R149 / P1-aa）。
+- 回调里如果发生导航/拆文档，leave 弹回前必须确认那条 document 记录还在（`documentRuntimeOf()`），
+  否则会还原悬垂指针；teardown 会先清空 `RuntimeState::bindStack`。
 - **engine 是多实例的**：`antb_engine_create()` 每次造一个独立 `ant_t`，注册进 `AntBridge.c`
   的 `g_engines[32]`；活跃数量 = 打开的 view 数（tab/弹窗），导航时旧 engine 销毁、新 engine 建。
   **frame 不是独立 engine**，是同一 VM 里的独立 realm（P0-i）。**worker 不在这张表里**：

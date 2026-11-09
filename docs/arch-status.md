@@ -38,6 +38,9 @@ ant 的反直觉行为（字面量属性名、`typeof`、`delete` 等）见 [ref
   同一个 catch-all getter 回答（R148），`parent`/`top` 是父/顶层 realm 的全局对象而不是 WindowProxy
   （S4 待做）。细节见 [design-per-frame-realm.md](design-per-frame-realm.md)；旧模型用
   `AGB_PER_FRAME_REALM=0` 回退。
+- **桥回调是 activate/leave 成对的**：每次 JS→C 桥方法进来先 `contextActivate()`（按当前 realm 切
+  view/document 镜像），返回前 `contextLeave()` 把调用方脚本的文档还原（R149，P1-aa）；回调里发生
+  导航时只还原仍在的文档记录，teardown 清空保存栈。
 - **CSS 边界**：grid 布局未实现（降级成 block）；`position:sticky` 已支持（R82，绘制/命中/几何随滚动平移，
   滚动时整视口重绘）；transform 做了
   translate/scale/rotate 的绘制与变换感知的脏矩形（hit-test、stacking context 未做，R52/R55），

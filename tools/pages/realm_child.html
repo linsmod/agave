@@ -41,13 +41,24 @@
 
   /* Window named/index properties from inside the frame: parent.frames[0] and
      parent.frames['fr'] must be THIS window (per-frame realms), and this
-     window's own frames collection is empty. A cross-realm *method* call
-     (parent.document.getElementById) is deliberately not part of this check:
-     it currently leaves the host document mirror on the callee's realm until
-     the next callback (see plan-roadmap "跨 realm 桥回调的 document 镜像"). */
+     window's own frames collection is empty. byOwner also crosses realms with
+     a bridged *method* call (getElementById), which used to leave the host
+     document mirror on the callee realm (P1-aa) - the runner asserts
+     AGB_REALM_CHECK reports no mismatch. */
   window.__framesMe = {
     byIndex: window.parent.frames[0] === window,
     byName: window.parent.frames['fr'] === window,
+    /* In the shared-realm model `parent.document` is the child's own document,
+       so the owner element is not reachable that way: keep the check from
+       throwing, the per-frame realm section is where it is asserted. */
+    byOwner: (function () {
+      try {
+        var owner = window.parent.document.getElementById('fr');
+        return !!(owner && owner.contentWindow === window);
+      } catch (e) {
+        return false;
+      }
+    })(),
     ownIndex: String(window.frames[0]),
     ownLen: window.frames.length,
     ownName: window.name
