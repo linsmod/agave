@@ -330,6 +330,13 @@ static AgaveWebView* agwByView(MaCrossView* view)
     return NULL;
 }
 
+/* Protocol submission (defined next to the command drain). Declared here:
+ * agwEnsureSurface() submits the first navigation right after creating the
+ * view. */
+static int agwSubmitSimple(AgaveWebView* item, int kind, int a, int b, int c, int d);
+static int agwSubmitText(AgaveWebView* item, int kind, const char* text,
+                         int a, int b, int c, int d);
+
 
 /* Frees the control once the engine thread is done with it. destroy() may be
  * called while the engine is inside macross_view_update on this item, or while
@@ -1005,12 +1012,12 @@ static void agwEnsureSurface(AgaveWebView* item, int width, int height)
 
         if (item->backendView) {
             if (item->zoom != 100)
-                item->backend->setScaleFactor(item->backendView, item->zoom);
+                agwSubmitSimple(item, AGW_VIEW_CMD_ZOOM, item->zoom, 0, 0, 0);
 
             /* A queued CMD_NAVIGATE will load the URL; doing it here as well made
              * every first navigation fetch the page twice. */
             if (item->url[0] && !item->navigatePending)
-                item->backend->navigate(item->backendView, item->url);
+                agwSubmitText(item, AGW_VIEW_CMD_NAVIGATE, item->url, 0, 0, 0, 0);
         }
     }
 
@@ -1565,6 +1572,46 @@ static DWORD agwQueueWaitType(int* type)
 
 /* Commands that replace or start page execution: they are what a browser makes
  * "abort whatever the page is doing" mean. Mouse/key/resize must not abort. */
+/* ---- protocol submission ------------------------------------------------ *
+ * Every per-view command goes to the backend as one AgwViewCommand
+ * (AgwViewProtocol.h): the local backend maps it back onto macross, a remote
+ * one serializes it. The helpers keep the drain switch readable and are the
+ * single place that guards "no view yet". */
+static int agwSubmitSimple(AgaveWebView* item, int kind, int a, int b, int c, int d)
+{
+    AgwViewCommand cmd;
+
+    if (!item || !item->backendView || !item->backend)
+        return 0;
+
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.kind = kind;
+    cmd.a = a;
+    cmd.b = b;
+    cmd.c = c;
+    cmd.d = d;
+    return item->backend->submit(item->backendView, &cmd);
+}
+
+static int agwSubmitText(AgaveWebView* item, int kind, const char* text,
+                         int a, int b, int c, int d)
+{
+    AgwViewCommand cmd;
+
+    if (!item || !item->backendView || !item->backend)
+        return 0;
+
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.kind = kind;
+    cmd.a = a;
+    cmd.b = b;
+    cmd.c = c;
+    cmd.d = d;
+    cmd.text = text;
+    cmd.textLen = text ? (int)strlen(text) : 0;
+    return item->backend->submit(item->backendView, &cmd);
+}
+
 static void agwDrainCommands(void)
 {
     for (;;) {
@@ -1622,7 +1669,7 @@ static void agwDrainCommands(void)
             item->navigatePending = 0;
 
             if (item->backendView) {
-                item->backend->navigate(item->backendView, payload);
+                agwSubmitText(item, AGW_VIEW_CMD_NAVIGATE, payload, 0, 0, 0, 0);
             } else {
                 strncpy(item->url, payload, sizeof(item->url) - 1);
                 item->url[sizeof(item->url) - 1] = 0;
@@ -1631,18 +1678,16 @@ static void agwDrainCommands(void)
             break;
 
         case AGW_CMD_LOAD_HTML:
-            if (item->backendView)
-                item->backend->loadHtml(item->backendView, payload, NULL);
+            agwSubmitText(item, AGW_VIEW_CMD_LOAD_HTML, payload, 0, 0, 0, 0);
             break;
 
-        case AGW_CMD_BACK:    if (item->backendView) item->backend->back(item->backendView); break;
-        case AGW_CMD_FORWARD: if (item->backendView) item->backend->forward(item->backendView); break;
-        case AGW_CMD_RELOAD:  if (item->backendView) item->backend->reload(item->backendView); break;
-        case AGW_CMD_STOP:    if (item->backendView) item->backend->stop(item->backendView); break;
+        case AGW_CMD_BACK:    agwSubmitSimple(item, AGW_VIEW_CMD_BACK, 0, 0, 0, 0); break;
+        case AGW_CMD_FORWARD: agwSubmitSimple(item, AGW_VIEW_CMD_FORWARD, 0, 0, 0, 0); break;
+        case AGW_CMD_RELOAD:  agwSubmitSimple(item, AGW_VIEW_CMD_RELOAD, 0, 0, 0, 0); break;
+        case AGW_CMD_STOP:    agwSubmitSimple(item, AGW_VIEW_CMD_STOP, 0, 0, 0, 0); break;
 
         case AGW_CMD_EVAL:
-            if (item->backendView)
-                item->backend->eval(item->backendView, payload);
+            agwSubmitText(item, AGW_VIEW_CMD_EVAL, payload, 0, 0, 0, 0);
             break;
 
         case AGW_CMD_VISIBLE:
@@ -1657,14 +1702,12 @@ static void agwDrainCommands(void)
                 if (item->visible)
                     item->forceFullPaint = 1;
             }
-            if (item->backendView)
-                item->backend->setVisible(item->backendView, command.a ? 1 : 0);
+            agwSubmitSimple(item, AGW_VIEW_CMD_VISIBLE, item->visible, 0, 0, 0);
             break;
 
         case AGW_CMD_ZOOM:
             item->zoom = command.a > 0 ? command.a : 100;
-            if (item->backendView)
-                item->backend->setScaleFactor(item->backendView, item->zoom);
+            agwSubmitSimple(item, AGW_VIEW_CMD_ZOOM, item->zoom, 0, 0, 0);
             if (item->hwnd)
                 InvalidateRect(item->hwnd, NULL, FALSE);
             break;
@@ -1697,56 +1740,32 @@ static void agwDrainCommands(void)
             break;
 
         case AGW_CMD_MOUSE:
-            if (item->backendView) {
-                MC_MOUSE_EVENT event;
-
-                memset(&event, 0, sizeof(event));
-                event.type = (MC_MOUSE_EVENT_TYPE)command.a;
-                event.button = (MC_MOUSE_BUTTON)command.b;
-                event.point.x = command.x;
-                event.point.y = command.y;
-                item->backend->mouseEvent(item->backendView, &event);
-            }
+            agwSubmitSimple(item, AGW_VIEW_CMD_MOUSE,
+                            command.a, command.b, command.x, command.y);
             break;
 
         case AGW_CMD_KEY:
-            if (item->backendView) {
-                MC_KEY_EVENT event;
-
-                memset(&event, 0, sizeof(event));
-                event.type = (MC_KEY_EVENT_TYPE)command.a;
-                event.key = (MC_VIRTUAL_KEY)command.x;
-                event.modifier = command.b;
-                item->backend->keyEvent(item->backendView, &event);
-            }
+            agwSubmitSimple(item, AGW_VIEW_CMD_KEY,
+                            command.a, command.b, command.x, 0);
             break;
 
         case AGW_CMD_CHAR:
-            if (item->backendView)
-                item->backend->inputText(item->backendView, payload);
+            agwSubmitText(item, AGW_VIEW_CMD_TEXT, payload, 0, 0, 0, 0);
             break;
 
         case AGW_CMD_FOCUS:
-            if (item->backendView)
-                item->backend->setFocus(item->backendView);
+            agwSubmitSimple(item, AGW_VIEW_CMD_FOCUS, 1, 0, 0, 0);
             break;
 
         case AGW_CMD_SEARCH:
-            if (item->backendView && payload[0])
-                item->backend->searchText(item->backendView, payload,
-                                          command.a ? 1 : 0, command.b ? 1 : 0);
+            if (payload[0])
+                agwSubmitText(item, AGW_VIEW_CMD_SEARCH, payload,
+                              command.a ? 1 : 0, command.b ? 1 : 0, 0, 0);
             break;
 
         case AGW_CMD_CONTEXT:
-            if (item->backendView) {
-                MC_CONTEXT_EVENT event;
-
-                memset(&event, 0, sizeof(event));
-                event.point.x = command.x;
-                event.point.y = command.y;
-                event.modifier = (unsigned int)command.a;
-                item->backend->contextMenu(item->backendView, &event);
-            }
+            agwSubmitSimple(item, AGW_VIEW_CMD_CONTEXT_MENU,
+                            command.a, 0, command.x, command.y);
             break;
 
         default:

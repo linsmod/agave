@@ -74,11 +74,16 @@ RVVM 后端用 guest 内存 + `virtpass_browser` 的 ecall；local 后端只是�
 
 ### 4.1 host → guest（命令）
 
+
+实现载体：`src/webview_control/AgwViewProtocol.h`（`AgwViewCommand`/`AgwViewEvent`/`AgwFrameBuffer`/`AgwFrameAck`，
+固定布局 POD + 能力位；`text` 只在 submit 调用期间有效，远端后端自己拷贝）。
+
 | 命令 | 载荷 | 说明 |
 |---|---|---|
 | `VIEW_RESIZE` | `w,h,scale,dpi` | 唯一触发重排的命令；必须幂等 |
 | `VIEW_VISIBLE` | `0/1` | 冻结/解冻（后台 tab、最小化）；对接 R150 的 skip + 整幅重绘 |
 | `VIEW_FOCUS` | `0/1` | 与 visibility 分开（活动窗口的焦点不等于可见性） |
+| `VIEW_ZOOM` | `percent` | `macross_view_set_scale_factor`；控件缩放已接 |
 | `INPUT_MOUSE` | `action,x,y,button,wheel,t` | 移动可合并（只留最后一个坐标），按下/抬起保序 |
 | `INPUT_KEY` | `down/up,vk,scan,mods,t` | 严格保序 |
 | `INPUT_TEXT` | `utf8 commit` | 直接喂 `macross_view_input_text()`；IME 提交从这条路进 |
@@ -184,18 +189,23 @@ RVVM 后端用 guest 内存 + `virtpass_browser` 的 ecall；local 后端只是�
 | 批 | 内容 | 验收 |
 |---|---|---|
 | B0 | `ViewBackend` 接口 + local 后端（行为零变化，纯重构） | ✅ 2026-11-09：`src/webview_control/AgwViewBackend.h/.c`（25 个 ops：3 个进程级 + 22 个 view 级），`AgaveWebView` 的 per-view 调用全部改走 `backend->op(backendView)`；`AGB_VIEW_BACKEND=local` 默认，未实现的名字**打一行警告并回退 local**；其余全套件绿 |
-| B1 | 协议 v1 结构体化（命令/事件/帧/ack），local 走协议 | 隐藏 view/输入/缩放/导航套件绿；`bench_hot` 不退化 |
+| B1 | 协议 v1 结构体化（命令/事件/帧/ack），local 走协议 | ✅ 2026-11-09：`src/webview_control/AgwViewProtocol.h`（`AgwViewCommand`/`AgwViewEvent`/`AgwFrameBuffer`/`AgwFrameAck` + 命令/事件 kind + 能力位）；后端接口收成 `submit`/`submitBatch`/`poll`/`frameAck` + create/resize/update/pump；控件的命令 drain 只构造协议命令；local 的 `submit` 把它们映回 macross，`poll` 返回 0（事件仍走 macross 回调）、`frameAck` 空（本地直接画宿主 buffer）。全套件绿、`bench_hot` 不退化 |
 | B2 | `process` 后端（共享内存 + 管道 + 崩溃检测 + sad tab） | 双 tab：一个 `while(true)`，另一个 <200 ms；reload/close 压测 |
 | B3 | `rvvm` 后端（`virtpass_browser` + guest 渲染器，先零拷贝 damage） | 单 tab 出帧/输入；M1/M2/M5 达标 |
 | B4 | 服务通道（open/dialog/download/clipboard/file）+ window.open 异步（S4 WindowProxy） | 弹窗/下载/对话框跨后端可用 |
 | B5 | 冻结与压测（R150 对接）、多实例 profile 策略、`one-VM-multi-surface` 评估 | 验收表 1–5 |
 
-## 9. 未决问题（开工前要拍板）
+## 9. 决策与未决问题
 
-1. **网络**：guest 自己的 socket（隔离好、多一跳 emulation）vs host `FETCH` 服务（快、共享 cookie）；
-   建议 v1 先 guest socket，性能问题再对 fetch/XHR 开服务。
-2. **profile/cookie 共享**：per-tab 实例各一份（登录态不共享）→ 还是共享挂载 + broker。
-   v1 建议 per-instance，登录态共享列入 B5。
+已定（2026-11-09，用户拍板）：
+
+1. **网络 = guest 自己的 socket**（已定，2026-11-09）：隔离好，代价是多一跳 emulation；不引入
+   host `FETCH` 服务。若实测成为瓶颈，再对 `fetch`/`XHR` 单独开 host 服务（协议里
+   `SERVICE_REQUEST` 已留位）。
+2. **profile/cookie = 共享 broker**（已定，2026-11-09）：宿主进程持有 `cookies.txt` /
+   `localstorage.txt` / HTTP 缓存目录并串行化访问，渲染实例通过 `SERVICE_REQUEST(profile_*)`
+   读写，自己不再直接写这些文件。B3 先用 per-instance 临时 profile 打通链路，broker 随 B4 的
+   服务通道落地；验收：两个 tab 共享登录态，broker 重启不丢已提交的写。
 3. **one-VM-multi-surface**：一个 VM 托管多个 view 省启动成本，需要 virtpass 支持多图形 session
    （今天的 `vp_core` 多 session 是终端 pty，不是图形面）。
 4. **IME 预编辑**：host 候选窗 + commit 先通；guest 侧预编辑需要引擎支持 composition。

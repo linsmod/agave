@@ -1,0 +1,96 @@
+/* AgwViewProtocol.h - render-backend protocol v1 (docs/design-render-backend.md §4).
+ *
+ * One command in, one event out. The local backend maps a command back onto
+ * macross_*; a process or RVVM backend serializes the same struct across its
+ * ring. Fixed-layout POD on purpose: a serializer can copy it field by field
+ * without a schema.
+ *
+ * `text` points into the submitter's memory and is only valid for the duration
+ * of submit()/submitBatch(): a backend that crosses a boundary copies it into
+ * its own ring. That is what keeps the hot path free of allocation.
+ */
+#ifndef AGW_VIEW_PROTOCOL_H
+#define AGW_VIEW_PROTOCOL_H
+
+#include <stdint.h>
+
+#include "macross.h"
+
+#define AGW_VIEW_PROTOCOL_VERSION 1
+
+/* host -> view */
+typedef enum {
+    AGW_VIEW_CMD_NONE = 0,
+    AGW_VIEW_CMD_VISIBLE,       /* a = 0/1 */
+    AGW_VIEW_CMD_FOCUS,         /* a = 0/1 */
+    AGW_VIEW_CMD_MOUSE,         /* a = MC_MOUSE_EVENT_TYPE, b = MC_MOUSE_BUTTON,
+                                 * c = x, d = y */
+    AGW_VIEW_CMD_KEY,           /* a = MC_KEY_EVENT_TYPE, b = modifier, c = vk */
+    AGW_VIEW_CMD_TEXT,          /* text = UTF-8 commit (IME commit goes here) */
+    AGW_VIEW_CMD_PREEDIT,       /* text = preedit, a = caret (reserved) */
+    AGW_VIEW_CMD_NAVIGATE,      /* text = url */
+    AGW_VIEW_CMD_LOAD_HTML,     /* text = html */
+    AGW_VIEW_CMD_RELOAD,
+    AGW_VIEW_CMD_STOP,
+    AGW_VIEW_CMD_BACK,
+    AGW_VIEW_CMD_FORWARD,
+    AGW_VIEW_CMD_EVAL,          /* text = script */
+    AGW_VIEW_CMD_ZOOM,          /* a = percent */
+    AGW_VIEW_CMD_SEARCH,        /* text = needle, a = forward, b = caseSensitive */
+    AGW_VIEW_CMD_CONTEXT_MENU,  /* a = modifier, c = x, d = y */
+    AGW_VIEW_CMD_SERVICE_REPLY  /* a = id, b = status, text = payload (B4) */
+} AgwViewCommandKind;
+
+typedef struct {
+    int32_t     kind;       /* AgwViewCommandKind */
+    int32_t     a, b, c, d; /* kind-specific scalars */
+    int64_t     timeUs;     /* input timestamp (0 = not an input) */
+    const char* text;       /* borrowed for the duration of the submit call */
+    int32_t     textLen;
+} AgwViewCommand;
+
+/* view -> host */
+typedef enum {
+    AGW_VIEW_EVENT_NONE = 0,
+    AGW_VIEW_EVENT_READY,           /* a = protocol version, b = capabilities */
+    AGW_VIEW_EVENT_FRAME,           /* frameBufferId/frameSeq + damage */
+    AGW_VIEW_EVENT_TITLE,           /* text */
+    AGW_VIEW_EVENT_PROGRESS,        /* a = percent, b = finished */
+    AGW_VIEW_EVENT_URL,             /* text */
+    AGW_VIEW_EVENT_SERVICE_REQUEST, /* a = service kind, text = args (B4) */
+    AGW_VIEW_EVENT_UNRESPONSIVE,    /* a = busy ms */
+    AGW_VIEW_EVENT_EXIT             /* a = exit code */
+} AgwViewEventKind;
+
+/* Capability bits reported by AGW_VIEW_EVENT_READY. */
+#define AGW_VIEW_CAP_DAMAGE   0x1  /* host understands damage rectangles */
+#define AGW_VIEW_CAP_GL       0x2  /* host may composite through GL */
+#define AGW_VIEW_CAP_SERVICES 0x4  /* service request/reply channel (B4) */
+
+typedef struct {
+    int32_t     kind;   /* AgwViewEventKind */
+    int32_t     a, b, c, d;
+    int64_t     timeUs;
+    uint32_t    frameBufferId;
+    uint32_t    frameSeq;
+    int32_t     damage[4]; /* x, y, w, h; empty = whole surface */
+    const char* text;      /* borrowed: valid for the poll call only */
+    int32_t     textLen;
+} AgwViewEvent;
+
+/* The frame backpack: the view renders into `bits` (BGRA, `pitch` bytes per
+ * row) and publishes it with AGW_VIEW_EVENT_FRAME; the host composites the
+ * damage and answers with one ack, after which the view may reuse the buffer. */
+typedef struct {
+    uint32_t id;
+    int32_t  format;   /* MC_PIXEL_FORMAT */
+    int32_t  width, height, pitch;
+    MC_BYTE* bits;
+} AgwFrameBuffer;
+
+typedef struct {
+    uint32_t bufferId;
+    uint32_t seq;
+} AgwFrameAck;
+
+#endif /* AGW_VIEW_PROTOCOL_H */

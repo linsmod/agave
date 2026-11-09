@@ -3,16 +3,18 @@
  * Design: docs/design-render-backend.md (S3). v1 ships exactly one backend,
  * `local`: the engine in this process, driven by macross_* - i.e. the calls the
  * control used to make inline. The process and RVVM backends implement the same
- * ops and are selected with AGB_VIEW_BACKEND; every op below is a command (or a
- * frame pump step) of the render-backend protocol v1 there, so a new backend
- * never needs to touch the shell or agave_webview.h.
+ * interface and are selected with AGB_VIEW_BACKEND.
  *
- * Scope of this interface (B0): per-view lifecycle/frame/input/navigation, plus
- * the three process-level steps the engine loop needs (init/pump/shutdown).
- * Process-global callback registration (macross_set_callback and the
- * open-window/post-message/dialog hooks), downloads and the probe hooks still
- * live in the control: they belong to the local backend and become messages in
- * the protocol (B2/B3), not calls.
+ * The interface is the protocol from that document: one `AgwViewCommand` in
+ * (AgwViewProtocol.h), one `AgwViewEvent` out, plus the three operations that
+ * cannot be a message - creating a view around the host's pixel buffer,
+ * resizing it, and "pump this view's frame".
+ *
+ * Scope (B1): per-view commands and frame pump, plus the three process-level
+ * steps the engine loop needs (init/pump/shutdown). Process-global callback
+ * registration (macross_set_callback and the open-window/post-message/dialog
+ * hooks) and downloads still live in the control: they belong to the local
+ * backend and become protocol messages in B2/B3.
  */
 #ifndef AGW_VIEW_BACKEND_H
 #define AGW_VIEW_BACKEND_H
@@ -20,6 +22,7 @@
 #include <stddef.h>
 
 #include "macross.h"
+#include "AgwViewProtocol.h"
 
 typedef struct AgwViewBackend AgwViewBackend;
 
@@ -39,26 +42,22 @@ struct AgwViewBackend {
     void  (*destroy)(void* view);
     void  (*resize)(void* view, MC_BYTE* buffer, int width, int height, int pitch);
 
-    /* Navigation / control */
-    void  (*navigate)(void* view, const char* url);
-    void  (*loadHtml)(void* view, const char* html, const char* baseUrl);
-    void  (*reload)(void* view);
-    void  (*stop)(void* view);
-    void  (*back)(void* view);
-    void  (*forward)(void* view);
-    void  (*eval)(void* view, const char* script);
+    /* Protocol v1: submit one command, or a batch of them. A batch is one ring
+     * slot / one boundary crossing - the measured cost per call is why the
+     * protocol is batch-friendly (design §6.2). `text` is borrowed. */
+    int  (*submit)(void* view, const AgwViewCommand* command);
+    int  (*submitBatch)(void* view, const AgwViewCommand* commands, int count);
 
-    /* View state */
-    void  (*setVisible)(void* view, int visible);
-    void  (*setFocus)(void* view);
-    void  (*setScaleFactor)(void* view, int percent);
+    /* Events toward the host, drained by the control's engine loop. Local
+     * returns 0: its events arrive through the macross callbacks the control
+     * registers once per process (titles, progress, errors, dialogs). A backend
+     * with its own instance queues them here instead. */
+    int  (*poll)(void* view, AgwViewEvent* out, int maxEvents);
 
-    /* Input */
-    void  (*mouseEvent)(void* view, const MC_MOUSE_EVENT* event);
-    void  (*keyEvent)(void* view, const MC_KEY_EVENT* event);
-    void  (*inputText)(void* view, const char* utf8);
-    void  (*searchText)(void* view, const char* utf8, int forward, int caseSensitive);
-    void  (*contextMenu)(void* view, const MC_CONTEXT_EVENT* event);
+    /* Frame backpack: the host finished compositing bufferId@seq, the view may
+     * reuse that buffer. Local paints straight into the caller's buffer, so
+     * there is no backpack to acknowledge yet. */
+    void (*frameAck)(void* view, const AgwFrameAck* ack);
 
     /* Frame pump: update = layout + paint + async work; pump = async work only
      * (a hidden view: no layout, no paint - R150). */
