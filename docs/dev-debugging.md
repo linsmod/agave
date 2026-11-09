@@ -54,7 +54,9 @@ process 时每个 view 起一个 gave_render_host.exe（无窗口，画进控�
 设计见 [design-render-backend.md](design-render-backend.md)）。诊断：
 AGB_RENDER_LOG=1 让 renderer 把命令/事件记录到 **exe 旁的 gave_render_host.log**
 （spawned 进程没有 console，stderr 不可见）；AGB_RENDER_CRASH_MS=<ms> 让 renderer 在启动后
-该毫秒数处 ExitProcess(42)，专门复测"渲染进程崩溃 → 控件报 load error 而不是卡住"。
+该毫秒数处 ExitProcess(42)（**只对进程里的第一个 renderer 生效**，否则 respawn 会无限崩），
+专门复测"渲染进程崩溃 → 控件报 load error 而不是卡住"；AGB_PROBE_RESPAWN=1 让探针在崩溃后对同一
+view load_html 一个页面，验证"崩溃后视图可重新拉起"（shell 的 sad tab 走同一条路）。
 process 下 --shot 抓的是共享 canvas 拷进 mirror 的那一帧。
 多 view 的并行判据用 uild-zig-native\agave_multiview_probe.exe：两个 view，A 跑
 while(true){}，B 的命令延迟 = pong_ms（process 后端几十毫秒；local 后端 pong_ms=-1 +

@@ -199,7 +199,46 @@ if ($p.ExitCode -eq 0 -and $text -match 'blocked=1') {
 Assert-NoRenderer 'local baseline' | Out-Null
 Remove-Item $mvOut -ErrorAction SilentlyContinue
 
-# 7. default backend: the local path still runs the same page
+# 7. after a crash the view is respawn-ready: the same view loads a page into a
+#    fresh renderer (that is what the shell's sad tab does with load_html).
+$env:AGB_RENDER_CRASH_MS = '400'
+$env:AGB_PROBE_RESPAWN = '1'
+try {
+    $respawn = Invoke-Probe -Page (Join-Path $pages 'cap_hidden_view.html') -Wait 1200 -Settle 300 `
+        -Js 'probeExit("title=" + document.title);'
+} finally {
+    Remove-Item Env:AGB_RENDER_CRASH_MS -ErrorAction SilentlyContinue
+    Remove-Item Env:AGB_PROBE_RESPAWN -ErrorAction SilentlyContinue
+}
+$respawnText = $respawn.Stdout + $respawn.Stderr
+
+if ($respawnText -match 'respawn: loading' -and $respawnText -match 'title=respawned') {
+    Write-Host "PASS  process backend: crash leaves the view respawn-ready (fresh renderer loads a page)"
+} else {
+    $failures++
+    Write-Host ("FAIL  process backend: respawn after crash (exit {0})" -f $respawn.Code)
+    Write-Host (($respawnText -split "`n" | Select-Object -Last 3) -join "`n")
+}
+Assert-NoRenderer 'respawn' | Out-Null
+
+# 8. closing a hung tab is immediate: the interrupt breaks the script, the
+#    renderer exits, and the process is killed if it does not (no 2s wait).
+$p = Start-Process -FilePath $mv -NoNewWindow -PassThru -Wait `
+     -ArgumentList @('--backend', 'process', '--allow-blocked', '--pong-wait', '1200', '--destroy-test') `
+     -RedirectStandardOutput $mvOut -RedirectStandardError (Join-Path $build 'multiview_err.txt')
+$text = (Get-Content $mvOut -Raw) -as [string]
+$destroy = if ($text -match 'destroy_ms=(\d+)') { [int]$Matches[1] } else { -1 }
+
+if ($p.ExitCode -eq 0 -and $destroy -ge 0 -and $destroy -lt 500) {
+    Write-Host ("PASS  process backend: closing a hung tab is immediate ({0} ms)" -f $destroy)
+} else {
+    $failures++
+    Write-Host ("FAIL  process backend: hung-tab close (exit {0}, destroy_ms={1})" -f $p.ExitCode, $destroy)
+}
+Assert-NoRenderer 'hung-tab close' | Out-Null
+Remove-Item $mvOut -ErrorAction SilentlyContinue
+
+# 9. default backend: the local path still runs the same page
 $local = Invoke-Probe -Page (Join-Path $pages 'cap_hidden_view.html') `
     -Js 'probeExit("title=" + document.title);' -Backend $null
 

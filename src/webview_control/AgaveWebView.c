@@ -980,15 +980,44 @@ static int agwCreateSurface(AgaveWebView* item, int width, int height)
     return item->bits != NULL && item->mirrorBits != NULL;
 }
 
-static void agwEnsureSurface(AgaveWebView* item, int width, int height)
+/* Brings the backend view up for a surface that already exists (the first
+ * navigation creates both, a crash leaves the surface behind when the dead
+ * backend is dropped). 
+avigateIfUrl submits the remembered URL; a caller
+ * that is about to load_html passes 0 so the crashed page is not fetched on the
+ * way to the crash page. */
+static void agwCreateBackendView(AgaveWebView* item, int width, int height, int navigateIfUrl)
+{
+    item->backendView = item->backend->create(item, item->bits, width, height, width * 4);
+    /* Local: the same pointer; kept for the callback lookups (agwByView) and
+     * for macross's own user_data convention. */
+    item->view = (MaCrossView*)item->backendView;
+
+    if (!item->backendView)
+        return;
+
+    if (item->zoom != 100)
+        agwSubmitSimple(item, AGW_VIEW_CMD_ZOOM, item->zoom, 0, 0, 0);
+
+    /* A queued CMD_NAVIGATE will load the URL; doing it here as well made every
+     * first navigation fetch the page twice. */
+    if (navigateIfUrl && item->url[0] && !item->navigatePending)
+        agwSubmitText(item, AGW_VIEW_CMD_NAVIGATE, item->url, 0, 0, 0, 0);
+}
+
+static void agwEnsureSurfaceEx(AgaveWebView* item, int width, int height, int navigateIfUrl)
 {
     int created;
 
     if (width < 1) width = 1;
     if (height < 1) height = 1;
 
-    if (item->bits && item->width == width && item->height == height)
+    if (item->bits && item->width == width && item->height == height) {
+        /* Surface is fine; only a missing backend view has to be (re)created. */
+        if (!item->backendView)
+            agwCreateBackendView(item, width, height, navigateIfUrl);
         return;
+    }
 
     /* The UI thread blits the mirror DIB from agwPaint() under agwLock.
      * Replacing the surface without the lock can free the mirror DC while
@@ -1002,27 +1031,18 @@ static void agwEnsureSurface(AgaveWebView* item, int width, int height)
     if (!created)
         return;
 
-    if (item->backendView) {
+    if (item->backendView)
         item->backend->resize(item->backendView, item->bits, width, height, width * 4);
-    } else {
-        item->backendView = item->backend->create(item, item->bits, width, height, width * 4);
-        /* Local: the same pointer; kept for the callback lookups (agwByView)
-         * and for macross's own user_data convention. */
-        item->view = (MaCrossView*)item->backendView;
-
-        if (item->backendView) {
-            if (item->zoom != 100)
-                agwSubmitSimple(item, AGW_VIEW_CMD_ZOOM, item->zoom, 0, 0, 0);
-
-            /* A queued CMD_NAVIGATE will load the URL; doing it here as well made
-             * every first navigation fetch the page twice. */
-            if (item->url[0] && !item->navigatePending)
-                agwSubmitText(item, AGW_VIEW_CMD_NAVIGATE, item->url, 0, 0, 0, 0);
-        }
-    }
+    else
+        agwCreateBackendView(item, width, height, navigateIfUrl);
 
     if (item->hwnd)
         InvalidateRect(item->hwnd, NULL, FALSE);
+}
+
+static void agwEnsureSurface(AgaveWebView* item, int width, int height)
+{
+    agwEnsureSurfaceEx(item, width, height, 1);
 }
 
 /* Applies the last size queued for each view, once per drain instead of once
@@ -1678,12 +1698,21 @@ static void agwDrainCommands(void)
             break;
 
         case AGW_CMD_LOAD_HTML:
+            /* A crashed backend leaves no view: bring one up first, so a host's
+             * crash page can be loaded into it. */
+            if (!item->backendView)
+                agwEnsureSurfaceEx(item, item->wantWidth, item->wantHeight, 0);
             agwSubmitText(item, AGW_VIEW_CMD_LOAD_HTML, payload, 0, 0, 0, 0);
             break;
 
         case AGW_CMD_BACK:    agwSubmitSimple(item, AGW_VIEW_CMD_BACK, 0, 0, 0, 0); break;
         case AGW_CMD_FORWARD: agwSubmitSimple(item, AGW_VIEW_CMD_FORWARD, 0, 0, 0, 0); break;
-        case AGW_CMD_RELOAD:  agwSubmitSimple(item, AGW_VIEW_CMD_RELOAD, 0, 0, 0, 0); break;
+        case AGW_CMD_RELOAD:
+            if (!item->backendView)
+                agwEnsureSurface(item, item->wantWidth, item->wantHeight);
+            else
+                agwSubmitSimple(item, AGW_VIEW_CMD_RELOAD, 0, 0, 0, 0);
+            break;
         case AGW_CMD_STOP:    agwSubmitSimple(item, AGW_VIEW_CMD_STOP, 0, 0, 0, 0); break;
 
         case AGW_CMD_EVAL:
@@ -1851,16 +1880,36 @@ static void agwDispatchBackendEvent(AgaveWebView* item, const AgwViewEvent* ev)
             item->callbacks.on_message(item, ev->text ? ev->text : "", item->user);
         break;
 
-    case AGW_VIEW_EVENT_EXIT:
+    case AGW_VIEW_EVENT_EXIT: {
+        int crashed = ev->b ? 1 : 0;
+        int code = ev->a;
+
         agwLock();
         item->loading = 0;
         agwUnlock();
 
-        if (item->callbacks.on_error)
-            item->callbacks.on_error(item, ev->a, ev->text ? ev->text : item->url, item->user);
+        if (crashed) {
+            /* The backend process is gone: report it and make the view
+             * respawn-ready, so the host's "page crashed" page (a load_html)
+             * gets a fresh renderer instead of writing into a dead one. */
+            if (item->backend && item->backendView) {
+                item->backend->destroy(item->backendView);
+                item->backendView = NULL;
+                item->view = NULL;
+            }
+
+            if (item->callbacks.on_crashed)
+                item->callbacks.on_crashed(item, code, item->user);
+            else if (item->callbacks.on_error)
+                item->callbacks.on_error(item, code, item->url, item->user);
+        } else if (item->callbacks.on_error) {
+            item->callbacks.on_error(item, code, ev->text ? ev->text : item->url, item->user);
+        }
+
         if (item->hwnd)
             PostMessageA(item->hwnd, AGW_MSG_STATE, 0, 0);
         break;
+    }
 
     default:
         break;

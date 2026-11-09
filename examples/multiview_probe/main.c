@@ -120,6 +120,7 @@ int main(int argc, char** argv)
     int noBlock = 0;
     int allowBlocked = 0;
     int pongWaitMs = 6000;
+    int destroyTest = 0;
     int i;
     WNDCLASSA wc;
     HWND host;
@@ -144,6 +145,8 @@ int main(int argc, char** argv)
             allowBlocked = 1;
         else if (!strcmp(argv[i], "--pong-wait") && i + 1 < argc)
             pongWaitMs = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--destroy-test"))
+            destroyTest = 1;
     }
 
     /* The control resolves AGB_VIEW_BACKEND with getenv(), which reads the CRT
@@ -235,7 +238,16 @@ int main(int argc, char** argv)
         printf("alive_ms=%ld\n", (long)aliveMs);
     }
 
-    agave_webview_destroy(a.view);
+    if (destroyTest && a.view) {
+        LONG t = (LONG)GetTickCount();
+
+        agave_webview_destroy(a.view);
+        a.view = NULL;
+        printf("destroy_ms=%ld\n", (long)((LONG)GetTickCount() - t));
+    }
+
+    if (a.view)
+        agave_webview_destroy(a.view);
     agave_webview_destroy(b.view);
     DestroyWindow(host);
 

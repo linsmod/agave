@@ -82,9 +82,17 @@ static void closeView(ProcessView* pv, int requestExit)
         return;
 
     if (requestExit && pv->hdr) {
-        LONG slot = InterlockedIncrement(&pv->hdr->commandWrite) - 1;
-        AgwIpcCommand* cmd = &pv->hdr->commands[slot & (AGW_IPC_CMD_SLOTS - 1)];
+        LONG slot;
+        AgwIpcCommand* cmd;
 
+        /* Break a script that is spinning first: the renderer's watchdog thread
+         * aborts it, so the EXIT command below is actually read. Closing a hung
+         * tab used to sit here for the full grace period. */
+        if (pv->intEvent)
+            SetEvent(pv->intEvent);
+
+        slot = InterlockedIncrement(&pv->hdr->commandWrite) - 1;
+        cmd = &pv->hdr->commands[slot & (AGW_IPC_CMD_SLOTS - 1)];
         memset(cmd, 0, sizeof(*cmd));
         cmd->kind = AGW_IPC_CMD_EXIT;
         if (pv->cmdEvent)
@@ -92,9 +100,11 @@ static void closeView(ProcessView* pv, int requestExit)
     }
 
     if (pv->process) {
-        if (WaitForSingleObject(pv->process, requestExit ? 2000 : 0) != WAIT_OBJECT_0) {
+        /* Short grace: a responsive renderer exits in a frame or two; a renderer
+         * that is still stuck after the interrupt is killed, not waited for. */
+        if (WaitForSingleObject(pv->process, requestExit ? 300 : 0) != WAIT_OBJECT_0) {
             TerminateProcess(pv->process, 0);
-            WaitForSingleObject(pv->process, 1000);
+            WaitForSingleObject(pv->process, 500);
         }
     }
 
@@ -221,13 +231,19 @@ static void* processCreate(void* owner, MC_BYTE* buffer, int width, int height, 
     }
 
     {
-        const char* crash = getenv("AGB_RENDER_CRASH_MS");
+        /* AGB_RENDER_CRASH_MS is a one-shot test hook: only the first renderer
+         * of the process gets it, so the respawned one after a crash is
+         * healthy - otherwise a crash test would loop forever. */
+        static int crashUsed = 0;
+        const char* crash = crashUsed ? NULL : getenv("AGB_RENDER_CRASH_MS");
 
-        if (crash && atoi(crash) > 0)
+        if (crash && atoi(crash) > 0) {
+            crashUsed = 1;
             snprintf(cmdline, sizeof(cmdline), "\"%s\" --ipc \"%s\" --crash-after %s",
                      pv->exePath, pv->ipcName, crash);
-        else
+        } else {
             snprintf(cmdline, sizeof(cmdline), "\"%s\" --ipc \"%s\"", pv->exePath, pv->ipcName);
+        }
     }
 
     memset(&si, 0, sizeof(si));

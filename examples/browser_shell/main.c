@@ -898,6 +898,51 @@ static void onStatus(AgaveWebView* view, const char* text, void* user)
         updateStatus();
 }
 
+/* The engine process of this tab died. Leave a page the user can read and
+ * reload: the control has already dropped the dead backend, so load_html
+ * brings a fresh renderer up (S3 B2c). */
+static void onCrashed(AgaveWebView* view, int code, void* user)
+{
+    Tab* tab = (Tab*)user;
+    char html[2048];
+    char base[MAX_PATH_CHARS];
+    const char* target = "about:blank";
+
+    if (!tab || !view)
+        return;
+
+    if (tab->url[0])
+        target = tab->url;
+
+    snprintf(base, sizeof(base), "%s", target);
+    snprintf(html, sizeof(html),
+             "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
+             "<title>Page crashed</title>"
+             "<style>body{font:14px/1.5 \"Segoe UI\",sans-serif;margin:0;padding:48px;"
+             "background:#f6f7f9;color:#333}h1{font-size:20px;margin:0 0 8px}"
+             "p{margin:6px 0;color:#555}code{background:#eee;padding:1px 4px;border-radius:3px}"
+             "a{color:#0b62d6}</style></head><body>"
+             "<h1>Page crashed</h1>"
+             "<p>The tab's engine process stopped unexpectedly (exit code %d).</p>"
+             "<p><code>%s</code></p>"
+             "<p><a href=\"%s\">Reload this page</a></p>"
+             "</body></html>",
+             code, base, base);
+
+    strncpy(tab->title, "Page crashed", sizeof(tab->title) - 1);
+    tab->title[sizeof(tab->title) - 1] = 0;
+    strncpy(tab->status, "Page crashed - reload to try again", sizeof(tab->status) - 1);
+    tab->status[sizeof(tab->status) - 1] = 0;
+    tab->loading = 0;
+
+    agave_webview_load_html(view, html, base);
+
+    if (tab == &g_tabs[g_activeTab]) {
+        updateStatus();
+        InvalidateRect(g_hwnd, NULL, FALSE);
+    }
+}
+
 static void onError(AgaveWebView* view, int code, const char* url, void* user)
 {
     Tab* tab = (Tab*)user;
@@ -2000,6 +2045,7 @@ static void createTab(const char* url)
     callbacks.on_progress = onProgress;
     callbacks.on_status = onStatus;
     callbacks.on_error = onError;
+    callbacks.on_crashed = onCrashed;
     callbacks.on_dialog = onDialog;
     callbacks.on_new_window = onNewWindow;
     callbacks.on_close_window = onCloseWindow;
@@ -2835,6 +2881,7 @@ static int g_probeLoadArmed;   /* the load-finished signal already scheduled --e
 static int g_probeEvalDone;
 static int g_probeGotExit;
 static int g_probeSawError;
+static int g_probeRespawned;   /* AGB_PROBE_RESPAWN: at most one respawn */
 static int g_probeSawDownload;   /* a download finished: that IS the outcome */
 static int g_probeClosed;        /* window.close() reached the host */
 static int g_probeTimedOut;
@@ -3210,17 +3257,35 @@ static void probeOnMessage(AgaveWebView* view, const char* message, void* user)
 
 static void probeOnError(AgaveWebView* view, int code, const char* url, void* user)
 {
-    (void)view;
     (void)user;
 
     g_probeSawError = 1;
     agbLog(AGB_LOG_PROBE, "load error code=%d url=%s", code, url ? url : "");
 
+    /* AGB_PROBE_RESPAWN=1: after a renderer crash the control has dropped the
+     * dead backend, so a load_html brings a fresh one up. The crash regression
+     * asserts exactly that (the probe then evals the new document). */
+    if (getenv("AGB_PROBE_RESPAWN") && view && !g_probeRespawned) {
+        static const char respawn[] =
+            "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
+            "<title>respawned</title></head><body>respawned</body></html>";
+
+        g_probeRespawned = 1;
+        /* The crash is expected here: the respawned page is a normal load, it
+         * drives --eval through its own progress-finished event, and the run's
+         * exit code is the respawned page's, not the crash's. */
+        g_probeSawError = 0;
+        g_probeLoadArmed = 0;
+
+        agave_webview_load_html(view, respawn, url ? url : "about:blank");
+        agbLog(AGB_LOG_PROBE, "respawn: loading a page into the crashed view");
+    }
+
     /* A failed navigation commits no document, so on_progress(finished) never
      * arrives. Arm the eval here or the run would sit until --timeout; the
      * eval then reports the empty document and the run ends with the load
-     * error code. */
-    if (!g_probeFinished && !g_probeReloadMode && !g_probeLoadArmed) {
+     * error code. A respawned run skips this: its page loads normally. */
+    if (!g_probeFinished && !g_probeReloadMode && !g_probeLoadArmed && !g_probeRespawned) {
         g_probeLoadArmed = 1;
         PostMessageA(g_probeWnd, AGW_PROBE_MSG, g_probeWaitMs, 0);
 
