@@ -534,18 +534,21 @@
   `agave_webview_get_html()` → shell 用 `agave_webview_load_html()` 在新标签页打开（`<pre>` 转义）。
 - 验收：右键 "View page source" → 新标签页显示源码，`document.URL` 仍是 `file:`/`http:` 原地址的派生标记。
 
-### P2 ant 中断路径收口
+### P2 ant 中断路径收口（**已完成 2026-11-09**）
 
-- `antb_interrupt_all_engines()` 里那句 `sv_jit_arm_interrupts(engine->js)` 是空转：engine 创建时已
-  arm（`antb_engine_create()`），`interrupts_armed` 只置 true、从不清零。真跑起来会在**引擎线程之外**
-  `jit_drop_all_code()` —— 释放的正是对方正在执行的代码页。动作：删掉这句，arm 只在创建时做，
-  并在 `AntBridge.h` 注明"arm 只能在引擎线程"。
-- `g_engines[]`/`g_engineCount` 无锁：写只在引擎线程（create/destroy），读在看门狗/UI 线程；
-  `antb_engine_destroy()` 是"先摘表、再 `js_destroy`、再 `free`"，读侧有极窄的 UAF 窗口。
-  动作：加一把 `SRWLOCK`（中断是冷路径，无热点代价），或改成原子槽位指针 + 死亡标记。
-- `Atomics.wait(sab, i, v)` 无 timeout 走 `pthread_cond_wait`（`src/modules/atomics.c`），中断只置标志、
-  没人 `signal` → 真·不可中断。动作：改成 100 ms 超时轮询标志，或中断路径 `broadcast`。
-- worker VM 不在注册表里，"停掉所有脚本"覆盖不到 worker（worker 走自家 `terminate()`）。
+- ~~`antb_interrupt_all_engines()` 里那句 `sv_jit_arm_interrupts(engine->js)` 是空转~~：已删除。arm
+  只在 `antb_engine_create()`（引擎线程）做；`AntBridge.h` 注明"arm 只能在引擎线程，这里只翻标志"。
+  这句如果哪天真的生效，会在**引擎线程之外** `jit_drop_all_code()` —— 释放对方正在执行的代码页。
+- ~~`g_engines[]`/`g_engineCount` 无锁~~：已加一把 C11 `atomic_flag` 自旋锁；扫描（depth/interrupt）
+  的**整个**字段访问都在锁内，`antb_engine_destroy()` 先在锁内摘表再拆（拆的时候读侧已经拿不到它）。
+- ~~`Atomics.wait(sab, i, v)` 无 timeout 真·不可中断~~：无 timeout 分支改成 100 ms 切片
+  `pthread_cond_timedwait` 轮询 `interrupt_pending`，中断延迟 ≤100 ms（`src/modules/atomics.c`）。
+- worker VM 仍不在注册表里（worker 走自家 `terminate()`）—— **保留为已知限制**，写进了
+  `AntBridge.h` 与 `antb_interrupt_all_engines()` 的注释；worker 不在引擎线程上跑，不挡页面命令。
+- 验收：ant `tests/test_bridge_interrupt.c`（meson target `test-bridge-interrupt`）—— ①`Atomics.wait`
+  无 timeout 从另一线程 `antb_interrupt_all_engines()` 后 ≤5 s 内以 termination 错误返回；②等待期间
+  `antb_engines_js_depth()` ≥1；③一个线程反复 create/destroy、另一个线程同时扫描，不崩、结束后 depth=0。
+  负向验证：去掉 atomics 修复后同一测试会挂到超时。agave 侧 hang 回归 9 条全绿。
 
 ### P2 下载
 

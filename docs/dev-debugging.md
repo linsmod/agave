@@ -413,6 +413,8 @@ ant 自身 CLI / 基础设施的开关（`ANT_MANIFEST_URL`、`ANT_SANDBOX_*`、
   收尾预算的起点来自引擎：`documentWillUnload()` 写 `g_teardownStart`，控件通过
   `agb_teardown_started_ms()`（`src/webview/AgbRuntime.h`）轮询——commit 是异步的，控件自己看不到收尾从哪一刻开始。
   中断只对 A 类（失控 JS）有效；B 类（原生阻塞）中断标志挂在那里没人看，所以第三档只记录不动作。
+  A 类里 `Atomics.wait()` 无 timeout 会以 100 ms 切片轮询中断标志（延迟 ≤100 ms）；worker 不在
+  中断覆盖范围（worker 走自家 `terminate()`，而且它不在引擎线程上跑，不挡页面命令）。
   每次判定同时写一行 `build-zig-native\agb_watchdog.txt`（pid / kind / jsdepth / 队首命令 / busy / jsbusy / queue）——
   GUI 里没有 stderr，"探针好好的、窗口里是 0%" 这种问题就靠它。**"页面无响应"这一档**每次报告另写一份
   `agb_busy_<YYYYMMDD-HHMMSS>_pid<pid>.txt`（exe 旁）：先是在**挂起引擎线程**时抓下来的 JS 栈
