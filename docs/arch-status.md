@@ -76,12 +76,8 @@ ant 的反直觉行为（字面量属性名、`typeof`、`delete` 等）见 [ref
   `Document::detach()` 上（媒体、字体），见 R141 与 [design-tab-teardown.md](design-tab-teardown.md)。
 - **默认根字号 14px（Chrome 是 16px）**：`Settings::m_defaultFontSize` 的初始值就是 14。页面自己写了
   `html{font-size:…}` 时没有影响；没写的站点，`rem`/`medium` 相关的尺寸整体比 Chrome 小约 12.5%
-  （R165 顺带发现）。改默认值会动到所有字体度量与既有 layout 回归，单独排期。
-- **`@media` 里的 `rem` 仍不求值**：声明中的 `rem` 已按根字号折叠（R165），但
-  `@media (min-width: 48rem)` 走的是媒体查询解析，阈值仍是未识别的 `DIMEN`。
-- **块盒的 computed `margin-right` 是 used 填充值**：1100 宽容器里 `width:100px; margin:0 20px`
-  的元素，`getComputedStyle().marginRight` 报 `980px`（Chrome 报 `20px`），`marginLeft` 正常；
-  布局几何正确，只是 computed 读值不同。
+  （R165 顺带发现）。`@media` 前导里的 `rem` 不跟这个值走：它按 CSS 初始 16px 折叠（R166，与 Chrome 的
+  断点一致）。改默认值会动到所有字体度量与既有 layout 回归，单独排期。
 - **下载面板仍是普通 realm**（没有独立生命周期），面板每次打开重新读快照；后续见 [plan-roadmap.md](plan-roadmap.md)。
 
 ## 3. 怎么验证

@@ -293,6 +293,10 @@ try {
         foreach ($needle in @('viewport inner=500x400', 'vwBox=500x200',
                               'calcBox=400x150', 'mediaCSS=rgb(200, 30, 40)',
                               'mediaCSSwide=rgb(40, 30, 20)',
+                              'mediaCSSrem=rgb(2, 60, 120)',
+                              'mediaCSSremWide=rgb(3, 4, 5)',
+                              'matchMedia(min-width:20rem)=true',
+                              'matchMedia(min-width:40rem)=false',
                               'matchMedia(max-width:600px)=true',
                               'resizeEvents addEventListener=500x400')) {
             if ($text -notmatch [regex]::Escape($needle)) {

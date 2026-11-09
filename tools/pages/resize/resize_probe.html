@@ -25,6 +25,14 @@
   @media (min-width: 900px) {
     #mq-wide { background: rgb(30, 200, 40); }
   }
+  /* rem breakpoints (R165 follow-up): a media-query rem is relative to the
+   * initial 16px, not to the root element. At the 500x400 resize 20rem=320px
+   * matches and 40rem=640px does not. Before the fix the 2008 media-query
+   * grammar could not parse the unit and every such query matched. */
+  #mq-rem      { width: 10px; height: 10px; background: rgb(1, 2, 3); }
+  #mq-rem-wide { width: 10px; height: 10px; background: rgb(3, 4, 5); }
+  @media (min-width: 20rem) { #mq-rem { background: rgb(2, 60, 120); } }
+  @media (min-width: 40rem) { #mq-rem-wide { background: rgb(120, 60, 2); } }
 </style>
 </head>
 <body onresize="document.documentElement.setAttribute('data-attr-resize', String(window.innerWidth) + 'x' + String(window.innerHeight));">
@@ -33,6 +41,8 @@
 <div id="mq"></div>
 <div id="calc"></div>
 <div id="mq-wide"></div>
+<div id="mq-rem"></div>
+<div id="mq-rem-wide"></div>
 <script>
   window.__resizeLog = [];
   window.addEventListener('resize', function () {

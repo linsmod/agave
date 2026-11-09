@@ -218,6 +218,8 @@ void CSSParser::setupParser(const char* prefix, const String& string, const char
 
 /* declared in CSSParser.h (public: the custom property API stores the same canonical form) */
 static String rewriteBareMediaQueries(const String& css);
+static String rewriteMediaQueryRem(const String& css, double initialFontPx);
+static double initialMediaFontPx();
 static String rewriteIsWhereSelectors(const String& css);
 static String rewriteWebkitScrollbarRules(const String& css);
 static String foldCalcConstants(const String& css, double emPx = 0, double remPx = 0);
@@ -1278,12 +1280,14 @@ void CSSParser::parseSheet(CSSStyleSheet* sheet, const String& string)
     AGA_CSS_TIME("rewriteCustomPropertyNames", s5);
     String s6 = rewriteBareMediaQueries(s5);
     AGA_CSS_TIME("rewriteBareMediaQueries", s6);
-    String s7 = rewriteIsWhereSelectors(s6);
-    AGA_CSS_TIME("rewriteIsWhereSelectors", s7);
-    String s8 = foldCalcConstants(s7);
-    AGA_CSS_TIME("foldCalcConstants", s8);
+    String s7 = rewriteMediaQueryRem(s6, initialMediaFontPx());
+    AGA_CSS_TIME("rewriteMediaQueryRem", s7);
+    String s8 = rewriteIsWhereSelectors(s7);
+    AGA_CSS_TIME("rewriteIsWhereSelectors", s8);
+    String s9 = foldCalcConstants(s8);
+    AGA_CSS_TIME("foldCalcConstants", s9);
 
-    setupParser("", rewriteWebkitScrollbarRules(s8), "");
+    setupParser("", rewriteWebkitScrollbarRules(s9), "");
 
     CSSParser* old = currentParser;
     currentParser = this;
@@ -2376,6 +2380,152 @@ static bool rewriteRemLengths(const String& css, double rootPx, String& result)
     return found;
 }
 
+/* The font size used for rem inside media queries. Unlike declarations (which
+ * follow the root element's computed font size), a media query's rem is
+ * relative to the *initial* font-size value, i.e. the CSS initial 16px; that
+ * is also what Chrome answers, so responsive breakpoints line up. (The
+ * engine's configurable default is 14px and only affects declarations, see
+ * plan-roadmap P2.) */
+static double initialMediaFontPx()
+{
+    return 16;
+}
+
+/* Rewrites rem lengths in `@media` preludes. The sheet is parsed as one text,
+ * so the prelude is the only place where a rem would reach the media-query
+ * parser instead of a declaration (declarations are folded per element, see
+ * rewriteRemLengths()). The 2008 media-query grammar does not know the unit:
+ * an unparseable dimension made the whole query match, which is why
+ * `@media (min-width: 100rem)` was true on a 1100px viewport. Comments,
+ * strings and the block bodies are left untouched. */
+static String rewriteMediaQueryRem(const String& css, double initialFontPx)
+{
+    if (initialFontPx <= 0 || css.isEmpty())
+        return css;
+
+    unsigned len = css.length();
+    std::vector<UChar> out;
+    out.reserve(len + 16);
+
+    unsigned i = 0;
+    while (i < len) {
+        UChar c = css[i];
+
+        if (c == '/' && i + 1 < len && css[i + 1] == '*') {
+            while (i < len) {
+                out.push_back(css[i]);
+                if (css[i] == '*' && i + 1 < len && css[i + 1] == '/') {
+                    out.push_back(css[i + 1]);
+                    i += 2;
+                    break;
+                }
+                ++i;
+            }
+            continue;
+        }
+
+        if (c == '"' || c == '\'') {
+            UChar quote = c;
+            out.push_back(c);
+            ++i;
+            while (i < len) {
+                UChar d = css[i];
+                out.push_back(d);
+                ++i;
+                if (d == '\\' && i < len) {
+                    out.push_back(css[i]);
+                    ++i;
+                } else if (d == quote) {
+                    break;
+                }
+            }
+            continue;
+        }
+
+        if ((c == 'u' || c == 'U') && i + 3 < len
+            && (css[i + 1] == 'r' || css[i + 1] == 'R')
+            && (css[i + 2] == 'l' || css[i + 2] == 'L') && css[i + 3] == '(') {
+            int parens = 0;
+            while (i < len) {
+                UChar d = css[i];
+                out.push_back(d);
+                ++i;
+                if (d == '(') ++parens;
+                else if (d == ')' && --parens == 0) break;
+            }
+            continue;
+        }
+
+        bool isMedia = (c == '@') && i + 6 <= len
+            && toASCIILower(css[i + 1]) == 'm' && toASCIILower(css[i + 2]) == 'e'
+            && toASCIILower(css[i + 3]) == 'd' && toASCIILower(css[i + 4]) == 'i'
+            && toASCIILower(css[i + 5]) == 'a'
+            && (i + 6 == len || (!isUnitChar(css[i + 6]) && css[i + 6] != '-'));
+
+        if (!isMedia) {
+            out.push_back(c);
+            ++i;
+            continue;
+        }
+
+        unsigned preludeStart = i + 6;
+        unsigned j = preludeStart;
+        int parens = 0;
+
+        while (j < len) {
+            UChar d = css[j];
+
+            if (d == '/' && j + 1 < len && css[j + 1] == '*') {
+                j += 2;
+                while (j + 1 < len && !(css[j] == '*' && css[j + 1] == '/'))
+                    ++j;
+                j = (j + 1 < len) ? j + 2 : len;
+                continue;
+            }
+            if (d == '"' || d == '\'') {
+                UChar quote = d;
+                ++j;
+                while (j < len) {
+                    if (css[j] == '\\' && j + 1 < len)
+                        j += 2;
+                    else if (css[j] == quote) {
+                        ++j;
+                        break;
+                    } else
+                        ++j;
+                }
+                continue;
+            }
+            if (d == '(')
+                ++parens;
+            else if (d == ')') {
+                if (parens)
+                    --parens;
+            } else if ((d == '{' || d == ';') && parens == 0)
+                break;
+            ++j;
+        }
+
+        for (unsigned k = i; k < preludeStart; ++k)
+            out.push_back(css[k]);
+
+        String prelude = css.substring(preludeStart, j - preludeStart);
+        String folded;
+
+        rewriteRemLengths(prelude, initialFontPx, folded);
+        for (unsigned k = 0; k < folded.length(); ++k)
+            out.push_back(folded[k]);
+
+        if (j < len) {
+            out.push_back(css[j]);
+            ++j;
+        }
+        i = j;
+    }
+
+    return out.empty() ? css : String(&out[0], (unsigned)out.size());
+}
+
 /* True when a parsed value carries a bare rem length. DIMEN is
  * `{num}{ident}`, so the unit is the tail of the dimension's text. */
 static bool valueListHasRemLength(ValueList* list);
@@ -2858,6 +3008,17 @@ bool CSSParser::parseMediaQuery(MediaList* queries, const String& string)
 
         if (begin < text.length() && text[begin] == '(')
             text = String("all and ") + text.substring(begin);
+
+        /* rem in a media query is relative to the initial font size (not the
+         * root element's), and the 2008 media-query grammar has no rem unit:
+         * an unparseable dimension used to make the whole query match.
+         * Fold it before the grammar sees it (stylesheet @media goes through
+         * rewriteMediaQueryRem() instead; this is the matchMedia()/media
+         * attribute path). */
+        String folded;
+
+        rewriteRemLengths(text, initialMediaFontPx(), folded);
+        text = folded;
 
         setupParser("@-webkit-mediaquery ", text, "} ");
     }

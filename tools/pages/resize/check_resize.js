@@ -31,6 +31,14 @@ out.push("mediaCSS=" + getComputedStyle(mq).backgroundColor +
          " (rgb(10,20,30) = desktop, rgb(200,30,40) = mobile rule)");
 out.push("mediaCSSwide=" + getComputedStyle(mqWide).backgroundColor +
          " (rgb(30,200,40) = >=900px rule, rgb(40,30,20) = base)");
+out.push("mediaCSSrem=" + getComputedStyle(document.getElementById('mq-rem')).backgroundColor +
+         " (rgb(2,60,120) = 20rem/320px rule)");
+out.push("mediaCSSremWide=" + getComputedStyle(document.getElementById('mq-rem-wide')).backgroundColor +
+         " (rgb(3,4,5) = base, 40rem/640px rule must not match at 500px)");
+out.push("matchMedia(min-width:20rem)=" +
+         (window.matchMedia ? window.matchMedia('(min-width: 20rem)').matches : 'n/a'));
+out.push("matchMedia(min-width:40rem)=" +
+         (window.matchMedia ? window.matchMedia('(min-width: 40rem)').matches : 'n/a'));
 out.push("matchMedia(max-width:600px)=" +
          (window.matchMedia ? window.matchMedia('(max-width: 600px)').matches : 'n/a'));
 out.push("resizeEvents addEventListener=" + list(window.__resizeLog) +

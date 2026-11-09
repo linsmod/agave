@@ -35,6 +35,7 @@
 #include "Document.h"
 #include "ExceptionCode.h"
 #include "Pair.h"
+#include "RenderBlock.h"
 #include "RenderObject.h"
 #include "ShadowValue.h"
 
@@ -243,6 +244,46 @@ static PassRefPtr<CSSValue> valueForLength(const Length& length)
     }
     ASSERT_NOT_REACHED();
     return 0;
+}
+
+/* CSSOM resolved values for margins, the way Chrome reports them:
+ *   auto                 -> the value layout used (auto-centering etc.)
+ *   percentage / calc(%) -> resolved against the containing block width
+ *   fixed                -> the specified value
+ * RenderBox::marginTop/Right/...() are *used* values; for an over-constrained
+ * block the right margin is rewritten to fill the containing block
+ * (`width:100px; margin:0 20px` in a 1100px body reads 980px), which is not
+ * what the page asked for. Only auto has no specified value to report. */
+static PassRefPtr<CSSValue> valueForMargin(const Length& length, int usedPx, RenderObject* renderer)
+{
+    if (length.isAuto()) {
+        if (renderer)
+            return new CSSPrimitiveValue(usedPx, CSSPrimitiveValue::CSS_PX);
+        return valueForLength(length);
+    }
+
+    if (length.isPercent() || length.isCalculated()) {
+        int referenceWidth = 0;
+
+        if (renderer) {
+            if (RenderBlock* containingBlock = renderer->containingBlock())
+                // In-flow children resolve against the content box; an
+                // absolutely positioned box resolves against its containing
+                // block's padding box.
+                referenceWidth = renderer->isPositioned() ? containingBlock->clientWidth()
+                                                          : containingBlock->contentWidth();
+        }
+
+        if (referenceWidth > 0) {
+            double px = length.isPercent()
+                ? length.percent() * referenceWidth / 100.0
+                : length.calcPercent() * referenceWidth / 100.0 + length.calcPx();
+
+            return new CSSPrimitiveValue(px, CSSPrimitiveValue::CSS_PX);
+        }
+    }
+
+    return valueForLength(length);
 }
 
 // Handles special value for "none".
@@ -1342,25 +1383,13 @@ PassRefPtr<CSSValue> CSSComputedStyleDeclaration::getPropertyCSSValue(int proper
             ASSERT_NOT_REACHED();
             return 0;
         case CSS_PROP_MARGIN_TOP:
-            if (renderer)
-                // FIXME: Supposed to return the percentage if percentage was specified.
-                return new CSSPrimitiveValue(renderer->marginTop(), CSSPrimitiveValue::CSS_PX);
-            return valueForLength(style->marginTop());
+            return valueForMargin(style->marginTop(), renderer ? renderer->marginTop() : 0, renderer);
         case CSS_PROP_MARGIN_RIGHT:
-            if (renderer)
-                // FIXME: Supposed to return the percentage if percentage was specified.
-                return new CSSPrimitiveValue(renderer->marginRight(), CSSPrimitiveValue::CSS_PX);
-            return valueForLength(style->marginRight());
+            return valueForMargin(style->marginRight(), renderer ? renderer->marginRight() : 0, renderer);
         case CSS_PROP_MARGIN_BOTTOM:
-            if (renderer)
-                // FIXME: Supposed to return the percentage if percentage was specified.
-                return new CSSPrimitiveValue(renderer->marginBottom(), CSSPrimitiveValue::CSS_PX);
-            return valueForLength(style->marginBottom());
+            return valueForMargin(style->marginBottom(), renderer ? renderer->marginBottom() : 0, renderer);
         case CSS_PROP_MARGIN_LEFT:
-            if (renderer)
-                // FIXME: Supposed to return the percentage if percentage was specified.
-                return new CSSPrimitiveValue(renderer->marginLeft(), CSSPrimitiveValue::CSS_PX);
-            return valueForLength(style->marginLeft());
+            return valueForMargin(style->marginLeft(), renderer ? renderer->marginLeft() : 0, renderer);
         case CSS_PROP__WEBKIT_MARQUEE_DIRECTION:
             switch (style->marqueeDirection()) {
                 case MFORWARD:

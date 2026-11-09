@@ -281,7 +281,8 @@ DOM attach（Element::attach / Text::attach）
   hit-test 不映射、不建 stacking context，`getComputedStyle().transform` 仍为空。
 - `calc()` 的求值分三段：纯常量在解析期折叠；含 `%` 的混合单位在布局期按包含块求值（R54）；
   含 `em`/`rem`/`ex`/`ch` 的在元素级按字号折成 px（R88/R165）。bare `rem` 长度也走元素级
-  （根字号）折叠，但 `@media (min-width: 48rem)` 的前导仍不认 rem。
+  （根字号）折叠；`@media (min-width: 48rem)` 的前导按 CSS 初始 16px 折叠（R166），
+  但 `@import ... (min-width: 40rem)` 的前导还没有折。
 - 没有 `contain`/`will-change`/合成层；多列是 2008 的部分实现（`RenderBlock::layoutColumns()`），
   无现代 `break-*` 语义；`RenderLayer` 只做 z-order 与裁剪。
 

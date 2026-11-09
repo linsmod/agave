@@ -166,8 +166,19 @@
         if (base === 'width' || base === 'device-width') actual = vw;
         else if (base === 'height' || base === 'device-height') actual = vh;
         else return false;
-        var wantPx = parseFloat(value);
+        /* Units matter: parseFloat('100rem') is 100, which made
+           `(min-width: 100rem)` match every viewport. Media-query rem/em use
+           the CSS initial font size (16px, same as Chrome); vw/vh are the
+           viewport share; anything else is honest only when px. */
+        var m = /^\s*(-?[0-9]*\.?[0-9]+)\s*([a-z%]*)\s*$/.exec(value);
+        if (!m) return false;
+        var wantPx = parseFloat(m[1]);
         if (isNaN(wantPx)) return false;
+        var unit = m[2];
+        if (unit === 'rem' || unit === 'em') wantPx *= 16;
+        else if (unit === 'vw') wantPx = wantPx * vw / 100;
+        else if (unit === 'vh') wantPx = wantPx * vh / 100;
+        else if (unit && unit !== 'px') return false;
         return min ? actual >= wantPx : (max ? actual <= wantPx : actual === wantPx);
       }
 
