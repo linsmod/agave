@@ -25,6 +25,7 @@
 #include "PlatformScrollBar.h"
 #include "PopupMenu.h"
 #include "WebView.h"
+#include "InternalPages.h"
 #include "Settings.h"
 #include "CookieJar.h"
 #include "WebEngine.h"
@@ -966,6 +967,12 @@ MC_STATUS macross_initialize(MC_PIXEL_FORMAT format, int w, int h)
         mescal::_global_initialize();
         GCController::init(GLOBAL()->runtime);
 #endif
+
+		/* The browser's own pages (agave://...) are served by a loader-level
+		 * scheme provider, so navigate/reload/iframe/window.open all get them
+		 * from the engine (R162). Every process does this: a renderer serves
+		 * its own internal pages. */
+		agaveRegisterInternalPages();
 
 		WebCore::setPixelFormat(format);	
 		WebCore::setScreenSize(w, h);

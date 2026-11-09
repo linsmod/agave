@@ -473,6 +473,34 @@ if ($ctx.Code -eq 0 -and $ctxText -match '\[ctx\] menu x=60 y=40 link=.*window_t
 }
 Assert-NoRenderer 'context menu' | Out-Null
 
+# 19. an internal page (agave://) survives a reload in the renderer. The page is
+#     served by a loader-level scheme provider (PageScheme); before that, reload
+#     re-requested the URL through the network stack and killed the renderer.
+$internalOut = Join-Path $build 'process_internal_out.txt'
+$internalErr = Join-Path $build 'process_internal_err.txt'
+$env:AGB_VIEW_BACKEND = 'process'
+try {
+    $argv = @('--probe', 'agave://downloads', '--reload', '2', '--wait', '500',
+              '--settle', '300', '--timeout', '25000',
+              '--eval', "probeExit('title='+document.title);")
+    $ip = Start-Process -FilePath $exe -NoNewWindow -PassThru -Wait `
+        -ArgumentList $argv -RedirectStandardOutput $internalOut `
+        -RedirectStandardError $internalErr
+} finally {
+    Remove-Item Env:AGB_VIEW_BACKEND -ErrorAction SilentlyContinue
+}
+$internalText = ((Get-Content $internalOut -Raw) -as [string]) + ((Get-Content $internalErr -Raw) -as [string])
+
+if ($ip.ExitCode -eq 0 -and $internalText -match '\[exit\] title=下载' -and
+    $internalText -notmatch 'page crashed|fail resource') {
+    Write-Host "PASS  internal page: agave:// survives a reload in the renderer"
+} else {
+    $failures++
+    Write-Host ("FAIL  internal page reload (exit {0})" -f $ip.ExitCode)
+    Write-Host (($internalText -split "`n" | Where-Object { $_ -match 'title=|crash|fail|ASSERT' } | Select-Object -First 4) -join "`n")
+}
+Assert-NoRenderer 'internal page' | Out-Null
+
 Remove-Item (Join-Path $build 'process_backend_out.txt'),
             (Join-Path $build 'process_backend_err.txt'),
             (Join-Path $build 'process_backend_eval.js') -ErrorAction SilentlyContinue

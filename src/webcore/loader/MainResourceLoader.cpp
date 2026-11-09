@@ -35,6 +35,7 @@
 #include "FrameLoaderClient.h"
 #include "HTMLFormElement.h"
 #include "ResourceError.h"
+#include "PageScheme.h"
 #include "ResourceHandle.h"
 
 // FIXME: More that is in common with SubresourceLoader should move up into ResourceLoader.
@@ -394,6 +395,17 @@ bool MainResourceLoader::load(const ResourceRequest& r, const SubstituteData&  s
     ASSERT(!m_handle);
 
     m_substituteData = substituteData;
+
+    /* A URL scheme the engine serves itself (agave:// and anything a host
+     * registered) is answered here, before any network handle exists. Reload
+     * re-requests the current URL through this function, which is what makes
+     * internal pages survive a reload (R162). */
+    if (!m_substituteData.isValid()) {
+        SubstituteData page;
+
+        if (pageSchemeSubstituteData(r.url(), page))
+            m_substituteData = page;
+    }
 
     ResourceRequest request(r);
     bool defer = defersLoading();

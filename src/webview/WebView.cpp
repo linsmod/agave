@@ -699,100 +699,11 @@ void WebView::loadHtml(const char* str, const char* rurl)
     d->m_frame->loader()->load(request, substituteData);
 }
 
-/* Reads one of the browser's own pages: agave://downloads -> downloads.html
- * next to the executable. The name is restricted to [a-z0-9_-] so a crafted URL
- * cannot walk out of the directory. */
-static bool loadInternalPage(const char* url, String& out)
-{
-    const char* name = url + 8;   /* after "agave://" */
-    char page[64];
-    char path[1024];
-    char* buffer = 0;
-    FILE* file = 0;
-    long size = 0;
-    size_t n = 0;
-
-    while (name[n] && name[n] != '/' && name[n] != '?' && name[n] != '#') {
-        char c = name[n];
-
-        if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_'))
-            return false;
-
-        if (n + 1 >= sizeof(page))
-            return false;
-
-        page[n] = c;
-        ++n;
-    }
-
-    page[n] = 0;
-
-    if (!n)
-        return false;
-
-    {
-        DWORD len = GetModuleFileNameA(NULL, path, (DWORD)sizeof(path));
-
-        if (!len || len >= sizeof(path))
-            return false;
-
-        {
-            char* slash = strrchr(path, '\\');
-
-            if (!slash)
-                return false;
-
-            slash[1] = 0;
-        }
-    }
-
-    strncat(path, page, sizeof(path) - strlen(path) - 1);
-    strncat(path, ".html", sizeof(path) - strlen(path) - 1);
-
-    file = fopen(path, "rb");
-
-    if (!file) {
-        fprintf(stderr, "[agave] internal page %s not found (looked for %s)\n", url, path);
-        return false;
-    }
-
-    fseek(file, 0, SEEK_END);
-    size = ftell(file);
-    fseek(file, 0, SEEK_SET);
-
-    if (size > 0) {
-        buffer = (char*)malloc((size_t)size + 1);
-
-        if (buffer) {
-            size_t read = fread(buffer, 1, (size_t)size, file);
-
-            buffer[read] = 0;
-            out = String::fromUTF8(buffer, read);
-            free(buffer);
-        }
-    }
-
-    fclose(file);
-    return !out.isEmpty();
-}
 
 void WebView::loadUrl(const char* url, bool lc)
 {	
     stop();
 
-    /* Internal pages are served by the engine itself: a synthetic document
-     * whose URL is the agave:// one, so the address bar, document.URL and the
-     * realm's binding profile all agree, and no network layer is involved. */
-    if (url && 0 == strncasecmp(url, "agave://", 8)) {
-        String html;
-
-        if (loadInternalPage(url, html)) {
-            CString bytes = html.utf8();
-
-            loadHtml(bytes.data(), url);
-            return;
-        }
-    }
     if (0 == strncasecmp(url, "about:blank", 11)) {
         /* A tab navigated to about:blank must own a document: since R44 the
          * main frame has none until its first load, which left

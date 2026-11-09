@@ -83,6 +83,33 @@ try {
     Run-Case 'form GET submit' 'navcheck_form.html'    'probeExit(location.search)' 'request main type=form method=GET url=.*\?q=hello' 'submit main form=.* action=navcheck_target\.html'
     Run-Case 'http 302 redirect' 'redirect302'          'probeExit(document.title)' 'redirect main from=.*redirect302 to=.*navcheck_target\.html' '\[probe\] main url=.*navcheck_target\.html'
 
+    # Internal pages (agave://) come from a loader-level scheme provider, so a
+    # reload re-requests the URL through the same path as a navigation instead
+    # of the network. Before R162 a reload of agave://downloads crashed the
+    # renderer (process backend) and failed the load (local backend).
+    foreach ($internal in @(
+        @{ Label = 'internal page: navigate';    Extra = @();               Expect = '\[exit\] title=下载' },
+        @{ Label = 'internal page: reload x2';   Extra = @('--reload','2'); Expect = '\[exit\] title=下载' }
+    )) {
+        $script:cases++
+        $argv = @('--probe', 'agave://downloads')
+        if ($internal.Extra.Count -gt 0) { $argv += $internal.Extra }
+        $argv += @('--wait', '500', '--settle', '300', '--timeout', '25000',
+                   '--eval', 'probeExit(''title=''+document.title);')
+        $o = & $exe @argv 2>&1
+        $code = $LASTEXITCODE
+        $txt = ($o | Out-String)
+
+        if ($code -eq 0 -and $txt -match $internal.Expect -and
+            $txt -notmatch 'page crashed|ASSERTION FAILED|fail resource') {
+            "PASS  $($internal.Label)"
+        } else {
+            $script:failures++
+            "FAIL  $($internal.Label)   exit=$code"
+            (($txt -split "`n" | Where-Object { $_ -match 'title=|crash|fail|ASSERT' } | Select-Object -First 4) -join "`n")
+        }
+    }
+
     # Opt-out: same link navigation, no [nav] line at all.
     $script:cases++
     $env:AGB_NAV_LOG = '0'

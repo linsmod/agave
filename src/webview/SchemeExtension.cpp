@@ -13,9 +13,10 @@ bool isSupportedInternalScheme(const char *scheme)
         return false;
 
 	/* "agave" is the browser's own page scheme (agave://downloads and future
-	 * internal pages). It has no network backend: WebView::loadUrl turns it
-	 * into a synthetic document, so accepting it here only means "the
-	 * navigation policy does not reject it as an unknown scheme".
+	 * internal pages). It has no network backend: the loader asks the page
+	 * scheme registry (PageScheme.h) for the bytes, so accepting it here only
+	 * means "the navigation policy does not reject it as an unknown scheme".
+	 * Both halves are needed: the policy check runs before the loader (R162).
 	 *
 	 * "about" must pass for the same class of reason: about:blank is served
 	 * by MainResourceLoader's empty-document path (handleEmptyLoad), never by
