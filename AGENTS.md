@@ -98,6 +98,8 @@ WHEN USER REPLY A QUESTION MARK[?] ONLY, MAY BE RETRY CONNECTION. IF MUTI QUESTI
 7. **截图用无头模式**：用 `tools/screenshot.ps1`（= `--probe ... --shot [-rect x,y,w,h]`，窗口从不 `ShowWindow`，不抢焦点、不上任务栏）；不要启动 GUI 壳截图、不要 `SetForegroundWindow`、不要截屏抓桌面。能用探针数字判断的，就不要截图。
 8. **页面资源需要对接页面生命周期**：新增或重构各种页面资源无论图片，字体，样式，JS，其他与页面有关的资源，按情况在拆页（doc）时挂上恰当的资源销毁或清理函数。
 
+9. **注意测试运行时间** 对于新加的测试，如无外部依赖，应该将运行时间保持在较低合理范围，在文档注明预估时间或实际平均执行时间。集中运行测试时，除了检查是否PASS，还需要度量各个测试实际执行时间，如果超出预期太多，根据情况选择仅提醒用户或修复它。
+
 ## 三个最常用命令
 
 ```powershell
@@ -111,6 +113,9 @@ agave_shell.exe --probe <url> --eval "probeExit(...)" --wait 3000 --settle 1000 
 pwsh -File tools\run_worker_tests.ps1
 ```
 
+## issues directory
+由用户或开发人员自己管理的已知问题，不入GIT，AGENT通常不写入该目录，用户提到具体文件才读写以了解问题，完善调查结论，补充解决方案和处理状态。
+
 ## TOOLS
-[Search Local Machine Files](c:/Users/linswin/.agents/skills/everything-search/SKILL.md)
+[Quick Search Files on Local Machine ](c:/Users/linswin/.agents/skills/everything-search/SKILL.md)
 [Sandbox Bypass](c:/Users/linswin/.agents/skills/traycmd/SKILL.md) Section:一次性/临时命令
