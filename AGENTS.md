@@ -115,7 +115,9 @@ pwsh -File tools\run_all_tests.ps1          # 单个：-Only process；跳过：
 ```
 
 ## issues directory
-由用户或开发人员自己管理的已知问题，不入GIT，AGENT通常不写入该目录，用户提到具体文件才读写以了解问题，完善调查结论，补充解决方案和处理状态。
+由用户或开发人员自己管理的已知问题，或者应他们要求添加，在issues/INDEX.md索引，不入GIT。
+用户提到才读取，可以更改issues文档以完善调查结论，说明解决方案等。
+
 
 ## TOOLS
 [Quick Search Files on Local Machine ](c:/Users/linswin/.agents/skills/everything-search/SKILL.md)
