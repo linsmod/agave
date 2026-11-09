@@ -2,8 +2,12 @@
 
 ## 1. 无头探针（主力度量工具）
 
+下面的 `agave_shell.exe` 指 **`build-zig-native\agave_shell.exe`**（本文的命令都在仓库根目录执行；
+exe 旁的 `libagave.dll` / `antjsb.dll` / `prelude.js` 是它运行时需要的）。`pwsh -File tools\screenshot.ps1`
+之类的 helper 会自己拼这个路径。
+
 ```powershell
-agave_shell.exe --probe <url> [--eval <js>] [--wait ms] [--settle ms] [--timeout ms] [--reload n] [--offline] [--resize WxH] [--zoom percent]
+build-zig-native\agave_shell.exe --probe <url> [--eval <js>] [--wait ms] [--settle ms] [--timeout ms] [--reload n] [--offline] [--resize WxH] [--zoom percent]
 ```
 
 - **eval 时机** = 页面 `window load` 事件 + `--wait`；`on_progress finished` 只是长延迟兜底
@@ -130,7 +134,7 @@ R119 的 SVG 对位就是这么量出来的。
 stderr 的 `[probe] userdata=<路径>` 是实际生效的根。要隔离到别处（并行跑多个探针）：
 
 ```powershell
-agave_shell.exe --probe <url> --userdata E:\tmp\probe-a ...   # 也可用环境变量 AGB_USERDATA
+build-zig-native\agave_shell.exe --probe <url> --userdata E:\tmp\probe-a ...   # 也可用环境变量 AGB_USERDATA
 ```
 
 注意 `--offline` 重放用的是**探针自己**的缓存：先在线跑一次暖它，不要指望 GUI 会话的缓存。
@@ -362,7 +366,7 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
   cdb **启动**（堆校验才生效），从管道里读 HEAP 消息的地址，现场 `db/dq/dps/ln` dump 被写坏的块
   和它的 vtable，用来判断"这块是什么"。
 - **只在非调试器下复现的 AV**：先用 `AGB_TEST_CRASH=1` 跑一次
-  （`agave_shell.exe --probe about:blank`）确认取证链路没坏，然后正常复现。壳里装了两道：
+  （`build-zig-native\agave_shell.exe --probe about:blank`）确认取证链路没坏，然后正常复现。壳里装了两道：
   ①`AddVectoredExceptionHandler` 在**任何** SEH/filter 之前抓首次异常，写 `agb_crash.txt`
   （`[crash-firstchance] thread/code/addr/info0/info1` + `#NN module+0x...` 帧，原始 Win32 I/O，
   CRT 挂了也能写）；②`shellCrashFilter`（`SetUnhandledExceptionFilter`）再打一遍 `[crash]` 到 stderr。
@@ -538,7 +542,7 @@ ant 自身 CLI / 基础设施的开关（`ANT_MANIFEST_URL`、`ANT_SANDBOX_*`、
   但 headless 的 `Page.captureScreenshot` 不一定画光标（R127 实测没抓到），要量 Chrome 的
   光标得看真浏览器。agave 侧加 `AGB_CARET_DEBUG=1`：它无视焦点和闪烁相位把光标画成**红色**，
   `python tools/caret_check.py <png>` 量出 `x/y/height`。例：
-  `agave_shell.exe --probe <pg> --eval "document.getElementById('a').focus()" --shot build-zig-native/c.png --shot-rect 0,0,240,60`
+  `build-zig-native\agave_shell.exe --probe <pg> --eval "document.getElementById('a').focus()" --shot build-zig-native/c.png --shot-rect 0,0,240,60`
   （**别**在 `--eval` 里 `probeExit`，探针会先退出、截图不落盘）。
 - **布局对拍 Chrome**：`python tools/layout_diff.py tools/pages/layout/<page>.html [--tol 1]`
   —— 同一份 `tools/pages/layout/lib_measure.js` 在 agave 探针和 headless Chrome 里各跑一遍，

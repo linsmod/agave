@@ -561,7 +561,7 @@
   回归脚本对它们零断言（日志已经补齐，见 [hist-lessons R75](hist-lessons.md)）。
 - 已具备的零件：`tools/send_ui_events.ps1`（`-RightClick` 打右键；WM_COMMAND 可直接点按钮）、
   探针的 `on_context_menu`（只记录、不开菜单）。
-- 动作：写 `tools/run_shell_tests.ps1` —— 起 GUI（临时 `--userdata`）→ 用 `WM_COMMAND` 点
+- 动作：写 `tools/run_shell_tests.ps1`（**尚未实现**）—— 起 GUI（临时 `--userdata`）→ 用 `WM_COMMAND` 点
   `ID_NEWTAB`/`ID_FIND_*`/`ID_BACK`、用 `-RightClick` 打右键 → 断言 `[shell] tab create/activate/…`、
   `[shell] find …`、`[shell] context menu … choice=N` 出现，然后 `WM_CLOSE`。
 - 约束：会短暂显示窗口，不能进默认回归；键盘快捷键**不可测**（`GetKeyState` 读真实键盘状态，

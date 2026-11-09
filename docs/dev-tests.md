@@ -14,6 +14,25 @@
 
 ## 1. 一键套件总表
 
+### 全部跑一遍
+
+```powershell
+pwsh -File tools/run_all_tests.ps1                          # 17 个离线套件，退出码 0 = 全绿
+pwsh -File tools/run_all_tests.ps1 -Only process            # 名字含 process 的
+pwsh -File tools/run_all_tests.ps1 -Skip run_layout_tests,run_media_tests
+pwsh -File tools/run_all_tests.ps1 -IncludeNetwork -IncludeReal   # 加上真站点 / ffmpeg 套件
+```
+
+默认排除"要外部条件"的三个：`run_site_smoke`（真站点，网络）、`run_media_real_tests`（ffmpeg +
+远程样片）、`run_c3`（外部工作区 + 8899 端口，本来就不是标准回归）。每个套件打印
+`PASS/FAIL + 秒数`，最后给最慢的 5 个和总数；单个套件超过 180 s 会打 `WARN`（AGENTS rule 9）。
+
+**实测耗时**（2026-11-09，16 核本机）：**17 套件 ~350 s**。最慢的是
+`run_process_backend_tests` 65 s、`run_image_tests` 53 s、`run_layout_tests` 50 s、
+`run_hang_recovery_tests` 38 s；其余多在 3–20 s。新增套件请把时间控制在几十秒内，并在下表注明。
+
+### 单个套件
+
 全部用 `pwsh -File tools/<脚本>` 跑，**退出码 0 = 通过**（`run_c3.ps1` 例外，见下）。
 `run_media_*` / `run_sticky_tests` 等脚本里的 Chrome 数值是写死的基准，不需要本机 Chrome；
 只有 `run_layout_tests.ps1` 会真的启动 Chrome。
