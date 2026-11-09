@@ -11,8 +11,11 @@
 #   run_c3.ps1               external workspace + 8899 port  (never; not a suite)
 #
 # Every suite prints its own PASS/FAIL line; this script's exit code is the
-# authority (0 = all green). Durations are shown per suite and summarised, so a
-# regression that makes a suite slow shows up as WARN (per AGENTS rule 9).
+# authority (0 = all green). Durations are printed per suite and summarised:
+# compare them with the soft baseline table in docs/dev-tests.md §1 and report
+# in the conversation when a suite is more than 30 s over it (AGENTS rule 9).
+# -SlowSeconds is only a sanity cap (a suite that never finishes); it is not the
+# baseline.
 #
 # Usage:
 #   pwsh -File tools/run_all_tests.ps1
@@ -20,7 +23,8 @@
 #   pwsh -File tools/run_all_tests.ps1 -Skip run_layout_tests,run_media_tests
 #   pwsh -File tools/run_all_tests.ps1 -IncludeNetwork -IncludeReal
 #
-# Expected duration: see docs/dev-tests.md §1 (the "全部跑一遍" row).
+# Expected duration: docs/dev-tests.md §1 has the per-suite soft baseline
+# (17 suites ≈ 350 s on a 16-core machine).
 
 param(
     [string]$Only = '',

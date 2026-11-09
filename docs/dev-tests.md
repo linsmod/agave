@@ -27,9 +27,26 @@ pwsh -File tools/run_all_tests.ps1 -IncludeNetwork -IncludeReal   # 加上真站
 远程样片）、`run_c3`（外部工作区 + 8899 端口，本来就不是标准回归）。每个套件打印
 `PASS/FAIL + 秒数`，最后给最慢的 5 个和总数；单个套件超过 180 s 会打 `WARN`（AGENTS rule 9）。
 
-**实测耗时**（2026-11-09，16 核本机）：**17 套件 ~350 s**。最慢的是
-`run_process_backend_tests` 65 s、`run_image_tests` 53 s、`run_layout_tests` 50 s、
-`run_hang_recovery_tests` 38 s；其余多在 3–20 s。新增套件请把时间控制在几十秒内，并在下表注明。
+**软基线**（2026-11-09 实测，16 核本机；**不是断言**）：
+
+| 套件 | 基线 | 套件 | 基线 |
+|---|---:|---|---:|
+| `run_process_backend_tests` | 65 s | `run_xhr_tests` | 20 s |
+| `run_image_tests` | 53 s | `run_window_tests` | 17 s |
+| `run_layout_tests` | 50 s | `run_nav_tests` | 13 s |
+| `run_hang_recovery_tests` | 38 s | `run_typing_tests` | 13 s |
+| `run_jit_loop_tests` | 22 s | `run_script_mode_tests` | 11 s |
+| `run_hidden_view_tests` | 9 s | `run_realm_tests` | 9 s |
+| `run_inspector_tests` | 9 s | `run_tab_lifecycle_tests` | 7 s |
+| `run_worker_tests` | 6 s | `run_media_tests` | 6 s |
+| `run_sticky_tests` | 4 s | **合计 17 套件** | **~350 s** |
+
+规则（软基线，靠人/Agent 判断，不做程序化对比）：集中跑的时候除了看 PASS，还看
+`run_all_tests.ps1` 打出的每套件秒数——**比基线慢 30 s 以上就在对话里提示**（AGENTS rule 9），
+顺带查一下是机器忙、测试真的退化还是新用例加多了。新增套件请控制在几十秒内并在这里补一行。
+
+`run_site_smoke`（真站点，网络）与 `run_media_real_tests`（ffmpeg + 远程样片）本机没测出稳定值，
+需要时用 `-IncludeNetwork` / `-IncludeReal` 单独跑。
 
 ### 单个套件
 
