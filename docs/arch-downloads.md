@@ -149,8 +149,9 @@ DownloadManager                     AgaveWebView 下载表(32 槽, 加锁)
 
 ```
 agave://downloads
-   │ WebView::loadUrl → loadInternalPage() 读 <exe>/downloads.html
-   │                  → loadHtml(html, "agave://downloads")   (SubstituteData.responseURL)
+   │ MainResourceLoader 问 PageScheme 注册表（scheme "agave"）
+   │   → agaveInternalPage() 读 <exe>/downloads.html
+   │   → 当作 SubstituteData 交给 loader（responseURL = agave://downloads）
    ▼
 Document（自己的 realm，document.URL = agave://downloads）
    │ AntRuntime::bindDocument：
@@ -165,6 +166,7 @@ internal.js → window.agave = { downloads(), cancelDownload(id), openDownload(i
 |---|---|
 | `src/javascript/ant_backend/internal.js` | 内部页 JS 门面（运行时加载，`AGB_INTERNAL` 可覆盖） |
 | `src/webview/internal/downloads.html` | 面板页面（运行时资产，拷到 exe 旁） |
+| `src/webview/InternalPages.cpp` / `src/webcore/loader/PageScheme.cpp` | 内部页的 scheme provider：**所有**加载路径（navigate / reload / iframe / window.open）都经由 loader 取内容，不再有 `loadUrl` 特判（R162） |
 | `src/webview/DownloadEvents.h` | `DownloadManager` → JS 的单一 hook（函数指针，避免 webview 依赖 JS 后端） |
 
 **不给内部页再开一个 VM**：realm 本来就是"一份文档一个 engine"，内部页天然独立；真正要
