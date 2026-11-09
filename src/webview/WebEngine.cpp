@@ -141,6 +141,44 @@ MC_STATUS macross_view_destroy(MaCrossView* view)
 	return MC_STATUS_SUCCESS;
 }
 
+/* The half of a view update that is not painting: page title polling (the
+ * legacy loader never delivers didReceiveTitle) and the delivery of async XHR
+ * results / JS timers. A hidden view still runs both - a background tab keeps
+ * loading and its tab caption keeps updating - it just does not lay out or
+ * paint (see AgaveWebView.c's engine loop). */
+static void pumpViewWork(MaCrossView* view)
+{
+	AntRuntime::activateContext(view->jscontext);
+
+	/* The legacy loader never delivers didReceiveTitle on this port, so hosts
+	 * never saw a page title. Poll document.title once per frame instead. */
+	{
+		WebCore::String title;
+
+		if (view->view->mainDocumentTitle(title)) {
+			CString utf8 = title.utf8();
+
+			if (getenv("AGB_TITLE_DEBUG"))
+				fprintf(stderr, "[title] '%s' last='%s' cb=%p\n",
+				        utf8.data() ? utf8.data() : "(null)",
+				        view->lastTitle, (void*)cb_set_title);
+
+			if (utf8.data() && strcmp(utf8.data(), view->lastTitle)) {
+				strncpy(view->lastTitle, utf8.data(), sizeof(view->lastTitle) - 1);
+				view->lastTitle[sizeof(view->lastTitle) - 1] = 0;
+
+				if (cb_set_title)
+					cb_set_title(view, view->lastTitle);
+			}
+		}
+	}
+
+	/* Async XHR results and JS timers are delivered after painting: the page may
+	 * detach nodes, which must not happen while the paint traversal holds
+	 * render object pointers. A pump-only update has no paint to wait for. */
+	AntRuntime::pumpAsyncRequests();
+}
+
 MC_STATUS macross_view_update(MaCrossView* view, const MC_RECT* rc)
 {
 	if (!view)
@@ -152,7 +190,7 @@ MC_STATUS macross_view_update(MaCrossView* view, const MC_RECT* rc)
 		view->view->setDirtyRect(rc->x, rc->y, rc->w, rc->h);
 	}
 	{
-		LARGE_INTEGER freq, t0, t1;
+		LARGE_INTEGER freq, t0, t1, t2;
 		double paintMs = 0.0;
 		double jsMs = 0.0;
 		double decodeMs = 0.0;
@@ -162,36 +200,9 @@ MC_STATUS macross_view_update(MaCrossView* view, const MC_RECT* rc)
 		view->view->paintView();
 		QueryPerformanceCounter(&t1);
 
-		/* The legacy loader never delivers didReceiveTitle on this port, so hosts
-		 * never saw a page title. Poll document.title once per frame instead. */
 		{
-			WebCore::String title;
-
-			if (view->view->mainDocumentTitle(title)) {
-				CString utf8 = title.utf8();
-
-				if (getenv("AGB_TITLE_DEBUG"))
-					fprintf(stderr, "[title] '%s' last='%s' cb=%p\n",
-					        utf8.data() ? utf8.data() : "(null)",
-					        view->lastTitle, (void*)cb_set_title);
-
-				if (utf8.data() && strcmp(utf8.data(), view->lastTitle)) {
-					strncpy(view->lastTitle, utf8.data(), sizeof(view->lastTitle) - 1);
-					view->lastTitle[sizeof(view->lastTitle) - 1] = 0;
-
-					if (cb_set_title)
-						cb_set_title(view, view->lastTitle);
-				}
-			}
-		}
-
-		/* Async XHR results and JS timers are delivered after painting: the page may
-		 * detach nodes, which must not happen while the paint traversal holds
-		 * render object pointers. */
-		{
-			LARGE_INTEGER t2;
 			QueryPerformanceCounter(&t2);
-			AntRuntime::pumpAsyncRequests();
+			pumpViewWork(view);
 			{
 				LARGE_INTEGER t3;
 				QueryPerformanceCounter(&t3);
@@ -210,6 +221,16 @@ MC_STATUS macross_view_update(MaCrossView* view, const MC_RECT* rc)
 			fprintf(stderr, "[perf] update paint=%.0fms js=%.0fms decode=%.0fms\n", paintMs, jsMs, decodeMs);
 	}
 
+	return MC_STATUS_SUCCESS;
+}
+
+/* Update a view nobody can see: title + async work, no layout, no paint. */
+MC_STATUS macross_view_pump(MaCrossView* view)
+{
+	if (!view)
+		return MC_STATUS_FAILED;
+
+	pumpViewWork(view);
 	return MC_STATUS_SUCCESS;
 }
 

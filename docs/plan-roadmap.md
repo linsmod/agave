@@ -742,10 +742,13 @@
 
 - 现状：一条引擎线程串行跑所有 view（[arch-overview.md](arch-overview.md) §1），所以 tab 之间既不并行，
   卡死的 tab 还会挡住宿主命令与别的 tab 的定时器/XHR（只有 1.5 s 看门狗中断能救）。
-- 第一步（便宜、可先做）：**隐藏 view 不画** —— 帧泵对每个 view 都 `macross_view_update()`
-  （`paintView()` + `pumpAsyncRequests()`），隐藏 tab 的绘制纯浪费。动作：帧泵按 `IsWindowVisible`
-  分流，不可见只泵定时器/XHR、不画不拷 mirror。判据：`AGB_LOOP_DEBUG` 的 `update=` 均值随 tab 数
-  不再线性增长；切回该 tab 时首帧正确（可能要一次强制重绘）。
+- 第一步（便宜、可先做）：**隐藏 view 不画** —— 已完成（R150，2026-11-09）。帧泵原来对每个 view 都
+  `macross_view_update()`（`paintView()` + `pumpAsyncRequests()`），隐藏 tab 的绘制纯浪费。现在
+  `AgaveWebView` 带一个 Page Visibility 标志（shell 的后台 tab / 最小化窗口驱动），不可见时只跑
+  `macross_view_pump()`（标题 + 异步工作）、不布局不绘制不拷 mirror，回到可见时整幅重绘一次。
+  ⚠ 判据不是 `IsWindowVisible`：探针窗口永远是隐藏的，但它必须照常出像素（`--shot`），所以开关必须是
+  宿主明确给出的 Page Visibility，而不是 OS 可见性。判据：`tools/run_hidden_view_tests.ps1`（隐藏期
+  `[loop] paints=` 冻结、`skips=` 增长，定时器照跑，显示后首帧重绘）。
 - 真正并行两条路，**都不是"加个线程"**：
   1. **引擎线程局部化**：先把进程级无锁全局拆掉 —— `AntRuntime` 的 `g_currentState`（当前 realm）、
      桥的 `g_wrappers`/`g_classes`/trampoline 表、ant 的 interned 字符串表；再做 per-view 线程 + 线程局部表。

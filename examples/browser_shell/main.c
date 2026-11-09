@@ -67,6 +67,9 @@ typedef struct {
     int           hangPending;
     unsigned int  hangMs;
     char          hangStack[MAX_PATH_CHARS];
+    /* Last Page Visibility value handed to the control (-1 = never sent), so a
+     * resize/minimize does not queue a visibility command per WM_SIZE. */
+    int           visibilitySent;
 } Tab;
 
 static HWND  g_hwnd;
@@ -78,6 +81,7 @@ static Tab   g_tabs[MAX_TABS];
 static int   g_activeTab;
 static int   g_zoom = 100;
 static int   g_findVisible;
+static int   g_minimized;      /* the top-level window is minimized */
 static char  g_status[1024];
 
 /* Closed tabs, so ctrl+shift+T can bring the last one back. */
@@ -645,6 +649,29 @@ static void setActiveTab(int index);
 static void createTab(const char* url);
 static void onCloseWindow(AgaveWebView* view, void* user);
 
+/* Page Visibility for the whole shell: exactly the active tab is visible, and
+ * nothing is when the window is minimized (Chrome does the same, and a minimized
+ * window's views must stop laying out and painting). Sent only on a change: the
+ * control's engine loop keys the paint skip off it. */
+static void syncTabVisibility(void)
+{
+    int i;
+
+    for (i = 0; i < MAX_TABS; ++i) {
+        int want;
+
+        if (!g_tabs[i].used || !g_tabs[i].view)
+            continue;
+
+        want = (i == g_activeTab && !g_minimized) ? 1 : 0;
+
+        if (g_tabs[i].visibilitySent != want) {
+            g_tabs[i].visibilitySent = want;
+            agave_webview_set_visible(g_tabs[i].view, want);
+        }
+    }
+}
+
 static void setActiveTab(int index)
 {
     int i;
@@ -659,15 +686,11 @@ static void setActiveTab(int index)
     g_activeTab = index;
 
     for (i = 0; i < MAX_TABS; ++i) {
-        if (g_tabs[i].used && g_tabs[i].hwnd) {
+        if (g_tabs[i].used && g_tabs[i].hwnd)
             ShowWindow(g_tabs[i].hwnd, i == index ? SW_SHOW : SW_HIDE);
-
-            /* Page Visibility: background tabs keep loading, but their
-             * document.hidden is true and pages pause timers/media on it. */
-            if (g_tabs[i].view)
-                agave_webview_set_visible(g_tabs[i].view, i == index);
-        }
     }
+
+    syncTabVisibility();
 
     layoutTab(index);
     applyZoomToActive();
@@ -2415,6 +2438,10 @@ static LRESULT CALLBACK shellProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM
         return 0;
 
     case WM_SIZE:
+        /* Minimized: every view is hidden (Page Visibility + no layout/paint);
+         * restored: only the active tab is. */
+        g_minimized = (wParam == SIZE_MINIMIZED) ? 1 : 0;
+        syncTabVisibility();
         layoutAll();
         updateToolbarState();
         return 0;

@@ -37,8 +37,9 @@
   见 [dev-debugging.md](dev-debugging.md) 的"真卡/慢"表）：**有人等**（导航/停止/查找）→
   `antb_interrupt_all_engines()` 中断；**没人等**（页面无响应）→ 只报告（tab 级提示 + 每事件一份
   `agb_busy_*.txt` 带 JS 栈），不杀页面；
-  ②帧泵对**每个** view 依次 `macross_view_update()`（画 + 泵定时器），不分可见与否，所以 N 个 tab
-  时每个 tab 每次都要画一遍（隐藏 tab 的绘制是纯浪费，见 [plan-roadmap.md](plan-roadmap.md)）；
+  ②帧泵对每个 view 依次更新：可见的走 `macross_view_update()`（布局 + 绘制 + 泵定时器），不可见的
+  （后台 tab / 最小化窗口，Page Visibility 由宿主给出）只走 `macross_view_pump()`（标题 + 异步工作），
+  不布局不绘制，回到可见时整幅重绘一次（R150）；
   ③重 tab 会拖慢其他 tab 的帧率（同一条循环）。
   想真正并行只有两条路（都不是"加个线程"）：桥/运行时的**进程级单线程假设**要先拆掉
   （`g_currentState` 当前 realm、`g_wrappers`/`g_classes`/trampoline 表、ant 的 interned 字符串表都是无锁全局），

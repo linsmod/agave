@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>hidden view</title>
+<style>
+  body { margin: 0; background: #ffffff; }
+  /* Solid colour, no text: the pixel check for "did the first frame after
+   * coming back from hidden paint the whole surface" must not depend on font
+   * metrics. */
+  #box { position: absolute; left: 0; top: 0; width: 300px; height: 200px; background: rgb(20,120,200); }
+</style>
+</head>
+<body>
+<div id="box"></div>
+<script>
+/* A background tab must keep running JS (timers, network) while the engine
+ * thread skips its layout and paint (R150). The suite hides this view with
+ * --hide-after and asserts both halves: ticks keep growing, [loop] stops
+ * counting paints and starts counting skips. */
+window.__ticks = 0;
+window.__hiddenSeen = 0;
+window.__shownSeen = 0;
+
+setInterval(function () { window.__ticks++; }, 5);
+
+document.addEventListener('visibilitychange', function () {
+  if (document.hidden) {
+    window.__hiddenSeen++;
+    /* Repaint regression guard: the box changes colour while the view is
+     * hidden, so the first frame after it comes back must not be the stale
+     * pre-hide image (R150's full repaint). rgb(30,180,60) = 1eb43c. */
+    document.getElementById('box').style.background = 'rgb(30,180,60)';
+  } else {
+    window.__shownSeen++;
+  }
+});
+</script>
+</body>
+</html>

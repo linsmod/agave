@@ -41,6 +41,11 @@ ant 的反直觉行为（字面量属性名、`typeof`、`delete` 等）见 [ref
 - **桥回调是 activate/leave 成对的**：每次 JS→C 桥方法进来先 `contextActivate()`（按当前 realm 切
   view/document 镜像），返回前 `contextLeave()` 把调用方脚本的文档还原（R149，P1-aa）；回调里发生
   导航时只还原仍在的文档记录，teardown 清空保存栈。
+- **隐藏 view 不布局不绘制**：后台 tab / 最小化窗口的 view 仍然跑定时器、XHR、网络和标题更新
+  （`macross_view_pump()`），但引擎帧泵跳过它的 `paintView()` 与 mirror 拷贝（`AgaveWebView` 的
+  `visible` 标志，R150）；回到可见时整幅重绘一次（跳过期间的帧没画过）。布局仍是按需的：hidden 页的
+  几何读（`offsetWidth`/`getBoundingClientRect`…）会内部 `updateLayout()`。这是 S3（每 view 一条
+  引擎线程）的前置：K 条线程不能都去画看不见的 view。
 - **CSS 边界**：grid 布局未实现（降级成 block）；`position:sticky` 已支持（R82，绘制/命中/几何随滚动平移，
   滚动时整视口重绘）；transform 做了
   translate/scale/rotate 的绘制与变换感知的脏矩形（hit-test、stacking context 未做，R52/R55），

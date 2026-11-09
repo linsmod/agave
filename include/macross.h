@@ -239,6 +239,19 @@ MACROSS_API MC_STATUS macross_view_destroy(MaCrossView* view);
 MACROSS_API MC_STATUS macross_view_update(MaCrossView* view, const MC_RECT* rect);
 
 /**
+ * \fn MC_STATUS macross_view_pump(MaCrossView* view)
+ * \brief Run the non-painting part of a view update (title poll + async work).
+ *
+ * Used for a view nobody can see (a background tab, a minimized window): its
+ * scripts, timers and network keep running, but no layout is flushed and no
+ * pixels are produced. The host must force a full repaint when the view becomes
+ * visible again, because the frames in between were never drawn.
+ *
+ * \sa macross_view_update, macross_view_set_visible
+ */
+MACROSS_API MC_STATUS macross_view_pump(MaCrossView* view);
+
+/**
  * \fn MC_STATUS macross_view_resize(MaCrossView* view, MC_BYTE* buffer, int width, int height, int pitch)
  * \brief Resize a webview with given parameters.
  *

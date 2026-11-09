@@ -227,11 +227,22 @@ struct AgaveWebView {
     char               status[512];
     int                progress;
     int                loading;
+    /* Engine-loop accounting for the hidden-view skip (AGB_LOOP_DEBUG). */
+    unsigned long      painted;
+    unsigned long      skippedPaints;
     int                lastRecordedProgress;
     int                backCount;
     int                forwardCount;
     unsigned long      lastMirrorMs;   /* last InvalidateRect mirrored to the window */
     int                navigatePending; /* a CMD_NAVIGATE is queued for this view */
+    /* Page Visibility as the engine loop sees it (host order: background tab,
+     * minimized window). A hidden view keeps running JS and its async work, but
+     * the engine thread skips its layout+paint: a background tab used to cost a
+     * full layout and paint per engine iteration. `forceFullPaint` is set when
+     * it comes back and the whole surface is stale (the skipped frames were
+     * never drawn, and the dirty rects were consumed by the skip). */
+    int                visible;
+    int                forceFullPaint;
 
     char               downloadDir[MAX_PATH];
     char               userAgent[256];
@@ -1623,8 +1634,17 @@ static void agwDrainCommands(void)
             break;
 
         case AGW_CMD_VISIBLE:
-            /* Page Visibility: only the document state and the event; the
-             * window itself is shown/hidden by the host. */
+            /* Page Visibility: the document state and the event. The engine
+             * loop also uses this flag to skip layout+paint for a view nobody
+             * can see (background tab / minimized window); the first frame
+             * after it comes back has to repaint the whole surface, because
+             * the frames in between were never drawn. */
+            if (item->visible != (command.a ? 1 : 0)) {
+                item->visible = command.a ? 1 : 0;
+
+                if (item->visible)
+                    item->forceFullPaint = 1;
+            }
             if (item->view)
                 macross_view_set_visible(item->view, command.a ? 1 : 0);
             break;
@@ -1789,7 +1809,36 @@ static DWORD WINAPI agwEngineThread(LPVOID param)
                 if (!item->destroyed) {
                     unsigned long began = GetTickCount();
 
-                    macross_view_update(item->view, NULL);
+                    /* A hidden view (background tab, minimized window) keeps
+                     * running JS, timers and network in macross_view_pump(), but
+                     * its layout+paint is skipped: a background tab used to cost
+                     * a full layout and paint per engine iteration, for pixels
+                     * nobody could see (and it is what S3 - one engine thread
+                     * per view - has to fix first: K threads must not all paint
+                     * a hidden view). The page still lays out on demand: every
+                     * geometry read in WebCore calls updateLayout(). */
+                    if (item->visible) {
+                        if (item->forceFullPaint && item->width > 0 && item->height > 0) {
+                            MC_RECT full;
+
+                            /* Coming back from hidden: the frames in between
+                             * were never drawn, so the accumulated dirty rects
+                             * are not enough - repaint the whole surface. */
+                            full.x = 0;
+                            full.y = 0;
+                            full.w = item->width;
+                            full.h = item->height;
+                            macross_view_update(item->view, &full);
+                            item->forceFullPaint = 0;
+                        } else {
+                            macross_view_update(item->view, NULL);
+                        }
+
+                        item->painted++;
+                    } else {
+                        macross_view_pump(item->view);
+                        item->skippedPaints++;
+                    }
 
                     if (getenv("AGB_LOOP_DEBUG")) {
                         static int frames = 0;
@@ -1801,6 +1850,10 @@ static DWORD WINAPI agwEngineThread(LPVOID param)
                         if (frames % 100 == 0)
                             fprintf(stderr, "[loop] frames=%d update=%u ms (avg %u ms)\n",
                                     frames, (unsigned)total, (unsigned)(total / frames));
+
+                        if ((item->painted + item->skippedPaints) % 20 == 0)
+                            fprintf(stderr, "[loop] view=%p paints=%lu skips=%lu\n",
+                                    (void*)item, item->painted, item->skippedPaints);
                     }
                 }
 
@@ -1809,8 +1862,9 @@ static DWORD WINAPI agwEngineThread(LPVOID param)
                  * from blitting a half-written frame (that tore while
                  * scrolling); the copy is ~1ms, the engine paints outside it.
                  * The size check is inside the lock too: agwEnsureSurface()
-                 * replaces both buffers (and their dimensions) under it. */
-                {
+                 * replaces both buffers (and their dimensions) under it.
+                 * A hidden view paints nothing, so it has nothing to copy. */
+                if (item->visible) {
                     int copied = 0;
 
                     agwLock();
@@ -2557,6 +2611,9 @@ AgaveWebView* agave_webview_create(void* parent, int x, int y, int width, int he
     item->wantWidth = width > 0 ? width : 1;
     item->wantHeight = height > 0 ? height : 1;
     item->user = user;
+    /* A fresh view is visible until the host says otherwise (a new tab starts
+     * active; the probe never calls set_visible). */
+    item->visible = 1;
 
     if (callbacks)
         item->callbacks = *callbacks;

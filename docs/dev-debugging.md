@@ -36,6 +36,15 @@ agave_shell.exe --probe <url> [--eval <js>] [--wait ms] [--settle ms] [--timeout
   页面与复测命令：`tools/pages/resize/resize_probe.html` +
   `--eval-file tools/pages/resize/check_resize.js`（现状见
   [arch-capability-gaps.md](arch-capability-gaps.md) §2「窗口 resize」）。
+- `--hide-after <ms>` / `--show-after <ms>`：不建 GUI tab 也能复测 **Page Visibility 与后台 tab 的绘制
+  跳过**（R150）。`--hide-after` 调 `agave_webview_set_visible(view, 0)`：页面继续跑定时器/XHR、`document.hidden`
+  为 true、`visibilitychange` 派发，但引擎帧泵不再布局/绘制这个 view，也不拷 mirror。
+  `AGB_LOOP_DEBUG=1` 时 stderr 每 20 帧一行 `[loop] view=<ptr> paints=<n> skips=<m>`：隐藏期间
+  `paints` 冻结、`skips` 增长（判据见 `tools/run_hidden_view_tests.ps1`）。
+  `--show-after` 之后**首帧是整幅重绘**（跳过期间的脏矩形不够用），所以"隐藏期间改颜色/改 DOM → 显示后
+  截图"能检验是否真的重画了。⚠ 探针窗口本身仍是隐藏的（`--probe` 从不 ShowWindow），绘制跳过只由这个
+  Page Visibility 开关驱动，所以普通 `--shot` 不受影响；但**在隐藏状态下直接 `--shot` 拿到的是隐藏前
+  那一帧**。
 - `--zoom <percent>`：eval 前调 `agave_webview_set_zoom`（10..500）。和 `--resize` 可叠加；
   用来复测 zoom 下的视口语义（`100vw == innerWidth`，两者都是 CSS px；R70）。
 - URL 参数走**地址栏同一套规则**（`normalizeUrl`），所以可以直接传本地路径 / 文件 URL。
