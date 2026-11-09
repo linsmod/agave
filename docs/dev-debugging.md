@@ -61,6 +61,15 @@ process 下 --shot 抓的是共享 canvas 拷进 mirror 的那一帧。
 AGB_IPC_STATS=1 打开 S3 的两条量化输出（stderr）：renderer 发布帧时打时间戳，控件每 2 s 汇总一行
 `[ipc] frames=<n> latency_avg_us=… max_us=…`（发布→poll 看到 FRAME 的延迟）；控件每次镜像拷贝打
 `[ipc] copy_us=…`（共享段 → 控件 mirror 的一次 memcpy，1100×800 约 430–700 µs、首帧冷启动 ~3.1 ms）。
+**渲染进程崩溃后看什么**（R160）：`on_crashed(view, code, report, user)` 的 `report` 是渲染进程
+临死前写的一份报告，shell 把它放在 "Page crashed" 页面的 `<pre>` 里。内容包括：
+`exception:`（异常码 + 读/写地址）、`fault:`、`context:`（后端/ipc/尺寸）、`cmdline`、`os:`（版本/CPU/内存）、
+`modules:`（每个模块 base/size 和**旁边有没有 PDB**）、`env:`（`AGB_*`）、以及每帧
+`module!function+off (file:line)`——PDB 就在模块旁边时符号自动解出来；没有 PDB 就是 `module+0xoff`。
+`AGB_SYMBOL_PATH` 可以追加符号搜索路径。制造一次真崩溃复测：`AGB_RENDER_CRASH_AV=<ms>`（只对第一个
+renderer 生效，重生出来的崩溃页渲染进程不会跟着崩）；`AGB_PROBE_CRASH_PAGE=<path>` 让探针把 sad tab
+的 HTML 落盘，方便直接看/回归。报告走共享段（`AgwIpcHeader.crashText`），渲染进程死了也读得到。
+
 **命令没有执行时查什么**：`on_command_dropped` 回调（宿主自报 `dropped=<n> kind=eval reason=…`），
 `AGB_CMD_LOG=1` 还会把同样的行写进 `agb_*.log`。原因短语就三种——`no page yet`（视图还没有页面）、
 `no live document`（后端里没有可用文档）、`document replaced by a navigation`（命令排在导航提交之后，

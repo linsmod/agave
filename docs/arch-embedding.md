@@ -61,6 +61,11 @@ exe 旁的 `prelude.js` / `polyfills.js`（运行时 JS 资产，可热替换）
 `on_dialog`、`on_context_menu`、`on_close_window`、`on_unresponsive`、`on_command_dropped`、
 `on_download`、`on_new_window`（保留，引擎当前不触发）。
 
+**崩溃报告**（R160）：process 后端里渲染进程死掉时，`on_crashed(view, code, report, user)` 的
+`report` 是那个进程自己写的（`src/webview/AgbCrash.*`：环境 + 全线程栈 + PDB 符号，经共享段传回），
+宿主把它显示在崩溃页上。本地后端（同一进程）崩了就轮不到回调——那是宿主自己的崩溃处理器的事
+（shell 的 `shellCrashFilter` 仍负责写 `agb_crash.txt`）。
+
 **窗口生命周期**（R158）：`<a target>` / `<form target>` / `window.open(url, name)` 的判定在引擎
 （`HTMLAnchorElement`：中键、ctrl、cmd 等同 `_blank`；`_self`/`_top`/`_parent` 由 frame 树解析），
 **具名窗口由控件登记**（`windowName` + `on_new_window` / `on_activate_view`）：名字命中就导航那个
