@@ -110,7 +110,8 @@ if (OPT_SHELL AND WIN32)
     # MaCross engine API and the agave_webview_* control API.
     target_sources(${LIB_NAME} PRIVATE
         ${PROJ_ROOT}/src/webview_control/AgaveWebView.c
-        ${PROJ_ROOT}/src/webview_control/AgwViewBackend.c)
+        ${PROJ_ROOT}/src/webview_control/AgwViewBackend.c
+        ${PROJ_ROOT}/src/webview_control/AgwViewBackendProcess.c)
     set_source_files_properties(
         ${PROJ_ROOT}/src/webview_control/AgaveWebView.c
         PROPERTIES COMPILE_DEFINITIONS AGW_BUILD_DLL)
@@ -123,6 +124,13 @@ if (OPT_SHELL AND WIN32)
     # dist carries the vendored libpng/zlib: the probe writes --shot .png files
     # itself (libagave links dist privately, which does not reach an exe).
     target_link_libraries(agave_shell PRIVATE ${LIB_NAME} dist user32 gdi32 shell32 comdlg32)
+
+    # Engine side of the B2 process backend: one console process per view, no
+    # window; the pixels land in the control's shared section (AgwViewIpc.h).
+    add_executable(agave_render_host ${PROJ_ROOT}/examples/render_host/main.c)
+    target_include_directories(agave_render_host PRIVATE ${PROJ_ROOT}/include ${PROJ_OUT})
+    target_compile_definitions(agave_render_host PRIVATE AGW_USE_DLL)
+    target_link_libraries(agave_render_host PRIVATE ${LIB_NAME} user32 gdi32)
 
     add_executable(agave_embed WIN32 ${PROJ_ROOT}/examples/embed_demo/main.c)
     target_include_directories(agave_embed PRIVATE ${PROJ_ROOT}/include ${PROJ_OUT})

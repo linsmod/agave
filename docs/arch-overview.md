@@ -42,6 +42,8 @@
   不布局不绘制，回到可见时整幅重绘一次（R150）；
   ③重 tab 会拖慢其他 tab 的帧率（同一条循环）。
   想真正并行：**渲染后端可插拔**（local / Win32 子进程 / RVVM 实例，共用一个"渲染后端协议"），
+  `AGB_VIEW_BACKEND=process` 时每个 view 是一个独立的 `agave_render_host.exe`：控件只发命令/收事件，
+  像素走命名共享段（canvas + damage），渲染进程崩溃由控件检测并报 load error。
   设计与协议见 [design-render-backend.md](design-render-backend.md)；每 view 一条引擎线程因为要拆
   桥/运行时的进程级无锁全局（含 WebCore 的全局 `AtomicString` 表），已降级为备选。
   待办与验收见 [plan-roadmap.md](plan-roadmap.md) 的 "P2 多 tab 并行"。

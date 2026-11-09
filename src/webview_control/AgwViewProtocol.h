@@ -57,6 +57,8 @@ typedef enum {
     AGW_VIEW_EVENT_TITLE,           /* text */
     AGW_VIEW_EVENT_PROGRESS,        /* a = percent, b = finished */
     AGW_VIEW_EVENT_URL,             /* text */
+    AGW_VIEW_EVENT_STATUS,          /* text */
+    AGW_VIEW_EVENT_MESSAGE,         /* text: agavePostMessage() reached the host */
     AGW_VIEW_EVENT_SERVICE_REQUEST, /* a = service kind, text = args (B4) */
     AGW_VIEW_EVENT_UNRESPONSIVE,    /* a = busy ms */
     AGW_VIEW_EVENT_EXIT             /* a = exit code */

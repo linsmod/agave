@@ -49,6 +49,14 @@ agave_shell.exe --probe <url> [--eval <js>] [--wait ms] [--settle ms] [--timeout
   用来复测 zoom 下的视口语义（`100vw == innerWidth`，两者都是 CSS px；R70）。
 - URL 参数走**地址栏同一套规则**（`normalizeUrl`），所以可以直接传本地路径 / 文件 URL。
 
+**渲染后端开关（S3）**：AGB_VIEW_BACKEND=local|process（默认 local）。
+process 时每个 view 起一个 gave_render_host.exe（无窗口，画进控件的命名共享段；
+设计见 [design-render-backend.md](design-render-backend.md)）。诊断：
+AGB_RENDER_LOG=1 让 renderer 把命令/事件记录到 **exe 旁的 gave_render_host.log**
+（spawned 进程没有 console，stderr 不可见）；AGB_RENDER_CRASH_MS=<ms> 让 renderer 在启动后
+该毫秒数处 ExitProcess(42)，专门复测"渲染进程崩溃 → 控件报 load error 而不是卡住"。
+process 下 --shot 抓的是共享 canvas 拷进 mirror 的那一帧。
+
 **退出码（先看它，再翻日志）**
 
 | 码 | 含义 |

@@ -3223,6 +3223,13 @@ static void probeOnError(AgaveWebView* view, int code, const char* url, void* us
     if (!g_probeFinished && !g_probeReloadMode && !g_probeLoadArmed) {
         g_probeLoadArmed = 1;
         PostMessageA(g_probeWnd, AGW_PROBE_MSG, g_probeWaitMs, 0);
+
+        /* A dead engine (the process backend's renderer crashed, or a realm
+         * that never came up) never reports eval-done: bound the run so an
+         * error is an error and not a --timeout. A healthy run's eval re-arms
+         * this timer in AGW_PROBE_EVALDONE. */
+        SetTimer(g_probeWnd, PROBE_TIMER_SETTLE,
+                 (UINT)(g_probeWaitMs + g_probeSettleMs + 600), NULL);
     }
 }
 

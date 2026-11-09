@@ -69,10 +69,19 @@ struct AgwViewBackend {
      * a backend with its own instance aborts exactly its own. */
     void  (*interrupt)(void* view);
     void* (*jsContext)(void* view);
+
+    /* The latest published canvas, for backends that keep the frame in shared
+     * memory instead of the host's buffer (process/rvvm). NULL when there is
+     * nothing new to copy - local always returns NULL and paints in place. */
+    const MC_BYTE* (*frame)(void* view, int* width, int* height, int* pitch,
+                            uint32_t* seq);
 };
 
-/* The only backend that exists today: the in-process engine. */
+/* The in-process engine. */
 const AgwViewBackend* agwBackendLocal(void);
+
+/* One agave_render_host.exe per view (B2). */
+const AgwViewBackend* agwBackendProcess(void);
 
 /* Backend selected by AGB_VIEW_BACKEND (default "local"). Returns NULL for an
  * unknown or not-yet-built name; the caller logs and falls back to local. */

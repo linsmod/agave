@@ -212,7 +212,8 @@ static const AgwViewBackend g_localBackend = {
     localUpdate,
     localPump,
     localInterrupt,
-    localJsContext
+    localJsContext,
+    NULL   /* frame: local paints into the host's own buffer */
 };
 
 const AgwViewBackend* agwBackendLocal(void)
@@ -224,6 +225,9 @@ const AgwViewBackend* agwBackendByName(const char* name)
 {
     if (!name || !name[0] || strcmp(name, "local") == 0)
         return &g_localBackend;
+
+    if (strcmp(name, "process") == 0)
+        return agwBackendProcess();
 
     /* "process" (B2) and "rvvm" (B3) are in the design; until they land, asking
      * for one must be loud and must not silently run something else. Logged

@@ -1782,6 +1782,141 @@ static void agwDrainCommands(void)
     }
 }
 
+/* ---- events from a remote backend --------------------------------------- *
+ * A backend with its own process reports titles/progress/frames through
+ * poll(); the local backend never does (its events are the macross callbacks
+ * above). Same fields and callbacks either way, so a host cannot tell them
+ * apart. */
+static void agwDispatchBackendEvent(AgaveWebView* item, const AgwViewEvent* ev)
+{
+    if (!item || !ev)
+        return;
+
+    switch (ev->kind) {
+    case AGW_VIEW_EVENT_TITLE:
+        agwLock();
+        if (ev->text) {
+            strncpy(item->title, ev->text, sizeof(item->title) - 1);
+            item->title[sizeof(item->title) - 1] = 0;
+        }
+        agwUnlock();
+
+        if (item->callbacks.on_title)
+            item->callbacks.on_title(item, item->title, item->user);
+        if (item->hwnd)
+            PostMessageA(item->hwnd, AGW_MSG_STATE, 0, 0);
+        break;
+
+    case AGW_VIEW_EVENT_STATUS:
+        if (item->callbacks.on_status && ev->text)
+            item->callbacks.on_status(item, ev->text, item->user);
+        break;
+
+    case AGW_VIEW_EVENT_URL:
+        agwLock();
+        if (ev->text) {
+            strncpy(item->url, ev->text, sizeof(item->url) - 1);
+            item->url[sizeof(item->url) - 1] = 0;
+        }
+        agwUnlock();
+
+        if (item->callbacks.on_url)
+            item->callbacks.on_url(item, item->url, item->user);
+        break;
+
+    case AGW_VIEW_EVENT_PROGRESS: {
+        int notify = 0;
+
+        agwLock();
+        item->progress = ev->a;
+        item->loading = ev->b ? 0 : 1;
+
+        if (ev->b && item->lastRecordedProgress != 100) {
+            item->lastRecordedProgress = 100;
+            notify = 1;
+        } else if (!ev->b) {
+            item->lastRecordedProgress = ev->a;
+        }
+        agwUnlock();
+
+        if (item->callbacks.on_progress)
+            item->callbacks.on_progress(item, ev->a, ev->b ? 1 : 0, item->user);
+        if (notify && item->hwnd)
+            PostMessageA(item->hwnd, AGW_MSG_STATE, 0, 0);
+        break;
+    }
+
+    case AGW_VIEW_EVENT_MESSAGE:
+        if (item->callbacks.on_message)
+            item->callbacks.on_message(item, ev->text ? ev->text : "", item->user);
+        break;
+
+    case AGW_VIEW_EVENT_EXIT:
+        agwLock();
+        item->loading = 0;
+        agwUnlock();
+
+        if (item->callbacks.on_error)
+            item->callbacks.on_error(item, ev->a, ev->text ? ev->text : item->url, item->user);
+        if (item->hwnd)
+            PostMessageA(item->hwnd, AGW_MSG_STATE, 0, 0);
+        break;
+
+    default:
+        break;
+    }
+}
+
+/* Copies a published remote frame into the mirror the window paints from. One
+ * copy, straight from the backend's canvas - the host-side DIB is not used by
+ * a remote backend. Returns 1 when a frame was consumed and acked. */
+static int agwCopyRemoteFrame(AgaveWebView* item)
+{
+    const MC_BYTE* src;
+    int w = 0, h = 0, pitch = 0;
+    uint32_t seq = 0;
+    int copied = 0;
+
+    if (!item || !item->backendView || !item->backend || !item->backend->frame)
+        return 0;
+
+    src = item->backend->frame(item->backendView, &w, &h, &pitch, &seq);
+    if (!src)
+        return 0;
+
+    agwLock();
+    if (item->mirrorBits && item->width > 0 && item->height > 0 && w > 0 && h > 0) {
+        int rows = item->height < h ? item->height : h;
+        int rowBytes = item->width * 4;
+        int copyBytes = w * 4;
+        int y;
+
+        if (copyBytes > rowBytes)
+            copyBytes = rowBytes;
+
+        for (y = 0; y < rows; ++y)
+            memcpy(item->mirrorBits + (size_t)y * (size_t)rowBytes,
+                   src + (size_t)y * (size_t)pitch, (size_t)copyBytes);
+
+        item->lastMirrorMs = GetTickCount();
+        copied = 1;
+    }
+    agwUnlock();
+
+    if (copied) {
+        AgwFrameAck ack;
+
+        ack.bufferId = 1;
+        ack.seq = seq;
+        item->backend->frameAck(item->backendView, &ack);
+
+        if (item->hwnd && IsWindowVisible(item->hwnd))
+            InvalidateRect(item->hwnd, NULL, FALSE);
+    }
+
+    return copied;
+}
+
 static DWORD WINAPI agwEngineThread(LPVOID param)
 {
     (void)param;
@@ -1795,8 +1930,15 @@ static DWORD WINAPI agwEngineThread(LPVOID param)
     if (!g_processBackend)
         g_processBackend = agwBackendLocal();
 
-    if (!g_processBackend->processInit(1024, 768))
+    if (g_processBackend != agwBackendLocal()) {
+        /* Mixed runs (a local view next to a remote one) still need the
+         * in-process engine; a pure remote run pays for it but stays simple. */
+        if (!agwBackendLocal()->processInit(1024, 768))
+            return 0;
+        g_processBackend->processInit(1024, 768);
+    } else if (!g_processBackend->processInit(1024, 768)) {
         return 0;
+    }
 
     for (;;) {
         int i;
@@ -1845,6 +1987,22 @@ static DWORD WINAPI agwEngineThread(LPVOID param)
 
                 if (!item->destroyed) {
                     unsigned long began = GetTickCount();
+
+                    /* Remote backends report everything the local one calls back
+                     * about (title, progress, url, frames, death) through the
+                     * event ring; drain it before the frame work below. */
+                    if (item->backend->poll) {
+                        AgwViewEvent events[8];
+                        int drained;
+
+                        while ((drained = item->backend->poll(item->backendView,
+                                                              events, 8)) > 0) {
+                            int e;
+
+                            for (e = 0; e < drained; ++e)
+                                agwDispatchBackendEvent(item, &events[e]);
+                        }
+                    }
 
                     /* A hidden view (background tab, minimized window) keeps
                      * running JS, timers and network in macross_view_pump(), but
@@ -1902,20 +2060,27 @@ static DWORD WINAPI agwEngineThread(LPVOID param)
                  * replaces both buffers (and their dimensions) under it.
                  * A hidden view paints nothing, so it has nothing to copy. */
                 if (item->visible) {
-                    int copied = 0;
+                    /* A backend that keeps its canvas in shared memory hands out
+                     * the frame here (one copy, straight into the mirror); the
+                     * local backend has none and painted into item->bits. */
+                    if (agwCopyRemoteFrame(item)) {
+                        /* copied + acked + invalidated inside */
+                    } else if (!item->backend->frame) {
+                        int copied = 0;
 
-                    agwLock();
-                    if (item->mirrorBits && item->bits && item->width > 0 && item->height > 0) {
-                        size_t bytes = (size_t)item->width * (size_t)item->height * 4u;
+                        agwLock();
+                        if (item->mirrorBits && item->bits && item->width > 0 && item->height > 0) {
+                            size_t bytes = (size_t)item->width * (size_t)item->height * 4u;
 
-                        memcpy(item->mirrorBits, item->bits, bytes);
-                        item->lastMirrorMs = GetTickCount();
-                        copied = 1;
+                            memcpy(item->mirrorBits, item->bits, bytes);
+                            item->lastMirrorMs = GetTickCount();
+                            copied = 1;
+                        }
+                        agwUnlock();
+
+                        if (copied && item->hwnd && IsWindowVisible(item->hwnd))
+                            InvalidateRect(item->hwnd, NULL, FALSE);
                     }
-                    agwUnlock();
-
-                    if (copied && item->hwnd && IsWindowVisible(item->hwnd))
-                        InvalidateRect(item->hwnd, NULL, FALSE);
                 }
 
                 g_lastActive = item;
