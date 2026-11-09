@@ -4165,7 +4165,10 @@ static void probeUsage(void)
 {
     fprintf(stderr,
             "usage:\n"
-            "  agave_shell.exe [url]\n"
+            "  agave_shell.exe [--backend local|process] [url]\n"
+            "  --backend local|process  where the engine runs: in this process (default)\n"
+            "            or one agave_render_host.exe per view (S3; the renderer must sit\n"
+            "            next to agave_shell.exe). Also usable with --probe.\n"
             "  agave_shell.exe --probe <url> [--eval <js> | --eval-file <path>]\n"
             "                  [--wait <ms>] [--settle <ms>] [--timeout <ms>]\n"
             "  --eval    script to run after the load finished (default dumps outerHTML\n"
@@ -4260,6 +4263,49 @@ static int parseCommandLine(char* cmdline, char** argv, int maxArgs)
     return argc;
 }
 
+/* --backend <local|process> (S3). The control reads AGB_VIEW_BACKEND with
+ * getenv(), and a Windows SetEnvironmentVariable() is not guaranteed to reach
+ * the CRT's copy (R153), so the switch is put in through the CRT here. */
+static char g_backendArg[64] = "local";
+static int  g_backendArgSet;   /* --backend was given: only then override the env */
+
+static void applyBackendArg(void)
+{
+    char envbuf[96];
+    const char* effective = g_backendArg;
+
+    if (g_backendArgSet) {
+        snprintf(envbuf, sizeof(envbuf), "AGB_VIEW_BACKEND=%s", g_backendArg);
+        putenv(envbuf);   /* the CRT's getenv is what the control reads */
+    } else {
+        /* No flag: honour the environment (the test suites and the launcher set
+         * it). Overwriting it with the default here silently broke every
+         * env-driven run. */
+        const char* env = getenv("AGB_VIEW_BACKEND");
+
+        effective = (env && env[0]) ? env : "local";
+    }
+
+    if (!strcmp(effective, "process")) {
+        char exe[MAX_PATH];
+        char* slash;
+        DWORD n = GetModuleFileNameA(NULL, exe, (DWORD)sizeof(exe));
+
+        if (n && n < sizeof(exe)) {
+            slash = strrchr(exe, '\\\\');
+            if (slash) {
+                *(slash + 1) = 0;
+                snprintf(exe + strlen(exe), sizeof(exe) - strlen(exe), "agave_render_host.exe");
+                if (GetFileAttributesA(exe) == INVALID_FILE_ATTRIBUTES) {
+                    fprintf(stderr, "shell: --backend process needs agave_render_host.exe next to agave_shell.exe (%s)\n", exe);
+                    fflush(stderr);
+                    ExitProcess(2);
+                }
+            }
+        }
+    }
+}
+
 /* Command line before any window exists: a --probe run must never create the
  * browser window. It used to be created and shown up front, so every headless
  * capture flashed a full browser and left it on screen for the whole run
@@ -4280,7 +4326,15 @@ static void parseShellArgv(void)
     }
 
     for (i = 1; i < argc; ++i) {
-        if (!strcmp(argv[i], "--probe")) {
+        if (!strcmp(argv[i], "--backend") && i + 1 < argc) {
+            strncpy(g_backendArg, argv[++i], sizeof(g_backendArg) - 1);
+            g_backendArg[sizeof(g_backendArg) - 1] = 0;
+            g_backendArgSet = 1;
+        } else if (!strncmp(argv[i], "--backend=", 10)) {
+            strncpy(g_backendArg, argv[i] + 10, sizeof(g_backendArg) - 1);
+            g_backendArg[sizeof(g_backendArg) - 1] = 0;
+            g_backendArgSet = 1;
+        } else if (!strcmp(argv[i], "--probe")) {
             g_probeMode = 1;
         } else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
             g_showUsage = 1;
@@ -4428,6 +4482,13 @@ static void parseShellArgv(void)
         /* Same rules as typing the address: a local path becomes a file:// URL,
          * "localhost:port" stays a host instead of a search term. */
         normalizeUrl(urlArg, g_startupUrl, sizeof(g_startupUrl));
+    }
+
+    if (g_backendArgSet && strcmp(g_backendArg, "local") && strcmp(g_backendArg, "process")) {
+        fprintf(stderr, "shell: --backend wants local or process, got '%s'\n", g_backendArg);
+        g_argError = 1;
+    } else {
+        applyBackendArg();
     }
 
     if (g_probeMode && !g_startupUrl[0] && !g_showUsage) {

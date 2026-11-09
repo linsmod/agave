@@ -20,6 +20,33 @@
 #include "AgwViewIpc.h"
 #include "../webview/AgbLog.h"
 
+/* One kill-on-close job for every renderer this process starts: whatever ends
+ * the control (a clean shutdown, a crash, the probe calling ExitProcess) takes
+ * the rendersers with it, instead of leaving orphans behind. */
+static HANDLE g_rendererJob;
+
+static void ensureRendererJob(void)
+{
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits;
+
+    if (g_rendererJob || g_rendererJob == INVALID_HANDLE_VALUE)
+        return;
+
+    g_rendererJob = CreateJobObjectA(NULL, NULL);
+    if (!g_rendererJob) {
+        g_rendererJob = INVALID_HANDLE_VALUE;
+        return;
+    }
+
+    memset(&limits, 0, sizeof(limits));
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if (!SetInformationJobObject(g_rendererJob, JobObjectExtendedLimitInformation,
+                                 &limits, sizeof(limits))) {
+        CloseHandle(g_rendererJob);
+        g_rendererJob = INVALID_HANDLE_VALUE;
+    }
+}
+
 typedef struct {
     HANDLE        mapping;
     AgwIpcHeader* hdr;
@@ -262,6 +289,10 @@ static void* processCreate(void* owner, MC_BYTE* buffer, int width, int height, 
     pv->process = pi.hProcess;
     pv->pid = pi.dwProcessId;
     CloseHandle(pi.hThread);
+
+    ensureRendererJob();
+    if (g_rendererJob && g_rendererJob != INVALID_HANDLE_VALUE)
+        AssignProcessToJobObject(g_rendererJob, pv->process);
 
     pv->width = width;
     pv->height = height;

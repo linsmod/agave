@@ -81,9 +81,18 @@ function Invoke-Probe {
 function Assert-NoRenderer {
     param([string]$What)
 
+    # Teardown is asynchronous: the control interrupts, sends EXIT and only then
+    # waits/kills, so a renderer may still be unwinding when the probe returns.
+    # Give it a moment before calling it a leak.
+    for ($i = 0; $i -lt 20; $i++) {
+        $left = @(Get-Process agave_render_host -ErrorAction SilentlyContinue)
+        if ($left.Count -eq 0) { return $true }
+        Start-Sleep -Milliseconds 100
+    }
+
     $left = @(Get-Process agave_render_host -ErrorAction SilentlyContinue)
     if ($left.Count -gt 0) {
-        $failures++
+        $script:failures++
         Write-Host ("FAIL  {0}: {1} renderer process(es) left behind" -f $What, $left.Count)
         $left | Stop-Process -Force
         return $false
@@ -247,6 +256,47 @@ if ($local.Code -eq 0 -and $local.Stdout -match 'title=hidden view') {
 } else {
     $failures++
     Write-Host ("FAIL  default backend: local run (exit {0})" -f $local.Code)
+}
+
+
+# 10. the shell flag (-–backend) does the same thing as the env: a probe
+#     started with --backend process uses a renderer, no environment involved.
+$flagRun = Invoke-Probe -Page (Join-Path $pages 'cap_hidden_view.html') `
+    -Js 'probeExit("title=" + document.title);' -Backend $null `
+    -Extra @('--backend', 'process')
+
+if ($flagRun.Code -eq 0 -and $flagRun.Stdout -match 'title=hidden view' -and
+    ($flagRun.Stdout + $flagRun.Stderr) -match 'process backend: view') {
+    Write-Host "PASS  --backend process flag: same renderer path as the env"
+} else {
+    $failures++
+    Write-Host ("FAIL  --backend process flag (exit {0})" -f $flagRun.Code)
+    Write-Host (($flagRun.Stdout -split "`n" | Select-Object -Last 2) -join "`n")
+}
+Assert-NoRenderer '--backend flag' | Out-Null
+
+# 11. a backend name the shell does not know is refused, not ignored.
+$bogus = Invoke-Probe -Page (Join-Path $pages 'blank.html') -Backend $null `
+    -Extra @('--backend', 'bogus')
+if ($bogus.Code -ne 0 -and ($bogus.Stdout + $bogus.Stderr) -match "backend wants local or process") {
+    Write-Host "PASS  unknown backend is refused with a message"
+} else {
+    $failures++
+    Write-Host ("FAIL  unknown backend: exit {0}" -f $bogus.Code)
+}
+
+# 12. the launcher starts the GUI shell in process mode by default (and
+#     falls back to local on request); -DryRun keeps the test headless.
+$launcher = Join-Path $root 'tools/agave.ps1'
+$dry = & pwsh -File $launcher -DryRun 2>&1 | Out-String
+$dryLocal = & pwsh -File $launcher -DryRun -Local 2>&1 | Out-String
+if ($dry -match '--backend process' -and $dryLocal -match '--backend local') {
+    Write-Host "PASS  launcher: process by default, -Local opts out"
+} else {
+    $failures++
+    Write-Host "FAIL  launcher dry run did not name the expected backend"
+    Write-Host $dry
+    Write-Host $dryLocal
 }
 
 Remove-Item (Join-Path $build 'process_backend_out.txt'),

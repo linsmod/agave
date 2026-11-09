@@ -94,7 +94,9 @@ bison -d -p cssyy src\webcore\css\CSSGrammar.y -o debug\CSSGrammar.tab.c
 
 | 产物 | 用途 |
 |---|---|
-| `agave_shell.exe` | 桌面壳：GUI 浏览 + `--probe` 无头探针 |
+| `agave_shell.exe` | 桌面壳：GUI 浏览 + `--probe` 无头探针；`--backend local\|process` 选渲染后端（默认 local） |
+| `agave_render_host.exe` | `process` 后端的引擎进程：每个 view 一个，由控件拉起（`--backend process` 时需要它在 exe 旁） |
+| `agave_multiview_probe.exe` | 两个 view 的验收宿主：A 卡死时 B 的命令延迟（`pong_ms` / `blocked`），S3 验收 1 |
 | `agave_view_host.exe` | **无窗口**渲染：`agave_view_host.exe <url> [out.bmp] [--eval js] [--click x y] [--type text] [--enter] [--wheel n] [--wheelup n] [--repaint]`，像素/交互校验用 |
 | `agave_embed.exe` | 嵌入 demo（同一套控件） |
 | `libagave.dll` | 引擎 + Win32 控件（`macross_*` 和 `agave_webview_*`） |
@@ -117,6 +119,9 @@ bison -d -p cssyy src\webcore\css\CSSGrammar.y -o debug\CSSGrammar.tab.c
   ②主工程给每个 C++ TU 强制 `-include src/wtf/Platform.h`（它拉 `mconfig.h`），picasso 没有
   `mconfig.h`，所以 `3rdparty/picasso/CMakeLists.txt` 里把这一条从 `CMAKE_CXX_FLAGS` 剥掉。
 - 把 exe 单独拷到别处跑会缺 DLL（`debug/` 里直接跑拷过去的 exe 会失败）。
+- **跑 GUI**：`pwsh -File tools/agave.ps1 [url]`（默认 `process` 后端，每个 tab 一个引擎进程；
+  `-Local` 回到单引擎线程，`-DryRun` 只打印命令行）。壳本身默认 local：
+  `agave_shell.exe [url]` 与 `agave_shell.exe --backend process [url]` 都可用，`--backend` 也给 `--probe` 用。
 - 可选宿主：`test/`（`OPT_EXAMPLES=ON` 时构建 `agave_test`）、`examples/touchweb`（手机 UI，单独构建）。
 - 单元测试：`unit_tests/` 存在，但默认 `OPT_UNITTEST=OFF` 不构建；打开它会在 configure 阶段
   从网络拉 googletest（`FetchContent`），离线环境会失败。

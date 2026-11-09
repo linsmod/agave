@@ -49,7 +49,7 @@ agave_shell.exe --probe <url> [--eval <js>] [--wait ms] [--settle ms] [--timeout
   用来复测 zoom 下的视口语义（`100vw == innerWidth`，两者都是 CSS px；R70）。
 - URL 参数走**地址栏同一套规则**（`normalizeUrl`），所以可以直接传本地路径 / 文件 URL。
 
-**渲染后端开关（S3）**：AGB_VIEW_BACKEND=local|process（默认 local）。
+**渲染后端开关（S3）**：`agave_shell.exe --backend local|process [url]`（`--probe` 同样适用；壳自身默认 `local`，`tools/agave.ps1` 默认用 `process` 起 GUI），或环境变量 `AGB_VIEW_BACKEND=local|process`（默认 `local`；命令行参数优先，没给参数时才读环境）。
 process 时每个 view 起一个 gave_render_host.exe（无窗口，画进控件的命名共享段；
 设计见 [design-render-backend.md](design-render-backend.md)）。诊断：
 AGB_RENDER_LOG=1 让 renderer 把命令/事件记录到 **exe 旁的 gave_render_host.log**
@@ -58,6 +58,8 @@ AGB_RENDER_LOG=1 让 renderer 把命令/事件记录到 **exe 旁的 gave_rende
 专门复测"渲染进程崩溃 → 控件报 load error 而不是卡住"；AGB_PROBE_RESPAWN=1 让探针在崩溃后对同一
 view load_html 一个页面，验证"崩溃后视图可重新拉起"（shell 的 sad tab 走同一条路）。
 process 下 --shot 抓的是共享 canvas 拷进 mirror 的那一帧。
+所有 renderer 都挂在一个 KILL_ON_JOB_CLOSE 的 Job Object 上：控制进程无论怎么结束，renderer 都会
+被一起收掉（正常关 tab 仍走 interrupt → EXIT → Terminate 的干净路径）。
 多 view 的并行判据用 uild-zig-native\agave_multiview_probe.exe：两个 view，A 跑
 while(true){}，B 的命令延迟 = pong_ms（process 后端几十毫秒；local 后端 pong_ms=-1 +
 locked=1，因为 eval 不是 watchdog 的"用户动作"，没人等就只按 advisory 报告）。
