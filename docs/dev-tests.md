@@ -17,17 +17,27 @@
 ### 全部跑一遍
 
 ```powershell
-pwsh -File tools/run_all_tests.ps1                          # 18 个离线套件，退出码 0 = 全绿
+pwsh -File tools/run_all_tests.ps1                          # 18 个离线套件，默认并发 4，退出码 0 = 全绿
+pwsh -File tools/run_all_tests.ps1 -Sequential              # 旧的一件一件跑（≈360 s）
+pwsh -File tools/run_all_tests.ps1 -Parallel 8              # 并发度（1..16）
 pwsh -File tools/run_all_tests.ps1 -Only process            # 名字含 process 的
 pwsh -File tools/run_all_tests.ps1 -Skip run_layout_tests,run_media_tests
 pwsh -File tools/run_all_tests.ps1 -IncludeNetwork -IncludeReal   # 加上真站点 / ffmpeg 套件
+pwsh -File tools/run_all_tests.ps1 -KeepLogs                # 保留每个套件的 stdout/stderr
 ```
+
+默认**并发执行**（`-Parallel 4`）：每个套件是独立的 `pwsh` 进程，`AGB_USERDATA` 指向
+`%TEMP%\agb-suites-<id>\profile-<suite>`，互不共享 cookie/cache；结果逐套件打印 `PASS/FAIL + 墙钟`。
+三个套件有硬冲突或怕负载，放在并发阶段之后**逐个串行**：`run_hang_recovery_tests`（断言没有
+`agb_crash.txt`/`agb_watchdog.txt` 出现）、`run_process_backend_tests`（故意崩 renderer 做崩溃报告、
+还量命令延迟）、`run_image_tests`（paint/rAF 时间上限）；`-IncludeReal` 时 `run_media_real_tests`
+（ffmpeg/音频设备）也进这一队。失败时默认保留该套件的日志（路径会打印），`-KeepLogs` 连成功的也留。
 
 默认排除"要外部条件"的三个：`run_site_smoke`（真站点，网络）、`run_media_real_tests`（ffmpeg +
 远程样片）、`run_c3`（外部工作区 + 8899 端口，本来就不是标准回归）。每个套件打印
 `PASS/FAIL + 秒数`，最后给最慢的 5 个和总数；单个套件超过 180 s 会打 `WARN`（AGENTS rule 9）。
 
-**软基线**（2026-11-09 实测，16 核本机；**不是断言**）：
+**软基线**（2026-11-09 实测，16 核本机；**不是断言**；下表是**串行**墙钟，默认并发整批 ≈ 245 s）：
 
 | 套件 | 基线 | 套件 | 基线 |
 |---|---:|---|---:|
@@ -40,11 +50,13 @@ pwsh -File tools/run_all_tests.ps1 -IncludeNetwork -IncludeReal   # 加上真站
 | `run_inspector_tests` | 9 s | `run_tab_lifecycle_tests` | 7 s |
 | `run_worker_tests` | 6 s | `run_media_tests` | 6 s |
 | `run_sticky_tests` | 4 s | `run_encoding_tests` | 9 s |
-| **合计 18 套件** | **~360 s** | | |
+| **合计 18 套件（串行）** | **~360 s** | **默认并发整批** | **~245 s** |
 
-规则（软基线，靠人/Agent 判断，不做程序化对比）：集中跑的时候除了看 PASS，还看
-`run_all_tests.ps1` 打出的每套件秒数——**比基线慢 30 s 以上就在对话里提示**（AGENTS rule 9），
-顺带查一下是机器忙、测试真的退化还是新用例加多了。新增套件请控制在几十秒内并在这里补一行。
+规则（软基线，靠人/Agent 判断，不做程序化对比）：上表是**串行**墙钟；并发跑时每个套件会被别的
+套件拖慢（`run_layout_tests` 55 s、`run_typing_tests` 17 s 是并行下的常见值），要拿它和基线比就加
+`-Sequential`。集中跑的时候除了看 PASS，还看每套件秒数——**比基线慢 30 s 以上就在对话里提示**
+（AGENTS rule 9），顺带查一下是机器忙、测试真的退化还是新用例加多了。新增套件请控制在几十秒内
+并在这里补一行；会和别的套件抢固定文件/端口的，加进 `run_all_tests.ps1` 的 `$serialOrder`。
 
 `run_site_smoke`（真站点，网络）与 `run_media_real_tests`（ffmpeg + 远程样片）本机没测出稳定值，
 需要时用 `-IncludeNetwork` / `-IncludeReal` 单独跑。
@@ -103,6 +115,9 @@ pwsh -File tools/run_all_tests.ps1 -IncludeNetwork -IncludeReal   # 加上真站
 - **python**：所有对拍/像素工具都是 python；`layout_diff.py`/`chrome_probe.py` 还依赖 `websockets`。
 - **本地服务端口**：worker 8971、nav 8973、tab lifecycle 8979、hang recovery 8982/8984、xhr 8991、encoding 8993。脚本自己起停；
   并行跑多个套件时用 `-Port` 错开（worker 支持）。
+- **并行批跑的 profile**：`run_all_tests.ps1` 给每个套件设一个独立的
+  `AGB_USERDATA`（`%TEMP%\agb-suites-<id>\profile-<suite>`），跑完删掉；单独跑套件时仍用
+  `%LOCALAPPDATA%\Agave\probe`，测试若依赖“上一次的 cookie/cache”，用单跑而不是批跑。
 - **网络**：`run_site_smoke.ps1` 必须要；`run_media_real_tests.ps1` 的远程样片需要（`-SkipRemote` 关掉）。
   站点打不开时 exit 5/6 是网络问题，不是引擎问题（见脚本头注释），重跑再判断。
 - **ffmpeg**：`run_media_tests.ps1` 没有也能跑（内部 ticker 模拟时钟）；`run_media_real_tests.ps1`

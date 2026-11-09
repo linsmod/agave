@@ -109,7 +109,7 @@ pwsh -File tools\build_project.ps1 *> build.log; $LASTEXITCODE
 # 无头探针：退出码是权威判据（0 OK / 1 usage / 2..4 超时或无 exit / 5 加载错误 / 6 空文档）
 build-zig-native\agave_shell.exe --probe <url> --eval "probeExit(...)" --wait 3000 --settle 1000 --timeout 60000
 
-# 全部离线回归（18 个套件，约 6 分钟；每套件打印耗时，超过阈值会 WARN。见 docs/dev-tests.md §1）
+# 全部离线回归（18 个套件，默认并发 4 约 4 分钟；-Sequential 约 6 分钟。见 docs/dev-tests.md §1）
 pwsh -File tools\run_all_tests.ps1          # 单个：-Only process；跳过：-Skip run_layout_tests
 
 ```
