@@ -43,8 +43,10 @@
   ③重 tab 会拖慢其他 tab 的帧率（同一条循环）。
   想真正并行：**渲染后端可插拔**（local / Win32 子进程 / RVVM 实例，共用一个"渲染后端协议"），
   `AGB_VIEW_BACKEND=process` 时每个 view 是一个独立的 `agave_render_host.exe`：控件只发命令/收事件，
-  像素走命名共享段（canvas + damage），渲染进程崩溃由控件检测并报 load error。
-  设计与协议见 [design-render-backend.md](design-render-backend.md)；每 view 一条引擎线程因为要拆
+  像素走命名共享段（canvas + damage），渲染进程崩溃由控件检测并报 load error。命令文本有两条路：
+  ≤16 KB 走 64 KB 的 SPSC 文本 arena（带读写指针 + 背压），更大的载荷（注入脚本、大 HTML）走
+  **一次性命名共享段**（大小按载荷精确创建），两边都不静默截断。见
+  [design-render-backend.md](design-render-backend.md) §4.1.1；每 view 一条引擎线程因为要拆
   桥/运行时的进程级无锁全局（含 WebCore 的全局 `AtomicString` 表），已降级为备选。
   待办与验收见 [plan-roadmap.md](plan-roadmap.md) 的 "P2 多 tab 并行"。
 
@@ -54,7 +56,7 @@
 |---|---|---|
 | 宿主壳 | `examples/browser_shell/main.c` | 标签页/地址栏/查找/书签；`--probe` 真无头探针。只做 UI，不碰引擎 |
 | Win32 控件 | `src/webview_control/AgaveWebView.c` | 控件窗口、引擎线程、`AGW_CMD_*` 队列、剪贴板/IME、下载表；编进 `libagave.dll` |
-| 渲染后端 seam | `src/webview_control/AgwViewBackend.h/.c` | 控件与"谁在跑页面"之间的接口（v1 只有 `local` = 进程内 macross）；`AGB_VIEW_BACKEND` 选后端，设计见 [design-render-backend.md](design-render-backend.md) |
+| 渲染后端 seam | `src/webview_control/AgwViewBackend.h/.c`、`AgwViewBackendProcess.c` | 控件与"谁在跑页面"之间的接口（`local` = 进程内 macross；`process` = 每 view 一个 `agave_render_host.exe`，协议 `AgwViewIpc.h`）；`AGB_VIEW_BACKEND` 选后端，设计见 [design-render-backend.md](design-render-backend.md) |
 | 视图适配 | `src/webview/` | MaCross `Page`/`Frame`/`WebView`、帧泵、`FrameLoaderClientMC`（willClose/commit/DCL/load）、`DownloadManager`、内部页、`AgbLog.h` |
 | WebCore 移植 | `src/webcore/` | WebKit 2008：HTML/CSS 解析、DOM、布局、绘制、网络 |
 | JS 门面 | `src/javascript/ant_backend/AntRuntime.cpp` | 每 view `RuntimeState`、realm 生命周期、DOM 桥外观、XHR/模块/定时器/history、加载 prelude/polyfills/internal.js |

@@ -17,12 +17,40 @@
 #include "AgwViewProtocol.h"
 
 #define AGW_IPC_MAGIC      0x41564950u /* 'AVIP' */
-#define AGW_IPC_VERSION    1
+#define AGW_IPC_VERSION    2
 
 #define AGW_IPC_CMD_SLOTS  64
 #define AGW_IPC_EVT_SLOTS  64
+/* Text arena. A command's text is copied in whole; larger payloads use a
+ * one-shot section instead (AGW_IPC_CMD_PAYLOAD) - the arena is a small,
+ * always-mapped ring, not a capacity for arbitrary scripts. */
 #define AGW_IPC_TEXT_BYTES 65536
 #define AGW_IPC_CRASH_BYTES 24576
+
+/* Host policy: texts up to this size travel through the text arena, anything
+ * larger through a payload section (one CreateFileMapping of exactly the
+ * payload's size). Not a hard wire limit: the renderer accepts any contiguous
+ * arena text up to AGW_IPC_TEXT_BYTES. */
+#define AGW_IPC_INLINE_TEXT 16384
+/* Sanity cap for a payload section: a host that asks for more than this is
+ * refused instead of asked to allocate it. */
+#define AGW_IPC_PAYLOAD_MAX (64 * 1024 * 1024)
+#define AGW_IPC_PAYLOAD_NAME 64
+
+/* Text arena protocol (single producer = control, single consumer = renderer).
+ *
+ *   cmdTextWrite  producer's next offset, 0..AGW_IPC_TEXT_BYTES
+ *   cmdTextRead   end offset of the last command whose text the renderer COPIED
+ *                 out, 0..AGW_IPC_TEXT_BYTES
+ *
+ * A payload is always contiguous. If it does not fit before the end, the
+ * producer pads the tail (the write counter jumps to 0) and the consumer acks
+ * the new payload's end; (write - read) then still counts the padding as used
+ * until that command is consumed. The producer may only write when
+ * (padding + length) + (write - read) <= AGW_IPC_TEXT_BYTES, otherwise it waits
+ * for the renderer's `_txt` event (signalled after every command is consumed).
+ * The consumer acks the text *before* executing the command, so a long script
+ * cannot stall the arena. No silent truncation on either side. */
 
 /* The canvas is allocated for this size once at create, and a resize only
  * changes how much of it is used; a stale full-size canvas avoids recreating
@@ -35,6 +63,15 @@
 /* Wire-only commands (the protocol itself has no buffer-carrying ops). */
 #define AGW_IPC_CMD_EXIT   1000
 #define AGW_IPC_CMD_RESIZE 1001   /* a = width, b = height */
+/* A command whose text was too large for the inline arena. `payloadName` is a
+ * named shared section the control filled with the payload before posting:
+ *   a = the kind of the command to execute with that payload
+ *       (EVAL / LOAD_HTML / NAVIGATE - kinds whose scalars are unused)
+ *   b = payload byte count
+ *   payloadName = "Local\\agave_pay_<pid>_<counter>"
+ * The renderer maps the section, copies the bytes (the section is only
+ * guaranteed to live until the renderer acks `_pay`), then executes. */
+#define AGW_IPC_CMD_PAYLOAD 1002
 
 typedef struct {
     int32_t kind;
@@ -43,6 +80,7 @@ typedef struct {
     int32_t textOffset;   /* into cmdText */
     int32_t textLen;
     uint32_t docEpoch;    /* document the command was issued against */
+    char    payloadName[AGW_IPC_PAYLOAD_NAME]; /* AGW_IPC_CMD_PAYLOAD only */
 } AgwIpcCommand;
 
 typedef struct {

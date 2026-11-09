@@ -91,6 +91,24 @@ RVVM 后端用 guest 内存 + `virtpass_browser` 的 ecall；local 后端只是�
 | `CTRL` | `navigate/reload/stop/eval/shot` | 复用现有控制命令语义 |
 | `SERVICE_REPLY` | `id,status,payload` | 对 guest 服务请求的应答 |
 
+### 4.1.1 命令文本与大载荷（arena / 一次性共享段）
+
+命令环只有 64 个槽，文本不放进环项本身，而是放进 64 KB 的 `cmdText` arena（[AgwViewIpc.h](../src/webview_control/AgwViewIpc.h)）。
+
+- **arena 是 SPSC 字节环**：`cmdTextWrite`（生产者）与 `cmdTextRead`（消费者）都是 0..`AGW_IPC_TEXT_BYTES` 的偏移；
+  一条命令的文本始终连续。装不下尾部就填充后回绕，`(write - read)` 自动把填充算作已用；
+  `used + padding + length > CAP` 时生产者等 `_txt` 事件（渲染进程每消费一条命令/复制完文本就 SetEvent），
+  不覆盖未读数据、不静默截断。
+- **消费者先 ack 再执行**：渲染进程把文本复制进自己进程后立即推进 `cmdTextRead`，所以一条跑几秒的脚本不会卡住 arena。
+  命令槽本身也是"先填满、再 publish `commandWrite`"，读端不会看到半条命令。
+- **大文本走一次性命名共享段**（`AGW_IPC_CMD_PAYLOAD`，wire-only）：超过 `AGW_IPC_INLINE_TEXT`（16 KB）的文本
+  （inspector.js 32 KB、vConsole 286 KB、生成的大 HTML）由控件按载荷大小精确 `CreateFileMapping`，写入后把
+  "段名 + 长度 + 原命令 kind" 放进环项；渲染进程 map→复制到自己的堆→`_pay` ack→执行，控件收到 ack 立即释放。
+  这样没有固定超大容量、没有分块状态机，也不需要把大文本塞进 arena；超过 `AGW_IPC_PAYLOAD_MAX`（64 MB）或
+  段打不开时回 `COMMAND_DROPPED`，宿主能看到原因而不是"injected 但没效果"。
+- 一个 view 有四个命名事件：`_evt`（有命令）、`_int`（中断/看门狗）、`_txt`（arena/槽位腾出）、`_pay`（载荷已复制）。
+- 布局带 `AGW_IPC_VERSION`，渲染进程启动时校验；版本不符直接退出，不按错误布局读共享段。
+
 ### 4.2 guest → host（事件 + 帧）
 
 | 事件 | 载荷 | 说明 |

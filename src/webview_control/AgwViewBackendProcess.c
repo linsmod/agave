@@ -61,6 +61,8 @@ typedef struct {
     AgwIpcHeader* hdr;
     HANDLE        cmdEvent;
     HANDLE        intEvent;   /* watchdog: abort the renderer's page script */
+    HANDLE        textEvent;  /* renderer consumed command text / a slot */
+    HANDLE        payEvent;   /* renderer copied a payload section */
     HANDLE        process;
     unsigned long pid;
     char          ipcName[160];
@@ -84,6 +86,11 @@ typedef struct {
     int64_t       frameLatencySumUs;
     int64_t       frameLatencyMaxUs;
 } ProcessView;
+
+/* Command ring writer (defined with the submit path below): reserve a slot and
+ * publish it only after it is filled. */
+static AgwIpcCommand* beginWireCommand(ProcessView* pv, DWORD timeoutMs);
+static void endWireCommand(ProcessView* pv);
 
 /* The renderer sits next to the host executable (agave_shell / the embedder):
  * both are deployed together, so the control's own directory is the answer. */
@@ -176,6 +183,14 @@ static void closeView(ProcessView* pv, int requestExit)
     if (pv->intEvent) {
         CloseHandle(pv->intEvent);
         pv->intEvent = NULL;
+    }
+    if (pv->textEvent) {
+        CloseHandle(pv->textEvent);
+        pv->textEvent = NULL;
+    }
+    if (pv->payEvent) {
+        CloseHandle(pv->payEvent);
+        pv->payEvent = NULL;
     }
     if (pv->process) {
         CloseHandle(pv->process);
@@ -274,6 +289,16 @@ static void* processCreate(void* owner, MC_BYTE* buffer, int width, int height, 
 
         snprintf(eventName, sizeof(eventName), "%s_int", pv->ipcName);
         pv->intEvent = CreateEventA(NULL, FALSE, FALSE, eventName);
+
+        /* Text arena read/write protocol: the renderer signals after it copied
+         * a command's text (frees arena space) and after each consumed command
+         * (frees a ring slot); the producer waits on it instead of overwriting
+         * or dropping silently. `_pay` acks the copy of a payload section. */
+        snprintf(eventName, sizeof(eventName), "%s_txt", pv->ipcName);
+        pv->textEvent = CreateEventA(NULL, FALSE, FALSE, eventName);
+
+        snprintf(eventName, sizeof(eventName), "%s_pay", pv->ipcName);
+        pv->payEvent = CreateEventA(NULL, FALSE, FALSE, eventName);
     }
 
     {
@@ -391,7 +416,6 @@ static void processDestroy(void* view)
 static void processResize(void* view, MC_BYTE* buffer, int width, int height, int pitch)
 {
     ProcessView* pv = (ProcessView*)view;
-    LONG slot;
     AgwIpcCommand* cmd;
 
     (void)buffer;
@@ -403,46 +427,265 @@ static void processResize(void* view, MC_BYTE* buffer, int width, int height, in
     pv->width = width;
     pv->height = height;
 
-    slot = InterlockedIncrement(&pv->hdr->commandWrite) - 1;
-    cmd = &pv->hdr->commands[slot & (AGW_IPC_CMD_SLOTS - 1)];
-    memset(cmd, 0, sizeof(*cmd));
+    /* Ring full means the renderer is not draining right now; the next WM_SIZE
+     * retries with the then-current size (resize is level-triggered). */
+    cmd = beginWireCommand(pv, 2000);
+    if (!cmd)
+        return;
+
     cmd->kind = AGW_IPC_CMD_RESIZE;
     cmd->a = width;
     cmd->b = height;
+    endWireCommand(pv);
+}
+
+/* Bytes of the text arena the renderer has not consumed yet. Offsets (not
+ * wrapping counters) are stored, so the distance is in [0, AGW_IPC_TEXT_BYTES]:
+ * write == read is empty, write == CAP with read == 0 is exactly full. */
+static int textArenaUsed(AgwIpcHeader* hdr)
+{
+    int used = (int)hdr->cmdTextWrite - (int)hdr->cmdTextRead;
+
+    if (used < 0)
+        used += AGW_IPC_TEXT_BYTES;
+
+    if (used < 0 || used > AGW_IPC_TEXT_BYTES)
+        return AGW_IPC_TEXT_BYTES;   /* defensive: a corrupt header reads as full */
+
+    return used;
+}
+
+/* Waits until the command ring has a free slot. The renderer signals `_txt`
+ * after every consumed command. Only the engine thread submits normal commands,
+ * so a slot observed free here is still free when the caller increments
+ * commandWrite (nothing else can take it in between). */
+static int waitForCommandSlot(ProcessView* pv, DWORD timeoutMs)
+{
+    ULONGLONG deadline = GetTickCount64() + timeoutMs;
+
+    for (;;) {
+        LONG write = pv->hdr->commandWrite;
+        LONG read = pv->hdr->commandRead;
+
+        if ((int)(write - read) < AGW_IPC_CMD_SLOTS - 1)
+            return 1;
+
+        if (pv->exited ||
+            (pv->process && WaitForSingleObject(pv->process, 0) == WAIT_OBJECT_0))
+            return 0;
+
+        if (GetTickCount64() >= deadline)
+            return 0;
+
+        if (pv->textEvent)
+            WaitForSingleObject(pv->textEvent, 5);
+        else
+            Sleep(1);
+    }
+}
+
+/* Copies one text payload into the arena and returns its offset/length, or 0
+ * when it cannot be placed before the deadline. Never truncates: a payload
+ * larger than the arena is refused (it should have gone through a payload
+ * section, see processSubmitPayload). A payload that would cross the end is
+ * moved to the start; the tail padding is accounted for through
+ * (cmdTextWrite - cmdTextRead), so the consumer's ack releases it. */
+static int pushWireText(ProcessView* pv, const char* text, int len, int32_t* outOffset)
+{
+    ULONGLONG deadline;
+    int off = 0;
+    int pad = 0;
+    int need = 0;
+    int used = 0;
+
+    *outOffset = 0;
+
+    if (!text || len <= 0)
+        return 0;
+
+    if (len > AGW_IPC_TEXT_BYTES)
+        return 0;
+
+    deadline = GetTickCount64() + 2000;
+
+    for (;;) {
+        LONG write = pv->hdr->cmdTextWrite;
+
+        if (write < 0 || write > AGW_IPC_TEXT_BYTES)
+            return 0;               /* corrupt header */
+
+        if (write + len > AGW_IPC_TEXT_BYTES) {
+            off = 0;
+            pad = AGW_IPC_TEXT_BYTES - (int)write;
+        } else {
+            off = (int)write;
+            pad = 0;
+        }
+
+        need = pad + len;
+        used = textArenaUsed(pv->hdr);
+
+        if (used + need <= AGW_IPC_TEXT_BYTES)
+            break;
+
+        if (pv->exited ||
+            (pv->process && WaitForSingleObject(pv->process, 0) == WAIT_OBJECT_0))
+            return 0;
+
+        if (GetTickCount64() >= deadline) {
+            agbLog(AGB_LOG_SHELL,
+                   "process backend: text arena full (%d used, %d needed)", used, need);
+            return 0;
+        }
+
+        if (pv->textEvent)
+            WaitForSingleObject(pv->textEvent, 5);
+        else
+            Sleep(1);
+    }
+
+    memcpy(&pv->hdr->cmdText[off], text, (size_t)len);
+    InterlockedExchange(&pv->hdr->cmdTextWrite, off + len);
+    *outOffset = off;
+    return len;
+}
+
+/* Reserve one wire command slot. The slot is only *published* by
+ * endWireCommand() after it is fully written: the renderer must never observe a
+ * command whose fields are still being filled. Fails when the renderer is not
+ * draining. */
+static AgwIpcCommand* beginWireCommand(ProcessView* pv, DWORD timeoutMs)
+{
+    LONG slot;
+    AgwIpcCommand* wire;
+
+    if (!waitForCommandSlot(pv, timeoutMs))
+        return NULL;
+
+    slot = pv->hdr->commandWrite;
+    wire = &pv->hdr->commands[slot & (AGW_IPC_CMD_SLOTS - 1)];
+    memset(wire, 0, sizeof(*wire));
+    return wire;
+}
+
+static void endWireCommand(ProcessView* pv)
+{
+    LONG slot = pv->hdr->commandWrite;
+
+    /* Publish last (full barrier): index visible only after the payload. */
+    InterlockedExchange(&pv->hdr->commandWrite, slot + 1);
+
     if (pv->cmdEvent)
         SetEvent(pv->cmdEvent);
 }
 
-static int pushWireText(ProcessView* pv, const char* text, int len, int32_t* outOffset)
+/* A payload that does not fit the inline arena travels through a one-shot named
+ * section sized exactly to the payload (no fixed large capacity in the header).
+ * The renderer maps it, copies it into its own heap, acks `_pay`, and only then
+ * executes it, so this side may unmap as soon as the ack arrives. */
+static int processSubmitPayload(ProcessView* pv, const AgwViewCommand* command)
 {
-    int32_t off;
+    static LONG payloadSeq;
+    char name[AGW_IPC_PAYLOAD_NAME];
+    HANDLE mapping;
+    void* view;
+    AgwIpcCommand* wire;
+    LONG id;
+    int len = command->textLen;
+    int done;
 
-    *outOffset = 0;
-    if (!text || len <= 0)
+    if (!command->text || len <= 0 || len > AGW_IPC_PAYLOAD_MAX)
         return 0;
 
-    if (len > AGW_IPC_TEXT_BYTES / 2)
-        len = AGW_IPC_TEXT_BYTES / 2;
+    /* The wire payload command carries the payload as its whole message, so it
+     * only covers kinds whose scalar arguments are unused. */
+    if (command->kind != AGW_VIEW_CMD_EVAL &&
+        command->kind != AGW_VIEW_CMD_LOAD_HTML &&
+        command->kind != AGW_VIEW_CMD_NAVIGATE)
+        return 0;
 
-    off = InterlockedExchangeAdd(&pv->hdr->cmdTextWrite, len);
-    /* Keep it contiguous: the renderer copies in one memcpy when it can and
-     * wraps otherwise (see commandText()). */
-    if ((off & (AGW_IPC_TEXT_BYTES - 1)) + len > AGW_IPC_TEXT_BYTES) {
-        off = 0;
-        InterlockedExchange(&pv->hdr->cmdTextWrite, len);
-    } else {
-        off &= (AGW_IPC_TEXT_BYTES - 1);
+    if (command->a || command->b || command->c || command->d)
+        return 0;
+
+    if (!pv->payEvent)
+        return 0;
+
+    id = InterlockedIncrement(&payloadSeq);
+    snprintf(name, sizeof(name), "Local\\agave_pay_%lu_%ld",
+             (unsigned long)GetCurrentProcessId(), (long)id);
+    if (strlen(name) >= sizeof(name) - 1)
+        return 0;
+
+    mapping = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0,
+                                 (DWORD)len, name);
+    if (!mapping) {
+        agbLog(AGB_LOG_SHELL, "process backend: payload section failed (err %lu)",
+               (unsigned long)GetLastError());
+        return 0;
     }
 
-    memcpy(&pv->hdr->cmdText[off], text, (size_t)len);
-    *outOffset = off;
-    return len;
+    view = MapViewOfFile(mapping, FILE_MAP_ALL_ACCESS, 0, 0, 0);
+    if (!view) {
+        CloseHandle(mapping);
+        return 0;
+    }
+
+    memcpy(view, command->text, (size_t)len);
+
+    wire = beginWireCommand(pv, 2000);
+    if (!wire) {
+        UnmapViewOfFile(view);
+        CloseHandle(mapping);
+        return 0;
+    }
+
+    wire->kind = AGW_IPC_CMD_PAYLOAD;
+    wire->a = command->kind;
+    wire->b = len;
+    wire->docEpoch = command->docEpoch;
+    memcpy(wire->payloadName, name, strlen(name) + 1);
+
+    ResetEvent(pv->payEvent);
+    endWireCommand(pv);
+
+    /* Wait for the copy ack in short slices: a dead renderer is reported by
+     * poll() (and its process handle is already signaled), so this must not
+     * hold the engine thread for the full budget. */
+    {
+        ULONGLONG deadline = GetTickCount64() + 5000;
+
+        for (;;) {
+            DWORD got = WaitForSingleObject(pv->payEvent, 50);
+
+            if (got == WAIT_OBJECT_0) {
+                done = 1;
+                break;
+            }
+
+            if (pv->exited ||
+                (pv->process && WaitForSingleObject(pv->process, 0) == WAIT_OBJECT_0) ||
+                GetTickCount64() >= deadline) {
+                done = 0;
+                break;
+            }
+        }
+    }
+
+    UnmapViewOfFile(view);
+    CloseHandle(mapping);
+
+    if (!done) {
+        agbLog(AGB_LOG_SHELL,
+               "process backend: payload %d bytes not consumed by the renderer", len);
+        return 0;
+    }
+
+    return 1;
 }
 
 static int processSubmit(void* view, const AgwViewCommand* command)
 {
     ProcessView* pv = (ProcessView*)view;
-    LONG slot;
     AgwIpcCommand* wire;
     int32_t textOffset = 0;
     int textLen = 0;
@@ -450,13 +693,26 @@ static int processSubmit(void* view, const AgwViewCommand* command)
     if (!pv || !pv->hdr || !command)
         return 0;
 
-    if (command->text && command->textLen > 0)
+    if (command->text && command->textLen > 0) {
+        if (command->textLen > AGW_IPC_INLINE_TEXT) {
+            if (!processSubmitPayload(pv, command)) {
+                agbLog(AGB_LOG_SHELL,
+                       "process backend: %d-byte text refused for kind %d",
+                       command->textLen, command->kind);
+                return 0;
+            }
+            return 1;
+        }
+
         textLen = pushWireText(pv, command->text, command->textLen, &textOffset);
+        if (textLen <= 0)
+            return 0;
+    }
 
-    slot = InterlockedIncrement(&pv->hdr->commandWrite) - 1;
-    wire = &pv->hdr->commands[slot & (AGW_IPC_CMD_SLOTS - 1)];
+    wire = beginWireCommand(pv, 2000);
+    if (!wire)
+        return 0;
 
-    memset(wire, 0, sizeof(*wire));
     wire->kind = command->kind;
     wire->a = command->a;
     wire->b = command->b;
@@ -467,9 +723,7 @@ static int processSubmit(void* view, const AgwViewCommand* command)
     wire->textLen = textLen;
     wire->docEpoch = command->docEpoch;
 
-    if (pv->cmdEvent)
-        SetEvent(pv->cmdEvent);
-
+    endWireCommand(pv);
     return 1;
 }
 

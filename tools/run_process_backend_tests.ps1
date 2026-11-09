@@ -167,6 +167,40 @@ if ($input.Code -eq 0 -and $input.Stdout -match 'value=ab1') {
 }
 Assert-NoRenderer 'input' | Out-Null
 
+# 3b. an injected asset larger than the inline arena: inspector.js is 32 KB, so
+#     it travels through a one-shot payload section. Before that channel existed
+#     the renderer cut every script at 4 KiB and the injection silently did
+#     nothing while the host still said "Injected ...".
+$inject = Invoke-Probe -Page (Join-Path $pages 'inspector_demo.html') -Wait 400 -Settle 400 `
+    -Extra @('--inject', 'inspector') `
+    -Js 'probeExit("ins=" + (window.__agaveInspector ? "yes" : "no") + " root=" + (document.getElementById("__agave_inspector__") ? "yes" : "no") + " hit=" + (window.__agaveInspector && window.__agaveInspector.inspectAt(120,140) ? "yes" : "no"));'
+$injectText = $inject.Stdout + $inject.Stderr
+
+if ($inject.Code -eq 0 -and $injectText -match 'ins=yes root=yes hit=yes') {
+    Write-Host "PASS  process backend: 32 KB injected asset arrives whole (payload section)"
+} else {
+    $failures++
+    Write-Host ("FAIL  process backend: injected asset (exit {0})" -f $inject.Code)
+    Write-Host (($injectText -split "`n" | Where-Object { $_ -match 'ins=|inject:|dropped|crash' } | Select-Object -Last 4) -join "`n")
+}
+Assert-NoRenderer 'inject asset' | Out-Null
+
+# 3c. a 300 KiB --eval-file: the bytes must reach the renderer whole. The old
+#     path cut the file at 8 KiB in the shell, then at 32 KiB in the control;
+#     markers at both ends prove neither cut happens.
+$bigScript = "window.__bigStart=1;`n// " + ('x' * 300000) + "`n;window.__bigEnd='tail-ok';probeExit('start=' + window.__bigStart + ' end=' + window.__bigEnd);"
+$big = Invoke-Probe -Page (Join-Path $pages 'blank.html') -Wait 300 -Settle 300 -Js $bigScript
+$bigText = $big.Stdout + $big.Stderr
+
+if ($big.Code -eq 0 -and $bigText -match 'start=1 end=tail-ok') {
+    Write-Host "PASS  process backend: 300 KiB eval script arrives whole (no truncation)"
+} else {
+    $failures++
+    Write-Host ("FAIL  process backend: large eval script (exit {0})" -f $big.Code)
+    Write-Host (($bigText -split "`n" | Where-Object { $_ -match 'start=|eval-file|dropped|crash' } | Select-Object -Last 4) -join "`n")
+}
+Assert-NoRenderer 'large eval' | Out-Null
+
 # 4. crash: the renderer dies, the control reports an error instead of hanging
 $env:AGB_RENDER_CRASH_MS = '400'
 try {

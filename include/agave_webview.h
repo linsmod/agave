@@ -190,6 +190,7 @@ typedef enum {
 #define AGW_REASON_NO_DOCUMENT         "no live document"
 #define AGW_REASON_DOCUMENT_REPLACED   "document replaced by a navigation"
 #define AGW_REASON_RENDERER            "renderer refused the command"
+#define AGW_REASON_PAYLOAD             "payload buffer unavailable"
 
 /* Runs a script in the page (thread safe, queued). See AgwCommandStatus: OK
  * means "queued", not "ran". The outcome, when it fails, arrives through

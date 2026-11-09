@@ -47,11 +47,18 @@ static AgwIpcHeader* g_hdr;
 static HANDLE        g_map;
 static HANDLE        g_cmdEvent;
 static HANDLE        g_intEvent;
+static HANDLE        g_txtEvent;   /* text arena space / ring slot freed */
+static HANDLE        g_payEvent;   /* payload section copied */
 static volatile LONG g_stopWatchdog;
 static MaCrossView*  g_view;
 static MC_BYTE*      g_frame;
 static int           g_visible = 1;
 static int           g_log;
+
+/* Full-size command text buffer: one command's arena text is copied here whole
+ * (the control never sends more than AGW_IPC_TEXT_BYTES). The old fixed 4 KiB
+ * stack buffer silently cut every injected script in half. */
+static char          g_cmdText[AGW_IPC_TEXT_BYTES + 1];
 
 /* A spawned renderer has no console (CREATE_NO_WINDOW, no inherited handles):
  * AGB_RENDER_LOG=1 writes next to the exe instead of stderr. */
@@ -307,7 +314,8 @@ static DWORD WINAPI watchdogThread(LPVOID param)
 /* ---- commands from the control ----------------------------------------- */
 
 /* Copies this slot's text out: the arena is a ring, so a contiguous run is only
- * guaranteed inside the slot's own copy. */
+ * guaranteed inside the slot's own copy. The caller passes a buffer of at least
+ * AGW_IPC_TEXT_BYTES + 1; the copy is never truncated. */
 static void commandText(const AgwIpcCommand* cmd, char* out, int outCap)
 {
     int len = cmd->textLen;
@@ -317,26 +325,130 @@ static void commandText(const AgwIpcCommand* cmd, char* out, int outCap)
     if (len <= 0 || !outCap)
         return;
 
+    if (cmd->textOffset < 0 || cmd->textOffset >= AGW_IPC_TEXT_BYTES) {
+        len = 0;
+        return;
+    }
+
+    if (len > AGW_IPC_TEXT_BYTES - cmd->textOffset)
+        len = AGW_IPC_TEXT_BYTES - cmd->textOffset;   /* corrupt slot: clamp */
     if (len > outCap - 1)
         len = outCap - 1;
 
-    if (cmd->textOffset >= 0 && cmd->textOffset + len <= AGW_IPC_TEXT_BYTES)
-        memcpy(out, &g_hdr->cmdText[cmd->textOffset], (size_t)len);
-    else if (cmd->textOffset >= 0 && cmd->textOffset < AGW_IPC_TEXT_BYTES) {
-        int first = AGW_IPC_TEXT_BYTES - cmd->textOffset;
+    memcpy(out, &g_hdr->cmdText[cmd->textOffset], (size_t)len);
+    out[len] = 0;
+}
 
-        memcpy(out, &g_hdr->cmdText[cmd->textOffset], (size_t)first);
-        memcpy(out + first, g_hdr->cmdText, (size_t)(len - first));
+/* The renderer has copied (or will never use) the text of this command: publish
+ * the arena read pointer so the producer may reuse the bytes even if the
+ * command itself runs for a long time. */
+static void ackCommandText(const AgwIpcCommand* cmd)
+{
+    int end;
+
+    if (cmd->textLen <= 0 || cmd->textOffset < 0)
+        return;
+
+    end = cmd->textOffset + cmd->textLen;
+    if (end < cmd->textOffset || end > AGW_IPC_TEXT_BYTES)
+        return;   /* corrupt slot: leave the read pointer alone */
+
+    InterlockedExchange(&g_hdr->cmdTextRead, end);
+    if (g_txtEvent)
+        SetEvent(g_txtEvent);
+}
+
+static void ackPayload(void)
+{
+    if (g_payEvent)
+        SetEvent(g_payEvent);
+}
+
+static void reportPayloadFailure(const char* why, int kind, unsigned epoch)
+{
+    pushEvent(AGW_VIEW_EVENT_COMMAND_DROPPED, kind, 0, (int)epoch, 0,
+              why, (int)strlen(why));
+}
+
+/* AGW_IPC_CMD_PAYLOAD: the text arrived through a one-shot named section, not
+ * the arena. Copy it into our heap, ack the section (the host frees it now),
+ * then execute the command that asked for it. */
+static int executePayload(const AgwIpcCommand* cmd)
+{
+    static const char noSection[] = AGW_REASON_PAYLOAD;
+    unsigned epoch = g_view ? macross_view_document_epoch(g_view) : 0;
+    HANDLE map;
+    const char* base = NULL;
+    char* text;
+    int len = cmd->b;
+
+    if (cmd->payloadName[AGW_IPC_PAYLOAD_NAME - 1] != 0 || len <= 0 ||
+        len > AGW_IPC_PAYLOAD_MAX) {
+        ackPayload();
+        reportPayloadFailure(noSection, (int)cmd->a, epoch);
+        return 1;
     }
 
-    out[len] = 0;
+    map = OpenFileMappingA(FILE_MAP_READ, FALSE, cmd->payloadName);
+    if (map)
+        base = (const char*)MapViewOfFile(map, FILE_MAP_READ, 0, 0, 0);
+
+    if (!base) {
+        rlog("[render] payload '%s' open failed (err %lu)\n",
+             cmd->payloadName, (unsigned long)GetLastError());
+        if (map)
+            CloseHandle(map);
+        ackPayload();
+        reportPayloadFailure(noSection, (int)cmd->a, epoch);
+        return 1;
+    }
+
+    text = (char*)malloc((size_t)len + 1);
+    if (!text) {
+        UnmapViewOfFile((void*)base);
+        CloseHandle(map);
+        ackPayload();
+        reportPayloadFailure(noSection, (int)cmd->a, epoch);
+        return 1;
+    }
+
+    memcpy(text, base, (size_t)len);
+    text[len] = 0;
+    UnmapViewOfFile((void*)base);
+    CloseHandle(map);
+
+    /* The payload is ours now; the host may unmap its section. Ack before the
+     * command runs: an eval can take arbitrarily long. */
+    ackPayload();
+
+    if (g_log)
+        rlog("[render] payload kind=%d bytes=%d text='%.120s'\n", cmd->a, len, text);
+
+    switch (cmd->a) {
+    case AGW_VIEW_CMD_EVAL:
+        macross_view_eval_script(g_view, text);
+        break;
+    case AGW_VIEW_CMD_LOAD_HTML:
+        macross_view_load_html(g_view, text, "");
+        break;
+    case AGW_VIEW_CMD_NAVIGATE:
+        macross_view_open_url(g_view, text);
+        break;
+    default:
+        /* The control-side validation refuses this; be loud if it happens. */
+        reportPayloadFailure(noSection, (int)cmd->a, epoch);
+        break;
+    }
+
+    free(text);
+    return 1;
 }
 
 static int executeCommand(const AgwIpcCommand* cmd)
 {
-    char text[4096];
     unsigned epoch = g_view ? macross_view_document_epoch(g_view) : 0;
     unsigned cmdEpoch = cmd->docEpoch;
+    const char* text = g_cmdText;
 
     /* Test hook: pretend every stamped command was issued for a different
      * document, so the "renderer refuses a stale command" path can be exercised
@@ -345,7 +457,11 @@ static int executeCommand(const AgwIpcCommand* cmd)
     if (getenv("AGB_IPC_STALE_EPOCH") && cmdEpoch)
         cmdEpoch += 0x1000;
 
-    commandText(cmd, text, sizeof(text));
+    commandText(cmd, g_cmdText, sizeof(g_cmdText));
+
+    /* Release the arena bytes before running the command: a script can run for
+     * seconds, and the producer must not be blocked on bytes we already own. */
+    ackCommandText(cmd);
 
     if (g_log)
         rlog("[render] cmd kind=%d a=%d b=%d epoch=%u cur=%u text='%s'\n",
@@ -357,13 +473,21 @@ static int executeCommand(const AgwIpcCommand* cmd)
      * so the control can tell its host (the local backend answers 0 instead). */
     if (cmdEpoch && epoch && cmdEpoch != epoch) {
         static const char why[] = AGW_REASON_DOCUMENT_REPLACED;
+        int kind = (int)cmd->kind;
 
-        pushEvent(AGW_VIEW_EVENT_COMMAND_DROPPED, (int)cmd->kind,
+        if (cmd->kind == AGW_IPC_CMD_PAYLOAD) {
+            ackPayload();   /* the control is waiting on the section copy */
+            kind = (int)cmd->a;   /* report the command the payload was for */
+        }
+
+        pushEvent(AGW_VIEW_EVENT_COMMAND_DROPPED, kind,
                   (int)cmdEpoch, (int)epoch, 0, why, (int)sizeof(why) - 1);
         return 1;
     }
 
     switch (cmd->kind) {
+    case AGW_IPC_CMD_PAYLOAD:
+        return executePayload(cmd);
     case AGW_VIEW_CMD_VISIBLE:
         g_visible = cmd->a ? 1 : 0;
         macross_view_set_visible(g_view, g_visible);
@@ -461,6 +585,10 @@ static int drainCommands(void)
 
         ++read;
         InterlockedExchange(&g_hdr->commandRead, read);
+        /* A consumed command frees its ring slot; the producer may be waiting
+         * for one (or for arena space it reclaimed while copying the text). */
+        if (g_txtEvent)
+            SetEvent(g_txtEvent);
         /* A resize/zoom changes what the next frame must cover. */
     }
 
@@ -513,6 +641,15 @@ int main(int argc, char** argv)
         return 3;
     }
 
+    if (g_hdr->version != AGW_IPC_VERSION) {
+        /* Both executables are deployed together; a mismatch means a stale
+         * renderer would read a layout it does not know. Say so instead of
+         * running with garbage offsets. */
+        rlog("render_host: ipc version %u, expected %u\n",
+             (unsigned)g_hdr->version, (unsigned)AGW_IPC_VERSION);
+        return 3;
+    }
+
     width = (int)g_hdr->width;
     height = (int)g_hdr->height;
     if (width <= 0 || height <= 0)
@@ -523,6 +660,12 @@ int main(int argc, char** argv)
 
     snprintf(eventName, sizeof(eventName), "%s_int", ipcName);
     g_intEvent = OpenEventA(SYNCHRONIZE, FALSE, eventName);
+
+    snprintf(eventName, sizeof(eventName), "%s_txt", ipcName);
+    g_txtEvent = OpenEventA(EVENT_MODIFY_STATE, FALSE, eventName);
+
+    snprintf(eventName, sizeof(eventName), "%s_pay", ipcName);
+    g_payEvent = OpenEventA(EVENT_MODIFY_STATE, FALSE, eventName);
 
     g_frame = agwIpcFrame(g_hdr);
 

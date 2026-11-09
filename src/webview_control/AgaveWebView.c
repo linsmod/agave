@@ -1904,12 +1904,24 @@ static void agwDrainCommands(void)
 
         case AGW_CMD_EVAL:
             /* A FALSE from the backend means nothing ran: no live document, no
-             * engine, or the renderer refused it. The host must learn that
-             * instead of assuming the script executed. */
-            if (!agwSubmitText(item, AGW_VIEW_CMD_EVAL, payload, 0, 0, 0, 0))
-                agwReportCommandDrop(item, command.type,
-                                     item->backendView ? AGW_REASON_NO_DOCUMENT : AGW_REASON_NO_PAGE,
+             * engine, a full text arena, or the renderer refused the payload.
+             * The host must learn that instead of assuming the script ran.
+             * Local reports "no document"; a remote backend only answers 0 when
+             * it could not hand the script over at all. */
+            if (!agwSubmitText(item, AGW_VIEW_CMD_EVAL, payload, 0, 0, 0, 0)) {
+                const char* reason;
+
+                if (!item->backendView)
+                    reason = AGW_REASON_NO_PAGE;
+                else if (item->backend && item->backend->name &&
+                         strcmp(item->backend->name, "local") != 0)
+                    reason = AGW_REASON_RENDERER;
+                else
+                    reason = AGW_REASON_NO_DOCUMENT;
+
+                agwReportCommandDrop(item, command.type, reason,
                                      command.docEpoch, (uint32_t)item->docEpoch);
+            }
             break;
 
         case AGW_CMD_VISIBLE:

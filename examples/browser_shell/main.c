@@ -44,6 +44,11 @@
  * runs inside the control's window procedure. wParam = tab index. */
 #define AGW_SHELL_HANG_PROMPT (WM_APP + 22)
 
+/* A dropped command wrote its reason into tab->status on the engine thread; the
+ * status bar is main-thread state, so the repaint is posted (see
+ * onCommandDropped). */
+#define AGW_SHELL_STATUS (WM_APP + 24)
+
 #define TAB_HEIGHT    28
 #define TOOLBAR_Y     4
 #define TOOLBAR_H     34
@@ -1329,6 +1334,10 @@ static void onCommandDropped(AgaveWebView* view, const char* kind,
         _snprintf(tab->status, sizeof(tab->status) - 1, "dropped %s: %s",
                   kind ? kind : "?", reason ? reason : "?");
         tab->status[sizeof(tab->status) - 1] = 0;
+
+        /* Engine thread: only ask the main thread to repaint the bar. */
+        if (g_hwnd && !g_probeMode)
+            PostMessageA(g_hwnd, AGW_SHELL_STATUS, 0, 0);
     }
 }
 
@@ -2571,6 +2580,10 @@ static LRESULT CALLBACK shellProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM
         return 0;
     }
 
+    case AGW_SHELL_STATUS:
+        updateStatus();
+        return 0;
+
     case AGW_SHELL_HANG_PROMPT: {
         int index = (int)wParam;
 
@@ -2995,6 +3008,10 @@ static AgaveWebView* g_probeView;
 static AgaveWebView* g_probeNewView;   /* window opened by the page (target=_blank) */
 static char          g_probeScript[8192] =
     "agavePostMessage('[dump] ' + document.documentElement.outerHTML)";
+/* --eval-file keeps the file's bytes on the heap: scripts (asset bundles,
+ * generated probes) are routinely larger than the inline --eval buffer, and a
+ * silent cut at 8 KiB used to break them before the backend ever saw them. */
+static char*         g_probeScriptFile;
 static int g_probeWaitMs    = 3000;   /* after load finished, before eval   */
 static int g_probeSettleMs  = 1000;   /* after eval, before exit            */
 static int g_probeTimeoutMs = 60000;  /* hard cap from start                */
@@ -3042,6 +3059,13 @@ static int  g_probeResizeH;
 static int  g_probeResizeDone;    /* the probe window was resized already      */
 static int  g_probeZoom;          /* --zoom <percent>: page zoom before --eval  */
 static int  g_probeZoomDone;
+
+/* The script --eval/--eval-file asked for: the heap copy when the script came
+ * from a file, otherwise the inline buffer. */
+static const char* probeScriptText(void)
+{
+    return g_probeScriptFile ? g_probeScriptFile : g_probeScript;
+}
 
 /* Offscreen capture. A hidden window gets no WM_PAINT, so PrintWindow has
  * nothing to render; the control keeps its own mirror buffer, and
@@ -4131,7 +4155,12 @@ static int probeRun(const char* url)
                         continue;
                     }
                     g_probeKeysDone = 1;
-                    SetTimer(g_probeWnd, PROBE_TIMER_EVAL, 300, NULL);
+                    /* Give the engine time to drain the posted key messages
+                     * before the eval reads the value. 300 ms was enough on an
+                     * idle machine but flaked under load (grayscale text AA
+                     * made the first paints slower): a key case would
+                     * occasionally report a short/empty value. */
+                    SetTimer(g_probeWnd, PROBE_TIMER_EVAL, 800, NULL);
                     continue;
                 }
 
@@ -4172,7 +4201,7 @@ static int probeRun(const char* url)
                  * screenshot path. With an eval script the capture has to wait
                  * for the script and its --settle delay (see PROBE_TIMER_SETTLE
                  * below), otherwise the shot would be the pre-eval frame. */
-                if (g_probeShot[0] && !g_probeScript[0]) {
+                if (g_probeShot[0] && !probeScriptText()[0]) {
                     /* Let one more frame run: an --eval that scrolled or mutated
                      * the DOM has not been painted yet, and the control's mirror
                      * still holds the pre-eval pixels. */
@@ -4255,14 +4284,20 @@ static int probeRun(const char* url)
                     "}");
                 /* Tag the document with the round number: the document itself
                  * is replaced on reload, so nothing else survives to tell
-                 * the rounds apart. */
+                 * the rounds apart. Sized from the script: --eval-file may be
+                 * an asset bundle far larger than the old 8 KiB stack buffer. */
                 {
-                    char script[8300];
+                    const char* source = probeScriptText();
+                    size_t need = strlen(source) + 128;
+                    char* script = (char*)malloc(need);
 
-                    snprintf(script, sizeof(script),
-                             "window.__agbRound=%d;window.__agbRounds=%d;%s",
-                             g_probeRound, g_probeTotalRounds, g_probeScript);
-                    agave_webview_eval(g_probeView, script);
+                    if (script) {
+                        snprintf(script, need,
+                                 "window.__agbRound=%d;window.__agbRounds=%d;%s",
+                                 g_probeRound, g_probeTotalRounds, source);
+                        agave_webview_eval(g_probeView, script);
+                        free(script);
+                    }
                 }
                 /* Eval-completion signal. The engine drains commands in order,
                  * so this marker runs right after the script returns - and it
@@ -4610,25 +4645,32 @@ static void parseShellArgv(void)
         } else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
             g_showUsage = 1;
         } else if (!strcmp(argv[i], "--eval") && i + 1 < argc) {
+            /* Last one wins: an --eval after --eval-file drops the file. */
+            free(g_probeScriptFile);
+            g_probeScriptFile = NULL;
             strncpy(g_probeScript, argv[++i], sizeof(g_probeScript) - 1);
             g_probeScript[sizeof(g_probeScript) - 1] = 0;
         } else if (!strcmp(argv[i], "--eval-file") && i + 1 < argc) {
             /* Same as --eval, but the script comes from a file. parseCommandLine
              * treats " and \ as syntax, so an inline script holding JS string
-             * literals (or a regexp) arrives mangled; a file always survives. */
-            FILE* scriptFile = fopen(argv[++i], "rb");
+             * literals (or a regexp) arrives mangled; a file always survives.
+             * The file is kept on the heap: assets and generated probes are
+             * routinely larger than the inline buffer, and a silent cut here
+             * would also cut what the backend is asked to run. */
+            wchar_t widePath[MAX_PATH_CHARS];
+            size_t got = 0;
 
-            if (!scriptFile) {
+            utf8ToWide(argv[++i], widePath, MAX_PATH_CHARS);
+            free(g_probeScriptFile);
+            g_probeScriptFile = readFileUtf8(widePath, &got);
+
+            if (!g_probeScriptFile) {
                 fprintf(stderr, "[shell] --eval-file: cannot open %s\n", argv[i]);
                 g_argError = 1;
                 return;
             }
-            {
-                size_t got = fread(g_probeScript, 1, sizeof(g_probeScript) - 1, scriptFile);
-
-                g_probeScript[got] = 0;
-            }
-            fclose(scriptFile);
+            agbLog(AGB_LOG_PROBE, "eval-file %s (%lu bytes)", argv[i],
+                   (unsigned long)got);
         } else if (!strcmp(argv[i], "--shot") && i + 1 < argc) {
             strncpy(g_probeShot, argv[++i], sizeof(g_probeShot) - 1);
             g_probeShot[sizeof(g_probeShot) - 1] = 0;
