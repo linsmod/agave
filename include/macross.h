@@ -252,6 +252,16 @@ MACROSS_API MC_STATUS macross_view_update(MaCrossView* view, const MC_RECT* rect
 MACROSS_API MC_STATUS macross_view_pump(MaCrossView* view);
 
 /**
+ * \fn MC_STATUS macross_interrupt_view(MaCrossView* view)
+ * \brief Abort the page script this view is running, if any.
+ *
+ * Safe to call from another thread (the interrupt registry is lock protected),
+ * which is what a watchdog does. In a process backend each renderer hosts one
+ * view, so this aborts exactly that view's script.
+ */
+MACROSS_API MC_STATUS macross_interrupt_view(MaCrossView* view);
+
+/**
  * \fn MC_STATUS macross_view_resize(MaCrossView* view, MC_BYTE* buffer, int width, int height, int pitch)
  * \brief Resize a webview with given parameters.
  *

@@ -6216,6 +6216,14 @@ static void bindFrameRealm(AntbEngine* engine, DocumentRuntime* runtime)
     loadPolyfills();
 }
 
+/* Aborts whatever page script is on this engine thread. The bridge's interrupt
+ * registry is lock protected (R146), so the renderer's watchdog thread may call
+ * it while the engine thread is stuck inside a script. */
+void interruptScripts(void)
+{
+    antb_interrupt_all_engines();
+}
+
 void forgetFrameRealm(void* document)
 {
     WebCore::Document* doc = (WebCore::Document*)document;

@@ -173,6 +173,12 @@ void beginNewRealm(void);
  * (AGB_PER_FRAME_REALM). `document` may be NULL. */
 void forgetFrameRealm(void* document);
 
+/* Aborts whatever page script is running on this engine thread. Safe from
+ * another thread (ant's interrupt registry is lock protected, R146): the
+ * renderer process backend's watchdog thread uses it, and so does the in-process
+ * watchdog when a navigation has to get through a stuck script. */
+void interruptScripts(void);
+
 } /* namespace AntRuntime */
 
 #endif /* ANT_RUNTIME_H */

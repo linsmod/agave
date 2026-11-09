@@ -25,6 +25,8 @@
 static AgwIpcHeader* g_hdr;
 static HANDLE        g_map;
 static HANDLE        g_cmdEvent;
+static HANDLE        g_intEvent;
+static volatile LONG g_stopWatchdog;
 static MaCrossView*  g_view;
 static MC_BYTE*      g_frame;
 static int           g_visible = 1;
@@ -155,6 +157,23 @@ static void onInvalidate(MaCrossView* view, const MC_RECT* rect)
 {
     (void)view;
     (void)rect;
+}
+
+/* The watchdog: waits on the control's interrupt event and aborts the script
+ * this process's engine thread is stuck in. Separate thread on purpose - the
+ * engine thread is inside the script, so it cannot read the command ring. */
+static DWORD WINAPI watchdogThread(LPVOID param)
+{
+    (void)param;
+
+    while (!g_stopWatchdog) {
+        if (WaitForSingleObject(g_intEvent, 200) == WAIT_OBJECT_0) {
+            rlog("[render] watchdog: interrupting the page script\n");
+            macross_interrupt_view(g_view);
+        }
+    }
+
+    return 0;
 }
 
 /* ---- commands from the control ----------------------------------------- */
@@ -345,6 +364,9 @@ int main(int argc, char** argv)
     snprintf(eventName, sizeof(eventName), "%s_evt", ipcName);
     g_cmdEvent = OpenEventA(EVENT_MODIFY_STATE | SYNCHRONIZE, FALSE, eventName);
 
+    snprintf(eventName, sizeof(eventName), "%s_int", ipcName);
+    g_intEvent = OpenEventA(SYNCHRONIZE, FALSE, eventName);
+
     g_frame = agwIpcFrame(g_hdr);
 
     if (macross_initialize(PIXEL_FORMAT_BGRA32, width, height) != MC_STATUS_SUCCESS) {
@@ -382,6 +404,9 @@ int main(int argc, char** argv)
     InterlockedExchange(&g_hdr->running, 1);
     pushEvent(AGW_VIEW_EVENT_READY, AGW_VIEW_PROTOCOL_VERSION,
               AGW_VIEW_CAP_DAMAGE, 0, 0, NULL, 0);
+
+    if (g_intEvent)
+        CreateThread(NULL, 0, watchdogThread, NULL, 0, NULL);
 
     started = GetTickCount64();
 
@@ -427,6 +452,7 @@ int main(int argc, char** argv)
         }
     }
 
+    g_stopWatchdog = 1;
     InterlockedExchange(&g_hdr->running, 0);
     macross_view_destroy(g_view);
     macross_shutdown();

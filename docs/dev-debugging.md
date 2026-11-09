@@ -56,6 +56,13 @@ AGB_RENDER_LOG=1 让 renderer 把命令/事件记录到 **exe 旁的 gave_rende
 （spawned 进程没有 console，stderr 不可见）；AGB_RENDER_CRASH_MS=<ms> 让 renderer 在启动后
 该毫秒数处 ExitProcess(42)，专门复测"渲染进程崩溃 → 控件报 load error 而不是卡住"。
 process 下 --shot 抓的是共享 canvas 拷进 mirror 的那一帧。
+多 view 的并行判据用 uild-zig-native\agave_multiview_probe.exe：两个 view，A 跑
+while(true){}，B 的命令延迟 = pong_ms（process 后端几十毫秒；local 后端 pong_ms=-1 +
+locked=1，因为 eval 不是 watchdog 的"用户动作"，没人等就只按 advisory 报告）。
+--interrupt-test 再量 live_ms：gave_webview_interrupt(A) → 渲染进程里的 _int 事件 →
+renderer 的 watchdog 线程调 macross_interrupt_view()（引擎线程卡在脚本里时只有另一条线程能到）。
+⚠ 宿主若要切后端，用 CRT 的 env（putenv/_putenv_s）或命令行，**不要用 SetEnvironmentVariable**
+（getenv 读不到，后端会静默保持 local，R153）。
 
 **退出码（先看它，再翻日志）**
 

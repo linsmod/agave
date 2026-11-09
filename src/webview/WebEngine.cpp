@@ -234,6 +234,17 @@ MC_STATUS macross_view_pump(MaCrossView* view)
 	return MC_STATUS_SUCCESS;
 }
 
+MC_STATUS macross_interrupt_view(MaCrossView* view)
+{
+	if (!view)
+		return MC_STATUS_FAILED;
+
+	/* Deliberately does not touch view->view: the caller may be a watchdog
+	 * thread while the engine thread is stuck inside this view's script. */
+	AntRuntime::interruptScripts();
+	return MC_STATUS_SUCCESS;
+}
+
 MC_STATUS macross_view_resize(MaCrossView* view, MC_BYTE* buffer, int width, int height, int pitch)
 {
 	if (!view || !buffer || width <= 0 || height <= 0)

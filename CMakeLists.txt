@@ -132,6 +132,14 @@ if (OPT_SHELL AND WIN32)
     target_compile_definitions(agave_render_host PRIVATE AGW_USE_DLL)
     target_link_libraries(agave_render_host PRIVATE ${LIB_NAME} user32 gdi32)
 
+    # S3 acceptance harness: two views in one host. One page spins in
+    # while(true), the other must still answer - local serialises them, the
+    # process backend does not.
+    add_executable(agave_multiview_probe ${PROJ_ROOT}/examples/multiview_probe/main.c)
+    target_include_directories(agave_multiview_probe PRIVATE ${PROJ_ROOT}/include ${PROJ_OUT})
+    target_compile_definitions(agave_multiview_probe PRIVATE AGW_USE_DLL)
+    target_link_libraries(agave_multiview_probe PRIVATE ${LIB_NAME} user32 gdi32)
+
     add_executable(agave_embed WIN32 ${PROJ_ROOT}/examples/embed_demo/main.c)
     target_include_directories(agave_embed PRIVATE ${PROJ_ROOT}/include ${PROJ_OUT})
     target_compile_definitions(agave_embed PRIVATE AGW_USE_DLL)

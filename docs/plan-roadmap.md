@@ -772,7 +772,9 @@
   - 分批：B0 接口 + local（行为零变化）→ B1 协议 v1 → B2 process 后端 → B3 rvvm 后端 →
     B4 服务通道 + `window.open` 异步（与 S4 WindowProxy 一起）→ B5 冻结/压测/profile 策略。
 - 验收：两个 tab，一个跑 `while(true){}`，另一个点击/刷新在 200 ms 内响应（当前要等 1.5 s 中断）；
-  其余验收数字见设计文档 §1/§8。
+  其余验收数字见设计文档 §1/§8。**验收 1 已可复现**（`AGB_VIEW_BACKEND=process` +
+  `agave_multiview_probe.exe`：B 的延迟 31 ms，local 对照 `blocked=1`；收在
+  `run_process_backend_tests.ps1` 的 7 项里）。
 
 ### P2 工具栏文本闪烁（`<` / `>` 在刷新时闪）
 

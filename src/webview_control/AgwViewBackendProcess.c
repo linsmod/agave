@@ -24,6 +24,7 @@ typedef struct {
     HANDLE        mapping;
     AgwIpcHeader* hdr;
     HANDLE        cmdEvent;
+    HANDLE        intEvent;   /* watchdog: abort the renderer's page script */
     HANDLE        process;
     unsigned long pid;
     char          ipcName[160];
@@ -115,6 +116,10 @@ static void closeView(ProcessView* pv, int requestExit)
     if (pv->cmdEvent) {
         CloseHandle(pv->cmdEvent);
         pv->cmdEvent = NULL;
+    }
+    if (pv->intEvent) {
+        CloseHandle(pv->intEvent);
+        pv->intEvent = NULL;
     }
     if (pv->process) {
         CloseHandle(pv->process);
@@ -210,6 +215,9 @@ static void* processCreate(void* owner, MC_BYTE* buffer, int width, int height, 
 
         snprintf(eventName, sizeof(eventName), "%s_evt", pv->ipcName);
         pv->cmdEvent = CreateEventA(NULL, FALSE, FALSE, eventName);
+
+        snprintf(eventName, sizeof(eventName), "%s_int", pv->ipcName);
+        pv->intEvent = CreateEventA(NULL, FALSE, FALSE, eventName);
     }
 
     {
@@ -453,9 +461,15 @@ static void processViewPump(void* view)
     (void)view;   /* the renderer drives its own timers/paint loop */
 }
 
+/* Aborts the page script in *this* renderer only: the event is watched by a
+ * thread inside the renderer, which is the only way to reach it while its engine
+ * thread is stuck in the script. */
 static void processInterrupt(void* view)
 {
-    (void)view;   /* per-instance abort lands with B3 (renderer-side watchdog) */
+    ProcessView* pv = (ProcessView*)view;
+
+    if (pv && pv->intEvent)
+        SetEvent(pv->intEvent);
 }
 
 static void* processJsContext(void* view)

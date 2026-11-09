@@ -159,7 +159,47 @@ if ($crash.Code -eq 5 -and ($crash.Stdout + $crash.Stderr) -match 'load error co
 }
 Assert-NoRenderer 'crash' | Out-Null
 
-# 5. default backend: the local path still runs the same page
+# 5. two views, one stuck: the process backend keeps the other responsive, and
+#    an explicit interrupt reaches exactly the stuck renderer.
+$mv = Join-Path $build 'agave_multiview_probe.exe'
+if (-not (Test-Path $mv)) { throw "agave_multiview_probe.exe not found: $mv" }
+
+$mvOut = Join-Path $build 'multiview_out.txt'
+$p = Start-Process -FilePath $mv -NoNewWindow -PassThru -Wait `
+     -ArgumentList @('--backend', 'process', '--interrupt-test') `
+     -RedirectStandardOutput $mvOut -RedirectStandardError (Join-Path $build 'multiview_err.txt')
+$text = (Get-Content $mvOut -Raw) -as [string]
+$pong = if ($text -match 'pong_ms=(\d+)') { [int]$Matches[1] } else { -1 }
+$alive = if ($text -match 'alive_ms=(\d+)') { [int]$Matches[1] } else { -1 }
+
+if ($p.ExitCode -eq 0 -and $pong -ge 0 -and $pong -lt 200 -and $alive -ge 0 -and $alive -lt 300) {
+    Write-Host ("PASS  process backend: stuck tab does not block the other (pong={0} ms), interrupt reaches it ({1} ms)" -f $pong, $alive)
+} else {
+    $failures++
+    Write-Host ("FAIL  process backend: two-view responsiveness (exit {0}, pong={1}, alive={2})" -f $p.ExitCode, $pong, $alive)
+    Write-Host (($text -split "`n" | Select-Object -Last 3) -join "`n")
+}
+Assert-NoRenderer 'multiview' | Out-Null
+
+# 6. the local baseline really serialises: the same two views, shared engine
+#    thread, B never answers while A spins (an eval is not a watchdog "user
+#    action", so nothing aborts A). That is the problem S3 exists for.
+$p = Start-Process -FilePath $mv -NoNewWindow -PassThru -Wait `
+     -ArgumentList @('--backend', 'local', '--allow-blocked', '--pong-wait', '2500') `
+     -RedirectStandardOutput $mvOut -RedirectStandardError (Join-Path $build 'multiview_err.txt')
+$text = (Get-Content $mvOut -Raw) -as [string]
+
+if ($p.ExitCode -eq 0 -and $text -match 'blocked=1') {
+    Write-Host "PASS  local baseline: the stuck tab blocks the other (shared engine thread)"
+} else {
+    $failures++
+    Write-Host ("FAIL  local baseline: expected blocked=1 (exit {0})" -f $p.ExitCode)
+    Write-Host (($text -split "`n" | Select-Object -Last 3) -join "`n")
+}
+Assert-NoRenderer 'local baseline' | Out-Null
+Remove-Item $mvOut -ErrorAction SilentlyContinue
+
+# 7. default backend: the local path still runs the same page
 $local = Invoke-Probe -Page (Join-Path $pages 'cap_hidden_view.html') `
     -Js 'probeExit("title=" + document.title);' -Backend $null
 
