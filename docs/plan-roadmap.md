@@ -755,13 +755,24 @@
   动作：把 `requestAnimationFrame` 换成宿主的真 rAF（帧泵里按可见 view 出帧），或在垫片里按
   `document.hidden` 把回调排队、`visibilitychange` 恢复时补发；判据：隐藏 tab 的 rAF 计数停止增长，
   显示后恢复，`run_hidden_view_tests.ps1` 加一条。
-- 真正并行两条路，**都不是"加个线程"**：
-  1. **引擎线程局部化**：先把进程级无锁全局拆掉 —— `AntRuntime` 的 `g_currentState`（当前 realm）、
-     桥的 `g_wrappers`/`g_classes`/trampoline 表、ant 的 interned 字符串表；再做 per-view 线程 + 线程局部表。
-     风险高（R71 那类静默崩溃面），收益是进程内并行。
-  2. **每 tab 一个子进程**（site-per-process 简化版）：`agave_view_host` 已是不建控件的现成宿主，
-     可当子进程引擎；shell 侧做 IPC + 共享内存位图。风险中、隔离性最好（顺带拿到崩溃隔离）。
-- 验收：两个 tab，一个跑 `while(true){}`，另一个点击/刷新在 200 ms 内响应（当前要等 1.5 s 中断）。
+- **路线已定（2026-11-09）**：不是"每 view 一条引擎线程"，而是**渲染后端可插拔**
+  （local / Win32 子进程 / RVVM 实例，共用一个"渲染后端协议"），设计、协议 v1、三后端映射、
+  分批计划与实测数据都在 [design-render-backend.md](design-render-backend.md)。
+  - 线程化的代价集中在三块进程级假设：宿主镜像（`g_currentState`）、桥的 trampoline/wrapper 表、
+    WebCore 单例（`Settings::globalSettings()`、`ImageDecodeService::shared()`、全局 `AtomicString`
+    字符串表无锁）；多进程让这些天然每进程一份 → 线程化降级为备选（parked），避免两套方案各做一半。
+  - 协议要点：批量命令环（一个环项可带多个输入事件）、**零拷贝 BGRA + damage**（主路径）、
+    GL 合成只用于缩放/缩略图、输入保序与合并规则、`SERVICE_REQUEST/REPLY`（popup/dialog/download/
+    clipboard/文件选择）、visibility/focus/resize 独立于生命周期、帧 ack/背压/崩溃代际。
+  - 实测（RVVM `bench_ecall`，GTX 1080 Ti + ANGLE；详见设计文档 §6）：裸 ecall 72 ns、逐调用 GL 通路
+    1.29 µs/调用（大头是封送+分发，不是 ecall）、3000 调用 3.9 ms（在 16.7 ms 预算内，所以"撑不住"不成立，
+    是"不划算"：整帧软件填充地板 0.036 ms）；全帧 GL 上传 0.51–0.88 ms，零拷贝 damage 0.034–0.07 ms。
+    NOJIT 下结论反转：guest 软填充 1–2 ms > GL 上传 0.53 ms，且纯 guest 计算本底 114 ns vs 7.1 ns
+    → **引擎放进 VM 必须以 JIT 为前提**。
+  - 分批：B0 接口 + local（行为零变化）→ B1 协议 v1 → B2 process 后端 → B3 rvvm 后端 →
+    B4 服务通道 + `window.open` 异步（与 S4 WindowProxy 一起）→ B5 冻结/压测/profile 策略。
+- 验收：两个 tab，一个跑 `while(true){}`，另一个点击/刷新在 200 ms 内响应（当前要等 1.5 s 中断）；
+  其余验收数字见设计文档 §1/§8。
 
 ### P2 工具栏文本闪烁（`<` / `>` 在刷新时闪）
 

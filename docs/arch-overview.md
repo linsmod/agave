@@ -41,10 +41,10 @@
   （后台 tab / 最小化窗口，Page Visibility 由宿主给出）只走 `macross_view_pump()`（标题 + 异步工作），
   不布局不绘制，回到可见时整幅重绘一次（R150）；
   ③重 tab 会拖慢其他 tab 的帧率（同一条循环）。
-  想真正并行只有两条路（都不是"加个线程"）：桥/运行时的**进程级单线程假设**要先拆掉
-  （`g_currentState` 当前 realm、`g_wrappers`/`g_classes`/trampoline 表、ant 的 interned 字符串表都是无锁全局），
-  或者改成**每 tab 一个子进程**（site-per-process 的简化版，`agave_view_host` 已经是现成的无控件宿主）。
-  评估见 [plan-roadmap.md](plan-roadmap.md) 的 "P2 多 tab 并行"。
+  想真正并行：**渲染后端可插拔**（local / Win32 子进程 / RVVM 实例，共用一个"渲染后端协议"），
+  设计与协议见 [design-render-backend.md](design-render-backend.md)；每 view 一条引擎线程因为要拆
+  桥/运行时的进程级无锁全局（含 WebCore 的全局 `AtomicString` 表），已降级为备选。
+  待办与验收见 [plan-roadmap.md](plan-roadmap.md) 的 "P2 多 tab 并行"。
 
 ## 2. 代码层
 
