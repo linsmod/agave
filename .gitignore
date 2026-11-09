@@ -36,3 +36,6 @@ build-ant-replay/
 
 # crash forensics written by agave_shell in its CWD
 agb_crash.txt
+
+# developer local, dont git.
+issues
