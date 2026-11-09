@@ -649,6 +649,8 @@ static void setActiveTab(int index);
 static void createTab(const char* url);
 static void onCloseWindow(AgaveWebView* view, void* user);
 static void onActivateView(AgaveWebView* view, void* user);
+static void probeCrashPage(AgaveWebView* view, const char* html, const char* base,
+                            int code, const char* report);
 /* Set when --probe was given: defined with the probe harness further down, used
  * by the callbacks above. */
 static int g_probeMode;
@@ -905,33 +907,84 @@ static void onStatus(AgaveWebView* view, const char* text, void* user)
 /* The engine process of this tab died. Leave a page the user can read and
  * reload: the control has already dropped the dead backend, so load_html
  * brings a fresh renderer up (S3 B2c). */
-static void onCrashed(AgaveWebView* view, int code, void* user)
+/* HTML-escape into `out` (bounded); a crash report contains '<' from C++
+ * templates and '&' from URLs often enough to break the page without it. */
+static void appendEscaped(char* out, size_t cap, size_t* used, const char* text)
+{
+    size_t n = *used;
+
+    for (; text && *text && n + 8 < cap; ++text) {
+        switch (*text) {
+        case '<':  n += (size_t)_snprintf(out + n, cap - n, "&lt;");   break;
+        case '>':  n += (size_t)_snprintf(out + n, cap - n, "&gt;");   break;
+        case '&':  n += (size_t)_snprintf(out + n, cap - n, "&amp;");  break;
+        case '"':  n += (size_t)_snprintf(out + n, cap - n, "&quot;"); break;
+        case '\n': n += (size_t)_snprintf(out + n, cap - n, "<br>");   break;
+        default:   out[n++] = *text; out[n] = 0;                      break;
+        }
+    }
+
+    *used = n;
+}
+
+static void onCrashed(AgaveWebView* view, int code, const char* report, void* user)
 {
     Tab* tab = (Tab*)user;
-    char html[2048];
+    static char html[32768];
     char base[MAX_PATH_CHARS];
     const char* target = "about:blank";
+    size_t used;
 
-    if (!tab || !view)
+    if (!view)
         return;
 
-    if (tab->url[0])
+    if (tab && tab->url[0])
         target = tab->url;
 
     snprintf(base, sizeof(base), "%s", target);
-    snprintf(html, sizeof(html),
+
+    used = (size_t)_snprintf(html, sizeof(html),
              "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
              "<title>Page crashed</title>"
-             "<style>body{font:14px/1.5 \"Segoe UI\",sans-serif;margin:0;padding:48px;"
+             "<style>body{font:14px/1.5 \"Segoe UI\",sans-serif;margin:0;padding:32px 40px;"
              "background:#f6f7f9;color:#333}h1{font-size:20px;margin:0 0 8px}"
              "p{margin:6px 0;color:#555}code{background:#eee;padding:1px 4px;border-radius:3px}"
-             "a{color:#0b62d6}</style></head><body>"
+             "a{color:#0b62d6}pre{background:#fff;border:1px solid #d8dbe0;border-radius:6px;"
+             "padding:12px 14px;overflow:auto;font:12px/1.45 Consolas,monospace;color:#222;"
+             "max-height:70vh}</style></head><body>"
              "<h1>Page crashed</h1>"
              "<p>The tab's engine process stopped unexpectedly (exit code %d).</p>"
              "<p><code>%s</code></p>"
-             "<p><a href=\"%s\">Reload this page</a></p>"
-             "</body></html>",
+             "<p><a href=\"%s\">Reload this page</a></p>",
              code, base, base);
+    html[used < sizeof(html) ? used : sizeof(html) - 1] = 0;
+
+    if (report && report[0]) {
+        used += (size_t)_snprintf(html + used, sizeof(html) - used,
+                                  "<h2 style=\"font-size:15px;margin:18px 0 6px\">Crash report</h2>"
+                                  "<pre>");
+        appendEscaped(html, sizeof(html) - 32, &used, report);
+        used += (size_t)_snprintf(html + used, sizeof(html) - used, "</pre>");
+    } else {
+        used += (size_t)_snprintf(html + used, sizeof(html) - used,
+                                  "<p>The renderer left no crash report "
+                                  "(clean exit, killed, or a build without symbol support).</p>");
+    }
+
+    used += (size_t)_snprintf(html + used, sizeof(html) - used, "</body></html>");
+    html[used < sizeof(html) ? used : sizeof(html) - 1] = 0;
+
+    agbLog(AGB_LOG_SHELL, "page crashed code=%d report_bytes=%lu",
+           code, (unsigned long)(report ? strlen(report) : 0));
+
+    /* Probe mode has no tab state: print the report so a suite can assert on
+     * it, and still give the view the same page a user would see. The page's
+     * text is read back (that is what proves the user actually sees the
+     * report), then the probe exits through its normal message channel. */
+    if (!tab) {
+        probeCrashPage(view, html, base, code, report);
+        return;
+    }
 
     strncpy(tab->title, "Page crashed", sizeof(tab->title) - 1);
     tab->title[sizeof(tab->title) - 1] = 0;
@@ -3324,6 +3377,23 @@ static void probeOnMessage(AgaveWebView* view, const char* message, void* user)
     probePrint("[msg]", message);
 }
 
+/* AGB_PROBE_RESPAWN=1: load a normal page into the view whose renderer just
+ * died, proving the control made it respawn-ready. Returns 1 when it did. */
+static int probeRespawnInto(AgaveWebView* view, const char* url)
+{
+    static const char respawn[] =
+        "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
+        "<title>respawned</title></head><body>respawned</body></html>";
+
+    if (!getenv("AGB_PROBE_RESPAWN") || !view || g_probeRespawned)
+        return 0;
+
+    g_probeRespawned = 1;
+    agave_webview_load_html(view, respawn, url ? url : "about:blank");
+    agbLog(AGB_LOG_PROBE, "respawn: loading a page into the crashed view");
+    return 1;
+}
+
 static void probeOnError(AgaveWebView* view, int code, const char* url, void* user)
 {
     (void)user;
@@ -3334,20 +3404,9 @@ static void probeOnError(AgaveWebView* view, int code, const char* url, void* us
     /* AGB_PROBE_RESPAWN=1: after a renderer crash the control has dropped the
      * dead backend, so a load_html brings a fresh one up. The crash regression
      * asserts exactly that (the probe then evals the new document). */
-    if (getenv("AGB_PROBE_RESPAWN") && view && !g_probeRespawned) {
-        static const char respawn[] =
-            "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
-            "<title>respawned</title></head><body>respawned</body></html>";
-
-        g_probeRespawned = 1;
-        /* The crash is expected here: the respawned page is a normal load, it
-         * drives --eval through its own progress-finished event, and the run's
-         * exit code is the respawned page's, not the crash's. */
+    if (probeRespawnInto(view, url)) {
         g_probeSawError = 0;
         g_probeLoadArmed = 0;
-
-        agave_webview_load_html(view, respawn, url ? url : "about:blank");
-        agbLog(AGB_LOG_PROBE, "respawn: loading a page into the crashed view");
     }
 
     /* A failed navigation commits no document, so on_progress(finished) never
@@ -3411,6 +3470,44 @@ static int probeOnDialog(AgaveWebView* view, int type, const char* message,
  * in, so it prints one line plus the busy-stack file: that is what makes "the
  * engine reported a stuck page and told the host" testable headlessly
  * (AGB_UNRESPONSIVE_MS=2000 on a spinner). */
+/* The probe has no tab to show a crashed page on: print the report (a suite
+ * asserts on it), keep the exact page the GUI would load when asked, and leave
+ * with the normal OK code - a renderer that crashed on request is not a probe
+ * failure. */
+static void probeCrashPage(AgaveWebView* view, const char* html, const char* base,
+                           int code, const char* report)
+{
+    const char* pagePath = getenv("AGB_PROBE_CRASH_PAGE");
+    size_t reportChars = report ? strlen(report) : 0;
+
+    printf("[probe] crash code=%d report_bytes=%lu page_bytes=%lu\n",
+           code, (unsigned long)reportChars, (unsigned long)strlen(html));
+
+    if (reportChars)
+        printf("%s\n", report);
+    fflush(stdout);
+
+    if (pagePath && pagePath[0]) {
+        FILE* f = fopen(pagePath, "wb");
+
+        if (f) {
+            fwrite(html, 1, strlen(html), f);
+            fclose(f);
+        }
+    }
+
+    agave_webview_load_html(view, html, base);
+
+    /* A respawn run wants the view usable again, not a report: load a normal
+     * page into it and let its own load event drive --eval (the run's exit code
+     * is then the respawned page's, not the crash's). */
+    if (probeRespawnInto(view, base))
+        return;
+
+    g_probeGotExit = 1;
+    PostMessageA(g_probeWnd, WM_CLOSE, 0, 0);
+}
+
 static void probeOnUnresponsive(AgaveWebView* view, const char* reason,
                                 unsigned int busy_ms, const char* stack_path,
                                 void* user)
@@ -3800,6 +3897,7 @@ static int probeRun(const char* url)
     callbacks.on_unresponsive = probeOnUnresponsive;
     callbacks.on_command_dropped = probeOnCommandDropped;
     callbacks.on_activate_view = onActivateView;
+    callbacks.on_crashed = onCrashed;
 
     g_probeView = agave_webview_create(g_probeWnd, 0, 0, 1100, 800, &callbacks, NULL);
     if (!g_probeView) {

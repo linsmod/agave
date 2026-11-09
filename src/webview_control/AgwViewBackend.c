@@ -197,6 +197,14 @@ static void* localJsContext(void* view)
     return view ? macross_view_js_context((MaCrossView*)view) : NULL;
 }
 
+static const char* localCrashReport(void* view, int* len)
+{
+    (void)view;
+    if (len)
+        *len = 0;
+    return NULL;   /* in-process: the process itself died, see AgbCrash */
+}
+
 static unsigned localDocumentEpoch(void* view)
 {
     return view ? macross_view_document_epoch((MaCrossView*)view) : 0;
@@ -218,6 +226,7 @@ static const AgwViewBackend g_localBackend = {
     localPump,
     localInterrupt,
     localJsContext,
+    localCrashReport,
     localDocumentEpoch,
     NULL   /* frame: local paints into the host's own buffer */
 };

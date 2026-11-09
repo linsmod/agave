@@ -21,6 +21,26 @@
 
 #include "macross.h"
 #include "../../src/webview_control/AgwViewIpc.h"
+#include "../../src/webview/AgbCrash.h"
+
+/* Crash report sink: copy the text into the shared section. The section
+ * outlives this process, so the control reads the report after we are gone and
+ * shows it on the "Page crashed" page. Raw memcpy only - this runs on a dying
+ * thread. */
+static void crashSink(const char* text, unsigned int len, void* user)
+{
+    AgwIpcHeader* hdr = (AgwIpcHeader*)user;
+
+    if (!hdr || !text || !len)
+        return;
+
+    if (len >= AGW_IPC_CRASH_BYTES)
+        len = AGW_IPC_CRASH_BYTES - 1;
+
+    memcpy(hdr->crashText, text, len);
+    hdr->crashText[len] = 0;
+    InterlockedExchange(&hdr->crashLen, (LONG)len);
+}
 
 static AgwIpcHeader* g_hdr;
 static HANDLE        g_map;
@@ -398,6 +418,8 @@ int main(int argc, char** argv)
     const char* ipcName = NULL;
     int width = 1100, height = 800;
     int crashAfterMs = 0;
+    int crashAvAfterMs = 0;
+    const char* crashAvEnv;
     HANDLE map;
     ULONGLONG started;
     char eventName[128];
@@ -407,6 +429,8 @@ int main(int argc, char** argv)
             ipcName = argv[++i];
         else if (!strcmp(argv[i], "--crash-after") && i + 1 < argc)
             crashAfterMs = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--crash-av") && i + 1 < argc)
+            crashAvEnv = argv[++i];
     }
 
     if (!ipcName || !ipcName[0]) {
@@ -447,6 +471,19 @@ int main(int argc, char** argv)
     g_intEvent = OpenEventA(SYNCHRONIZE, FALSE, eventName);
 
     g_frame = agwIpcFrame(g_hdr);
+
+    /* Crash reporting: the report lands in the shared section, so the control
+     * can show it on the "Page crashed" page even though this process is gone
+     * by then. dbghelp is loaded here (not in the handler), which is why the
+     * report can carry resolved symbols. */
+    {
+        char info[512];
+
+        snprintf(info, sizeof(info), "backend=process ipc=%s size=%dx%d",
+                 ipcName, width, height);
+        agbCrashInstall("render-host", crashSink, g_hdr);
+        agbCrashSetInfo(info);
+    }
 
     if (macross_initialize(PIXEL_FORMAT_BGRA32, width, height) != MC_STATUS_SUCCESS) {
         rlog("render_host: macross_initialize failed\n");
@@ -490,6 +527,9 @@ int main(int argc, char** argv)
     if (g_intEvent)
         CreateThread(NULL, 0, watchdogThread, NULL, 0, NULL);
 
+    if (crashAvEnv)
+        crashAvAfterMs = atoi(crashAvEnv);
+
     started = GetTickCount64();
 
     for (;;) {
@@ -514,6 +554,14 @@ int main(int argc, char** argv)
         if (crashAfterMs > 0 && (int)(GetTickCount64() - started) >= crashAfterMs) {
             rlog("render_host: crashing on request (%d ms)\n", crashAfterMs);
             ExitProcess(42);
+        }
+
+        /* Test hook: a *real* access violation, so the crash report path (env,
+         * stack, symbols, the page the control shows) can be exercised. The
+         * plain --crash-after above is a clean exit and produces no report. */
+        if (crashAvAfterMs > 0 && (int)(GetTickCount64() - started) >= crashAvAfterMs) {
+            rlog("render_host: faking an access violation (%d ms)\n", crashAvAfterMs);
+            *(volatile int*)0 = 1;
         }
 
         macross_event_dispatch();

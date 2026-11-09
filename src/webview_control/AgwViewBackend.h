@@ -70,6 +70,13 @@ struct AgwViewBackend {
     void  (*interrupt)(void* view);
     void* (*jsContext)(void* view);
 
+    /* The last crash report the view wrote about itself (environment + stack),
+     * or NULL when there is none. Only meaningful after the view died: the text
+     * lives in the backend's own storage and stays valid until the view is
+     * destroyed. Local returns NULL (an in-process crash takes the whole
+     * process down and the shell's own handler writes the report). */
+    const char* (*crashReport)(void* view, int* len);
+
     /* The document epoch of the page this view shows (0 when unknown). Local
      * reads it straight from the engine; process/rvvm return the last epoch
      * that came back with an event, which is also what they stamp commands

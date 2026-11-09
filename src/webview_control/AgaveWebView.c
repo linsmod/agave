@@ -22,6 +22,7 @@
 #include "../webview/AgbLog.h"
 #include "../webview/AgbRuntime.h"   /* agb_teardown_started_ms: budget the teardown */
 #include "AgwViewBackend.h"          /* the render-backend seam (S3) */
+#include "AgwViewIpc.h"              /* AGW_IPC_CRASH_BYTES (crash report size) */
 
 /* Defined next to the command drain loop; needed here because agwPost() is the
  * single choke point every host call goes through. */
@@ -2106,6 +2107,29 @@ static void agwDispatchBackendEvent(AgaveWebView* item, const AgwViewEvent* ev)
         agwUnlock();
 
         if (crashed) {
+            /* The report the dying renderer left in the shared section: the
+             * host puts it on its "page crashed" screen, which is the only way
+             * a user can see why the tab died. Read it *before* the backend
+             * view (and with it the mapping) goes away. */
+            const char* report = NULL;
+            char reportCopy[AGW_IPC_CRASH_BYTES];
+
+            reportCopy[0] = 0;
+
+            if (item->backend && item->backend->crashReport && item->backendView) {
+                int reportLen = 0;
+                const char* text = item->backend->crashReport(item->backendView, &reportLen);
+
+                if (text && reportLen > 0) {
+                    if (reportLen > (int)sizeof(reportCopy) - 1)
+                        reportLen = (int)sizeof(reportCopy) - 1;
+
+                    memcpy(reportCopy, text, (size_t)reportLen);
+                    reportCopy[reportLen] = 0;
+                    report = reportCopy;
+                }
+            }
+
             /* The backend process is gone: report it and make the view
              * respawn-ready, so the host's "page crashed" page (a load_html)
              * gets a fresh renderer instead of writing into a dead one. */
@@ -2116,7 +2140,7 @@ static void agwDispatchBackendEvent(AgaveWebView* item, const AgwViewEvent* ev)
             }
 
             if (item->callbacks.on_crashed)
-                item->callbacks.on_crashed(item, code, item->user);
+                item->callbacks.on_crashed(item, code, report ? report : "", item->user);
             else if (item->callbacks.on_error)
                 item->callbacks.on_error(item, code, item->url, item->user);
         } else if (item->callbacks.on_error) {

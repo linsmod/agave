@@ -281,7 +281,9 @@ static void* processCreate(void* owner, MC_BYTE* buffer, int width, int height, 
          * of the process gets it, so the respawned one after a crash is
          * healthy - otherwise a crash test would loop forever. */
         static int crashUsed = 0;
+        static int crashAvUsed = 0;
         const char* crash = crashUsed ? NULL : getenv("AGB_RENDER_CRASH_MS");
+        const char* crashAv = crashAvUsed ? NULL : getenv("AGB_RENDER_CRASH_AV");
 
         /* --owner: the control that spawned this renderer (diagnostics).
          * --tag: AGB_RENDER_TAG passed straight through, so a test can tell its
@@ -306,7 +308,15 @@ static void* processCreate(void* owner, MC_BYTE* buffer, int width, int height, 
                 tag[k] = 0;
             }
 
-            if (crash && atoi(crash) > 0) {
+            if (crashAv && atoi(crashAv) > 0) {
+                /* One-shot, like the clean-exit hook: the respawned renderer
+                 * (the one that shows the crashed page) has to stay alive. */
+                crashAvUsed = 1;
+                snprintf(cmdline, sizeof(cmdline),
+                         "\"%s\" --ipc \"%s\" --owner %lu%s%s --crash-av %s",
+                         pv->exePath, pv->ipcName, (unsigned long)GetCurrentProcessId(),
+                         tag[0] ? " --tag " : "", tag, crashAv);
+            } else if (crash && atoi(crash) > 0) {
                 crashUsed = 1;
                 snprintf(cmdline, sizeof(cmdline),
                          "\"%s\" --ipc \"%s\" --owner %lu%s%s --crash-after %s",
@@ -600,6 +610,33 @@ static void* processJsContext(void* view)
     return NULL;   /* the engine lives in another process */
 }
 
+/* The report the renderer wrote into the shared section before it died. The
+ * section outlives the process, which is the whole point: the control reads it
+ * after the crash and hands it to the host. */
+static const char* processCrashReport(void* view, int* len)
+{
+    ProcessView* pv = (ProcessView*)view;
+    LONG n;
+
+    if (len)
+        *len = 0;
+
+    if (!pv || !pv->hdr)
+        return NULL;
+
+    n = pv->hdr->crashLen;
+
+    if (n <= 0 || n >= AGW_IPC_CRASH_BYTES)
+        return NULL;
+
+    pv->hdr->crashText[n] = 0;
+
+    if (len)
+        *len = (int)n;
+
+    return pv->hdr->crashText;
+}
+
 static unsigned processDocumentEpoch(void* view)
 {
     ProcessView* pv = (ProcessView*)view;
@@ -644,6 +681,7 @@ static const AgwViewBackend g_processBackend = {
     processViewPump,
     processInterrupt,
     processJsContext,
+    processCrashReport,
     processDocumentEpoch,
     processFrame
 };

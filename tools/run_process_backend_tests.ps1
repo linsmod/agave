@@ -176,12 +176,18 @@ try {
     Remove-Item Env:AGB_RENDER_CRASH_MS -ErrorAction SilentlyContinue
 }
 
-if ($crash.Code -eq 5 -and ($crash.Stdout + $crash.Stderr) -match 'load error code=42') {
-    Write-Host "PASS  process backend: renderer crash is reported as a load error (exit 5)"
+# The host now hears about the crash through on_crashed (it used to fall
+# through to on_error), so the probe reports the crash and exits OK. `AGB_RENDER_CRASH_MS`
+# is a clean ExitProcess(42) - there is no crash report, only the exit code.
+$crashText = $crash.Stdout + $crash.Stderr
+
+if ($crash.Code -eq 0 -and $crashText -match '\[probe\] crash code=42' -and
+    $crashText -match 'report_bytes=0') {
+    Write-Host "PASS  process backend: renderer crash reaches the host (code 42, no report)"
 } else {
     $failures++
     Write-Host ("FAIL  process backend: crash handling (exit {0})" -f $crash.Code)
-    Write-Host (($crash.Stdout -split "`n" | Select-Object -Last 3) -join "`n")
+    Write-Host (($crashText -split "`n" | Where-Object { $_ -match 'crash|respawn|title=' } | Select-Object -Last 3) -join "`n")
 }
 Assert-NoRenderer 'crash' | Out-Null
 
@@ -408,6 +414,47 @@ if ($staleText -match 'dropped=\d+ kind=eval reason=document replaced by a navig
     Write-Host (($staleText -split "`n" | Where-Object { $_ -match 'dropped|should-not-run|exit' } | Select-Object -Last 4) -join "`n")
 }
 Assert-NoRenderer 'stale' | Out-Null
+
+# 17. a renderer that really crashes leaves a report: environment, the faulting
+#     address and a symbol-resolved stack (PDBs sit next to the modules). The
+#     host shows that text on its "Page crashed" page - the page is written out
+#     here and loaded back, so the assertion is about what a user would read.
+$sadPage = Join-Path $build 'process_backend_sadpage.html'
+Remove-Item $sadPage -ErrorAction SilentlyContinue
+$env:AGB_PROBE_CRASH_PAGE = $sadPage
+$env:AGB_RENDER_CRASH_AV = '600'
+try {
+    $crash = Invoke-Probe -Page (Join-Path $pages 'blank.html') -Wait 900 -Settle 300
+} finally {
+    Remove-Item Env:AGB_PROBE_CRASH_PAGE -ErrorAction SilentlyContinue
+    Remove-Item Env:AGB_RENDER_CRASH_AV -ErrorAction SilentlyContinue
+}
+$crashText = $crash.Stdout + $crash.Stderr
+$crashOk = $crash.Code -eq 0 -and
+           $crashText -match '\[probe\] crash code=-1073741819' -and
+           $crashText -match 'exception: 0xc0000005 \(ACCESS_VIOLATION\)' -and
+           $crashText -match 'fault: write 0x0' -and
+           $crashText -match 'symbols: dbghelp' -and
+           $crashText -match '#00 agave_render_host\.exe!\S+\+0x[0-9a-f]+ \(' -and
+           $crashText -match 'AGB_VIEW_BACKEND=process'
+
+$sadOk = $false
+if (Test-Path $sadPage) {
+    $shown = Invoke-Probe -Page $sadPage -Wait 300 -Settle 200 `
+        -Js 'probeExit("crashed=" + (document.title === "Page crashed") + " exception=" + (document.body.innerText.indexOf("exception: 0xc0000005") >= 0) + " frames=" + (document.body.innerText.indexOf(".c:") >= 0));'
+    $shownText = $shown.Stdout + $shown.Stderr
+    $sadOk = $shown.Code -eq 0 -and $shownText -match 'crashed=true exception=true frames=true'
+}
+
+if ($crashOk -and $sadOk) {
+    Write-Host "PASS  crash report: environment + symbols, shown on the crashed page"
+} else {
+    $failures++
+    Write-Host ("FAIL  crash report (report={0} page={1})" -f $crashOk, $sadOk)
+    Write-Host (($crashText -split "`n" | Where-Object { $_ -match 'crash code=|exception:|symbols:|#00 ' } | Select-Object -First 4) -join "`n")
+}
+Assert-NoRenderer 'crash report' | Out-Null
+Remove-Item $sadPage -ErrorAction SilentlyContinue
 
 Remove-Item (Join-Path $build 'process_backend_out.txt'),
             (Join-Path $build 'process_backend_err.txt'),

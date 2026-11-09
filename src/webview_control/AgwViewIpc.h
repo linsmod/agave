@@ -22,6 +22,7 @@
 #define AGW_IPC_CMD_SLOTS  64
 #define AGW_IPC_EVT_SLOTS  64
 #define AGW_IPC_TEXT_BYTES 65536
+#define AGW_IPC_CRASH_BYTES 24576
 
 /* The canvas is allocated for this size once at create, and a resize only
  * changes how much of it is used; a stale full-size canvas avoids recreating
@@ -90,6 +91,13 @@ typedef struct {
     uint32_t frameOffset;   /* from the start of this struct */
     uint32_t framePitch;
     uint32_t frameBytes;
+
+    /* Renderer crash report (environment + symbolized stack), written once by
+     * the renderer's last-chance handler. The section outlives the process, so
+     * the control can read the text after the renderer is gone and put it on
+     * the "Page crashed" screen. crashLen bytes used, 0 = no report. */
+    volatile LONG crashLen;
+    char crashText[AGW_IPC_CRASH_BYTES];
 } AgwIpcHeader;
 
 static inline char* agwIpcText(AgwIpcHeader* hdr, int32_t offset)

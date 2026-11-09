@@ -60,11 +60,13 @@ typedef struct AgaveWebViewCallback {
     /* Navigation failed. */
     void (*on_error)(AgaveWebView* view, int code, const char* url, void* user);
     /* The engine process for this view died (not a navigation error): code is
-     * its exit code. Optional - when it is NULL a crash is reported through
-     * on_error instead, and either way the view is respawn-ready: the next
+     * its exit code, `report` is what the dying process wrote about itself -
+     * environment info and a symbol-resolved stack ("" when it left none).
+     * Optional - when it is NULL a crash is reported through on_error instead,
+     * and either way the view is respawn-ready: the next
      * navigate/reload/load_html brings a fresh renderer up. Hosts show their
-     * "page crashed" UI here. */
-    void (*on_crashed)(AgaveWebView* view, int code, void* user);
+     * "page crashed" UI here; the report is what makes that page useful. */
+    void (*on_crashed)(AgaveWebView* view, int code, const char* report, void* user);
     /* A download job changed state (started / progress / finished / failed /
      * cancelled). `info` is only valid during the call; copy what you keep.
      * Runs on the UI thread, but the job itself lives in the engine, so it
