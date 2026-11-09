@@ -509,7 +509,9 @@ Document* DOMWindow::document() const
     if (!m_frame)
         return 0;
 
-    ASSERT(m_frame->document());
+    /* A window can outlive its document (a frame torn down between a script
+     * being scheduled and it running). Callers get 0 and must cope; asserting
+     * here turned a host eval into a process crash (P1-ac). */
     return m_frame->document();
 }
 

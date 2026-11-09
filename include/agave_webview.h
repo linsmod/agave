@@ -119,10 +119,9 @@ typedef struct AgaveWebViewCallback {
      * it. Without this callback the same situations were silent: the command
      * simply never happened.
      *
-     * `kind` is "eval", "mouse", "key", "text", "search", ... and `reason` is a
-     * short English phrase ("document replaced by a navigation", "no live
-     * document", "no page yet"). Runs on the engine thread: keep it cheap and
-     * do not call back into the control synchronously. */
+     * `kind` is "eval", "mouse", "key", "text", "search", ... and `reason` is one
+     * of the AGW_REASON_* strings above. Runs on the engine thread: keep it
+     * cheap and do not call back into the control synchronously. */
     void (*on_command_dropped)(AgaveWebView* view, const char* kind,
                                const char* reason, void* user);
 } AgaveWebViewCallback;
@@ -165,8 +164,37 @@ AGW_API void agave_webview_interrupt(AgaveWebView* view);
 AGW_API int  agave_webview_busy(AgaveWebView* view, int minMs);
 AGW_API void agave_webview_stop(AgaveWebView* view);
 
-/* Runs a script in the page (thread safe, queued). */
-AGW_API void agave_webview_eval(AgaveWebView* view, const char* script);
+/* ---- command delivery -----------------------------------------------------
+ *
+ * Every host entry point (navigate/eval/input/...) queues a command for the
+ * engine thread. `agave_webview_eval` reports what happened *at the call*:
+ * whether the command was accepted. Acceptance is not execution - a queued
+ * command can still fail later (the document it was written for is replaced
+ * before it runs), and that is reported through on_command_dropped.
+ *
+ * The split is deliberate: a status code where the host branches, text where
+ * the host only shows the reason (the renderer sends the same text across the
+ * process boundary, so a second numeric channel would be a second thing to keep
+ * in sync).
+ */
+typedef enum {
+    AGW_CMD_OK = 0,            /* queued; the engine will run it */
+    AGW_CMD_ERR_BAD_ARGS = 1,  /* view or script is NULL */
+    AGW_CMD_ERR_NO_VIEW = 2,   /* the view has been destroyed */
+    AGW_CMD_ERR_QUEUE_FULL = 3 /* the control's command ring is full */
+} AgwCommandStatus;
+
+/* Why a queued command did not run. Stable strings (only additions): a host may
+ * compare them, localize them, or just log them. Valid for the callback only. */
+#define AGW_REASON_NO_PAGE             "no page yet"
+#define AGW_REASON_NO_DOCUMENT         "no live document"
+#define AGW_REASON_DOCUMENT_REPLACED   "document replaced by a navigation"
+#define AGW_REASON_RENDERER            "renderer refused the command"
+
+/* Runs a script in the page (thread safe, queued). See AgwCommandStatus: OK
+ * means "queued", not "ran". The outcome, when it fails, arrives through
+ * on_command_dropped. */
+AGW_API int agave_webview_eval(AgaveWebView* view, const char* script);
 
 /* Zoom: 100 is normal. */
 AGW_API void agave_webview_set_zoom(AgaveWebView* view, int percent);

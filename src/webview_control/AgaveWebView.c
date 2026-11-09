@@ -564,14 +564,17 @@ static void agwRelease(AgaveWebView* item)
         agwDestroyNow(item);
 }
 
-static void agwPost(int type, AgaveWebView* view, const char* text,
-                    int x, int y, int a, int b)
+static int agwPost(int type, AgaveWebView* view, const char* text,
+                   int x, int y, int a, int b)
 {
     AgwCommand command;
     int queued = 0;
 
+    if (!view || view->destroyed)
+        return AGW_CMD_ERR_NO_VIEW;
+
     if (!g_lockReady)
-        return;
+        return AGW_CMD_ERR_NO_VIEW;
 
     /* Every host entry point (address bar, link navigation, back/forward,
      * reload, new tab, eval) queues here. If the engine has been inside a
@@ -583,7 +586,13 @@ static void agwPost(int type, AgaveWebView* view, const char* text,
      * away, so there is nothing to preserve and no grace period to wait out
      * (the teardown that follows has its own budget, see the watchdog). The
      * flag is consumed by the aborted script; the teardown handlers run later
-     * as fresh top-level evals and are unaffected. */
+     * as fresh top-level evals and are unaffected.
+     *
+     * Only the view this command belongs to: the engine thread runs every view,
+     * so "something is in JS" does not mean "this navigation's page is in JS".
+     * Without the view check, opening a popup from a page's own script (or
+     * navigating another tab) aborted the caller - window.open threw
+     * "Script execution interrupted" (R158). */
 
     memset(&command, 0, sizeof(command));
     command.type = type;
@@ -615,10 +624,9 @@ static void agwPost(int type, AgaveWebView* view, const char* text,
     }
 
     agwLock();
-    command.viewId = view ? view->id : 0;
-    command.docEpoch = (view && agwCommandIsDocumentScoped(type)) ? (uint32_t)view->docEpoch : 0;
-    if (command.viewId > 0 &&
-        ((g_queueTail + 1) % AGW_QUEUE_SIZE) != g_queueHead) {
+    command.viewId = view->id;
+    command.docEpoch = agwCommandIsDocumentScoped(type) ? (uint32_t)view->docEpoch : 0;
+    if (((g_queueTail + 1) % AGW_QUEUE_SIZE) != g_queueHead) {
         g_queue[g_queueTail] = command;
         g_queueTail = (g_queueTail + 1) % AGW_QUEUE_SIZE;
         queued = 1;
@@ -628,23 +636,26 @@ static void agwPost(int type, AgaveWebView* view, const char* text,
     /* Queued and nobody is draining: the engine is inside a script right now
      * (that is why the command cannot run). A navigation means the page it is
      * blocking is going away, so abort that script here instead of leaving the
-     * navigation behind it until the watchdog fires (100 ms).
-     *
-     * Only the view this command belongs to: the engine thread runs every view,
-     * so "something is in JS" does not mean "this navigation's page is in JS".
-     * Without the view check, opening a popup from a page's own script (or
-     * navigating another tab) aborted the caller - window.open threw
-     * "Script execution interrupted" (R158). */
+     * navigation behind it until the watchdog fires (100 ms). See above for why
+     * only `view->busy` counts. */
     if (queued && agwCommandIsNavigation(type) && view->busy &&
         antb_engines_js_depth() > 0) {
         antb_interrupt_all_engines();
     }
 
-    if (!queued && command.heapText)
-        free(command.heapText);
+    if (!queued) {
+        if (command.heapText)
+            free(command.heapText);
 
-    if (queued && view->hwnd)
+        agbLog(AGB_LOG_SHELL, "command %d dropped: queue full (view %d)",
+               type, view->id);
+        return AGW_CMD_ERR_QUEUE_FULL;
+    }
+
+    if (view->hwnd)
         PostMessageA(view->hwnd, AGW_MSG_STATE, 0, 0);
+
+    return AGW_CMD_OK;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -1847,7 +1858,7 @@ static void agwDrainCommands(void)
          * tell the host. */
         if (agwCommandIsDocumentScoped(command.type) && command.docEpoch &&
             item->docEpoch && command.docEpoch != (uint32_t)item->docEpoch) {
-            agwReportCommandDrop(item, command.type, "document replaced by a navigation",
+            agwReportCommandDrop(item, command.type, AGW_REASON_DOCUMENT_REPLACED,
                                  command.docEpoch, (uint32_t)item->docEpoch);
             free(command.heapText);
             agwRelease(item);
@@ -1897,7 +1908,7 @@ static void agwDrainCommands(void)
              * instead of assuming the script executed. */
             if (!agwSubmitText(item, AGW_VIEW_CMD_EVAL, payload, 0, 0, 0, 0))
                 agwReportCommandDrop(item, command.type,
-                                     item->backendView ? "no live document" : "no page yet",
+                                     item->backendView ? AGW_REASON_NO_DOCUMENT : AGW_REASON_NO_PAGE,
                                      command.docEpoch, (uint32_t)item->docEpoch);
             break;
 
@@ -2144,7 +2155,7 @@ static void agwDispatchBackendEvent(AgaveWebView* item, const AgwViewEvent* ev)
          * command was in flight, or nothing could run it. Report it exactly
          * like the local path does - the host must never be left guessing. */
         const char* kind = agwViewCommandKindName(ev->a);
-        const char* reason = ev->text && ev->text[0] ? ev->text : "dropped by the view";
+        const char* reason = ev->text && ev->text[0] ? ev->text : AGW_REASON_RENDERER;
 
         if (!item->callbacks.on_command_dropped || getenv("AGB_CMD_LOG"))
             agbLog(AGB_LOG_SHELL, "dropped %s command: %s (epoch %d -> %d)",
@@ -3411,10 +3422,16 @@ int agave_webview_busy(AgaveWebView* item, int minMs)
 void agave_webview_reload(AgaveWebView* item)  { agwPost(AGW_CMD_RELOAD, item, NULL, 0, 0, 0, 0); }
 void agave_webview_stop(AgaveWebView* item)    { agwPost(AGW_CMD_STOP, item, NULL, 0, 0, 0, 0); }
 
-void agave_webview_eval(AgaveWebView* item, const char* script)
+int agave_webview_eval(AgaveWebView* item, const char* script)
 {
-    if (item && script)
-        agwPost(AGW_CMD_EVAL, item, script, 0, 0, 0, 0);
+    if (!item || !script)
+        return AGW_CMD_ERR_BAD_ARGS;
+
+    /* OK means "queued". A command that cannot run once it reaches the engine
+     * (no live document yet, or the document was replaced while it waited) is
+     * reported through on_command_dropped - the control does not guess that at
+     * call time, because the document state lives on the engine thread. */
+    return agwPost(AGW_CMD_EVAL, item, script, 0, 0, 0, 0);
 }
 
 void agave_webview_set_zoom(AgaveWebView* item, int percent)

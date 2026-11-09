@@ -22,6 +22,7 @@
 #include "macross.h"
 #include "../../src/webview_control/AgwViewIpc.h"
 #include "../../src/webview/AgbCrash.h"
+#include "agave_webview.h"   /* AGW_REASON_*: one vocabulary for drop reasons */
 
 /* Crash report sink: copy the text into the shared section. The section
  * outlives this process, so the control reads the report after we are gone and
@@ -355,7 +356,7 @@ static int executeCommand(const AgwIpcCommand* cmd)
      * page behind the host's back, doing nothing would be invisible. Report it
      * so the control can tell its host (the local backend answers 0 instead). */
     if (cmdEpoch && epoch && cmdEpoch != epoch) {
-        static const char why[] = "document replaced by a navigation";
+        static const char why[] = AGW_REASON_DOCUMENT_REPLACED;
 
         pushEvent(AGW_VIEW_EVENT_COMMAND_DROPPED, (int)cmd->kind,
                   (int)cmdEpoch, (int)epoch, 0, why, (int)sizeof(why) - 1);
@@ -409,7 +410,7 @@ static int executeCommand(const AgwIpcCommand* cmd)
     case AGW_VIEW_CMD_FORWARD: macross_view_forward(g_view);  return 1;
     case AGW_VIEW_CMD_EVAL:
         if (text[0] && !macross_view_eval_script(g_view, text)) {
-            static const char why[] = "no live document";
+            static const char why[] = AGW_REASON_NO_DOCUMENT;
 
             pushEvent(AGW_VIEW_EVENT_COMMAND_DROPPED, AGW_VIEW_CMD_EVAL, 0,
                       (int)epoch, 0, why, (int)sizeof(why) - 1);

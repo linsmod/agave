@@ -231,8 +231,13 @@ JSValue* KJSProxy::evaluate(const String& filename, int baseLine, const String& 
         free(err);
         return jsUndefined();
     }
-#endif
-
+    /* Anti fallthrough: when the engine cannot run this script (no document yet,
+     * frame torn down), nothing runs. The legacy interpreter below would build a
+     * JSDOMWindow around a frame that has no document and crash on the first
+     * `document` access (P1-ac). m_lastEvaluateRan stays false, so the control
+     * reports the command as dropped instead. */
+    return 0;
+#else
     initScriptIfNeeded();
     // inlineCode is true for <a href="javascript:doSomething()">
     // and false for <script>doSomething()</script>. Check if it has the
@@ -266,6 +271,7 @@ JSValue* KJSProxy::evaluate(const String& filename, int baseLine, const String& 
     }
 
     return 0;
+#endif /* ENABLE(ANTJS) */
 }
 
 void KJSProxy::clear() {
@@ -285,6 +291,12 @@ void KJSProxy::clear() {
 
 EventListener* KJSProxy::createHTMLEventHandler(const String& functionName, const String& code, Node* node)
 {
+    /* The legacy interpreter owns this path (HTML attribute handlers). Without
+     * a document the handler would be attached to a dead window and crash when
+     * it finally runs (P1-ac). */
+    if (!m_frame || !m_frame->document())
+        return 0;
+
     initScriptIfNeeded();
     JSLock lock;
     return new JSLazyEventListener(functionName, code, Window::retrieveWindow(m_frame), node, m_handlerLineno);
@@ -293,6 +305,9 @@ EventListener* KJSProxy::createHTMLEventHandler(const String& functionName, cons
 #if ENABLE(SVG)
 EventListener* KJSProxy::createSVGEventHandler(const String& functionName, const String& code, Node* node)
 {
+    if (!m_frame || !m_frame->document())
+        return 0;
+
     initScriptIfNeeded();
     JSLock lock;
     return new JSSVGLazyEventListener(functionName, code, Window::retrieveWindow(m_frame), node, m_handlerLineno);

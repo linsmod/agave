@@ -501,6 +501,35 @@ if ($ip.ExitCode -eq 0 -and $internalText -match '\[exit\] title=下载' -and
 }
 Assert-NoRenderer 'internal page' | Out-Null
 
+# 20. P1-ac: an eval issued while the new document has not been committed yet
+#     (right after load_html) must be reported as dropped, never fall into the
+#     legacy interpreter - that used to crash the process with
+#     "ASSERTION FAILED: m_frame->document()".
+$env:AGB_VIEW_BACKEND = 'process'
+$env:AGB_RENDER_CRASH_AV = '500'
+$env:AGB_PROBE_CRASH_EVAL = '1'
+$earlyOut = Join-Path $build 'process_early_eval_out.txt'
+$earlyErr = Join-Path $build 'process_early_eval_err.txt'
+try {
+    $early = Start-Process -FilePath $exe -NoNewWindow -PassThru -Wait `
+        -ArgumentList @('--probe', "file:///$((Join-Path $pages 'blank.html') -replace '\\','/')",
+                        '--wait', '300', '--settle', '800', '--timeout', '15000') `
+        -RedirectStandardOutput $earlyOut -RedirectStandardError $earlyErr
+} finally {
+    Remove-Item Env:AGB_VIEW_BACKEND, Env:AGB_RENDER_CRASH_AV, Env:AGB_PROBE_CRASH_EVAL -ErrorAction SilentlyContinue
+}
+$earlyText = ((Get-Content $earlyOut -Raw) -as [string]) + ((Get-Content $earlyErr -Raw) -as [string])
+
+if ($earlyText -match 'dropped=\d+ kind=eval reason=no live document' -and
+    $earlyText -notmatch 'ASSERTION FAILED|\[crash\]') {
+    Write-Host "PASS  early eval after load_html is reported, not crashed (P1-ac)"
+} else {
+    $failures++
+    Write-Host ("FAIL  early eval after load_html (exit {0})" -f $early.ExitCode)
+    Write-Host (($earlyText -split "`n" | Where-Object { $_ -match 'dropped|crash|ASSERT|exit code' } | Select-Object -Last 4) -join "`n")
+}
+Assert-NoRenderer 'early eval' | Out-Null
+
 Remove-Item (Join-Path $build 'process_backend_out.txt'),
             (Join-Path $build 'process_backend_err.txt'),
             (Join-Path $build 'process_backend_eval.js') -ErrorAction SilentlyContinue

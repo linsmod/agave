@@ -3510,6 +3510,15 @@ static void probeCrashPage(AgaveWebView* view, const char* html, const char* bas
     if (probeRespawnInto(view, base))
         return;
 
+    /* Regression hook for P1-ac: eval right after load_html, i.e. while the new
+     * document has not been committed yet. The command must be dropped with a
+     * reason (on_command_dropped), never fall into the legacy interpreter. */
+    if (getenv("AGB_PROBE_CRASH_EVAL")) {
+        agave_webview_eval(view, "agavePostMessage('__agb_exit__crasheval-ran')");
+        PostMessageA(g_probeWnd, AGW_PROBE_EVALDONE, 0, 0);
+        return;
+    }
+
     g_probeGotExit = 1;
     PostMessageA(g_probeWnd, WM_CLOSE, 0, 0);
 }
