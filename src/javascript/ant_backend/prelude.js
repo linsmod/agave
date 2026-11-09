@@ -344,39 +344,12 @@
   }
   {
     var _ctors = ['Document','HTMLDocument','Element','HTMLElement','HTMLDivElement','Node','NodeList','HTMLCollection','Event','CustomEvent','MouseEvent','KeyboardEvent','DocumentFragment','Text','Comment','Attr','DOMParser','XMLSerializer','MutationObserver','Storage','Location','Navigator','Screen','History','Window','Performance','CSSStyleDeclaration','HTMLUnknownElement','HTMLAnchorElement','HTMLAreaElement','HTMLAudioElement','HTMLBRElement','HTMLBaseElement','HTMLBodyElement','HTMLButtonElement','HTMLCanvasElement','HTMLDListElement','HTMLDataElement','HTMLDataListElement','HTMLDetailsElement','HTMLDialogElement','HTMLEmbedElement','HTMLFieldSetElement','HTMLFontElement','HTMLFormElement','HTMLFrameElement','HTMLFrameSetElement','HTMLHRElement','HTMLHeadElement','HTMLHeadingElement','HTMLHtmlElement','HTMLIFrameElement','HTMLImageElement','HTMLInputElement','HTMLLIElement','HTMLLabelElement','HTMLLegendElement','HTMLLinkElement','HTMLMapElement','HTMLMediaElement','HTMLMenuElement','HTMLMetaElement','HTMLMeterElement','HTMLModElement','HTMLOListElement','HTMLObjectElement','HTMLOptGroupElement','HTMLOptionElement','HTMLOutputElement','HTMLParagraphElement','HTMLParamElement','HTMLPictureElement','HTMLPreElement','HTMLProgressElement','HTMLQuoteElement','HTMLScriptElement','HTMLSelectElement','HTMLSlotElement','HTMLSourceElement','HTMLSpanElement','HTMLStyleElement','HTMLTableCaptionElement','HTMLTableCellElement','HTMLTableColElement','HTMLTableElement','HTMLTableRowElement','HTMLTableSectionElement','HTMLTemplateElement','HTMLTextAreaElement','HTMLTimeElement','HTMLTitleElement','HTMLTrackElement','HTMLUListElement','HTMLVideoElement','SVGElement','SVGSVGElement'];
-  if (typeof g.innerWidth === 'undefined') {
-    /* Viewport metrics are per FRAME, not per process: an iframe is a small
-     * viewport inside the parent's window, and pages size themselves from
-     * these values. They used to be plain properties filled in once when this
-     * prelude ran (outerWidth = the top-level width), so a child frame read
-     * the parent's 1100 and laid its content out for a window it does not
-     * have - WeChat's login QR was sized for the parent page and then clipped
-     * inside its 200x200 iframe. Getters keep them in step with whichever
-     * document is bound. */
-    function innerW() {
-      if (typeof g.__agbViewportWidth === 'function') { try { return g.__agbViewportWidth(g.document); } catch (e) {} }
-      return (g.document && g.document.documentElement) ? g.document.documentElement.clientWidth : 0;
-    }
-    function innerH() {
-      if (typeof g.__agbViewportHeight === 'function') { try { return g.__agbViewportHeight(g.document); } catch (e) {} }
-      return (g.document && g.document.documentElement) ? g.document.documentElement.clientHeight : 0;
-    }
-    function defineViewport(name, getter) {
-      if (Object.defineProperty) {
-        try { Object.defineProperty(g, name, { get: getter, configurable: true }); return; } catch (e) {}
-      }
-      g[name] = getter();
-    }
-    defineViewport('innerWidth', innerW);
-    defineViewport('innerHeight', innerH);
-    /* outerWidth/outerHeight describe the browser window; with no real window
-     * chrome here the frame's own viewport is the best answer, and it must
-     * follow the bound document. */
-    defineViewport('outerWidth', innerW);
-    defineViewport('outerHeight', innerH);
-    /* Scroll offsets follow the document scroller (see RenderObject::scrollTop:
-     * <html>/<body> route to the FrameView), so they have to be read on demand
-     * instead of frozen at 0. */
+  /* Scroll offsets and scrollTo/scrollBy are installed UNCONDITIONALLY: the
+   * window getter the host installs on a realm's global object already answers
+   * innerWidth, and the old guard below (	ypeof g.innerWidth === 'undefined')
+   * then skipped this whole block - so window.scrollTo/scrollY/pageYOffset went
+   * missing (R151). */
+  {
     function scrollX() {
       var d = g.document;
       if (!d) return 0;
@@ -411,6 +384,38 @@
       if (y !== undefined && y !== null) se.scrollTop = y;
     };
     g.scrollBy = function (x, y) { g.scrollTo(scrollX() + (x || 0), scrollY() + (y || 0)); };
+  }
+  if (typeof g.innerWidth === 'undefined') {
+    /* Viewport metrics are per FRAME, not per process: an iframe is a small
+     * viewport inside the parent's window, and pages size themselves from
+     * these values. They used to be plain properties filled in once when this
+     * prelude ran (outerWidth = the top-level width), so a child frame read
+     * the parent's 1100 and laid its content out for a window it does not
+     * have - WeChat's login QR was sized for the parent page and then clipped
+     * inside its 200x200 iframe. Getters keep them in step with whichever
+     * document is bound. */
+    function innerW() {
+      if (typeof g.__agbViewportWidth === 'function') { try { return g.__agbViewportWidth(g.document); } catch (e) {} }
+      return (g.document && g.document.documentElement) ? g.document.documentElement.clientWidth : 0;
+    }
+    function innerH() {
+      if (typeof g.__agbViewportHeight === 'function') { try { return g.__agbViewportHeight(g.document); } catch (e) {} }
+      return (g.document && g.document.documentElement) ? g.document.documentElement.clientHeight : 0;
+    }
+    function defineViewport(name, getter) {
+      if (Object.defineProperty) {
+        try { Object.defineProperty(g, name, { get: getter, configurable: true }); return; } catch (e) {}
+      }
+      g[name] = getter();
+    }
+    defineViewport('innerWidth', innerW);
+    defineViewport('innerHeight', innerH);
+    /* outerWidth/outerHeight describe the browser window; with no real window
+     * chrome here the frame's own viewport is the best answer, and it must
+     * follow the bound document. */
+    defineViewport('outerWidth', innerW);
+    defineViewport('outerHeight', innerH);
+
   }
   g.__agbSafe = function (fn, label) {
     return function () {

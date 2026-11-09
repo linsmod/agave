@@ -92,7 +92,11 @@ if ($probe.Code -ne 0 -or $missing.Count -gt 0) {
 #    the probe window before --shot can run, so the capture never happens and
 #    this group fails with "no such file". Letting --settle finish is what
 #    reaches the shot path.
-$shot = Join-Path $tmp 'sticky.bmp'
+# The probe writes the capture itself with fopen(); a path under %TEMP% fails
+# with EACCES in this environment (see dev-debugging.md), so the shot goes next
+# to the build output and the pixel check reads it from there.
+$shot = Join-Path $build 'sticky_shot.bmp'
+Remove-Item $shot -ErrorAction SilentlyContinue
 $scrollJs = Join-Path $tmp 'scroll.js'
 "window.scrollTo(0, 500);" |
     Set-Content -Path $scrollJs -Encoding ascii
