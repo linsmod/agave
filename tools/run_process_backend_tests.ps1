@@ -334,6 +334,64 @@ if ($dry -match '--backend process' -and $dryLocal -match '--backend local') {
     Write-Host $dryLocal
 }
 
+# 13. a command the host issues before there is a page is reported as dropped.
+#     It used to vanish: eval on a view that has not navigated yet queued, found
+#     no backend view, and nothing happened.
+$dead = Invoke-Probe -Page (Join-Path $pages 'blank.html') -Wait 300 -Settle 200 `
+    -Extra @('--eval-before-nav', "document.title='before-nav'") `
+    -Js 'probeExit("title=" + document.title);'
+$deadText = $dead.Stdout + $dead.Stderr
+if ($dead.Code -eq 0 -and $deadText -match 'dropped=\d+ kind=eval reason=(no page yet|no live document)' -and
+    $deadText -notmatch 'title=before-nav') {
+    Write-Host "PASS  dropped: eval with no page is reported, not swallowed"
+} else {
+    $failures++
+    Write-Host ("FAIL  dropped: eval with no page (exit {0})" -f $dead.Code)
+    Write-Host (($deadText -split "`n" | Where-Object { $_ -match 'dropped|title=|exit' } | Select-Object -Last 4) -join "`n")
+}
+
+# 14. the contract for "eval during a navigation": either it ran or the host was
+#     told it was dropped - never both missing. --eval-early posts the marker
+#     right after navigate() returns, i.e. while the document swap is in flight,
+#     so this lands either before a document exists (dropped) or in the old one
+#     (the marker arrives through on_message).
+$early = Invoke-Probe -Page (Join-Path $pages 'blank.html') -Wait 600 -Settle 300 `
+    -Extra @('--eval-early', "window.agavePostMessage('early-ran')") `
+    -Js 'probeExit("done");'
+$earlyText = $early.Stdout + $early.Stderr
+$earlyRan = $earlyText -match 'early-ran'
+$earlyDropped = $earlyText -match 'dropped=\d+ kind=eval'
+if ($early.Code -eq 0 -and (($earlyRan -and -not $earlyDropped) -or ($earlyDropped -and -not $earlyRan))) {
+    Write-Host ("PASS  eval during navigation: {0}" -f $(if ($earlyRan) { 'ran' } else { 'reported as dropped' }))
+} else {
+    $failures++
+    Write-Host ("FAIL  eval during navigation (exit {0}, ran={1}, dropped={2})" -f $early.Code, $earlyRan, $earlyDropped)
+    Write-Host (($earlyText -split "`n" | Where-Object { $_ -match 'early-ran|dropped|exit' } | Select-Object -Last 4) -join "`n")
+}
+
+# 15. the renderer refuses a command stamped for a document it has left, and the
+#     control turns that into on_command_dropped. AGB_IPC_STALE_EPOCH makes the
+#     renderer treat every stamp as one document old (the real window - a
+#     command that waits out a navigation commit - is too narrow to hit on
+#     purpose), so this is the deterministic check of the reporting path.
+$env:AGB_IPC_STALE_EPOCH = '1'
+try {
+    $stale = Invoke-Probe -Page (Join-Path $pages 'blank.html') -Wait 300 -Settle 200 `
+        -Js 'probeExit("should-not-run");'
+} finally {
+    Remove-Item Env:AGB_IPC_STALE_EPOCH -ErrorAction SilentlyContinue
+}
+$staleText = $stale.Stdout + $stale.Stderr
+if ($staleText -match 'dropped=\d+ kind=eval reason=document replaced by a navigation' -and
+    $staleText -notmatch 'should-not-run') {
+    Write-Host "PASS  stale document: renderer refuses the command, host is told"
+} else {
+    $failures++
+    Write-Host "FAIL  stale document: no drop reported by the renderer path"
+    Write-Host (($staleText -split "`n" | Where-Object { $_ -match 'dropped|should-not-run|exit' } | Select-Object -Last 4) -join "`n")
+}
+Assert-NoRenderer 'stale' | Out-Null
+
 Remove-Item (Join-Path $build 'process_backend_out.txt'),
             (Join-Path $build 'process_backend_err.txt'),
             (Join-Path $build 'process_backend_eval.js') -ErrorAction SilentlyContinue

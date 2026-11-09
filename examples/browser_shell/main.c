@@ -1254,10 +1254,30 @@ static int showHangPrompt(int tabIndex, unsigned int busyMs, const char* stackPa
 /* The watchdog reported an unresponsive page (advisory: see
  * AgaveWebView.c). Runs on the UI thread. Only the tab the user is looking at
  * prompts; a background tab is marked and prompts when it becomes active. */
-static void onUnresponsive(AgaveWebView* view, const char* reason,
-                           unsigned int busy_ms, const char* stack_path, void* user)
+/* Engine thread: a queued command never reached the page - the navigation the
+ * user just started replaced the document, or there was nothing live to run it
+ * on. Before this callback the command just never happened; the status line is
+ * the least intrusive way to say so. */
+static void onCommandDropped(AgaveWebView* view, const char* kind,
+                             const char* reason, void* user)
 {
     Tab* tab = (Tab*)user;
+
+    (void)view;
+
+    agbLog(AGB_LOG_SHELL, "dropped %s command: %s",
+           kind ? kind : "?", reason ? reason : "?");
+
+    if (tab) {
+        _snprintf(tab->status, sizeof(tab->status) - 1, "dropped %s: %s",
+                  kind ? kind : "?", reason ? reason : "?");
+        tab->status[sizeof(tab->status) - 1] = 0;
+    }
+}
+
+static void onUnresponsive(AgaveWebView* view, const char* reason,
+                           unsigned int busy_ms, const char* stack_path, void* user)
+{    Tab* tab = (Tab*)user;
     const char* show = getenv("AGB_HANG_POPUP");
     int index = -1;
     int i;
@@ -2052,6 +2072,7 @@ static void createTab(const char* url)
     callbacks.on_download = onDownload;
     callbacks.on_context_menu = onContextMenu;
     callbacks.on_unresponsive = onUnresponsive;
+    callbacks.on_command_dropped = onCommandDropped;
 
     tab->used = 1;
     tab->view = agave_webview_create(g_hwnd, 0, TAB_HEIGHT + TOOLBAR_H,
@@ -2605,6 +2626,15 @@ static int g_probeShowAfterMs;
 /* --reload-every <ms> --reload-count <n>: hammer Reload regardless of load state. */
 static int g_probeReloadEveryMs;
 static int g_probeReloadCount;
+/* --eval-early <js>: run a script immediately after navigate() returns, while
+ * the document swap is still in flight. That is the window where a host command
+ * used to vanish without a trace; the run must either execute it or report
+ * on_command_dropped, and the suite asserts exactly that. */
+static const char* g_probeEarlyEval;
+/* --eval-before-nav <js>: eval before the first navigate(), i.e. a view with no
+ * page at all. The control has nowhere to run it: the run must report
+ * on_command_dropped ("no page yet"), deterministically. */
+static const char* g_probeBeforeNavEval;
 /* GUI runs only: tell the user where the crash dump landed. The file name is
  * relative to the process CWD, so show the absolute path - the shell may have
  * been started from anywhere. */
@@ -3354,6 +3384,24 @@ static void probeOnUnresponsive(AgaveWebView* view, const char* reason,
             busy_ms, (stack_path && stack_path[0]) ? stack_path : "(none)");
 }
 
+/* A command the host issued could not be delivered: print it and count it, so a
+ * probe run can prove "either it ran or the host heard about it" from stdout. */
+static volatile LONG g_probeDropped;
+
+static void probeOnCommandDropped(AgaveWebView* view, const char* kind,
+                                  const char* reason, void* user)
+{
+    (void)view;
+    (void)user;
+
+    InterlockedIncrement(&g_probeDropped);
+    printf("dropped=%ld kind=%s reason=%s\n",
+           (long)g_probeDropped, kind ? kind : "?", reason ? reason : "?");
+    fflush(stdout);
+    agbLog(AGB_LOG_PROBE, "dropped command kind=%s reason=%s",
+           kind ? kind : "?", reason ? reason : "?");
+}
+
 /* Right click reaches the host on the UI thread (the control copies the payload
  * and posts it there; a menu cannot be built from the engine thread). The probe
  * only records it - no menu, so the run stays headless - which is what makes the
@@ -3711,6 +3759,7 @@ static int probeRun(const char* url)
     callbacks.on_dialog = probeOnDialog;
     callbacks.on_context_menu = probeOnContextMenu;
     callbacks.on_unresponsive = probeOnUnresponsive;
+    callbacks.on_command_dropped = probeOnCommandDropped;
 
     g_probeView = agave_webview_create(g_probeWnd, 0, 0, 1100, 800, &callbacks, NULL);
     if (!g_probeView) {
@@ -3746,7 +3795,16 @@ static int probeRun(const char* url)
     if (g_probeVisible)
         agave_webview_set_focus(g_probeView);
 
+    if (g_probeBeforeNavEval && g_probeBeforeNavEval[0])
+        agave_webview_eval(g_probeView, g_probeBeforeNavEval);
+
     agave_webview_navigate(g_probeView, url);
+
+    /* --eval-early: right after navigate() returns, i.e. while the old document
+     * may still be on screen. Either this runs or it is reported as dropped -
+     * never both missing (see probeOnCommandDropped). */
+    if (g_probeEarlyEval && g_probeEarlyEval[0])
+        agave_webview_eval(g_probeView, g_probeEarlyEval);
 
     /* Nothing is injected here any more: the engine's on_progress(finished)
      * callback is the single "the requested document loaded" signal, and --wait
@@ -3781,6 +3839,12 @@ static int probeRun(const char* url)
                     probePrint("[probe]", "nav-after: navigating while the page is busy");
                     agave_webview_navigate(g_probeView,
                                            g_probeNavUrl[0] ? g_probeNavUrl : "about:blank");
+
+                    /* Same race as the start-of-run --eval-early, but with a
+                     * live document on screen: the command is issued for the
+                     * page that is about to be replaced. */
+                    if (g_probeEarlyEval && g_probeEarlyEval[0])
+                        agave_webview_eval(g_probeView, g_probeEarlyEval);
                 }
                 continue;
             }
@@ -4186,6 +4250,11 @@ static void probeUsage(void)
             "            a script slower than settle is still allowed to finish)\n"
             "  --timeout hard cap from start (default 60000)\n"
             "  --nav-after <ms> [--nav-url <url>]  navigate while the page is busy\n"
+            "  --eval-before-nav <js>  eval before the first navigate (no page yet:\n"
+            "            must be reported as dropped, never silently ignored)\n"
+            "  --eval-early <js>  run a script right after navigate() returns, i.e.\n"
+            "            while the document swap is still in flight; it must either\n"
+            "            run or be reported as dropped (\"dropped=1 kind=eval ...\")\n"
             "  --hide-after <ms> / --show-after <ms>  Page Visibility change\n"
             "            (document.hidden + visibilitychange) without a GUI tab switch\n"
             "  --shot <path>  capture what the page painted and exit; the extension\n"
@@ -4438,6 +4507,12 @@ static void parseShellArgv(void)
             if (!g_probeReloadCount) g_probeReloadCount = 10;
         } else if (!strcmp(argv[i], "--reload-count") && i + 1 < argc) {
             g_probeReloadCount = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "--eval-before-nav") && i + 1 < argc) {
+            g_probeBeforeNavEval = argv[++i];
+        } else if (!strcmp(argv[i], "--eval-early") && i + 1 < argc) {
+            /* Run a script while the navigation it was issued during is still
+             * in flight: the case that used to swallow host commands. */
+            g_probeEarlyEval = argv[++i];
         } else if (!strcmp(argv[i], "--nav-after") && i + 1 < argc) {
             /* Navigate N ms after the probe starts, while the page is still
              * busy: the control aborts the running script at agwPost(). */

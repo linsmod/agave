@@ -11,6 +11,7 @@
 
 #include "Page.h"
 #include "Frame.h"
+#include "kjs_proxy.h"
 #include "PopupMenu.h"
 #include "HTMLInputElement.h"
 #include "HTMLTextAreaElement.h"
@@ -1025,9 +1026,25 @@ int WebView::markAll(const char *str, bool caseSens, bool highlight, unsigned in
     return matches;
 }
 
-void WebView::executeScript(const char* script)
+bool WebView::executeScript(const char* script)
 {
-	d->m_frame->loader()->executeScript(String::fromUTF8(script), true);
+    if (!d->m_frame)
+        return false;
+
+    d->m_frame->loader()->executeScript(String::fromUTF8(script), true);
+
+    /* "Ran" is not the same as "returned a value": a script that throws also
+     * yields no JSValue. KJSProxy knows which of the two happened, and the host
+     * needs that to report a dropped command instead of a silent no-op. */
+    KJSProxy* proxy = d->m_frame->scriptProxy();
+    return proxy ? proxy->lastEvaluateRan() : false;
+}
+
+unsigned WebView::documentEpoch(void) const
+{
+    WebCore::Page* p = d->m_frame ? d->m_frame->page() : 0;
+
+    return p ? p->documentEpoch() : 0;
 }
 
 void WebView::unmarkAll(void)

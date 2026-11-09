@@ -109,7 +109,9 @@ public:
 	int scaleFactor(void);
 	void setScaleFactor(int scale);
 	//javascript
-	void executeScript(const char* script);
+	bool executeScript(const char* script);
+	// document epoch: bumped on every main-frame document commit (see Page)
+	unsigned documentEpoch(void) const;
 	//font antialias
 	bool isTextAntialias(void); 
 	void setTextAntialias(bool b);

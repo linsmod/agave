@@ -140,6 +140,72 @@ static int agwCommandIsNavigation(int type)
     }
 }
 
+/* Commands whose meaning is a document, not a view: they were written for the
+ * page that was on screen when the host issued them. Navigation, zoom, resize,
+ * visibility and download control are view-level and can always run. */
+static int agwCommandIsDocumentScoped(int type)
+{
+    switch (type) {
+    case AGW_CMD_EVAL:
+    case AGW_CMD_MOUSE:
+    case AGW_CMD_KEY:
+    case AGW_CMD_CHAR:
+    case AGW_CMD_SEARCH:
+    case AGW_CMD_CONTEXT:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static const char* agwCommandKindName(int type)
+{
+    switch (type) {
+    case AGW_CMD_NAVIGATE:  return "navigate";
+    case AGW_CMD_LOAD_HTML: return "load-html";
+    case AGW_CMD_BACK:      return "back";
+    case AGW_CMD_FORWARD:   return "forward";
+    case AGW_CMD_RELOAD:    return "reload";
+    case AGW_CMD_STOP:      return "stop";
+    case AGW_CMD_EVAL:      return "eval";
+    case AGW_CMD_ZOOM:      return "zoom";
+    case AGW_CMD_RESIZE:    return "resize";
+    case AGW_CMD_MOUSE:     return "mouse";
+    case AGW_CMD_KEY:       return "key";
+    case AGW_CMD_CHAR:      return "text";
+    case AGW_CMD_FOCUS:     return "focus";
+    case AGW_CMD_SEARCH:    return "search";
+    case AGW_CMD_CONTEXT:   return "context-menu";
+    case AGW_CMD_VISIBLE:   return "visible";
+    default:                return "command";
+    }
+}
+
+/* Protocol kinds, for a command a backend reports as dropped. */
+static const char* agwViewCommandKindName(int kind)
+{
+    switch (kind) {
+    case AGW_VIEW_CMD_VISIBLE:      return "visible";
+    case AGW_VIEW_CMD_FOCUS:        return "focus";
+    case AGW_VIEW_CMD_MOUSE:        return "mouse";
+    case AGW_VIEW_CMD_KEY:          return "key";
+    case AGW_VIEW_CMD_TEXT:         return "text";
+    case AGW_VIEW_CMD_PREEDIT:      return "preedit";
+    case AGW_VIEW_CMD_NAVIGATE:     return "navigate";
+    case AGW_VIEW_CMD_LOAD_HTML:    return "load-html";
+    case AGW_VIEW_CMD_RELOAD:       return "reload";
+    case AGW_VIEW_CMD_STOP:         return "stop";
+    case AGW_VIEW_CMD_BACK:         return "back";
+    case AGW_VIEW_CMD_FORWARD:      return "forward";
+    case AGW_VIEW_CMD_EVAL:         return "eval";
+    case AGW_VIEW_CMD_ZOOM:         return "zoom";
+    case AGW_VIEW_CMD_SEARCH:       return "search";
+    case AGW_VIEW_CMD_CONTEXT_MENU: return "context-menu";
+    default:                        return "command";
+    }
+}
+
+
 /* Why the watchdog spoke up. AGW_HANG_STALL is the one case where aborting is
  * pointless: the engine is not in JS, so nothing would poll the flag. */
 enum { AGW_HANG_NONE, AGW_HANG_USER_ACTION, AGW_HANG_UNRESPONSIVE, AGW_HANG_STALL,
@@ -178,6 +244,10 @@ typedef struct {
      * pumping window messages, and a page legitimately parsing for seconds looks
      * identical from the outside. */
     DWORD at;
+    /* Document this command was issued against (backend document epoch at post
+     * time). Document-scoped commands whose epoch has moved on are dropped and
+     * reported - never re-targeted at the page that replaced it. */
+    uint32_t docEpoch;
 } AgwCommand;
 
 struct AgaveWebView {
@@ -250,6 +320,13 @@ struct AgaveWebView {
     int                visible;
     int                forceFullPaint;
 
+    /* The document epoch of the page this view is showing (see
+     * macross_view_document_epoch). Refreshed on the engine thread before each
+     * queued command is dispatched, and posted on the UI thread onto the
+     * commands themselves; a command stamped with an older epoch is dropped and
+     * reported instead of silently not happening (or hitting the next page). */
+    volatile LONG      docEpoch;
+
     char               downloadDir[MAX_PATH];
     char               userAgent[256];
     AgwDownloadEntry   downloads[AGW_MAX_DOWNLOADS];
@@ -261,6 +338,22 @@ struct AgaveWebView {
      * WM_IME_CHAR deliver one UTF-16 code unit per message). */
     unsigned int       pendingHighSurrogate;
 };
+
+/* A queued command that could not run. Every one of these used to disappear
+ * without a trace, which is indistinguishable from "it ran and did nothing".
+ * Engine thread; the host callback is documented as cheap-only. */
+static void agwReportCommandDrop(AgaveWebView* item, int type, const char* reason,
+                                 uint32_t expected, uint32_t actual)
+{
+    const char* kind = agwCommandKindName(type);
+
+    if (!item->callbacks.on_command_dropped || getenv("AGB_CMD_LOG"))
+        agbLog(AGB_LOG_SHELL, "dropped %s command: %s (epoch %u -> %u)",
+               kind, reason, expected, actual);
+
+    if (item->callbacks.on_command_dropped)
+        item->callbacks.on_command_dropped(item, kind, reason, item->user);
+}
 
 static char             g_userAgent[256];
 
@@ -333,6 +426,12 @@ static AgaveWebView* agwByView(MaCrossView* view)
 /* Protocol submission (defined next to the command drain). Declared here:
  * agwEnsureSurface() submits the first navigation right after creating the
  * view. */
+/* Document the command now being dispatched was issued against. Set once per
+ * drained command (engine thread only) and copied into every command the
+ * backend receives, so a remote backend can refuse a stale one exactly like the
+ * in-process path does. */
+static uint32_t g_submitDocEpoch;
+
 static int agwSubmitSimple(AgaveWebView* item, int kind, int a, int b, int c, int d);
 static int agwSubmitText(AgaveWebView* item, int kind, const char* text,
                          int a, int b, int c, int d);
@@ -482,8 +581,6 @@ static void agwPost(int type, AgaveWebView* view, const char* text,
      * (the teardown that follows has its own budget, see the watchdog). The
      * flag is consumed by the aborted script; the teardown handlers run later
      * as fresh top-level evals and are unaffected. */
-    if (queued && agwCommandIsNavigation(type) && antb_engines_js_depth() > 0)
-        antb_interrupt_all_engines();
 
     memset(&command, 0, sizeof(command));
     command.type = type;
@@ -516,6 +613,7 @@ static void agwPost(int type, AgaveWebView* view, const char* text,
 
     agwLock();
     command.viewId = view ? view->id : 0;
+    command.docEpoch = view ? (uint32_t)view->docEpoch : 0;
     if (command.viewId > 0 &&
         ((g_queueTail + 1) % AGW_QUEUE_SIZE) != g_queueHead) {
         g_queue[g_queueTail] = command;
@@ -523,6 +621,17 @@ static void agwPost(int type, AgaveWebView* view, const char* text,
         queued = 1;
     }
     agwUnlock();
+
+    /* Queued and nobody is draining: the engine is inside a script right now
+     * (that is why the command cannot run). A navigation means the page it is
+     * blocking is going away, so abort the script here rather than leaving the
+     * navigation stuck behind it until the watchdog fires. The check has to
+     * follow the enqueue - asking "is this queued?" before queueing it was
+     * always false, so this interrupt never happened. */
+    if (queued && agwCommandIsNavigation(type)) {
+        if (antb_engines_js_depth() > 0)
+            antb_interrupt_all_engines();
+    }
 
     if (!queued && command.heapText)
         free(command.heapText);
@@ -1606,6 +1715,7 @@ static int agwSubmitSimple(AgaveWebView* item, int kind, int a, int b, int c, in
 
     memset(&cmd, 0, sizeof(cmd));
     cmd.kind = kind;
+    cmd.docEpoch = g_submitDocEpoch;
     cmd.a = a;
     cmd.b = b;
     cmd.c = c;
@@ -1623,6 +1733,7 @@ static int agwSubmitText(AgaveWebView* item, int kind, const char* text,
 
     memset(&cmd, 0, sizeof(cmd));
     cmd.kind = kind;
+    cmd.docEpoch = g_submitDocEpoch;
     cmd.a = a;
     cmd.b = b;
     cmd.c = c;
@@ -1630,6 +1741,27 @@ static int agwSubmitText(AgaveWebView* item, int kind, const char* text,
     cmd.text = text;
     cmd.textLen = text ? (int)strlen(text) : 0;
     return item->backend->submit(item->backendView, &cmd);
+}
+
+
+/* Keep every view's document epoch fresh. Only the engine thread may ask the
+ * engine, and it must ask *before* the host can post the next command: a host
+ * that just saw "load finished" and evals in response must be stamped with the
+ * epoch of the document it was told about, not the one before it. The control
+ * used to read the epoch only when a command drained, so the first command
+ * after any navigation was always one epoch stale and got dropped. */
+static void agwRefreshDocumentEpochs(void)
+{
+    int i;
+
+    agwLock();
+    for (i = 0; i < g_viewCount; ++i) {
+        AgaveWebView* v = g_views[i];
+
+        if (v && !v->destroyed && v->backend && v->backend->documentEpoch && v->backendView)
+            v->docEpoch = (LONG)v->backend->documentEpoch(v->backendView);
+    }
+    agwUnlock();
 }
 
 static void agwDrainCommands(void)
@@ -1675,7 +1807,31 @@ static void agwDrainCommands(void)
         agwUnlock();
 
         if (!item) {
+            /* Nobody to report to: the view is gone. Still leave a trace, the
+             * "command vanished" class of bug is invisible otherwise. */
+            if (getenv("AGB_CMD_LOG"))
+                agbLog(AGB_LOG_SHELL, "dropped command %d: view %d is gone",
+                       command.type, command.viewId);
             free(command.heapText);
+            continue;
+        }
+
+        /* Only the engine thread may touch the engine, so this is the one place
+         * the control learns which document is live right now. */
+        if (item->backend && item->backend->documentEpoch && item->backendView)
+            item->docEpoch = (LONG)item->backend->documentEpoch(item->backendView);
+
+        /* A command issued for one document must never run against another: the
+         * page it was written for is gone (navigation committed while it waited
+         * in the queue). Running it would silently script the new page; doing
+         * nothing silently is what this whole path exists to end. Drop it and
+         * tell the host. */
+        if (agwCommandIsDocumentScoped(command.type) && command.docEpoch &&
+            item->docEpoch && command.docEpoch != (uint32_t)item->docEpoch) {
+            agwReportCommandDrop(item, command.type, "document replaced by a navigation",
+                                 command.docEpoch, (uint32_t)item->docEpoch);
+            free(command.heapText);
+            agwRelease(item);
             continue;
         }
 
@@ -1683,6 +1839,7 @@ static void agwDrainCommands(void)
         InterlockedExchange(&g_engineBusy, 1);
         item->busySince = g_engineBusySince;
         InterlockedExchange(&item->busy, 1);
+        g_submitDocEpoch = command.docEpoch;
 
         switch (command.type) {
         case AGW_CMD_NAVIGATE:
@@ -1716,7 +1873,13 @@ static void agwDrainCommands(void)
         case AGW_CMD_STOP:    agwSubmitSimple(item, AGW_VIEW_CMD_STOP, 0, 0, 0, 0); break;
 
         case AGW_CMD_EVAL:
-            agwSubmitText(item, AGW_VIEW_CMD_EVAL, payload, 0, 0, 0, 0);
+            /* A FALSE from the backend means nothing ran: no live document, no
+             * engine, or the renderer refused it. The host must learn that
+             * instead of assuming the script executed. */
+            if (!agwSubmitText(item, AGW_VIEW_CMD_EVAL, payload, 0, 0, 0, 0))
+                agwReportCommandDrop(item, command.type,
+                                     item->backendView ? "no live document" : "no page yet",
+                                     command.docEpoch, (uint32_t)item->docEpoch);
             break;
 
         case AGW_CMD_VISIBLE:
@@ -1880,6 +2043,22 @@ static void agwDispatchBackendEvent(AgaveWebView* item, const AgwViewEvent* ev)
             item->callbacks.on_message(item, ev->text ? ev->text : "", item->user);
         break;
 
+    case AGW_VIEW_EVENT_COMMAND_DROPPED: {
+        /* The renderer refused a command: its document moved on while the
+         * command was in flight, or nothing could run it. Report it exactly
+         * like the local path does - the host must never be left guessing. */
+        const char* kind = agwViewCommandKindName(ev->a);
+        const char* reason = ev->text && ev->text[0] ? ev->text : "dropped by the view";
+
+        if (!item->callbacks.on_command_dropped || getenv("AGB_CMD_LOG"))
+            agbLog(AGB_LOG_SHELL, "dropped %s command: %s (epoch %d -> %d)",
+                   kind, reason, ev->b, ev->c);
+
+        if (item->callbacks.on_command_dropped)
+            item->callbacks.on_command_dropped(item, kind, reason, item->user);
+        break;
+    }
+
     case AGW_VIEW_EVENT_EXIT: {
         int crashed = ev->b ? 1 : 0;
         int code = ev->a;
@@ -2020,6 +2199,7 @@ static DWORD WINAPI agwEngineThread(LPVOID param)
             }
         }
 
+        agwRefreshDocumentEpochs();
         agwDrainCommands();
         agwApplyPendingResizes();
 

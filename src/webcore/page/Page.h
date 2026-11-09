@@ -67,6 +67,13 @@ namespace WebCore {
         void setMainFrame(PassRefPtr<Frame>);
         Frame* mainFrame() const { return m_mainFrame.get(); }
 
+        /* Incremented every time the main frame commits a new document. The
+         * host stamps each queued command with it, so a command posted against
+         * one document is never silently executed against (or lost in) the
+         * next one: the render protocol reports the mismatch instead. */
+        unsigned documentEpoch() const { return m_documentEpoch; }
+        void bumpDocumentEpoch() { ++m_documentEpoch; }
+
         BackForwardList* backForwardList();
 
         // FIXME: The following three methods don't fall under the responsibilities of the Page object
@@ -150,6 +157,7 @@ namespace WebCore {
 #endif
         bool m_inSmallView;
         unsigned m_smallViewWidth;
+        unsigned m_documentEpoch;
     };
 
 } // namespace WebCore

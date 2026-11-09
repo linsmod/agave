@@ -117,9 +117,9 @@ static int localSubmit(void* view, const AgwViewCommand* cmd)
         macross_view_forward(mcv);
         return 1;
     case AGW_VIEW_CMD_EVAL:
-        if (text)
-            macross_view_eval_script(mcv, text);
-        return 1;
+        /* FALSE = nothing ran (no live document yet / document torn down). The
+         * control turns that into an explicit "command dropped" report. */
+        return (text && macross_view_eval_script(mcv, text)) ? 1 : 0;
     case AGW_VIEW_CMD_ZOOM:
         macross_view_set_scale_factor(mcv, cmd->a > 0 ? cmd->a : 100);
         return 1;
@@ -197,6 +197,11 @@ static void* localJsContext(void* view)
     return view ? macross_view_js_context((MaCrossView*)view) : NULL;
 }
 
+static unsigned localDocumentEpoch(void* view)
+{
+    return view ? macross_view_document_epoch((MaCrossView*)view) : 0;
+}
+
 static const AgwViewBackend g_localBackend = {
     "local",
     localProcessInit,
@@ -213,6 +218,7 @@ static const AgwViewBackend g_localBackend = {
     localPump,
     localInterrupt,
     localJsContext,
+    localDocumentEpoch,
     NULL   /* frame: local paints into the host's own buffer */
 };
 

@@ -46,6 +46,14 @@ public:
     /* Evaluates `code` as an ES module whose URL is `filename`, so its imports
      * resolve against the script URL. */
     KJS::JSValue* evaluateModule(const String& filename, const String& code);
+
+    /* Whether the last evaluate()/evaluateModule() actually reached the engine.
+     * A null JSValue alone cannot say this: it also comes back from a script
+     * that threw. When false, nothing ran at all (no frame, no document, no
+     * engine), and the host reports the command as dropped instead of
+     * pretending it executed. */
+    bool lastEvaluateRan() const { return m_lastEvaluateRan; }
+
     void clear();
     EventListener* createHTMLEventHandler(const String& functionName, const String& code, Node*);
 #if ENABLE(SVG)
@@ -65,6 +73,7 @@ private:
     RefPtr<KJS::ScriptInterpreter> m_script;
     Frame* m_frame;
     int m_handlerLineno;
+    bool m_lastEvaluateRan;
 };
 
 }

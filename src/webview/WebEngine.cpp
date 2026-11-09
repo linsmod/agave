@@ -649,8 +649,14 @@ MC_BOOL macross_view_eval_script(MaCrossView* view, const char* script)
     if (!view)
         return FALSE;
 
-    view->view->executeScript(script);
-    return TRUE;
+    /* FALSE means "nothing ran" (no live document / no engine), which the host
+     * reports as a dropped command; a script that throws is still TRUE. */
+    return view->view->executeScript(script) ? TRUE : FALSE;
+}
+
+unsigned macross_view_document_epoch(MaCrossView* view)
+{
+    return view ? view->view->documentEpoch() : 0;
 }
 
 MC_STATUS macross_menu_resize(MC_POPUP_MENU* menu, int width, int height)

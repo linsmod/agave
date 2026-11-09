@@ -70,6 +70,13 @@ struct AgwViewBackend {
     void  (*interrupt)(void* view);
     void* (*jsContext)(void* view);
 
+    /* The document epoch of the page this view shows (0 when unknown). Local
+     * reads it straight from the engine; process/rvvm return the last epoch
+     * that came back with an event, which is also what they stamp commands
+     * with. Used to refuse executing a command against a document that
+     * replaced the one it was issued for. */
+    unsigned (*documentEpoch)(void* view);
+
     /* The latest published canvas, for backends that keep the frame in shared
      * memory instead of the host's buffer (process/rvvm). NULL when there is
      * nothing new to copy - local always returns NULL and paints in place. */

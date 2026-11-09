@@ -47,6 +47,12 @@ typedef struct {
     int64_t     timeUs;     /* input timestamp (0 = not an input) */
     const char* text;       /* borrowed for the duration of the submit call */
     int32_t     textLen;
+    /* Document the command was issued against (macross_view_document_epoch at
+     * queue time; 0 = not stamped). A document-scoped command whose epoch no
+     * longer matches runs against a page it was never meant for, so the view
+     * drops it and answers AGW_VIEW_EVENT_COMMAND_DROPPED instead of either
+     * mis-running it or silently doing nothing. */
+    uint32_t    docEpoch;
 } AgwViewCommand;
 
 /* view -> host */
@@ -59,8 +65,11 @@ typedef enum {
     AGW_VIEW_EVENT_URL,             /* text */
     AGW_VIEW_EVENT_STATUS,          /* text */
     AGW_VIEW_EVENT_MESSAGE,         /* text: agavePostMessage() reached the host */
+    AGW_VIEW_EVENT_DOCUMENT,        /* a = new document epoch (a document committed) */
     AGW_VIEW_EVENT_SERVICE_REQUEST, /* a = service kind, text = args (B4) */
     AGW_VIEW_EVENT_UNRESPONSIVE,    /* a = busy ms */
+    AGW_VIEW_EVENT_COMMAND_DROPPED, /* a = AgwViewCommandKind, b = expected epoch,
+                                     * c = current epoch, text = reason */
     AGW_VIEW_EVENT_EXIT             /* a = exit code */
 } AgwViewEventKind;
 
@@ -78,6 +87,9 @@ typedef struct {
     int32_t     damage[4]; /* x, y, w, h; empty = whole surface */
     const char* text;      /* borrowed: valid for the poll call only */
     int32_t     textLen;
+    /* The document epoch the event was produced in, so the host can stamp
+     * commands queued afterwards with the epoch of the page it is looking at. */
+    uint32_t    docEpoch;
 } AgwViewEvent;
 
 /* The frame backpack: the view renders into `bits` (BGRA, `pitch` bytes per

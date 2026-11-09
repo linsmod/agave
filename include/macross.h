@@ -726,9 +726,24 @@ MACROSS_API MC_BOOL macross_view_set_text_multiplier(MaCrossView* view, int fact
  * \param view  		Pointer to an existing webview object.
  * \param utf8_script	The specified script encoding with UTF-8 character encoding.
  *
- * \return TRUE on success, FALSE on error.
+ * \return TRUE when the script reached the engine (even if it threw), FALSE
+ *         when nothing ran because the view has no live document or no engine.
+ *         The host reports the FALSE case as a dropped command.
  */
 MACROSS_API MC_BOOL macross_view_eval_script(MaCrossView* view, const char* urf8_script);
+
+/**
+ * \fn unsigned macross_view_document_epoch(MaCrossView* view)
+ * \brief Counts the documents this view has committed (main frame).
+ *
+ * A host stamps queued commands (eval/input) with this value and refuses to run
+ * one against a document that has since been replaced - the alternative is a
+ * command that silently does nothing, or one that runs against a page it was
+ * never issued for.
+ *
+ * \return The current epoch; 0 when the view has no document yet.
+ */
+MACROSS_API unsigned macross_view_document_epoch(MaCrossView* view);
 /** @} end of view*/
 
 

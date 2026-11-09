@@ -76,6 +76,10 @@ typedef struct {
 
     /* AGB_IPC_STATS=1: frame publish -> this process seeing the event (M1 of
      * the design), printed every 30 frames. */
+    /* Document epoch the renderer last reported (events carry it). Commands
+     * are stamped with this, and the renderer refuses one it has left. */
+    uint32_t      docEpoch;
+
     unsigned long framesSeen;
     int64_t       frameLatencySumUs;
     int64_t       frameLatencyMaxUs;
@@ -422,6 +426,7 @@ static int processSubmit(void* view, const AgwViewCommand* command)
     wire->timeUs = command->timeUs;
     wire->textOffset = textOffset;
     wire->textLen = textLen;
+    wire->docEpoch = command->docEpoch;
 
     if (pv->cmdEvent)
         SetEvent(pv->cmdEvent);
@@ -481,6 +486,13 @@ static int processPoll(void* view, AgwViewEvent* out, int maxEvents)
         ev->frameBufferId = wire->frameBufferId;
         ev->frameSeq = wire->frameSeq;
         memcpy(ev->damage, wire->damage, sizeof(ev->damage));
+        ev->docEpoch = wire->docEpoch;
+
+        /* Later commands are stamped with the epoch of the page the host is
+         * currently looking at; every event carries it. */
+        if (wire->docEpoch)
+            pv->docEpoch = wire->docEpoch;
+
 
         if (wire->textLen > 0 && wire->textLen < (int)sizeof(pv->evtTextBuf[0])) {
             char* slot = pv->evtTextBuf[n];
@@ -559,6 +571,13 @@ static void* processJsContext(void* view)
     return NULL;   /* the engine lives in another process */
 }
 
+static unsigned processDocumentEpoch(void* view)
+{
+    ProcessView* pv = (ProcessView*)view;
+
+    return pv ? pv->docEpoch : 0;
+}
+
 /* The canvas the control copies into its mirror: no host-side image of the
  * frame, the shared mapping IS the surface. Returns NULL until the first frame
  * has been published and not acked. */
@@ -596,6 +615,7 @@ static const AgwViewBackend g_processBackend = {
     processViewPump,
     processInterrupt,
     processJsContext,
+    processDocumentEpoch,
     processFrame
 };
 

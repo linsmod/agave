@@ -318,6 +318,13 @@ void Frame::setDocument(PassRefPtr<Document> newDoc)
     }
 
     d->m_doc = newDoc;
+
+    /* A new document in the main frame is a new command epoch: host commands
+     * (eval/input) queued against the previous document must not be executed
+     * against this one without the host finding out (see Page::documentEpoch). */
+    if (d->m_doc && d->m_page && d->m_page->mainFrame() == this)
+        d->m_page->bumpDocumentEpoch();
+
     if (d->m_doc && d->m_isActive)
         setUseSecureKeyboardEntry(d->m_doc->useSecureKeyboardEntryWhenActive());
         

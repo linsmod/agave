@@ -53,6 +53,7 @@ KJSProxy::KJSProxy(Frame* frame)
 {
     m_frame = frame;
     m_handlerLineno = 0;
+    m_lastEvaluateRan = false;
 }
 
 KJSProxy::~KJSProxy()
@@ -117,8 +118,12 @@ static CString utf8ForScript(const String& text)
 #endif
 JSValue* KJSProxy::evaluateModule(const String& filename, const String& str)
 {
+    m_lastEvaluateRan = false;
+
 #if ENABLE(ANTJS)
-    if (AntRuntime::isRunning() && m_frame) {
+    if (AntRuntime::isRunning() && m_frame && m_frame->document()) {
+        m_lastEvaluateRan = true;
+
         CString code = utf8ForScript(str);
         char* out = 0;
         char* err = 0;
@@ -149,10 +154,14 @@ JSValue* KJSProxy::evaluate(const String& filename, int baseLine, const String& 
     // evaluate code. Returns the JS return value or 0
     // if there was none, an error occured or the type couldn't be converted.
 
+    m_lastEvaluateRan = false;
+
 #if ENABLE(ANTJS)
     /* Task 2: page scripts run on the Ant engine. The DOM surface is provided by
      * the AntRuntime shim (document.title for now; elements come in task 3). */
-    if (AntRuntime::isRunning() && m_frame) {
+    if (AntRuntime::isRunning() && m_frame && m_frame->document()) {
+        m_lastEvaluateRan = true;
+
         CString code = utf8ForScript(str);
         char* out = 0;
         char* err = 0;

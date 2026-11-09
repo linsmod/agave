@@ -78,6 +78,7 @@ static void pushEvent(int kind, int a, int b, int c, int d,
     ev->c = c;
     ev->d = d;
     ev->timeUs = 0;
+    ev->docEpoch = macross_view_document_epoch(g_view);
 
     if (text && textLen > 0) {
         int32_t off = InterlockedExchangeAdd(&g_hdr->evtTextWrite, textLen) & (AGW_IPC_TEXT_BYTES - 1);
@@ -116,6 +117,7 @@ static void pushFrameEvent(uint32_t seq, int width, int height)
     memset(ev, 0, sizeof(*ev));
     ev->kind = AGW_VIEW_EVENT_FRAME;
     ev->timeUs = qpcUs();
+    ev->docEpoch = macross_view_document_epoch(g_view);
     ev->frameBufferId = 1;
     ev->frameSeq = seq;
     ev->damage[0] = 0;
@@ -220,12 +222,33 @@ static void commandText(const AgwIpcCommand* cmd, char* out, int outCap)
 static int executeCommand(const AgwIpcCommand* cmd)
 {
     char text[4096];
+    unsigned epoch = g_view ? macross_view_document_epoch(g_view) : 0;
+    unsigned cmdEpoch = cmd->docEpoch;
+
+    /* Test hook: pretend every stamped command was issued for a different
+     * document, so the "renderer refuses a stale command" path can be exercised
+     * deterministically (the real window - a command that waits out a commit -
+     * is too narrow to hit on purpose). */
+    if (getenv("AGB_IPC_STALE_EPOCH") && cmdEpoch)
+        cmdEpoch += 0x1000;
 
     commandText(cmd, text, sizeof(text));
 
     if (g_log)
-        rlog("[render] cmd kind=%d a=%d b=%d text='%s'\n",
-                cmd->kind, cmd->a, cmd->b, text);
+        rlog("[render] cmd kind=%d a=%d b=%d epoch=%u cur=%u text='%s'\n",
+                cmd->kind, cmd->a, cmd->b, cmdEpoch, epoch, text);
+
+    /* A command stamped with a document that is no longer current was issued
+     * for a page that has since been replaced: running it would script the new
+     * page behind the host's back, doing nothing would be invisible. Report it
+     * so the control can tell its host (the local backend answers 0 instead). */
+    if (cmdEpoch && epoch && cmdEpoch != epoch) {
+        static const char why[] = "document replaced by a navigation";
+
+        pushEvent(AGW_VIEW_EVENT_COMMAND_DROPPED, (int)cmd->kind,
+                  (int)cmdEpoch, (int)epoch, 0, why, (int)sizeof(why) - 1);
+        return 1;
+    }
 
     switch (cmd->kind) {
     case AGW_VIEW_CMD_VISIBLE:
@@ -273,8 +296,12 @@ static int executeCommand(const AgwIpcCommand* cmd)
     case AGW_VIEW_CMD_BACK:    macross_view_backward(g_view); return 1;
     case AGW_VIEW_CMD_FORWARD: macross_view_forward(g_view);  return 1;
     case AGW_VIEW_CMD_EVAL:
-        if (text[0])
-            macross_view_eval_script(g_view, text);
+        if (text[0] && !macross_view_eval_script(g_view, text)) {
+            static const char why[] = "no live document";
+
+            pushEvent(AGW_VIEW_EVENT_COMMAND_DROPPED, AGW_VIEW_CMD_EVAL, 0,
+                      (int)epoch, 0, why, (int)sizeof(why) - 1);
+        }
         return 1;
     case AGW_VIEW_CMD_SEARCH:
         if (text[0])
@@ -426,6 +453,21 @@ int main(int argc, char** argv)
     for (;;) {
         if (!drainCommands())
             break;
+
+        /* The host stamps its commands with the epoch of the page it is looking
+         * at, so it has to hear about a commit even when the new page publishes
+         * no other event (a static page used to leave the host on the old
+         * epoch forever, and then it dropped the first command after the load). */
+        {
+            static unsigned lastEpoch;
+
+            unsigned now = macross_view_document_epoch(g_view);
+
+            if (now != lastEpoch) {
+                lastEpoch = now;
+                pushEvent(AGW_VIEW_EVENT_DOCUMENT, (int)now, 0, 0, 0, NULL, 0);
+            }
+        }
 
         if (crashAfterMs > 0 && (int)(GetTickCount64() - started) >= crashAfterMs) {
             rlog("render_host: crashing on request (%d ms)\n", crashAfterMs);

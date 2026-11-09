@@ -41,6 +41,7 @@ typedef struct {
     int64_t timeUs;
     int32_t textOffset;   /* into cmdText */
     int32_t textLen;
+    uint32_t docEpoch;    /* document the command was issued against */
 } AgwIpcCommand;
 
 typedef struct {
@@ -52,6 +53,7 @@ typedef struct {
     int32_t damage[4];
     int32_t textOffset;   /* into evtText */
     int32_t textLen;
+    uint32_t docEpoch;    /* document the event was produced in */
 } AgwIpcEvent;
 
 typedef struct {

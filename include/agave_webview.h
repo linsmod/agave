@@ -101,6 +101,21 @@ typedef struct AgaveWebViewCallback {
     void (*on_unresponsive)(AgaveWebView* view, const char* reason,
                             unsigned int busy_ms, const char* stack_path,
                             void* user);
+
+    /* A command the host issued could not be delivered to the page: the view
+     * had no page yet, the engine was not in a state to run it, or - the case
+     * this exists for - the document it was issued against was replaced by a
+     * navigation before the command reached the front of the queue. The command
+     * is dropped, never retried and never run against the page that replaced
+     * it. Without this callback the same situations were silent: the command
+     * simply never happened.
+     *
+     * `kind` is "eval", "mouse", "key", "text", "search", ... and `reason` is a
+     * short English phrase ("document replaced by a navigation", "no live
+     * document", "no page yet"). Runs on the engine thread: keep it cheap and
+     * do not call back into the control synchronously. */
+    void (*on_command_dropped)(AgaveWebView* view, const char* kind,
+                               const char* reason, void* user);
 } AgaveWebViewCallback;
 
 /* Creates the control as a child of `parent`. Returns NULL on failure. */

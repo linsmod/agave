@@ -103,6 +103,7 @@ Page::Page(ChromeClient* chromeClient, ContextMenuClient* contextMenuClient, Edi
 #endif
     , m_inSmallView(false)
     , m_smallViewWidth(240) //FIXME: this is a suitable value ?
+    , m_documentEpoch(0)
 {
     if (!allPages) {
         allPages = new HashSet<Page*>;
