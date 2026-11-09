@@ -34,8 +34,10 @@ ant 的反直觉行为（字面量属性名、`typeof`、`delete` 等）见 [ref
 - **一个 view 一个 engine，多个 frame 多个 realm**：同一进程的控件共用一条引擎线程；每个 frame 文档
   有自己的 realm（独立全局/intrinsics/wrapper，默认开启），**ES module map 也按 realm**
   （`js->modules` 进了 realm 镜像表：两个 frame import 同一 URL 各求值一次，P1-f 2026-11-09），
-  `parent`/`top` 是父/顶层 realm 的全局对象而不是 WindowProxy（S4 待做）。细节见
-  [design-per-frame-realm.md](design-per-frame-realm.md)；旧模型用 `AGB_PER_FRAME_REALM=0` 回退。
+  **窗口命名/索引属性**（`frames[0]`、`frames['kid']`、`window[0]`）由装在每个 realm 全局对象上的
+  同一个 catch-all getter 回答（R148），`parent`/`top` 是父/顶层 realm 的全局对象而不是 WindowProxy
+  （S4 待做）。细节见 [design-per-frame-realm.md](design-per-frame-realm.md)；旧模型用
+  `AGB_PER_FRAME_REALM=0` 回退。
 - **CSS 边界**：grid 布局未实现（降级成 block）；`position:sticky` 已支持（R82，绘制/命中/几何随滚动平移，
   滚动时整视口重绘）；transform 做了
   translate/scale/rotate 的绘制与变换感知的脏矩形（hit-test、stacking context 未做，R52/R55），

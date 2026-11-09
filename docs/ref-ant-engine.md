@@ -75,6 +75,11 @@ git -C H:\ant-v16 rev-parse HEAD
   `gc_pin_permanent()`。对象走 `permanent_roots`（`gc_permanent` 免扫），**函数/闭包走
   `permanent_values`**（每次 GC 重新 mark）——两者都不要绕过桥自己 pin，且必须检查返回值：
   pin 失败是静默的（R67：函数曾整类 pin 失败，监听器被回收后 deepseek 载入 AV）。
+- **给全局对象装 exotic getter 会付出全局读的代价**：`js_set_getter(js->global, ...)` 让全局对象
+  `is_exotic`，而 `sv_global_ic_try_get_hit/fill`（`src/silver/ops/globals.h`）现在**只缓存正命中**
+  （own data slot 先于 getter；miss 永不缓存），所以窗口的 catch-all getter 不会再让每个全局读从
+  ~5 ns 变 ~470 ns。改这一段时先跑 `bench_hot`（`tools/run_script_mode_tests.ps1`）和 ant 的
+  `test-exotic-global-ic`（R148）。
 
 ## 6. 桥接的边界
 

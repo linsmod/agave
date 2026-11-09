@@ -46,6 +46,10 @@ view（一个 AgaveWebView）
 - **window = 当前 realm 的 global**（顶层成立；子 frame 也成立）。- **`parent` / `top` / `frames[i]`** 是转发对象：get/set/has 进目标 realm 再操作它的 global。
   同 VM 所以 `parent.document`、`parent.fn()` 仍然可用，但 `parent.Array !== Array`、跨 realm
   `instanceof` 为 false —— 这正是规范行为。
+  现状（R148）：per-realm 模式**不造代理**——`window`/`self`/`frames` 就是各 realm 的 global，
+  窗口的命名/索引属性（`frames[0]`、`frames["kid"]`、`window[0]`）由装在每个 global 上的同一个
+  catch-all getter 回答，父/子同一性由 `realmWindowFor()`（文档 → 它的 realm global）保证；
+  跨 realm 的 set/has 转发语义（完整 WindowProxy）仍是 S4。
 - **DOM 包装按 realm 分**：同一个 DOM node 在父/子 realm 里有不同的 wrapper 对象
   （`parent.document.body !== document.body`，规范如此）。
 - **模块表按 realm**：ES module map 属于 realm，不再进程级共享（规范如此；也修掉两个 frame

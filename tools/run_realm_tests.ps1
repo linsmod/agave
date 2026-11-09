@@ -49,6 +49,14 @@ probeExit([
   'parentTopArraySame=' + (window.top.Array === Array),
   'childReachable=' + (cw ? (typeof cw.childVar) : 'n/a'),
   'childTopIsParent=' + (cw ? (cw.top === window) : 'n/a'),
+  'framesIndexSame=' + (cw ? (window.frames[0] === cw) : 'n/a'),
+  'framesNameSame=' + (cw ? (window.frames['fr'] === cw) : 'n/a'),
+  'winIndexSame=' + (cw ? (window[0] === cw) : 'n/a'),
+  'framesLen=' + window.length,
+  'childFramesByIndex=' + (cw && cw.__framesMe ? cw.__framesMe.byIndex : 'n/a'),
+  'childFramesByName=' + (cw && cw.__framesMe ? cw.__framesMe.byName : 'n/a'),
+  'childOwnFrames=' + (cw && cw.__framesMe
+      ? cw.__framesMe.ownLen + ':' + cw.__framesMe.ownIndex : 'n/a'),
   'sameBody=' + (cd && cd.body && cw && cw.__selfBody
       ? (cd.body === cw.__selfBody) : 'n/a'),
   'childDcl=' + (cw ? cw.__childDcl : 'n/a'),
@@ -128,6 +136,10 @@ if ($shared.Code -ne 0) {
 } elseif ($sharedText -notmatch 'parentSelf=true' -or
           $sharedText -notmatch 'childReachable=string' -or
           $sharedText -notmatch 'parentFn=PF-ok' -or
+          $sharedText -notmatch 'framesIndexSame=true' -or
+          $sharedText -notmatch 'framesNameSame=true' -or
+          $sharedText -notmatch 'winIndexSame=true' -or
+          $sharedText -notmatch 'framesLen=1' -or
           $sharedText -notmatch 'childTimerUrl=own' -or
           $sharedText -notmatch 'childTimerMarker=found' -or
           $shared.Mismatch -gt 0) {
@@ -160,6 +172,13 @@ if ($perFrame.Code -ne 0) {
         @{ Name = 'parent globals reachable'; Want = 'parentFn=PF-ok';           Ok = ($perFrameText -match 'parentFn=PF-ok') },
         @{ Name = 'contentWindow reachable';  Want = 'childReachable=string';    Ok = ($perFrameText -match 'childReachable=string') },
         @{ Name = 'node wrappers per realm';  Want = 'sameBody=false';           Ok = ($perFrameText -match 'sameBody=false') },
+        @{ Name = 'frames[0] is child window'; Want = 'framesIndexSame=true';     Ok = ($perFrameText -match 'framesIndexSame=true') },
+        @{ Name = 'frames["fr"] is child window'; Want = 'framesNameSame=true';   Ok = ($perFrameText -match 'framesNameSame=true') },
+        @{ Name = 'window[0] is child window'; Want = 'winIndexSame=true';        Ok = ($perFrameText -match 'winIndexSame=true') },
+        @{ Name = 'window.length is frame count'; Want = 'framesLen=1';           Ok = ($perFrameText -match 'framesLen=1') },
+        @{ Name = 'child sees itself in parent.frames'; Want = 'childFramesByIndex=true'; Ok = ($perFrameText -match 'childFramesByIndex=true') },
+        @{ Name = 'child found by name/id';   Want = 'childFramesByName=true';    Ok = ($perFrameText -match 'childFramesByName=true') },
+        @{ Name = 'child own frames empty';   Want = 'childOwnFrames=0:undefined'; Ok = ($perFrameText -match 'childOwnFrames=0:undefined') },
         @{ Name = 'frame DOMContentLoaded';   Want = 'childDcl=1';               Ok = ($perFrameText -match 'childDcl=1') },
         @{ Name = 'parent DCL ran once';      Want = 'parentDcl=1';              Ok = ($perFrameText -match 'parentDcl=1') },
         @{ Name = 'child realm has timers';   Want = 'childTimer=function';      Ok = ($perFrameText -match 'childTimer=function') },

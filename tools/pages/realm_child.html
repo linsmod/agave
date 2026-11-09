@@ -39,6 +39,20 @@
     window.__childDcl = (window.__childDcl || 0) + 1;
   });
 
+  /* Window named/index properties from inside the frame: parent.frames[0] and
+     parent.frames['fr'] must be THIS window (per-frame realms), and this
+     window's own frames collection is empty. A cross-realm *method* call
+     (parent.document.getElementById) is deliberately not part of this check:
+     it currently leaves the host document mirror on the callee's realm until
+     the next callback (see plan-roadmap "跨 realm 桥回调的 document 镜像"). */
+  window.__framesMe = {
+    byIndex: window.parent.frames[0] === window,
+    byName: window.parent.frames['fr'] === window,
+    ownIndex: String(window.frames[0]),
+    ownLen: window.frames.length,
+    ownName: window.name
+  };
+
   var r = [];
   r.push('selfIsParent=' + (window.parent === window));
   r.push('topArraySame=' + (window.top.Array === Array));

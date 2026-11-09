@@ -253,7 +253,7 @@
 
 ## P1：机制收敛
 
-### P1-z 图片解码离开 paint（L0–L3，2026-11-08 起；L0+L1 已完成，L2/L3 待做）
+### P1-z 图片解码离开 paint（L0–L3，2026-11-08 起；L0–L3 已完成，剩余见下）
 
 - 现状：`RenderImage::paint → BitmapImage::draw → ImageSource::createFrameAtIndex →
   ImageDecoder::frameBufferAtIndex` 全在引擎线程上，且 JPEG `outputScanlines()` 一次解完整张图。
@@ -393,11 +393,37 @@
   agave 全部常规套件绿。
 
 
-### P1-c 清 `g_documentParsed` 死标志
+### P1-c 清 `g_documentParsed` 死标志（已完成）
 
-- 现状：`AntRuntime.cpp` 声明并读取，从不置 true → "立即执行模块"分支是死代码。
-- 动作：要么真正维护它（解析完成时置位），要么删掉该分支。
-- 验收：模块执行时机只有单一判定来源。
+- 现状：R108 的修法已经删掉这个从不置位的标志，"立即执行模块"走 `queueModule` 的两个分支判定。
+- 验收：`grep g_documentParsed src/` 为空，模块执行时机只有队列/封口判定一个来源。✅ 2026-11-09
+
+### P1-ab 全局对象的 exotic getter 与 inspector safe-eval（新发现，2026-11-09）
+
+- 现状：R148 把窗口 getter 装到了每个 realm 的全局对象上；ant 的
+  `src/inspector/safe_eval.c` 沿原型链找属性时"遇到带 exotic getter 的对象就放弃"，
+  于是 inspector 求值 `window.hasOwnProperty` 这类**沿原型链**的读会失败（自己的属性不受影响）。
+- 影响：只影响调试器/inspector 的表达式求值，页面 JS 不受影响（页面走完整 getter，未命中继续原型链）。
+- 动作：safe_eval 对"窗口类型"的 exotic getter 放宽（读不到就走原型链），或让 inspector 直接走
+  `js_getprop_fallback_len()`；验收：inspector 里 `window.hasOwnProperty`（原型链上的）可读，
+  `window.length`（全局自己的属性）本来就正常。
+
+
+### P1-aa 跨 realm 桥回调的 document 镜像（新发现，2026-11-09）
+
+- 现状：`contextActivate()` 在每个桥方法回调前用**被调函数所在 realm**去 `applyRealmBinding()`，
+  但 ant 的 C builtin（node class 的方法，engine 级创建）带的是**创建它的 realm**（通常主 realm）：
+  子 frame 里执行 `parent.document.getElementById('fr')` 会把宿主 `g_currentDocument` 切到父文档，
+  回调返回后 ant 把 realm 还原，宿主镜像却留在父文档，直到下一次回调才被纠正。
+- 症状：`AGB_REALM_CHECK=1` 下探针报
+  `realm-mismatch document.title self=<child> current=<parent>`；这段窗口内**无 receiver 的
+  document 级宿主函数**（`setTimeout`/`fetch`/`new Image()`）会落到父文档（R128 那一类）。
+- 动作（bridge + agave，二选一）：①桥在方法 trampoline 里成对调用 `contextActivate`/`contextLeave`，
+  宿主用 per-view 的 document 栈在 leave 时还原（`runListenersFor()` 已经是这个模式：
+  `antb_realm_enter(prev)` + `applyRealmBinding(prev)`）；②让 ant 在 realm 切换时通知宿主
+  （enter/leave 带 realm），宿主按"调用方 realm"绑定而不是按被调方。
+- 验收：`tools/pages/realm_child.html` 的 `byOwner` 检查（`parent.document.getElementById('fr')
+  .contentWindow === window`）重新打开后，两种 realm 模式下 `AGB_REALM_CHECK=1` 都 0 条 mismatch。
 
 ### P1-d worker 里的网络
 

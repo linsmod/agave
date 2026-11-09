@@ -121,6 +121,7 @@ AntbValue* documentObjectFor(AntbEngine*, WebCore::Document*);
 AntbValue* windowObjectFor(AntbEngine*, WebCore::Document*);
 void installFrameGlobals(AntbEngine*, WebCore::Document*);
 AntbValue* windowForDocument(AntbEngine*, WebCore::Document*);
+AntbValue* realmWindowFor(AntbEngine*, WebCore::Document*);
 int windowGetter(AntbEngine*, AntbValue*, const char*, AntbValue*, void*);
 int windowSetter(AntbEngine*, AntbValue*, const char*, const AntbValue*, void*);
 }
@@ -5521,6 +5522,66 @@ AntbValue* windowForDocument(AntbEngine* engine, WebCore::Document* document)
     return windowObjectFor(engine, document);
 }
 
+/* The window of a document as seen from ANY realm. With per-frame realms a
+ * frame's window is that realm's global object; windowForDocument() would build
+ * a legacy proxy for it (a different object than the frame's `window`, and one
+ * that answers for the *reading* realm), so `frames[0] === kid.contentWindow`
+ * was false and `kid.top` belonged to the wrong realm. */
+AntbValue* realmWindowFor(AntbEngine* engine, WebCore::Document* document)
+{
+    if (!engine || !document)
+        return NULL;
+
+    if (perFrameRealmEnabled()) {
+        RuntimeState* state = stateForEngine(engine);
+        DocumentRuntime* runtime = documentRuntimeOf(state, document);
+        AntbRealm* realm = NULL;
+
+        if (document->parentDocument()) {
+            if (runtime)
+                realm = runtime->realm;
+        } else if (state && state != &g_emptyState) {
+            realm = state->mainRealm;
+        }
+
+        if (realm)
+            return antb_realm_global(engine, realm);
+    }
+
+    return windowForDocument(engine, document);
+}
+
+/* A child frame reachable as window[name]: its browsing context name first, then
+ * the id/name attribute of a frame owner element (an iframe created from script
+ * with only an id is still `window.fr`, as in HTML's window named properties). */
+static WebCore::Frame* childFrameNamed(WebCore::Document* document, const char* name)
+{
+    WebCore::Frame* frame = frameOfDocument(document);
+    WebCore::Frame* child;
+
+    if (!frame || !frame->tree() || !name || !name[0])
+        return 0;
+
+    child = frame->tree()->child(WebCore::AtomicString(name));
+    if (child && child->document())
+        return child;
+
+    if (RefPtr<WebCore::Element> owner = document->getElementById(WebCore::AtomicString(name))) {
+        if (owner->isFrameOwnerElement()) {
+            WebCore::Document* content = static_cast<WebCore::HTMLFrameOwnerElement*>(owner.get())->contentDocument();
+            if (content)
+                return content->frame();
+        }
+    }
+
+    return 0;
+}
+
+/* Passed as windowGetter's `user` when the getter is installed on a realm's
+ * global object instead of a legacy frame proxy. Such a window IS the global, so
+ * the fallback "ask the shared global" branch would call itself. */
+static char s_windowGlobalMarker;
+
 AntbValue* windowObjectFor(AntbEngine* engine, WebCore::Document* document)
 {
     AntbValue* v;
@@ -5567,10 +5628,13 @@ AntbValue* windowObjectFor(AntbEngine* engine, WebCore::Document* document)
 }
 
 /* A window proxy answers for its own frame; everything else is the shared
- * global's, which keeps direct cross-frame property access working. */
-int windowGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue* out, void*)
+ * global's, which keeps direct cross-frame property access working. The same
+ * getter is installed on each realm's global object (windowGetter's `user`
+ * says which), so `window[0]` / `window.frames["kid"]` work everywhere. */
+int windowGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue* out, void* user)
 {
     WebCore::Document* d = (WebCore::Document*)antb_get_native(self, AGB_TAG_WINDOW);
+    int isRealmGlobal = (user == &s_windowGlobalMarker);
     AntbValue* v = NULL;
 
     if (!d || !name)
@@ -5597,7 +5661,7 @@ int windowGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValu
             antb_value_assign(out, self);
             return 1;
         }
-        v = windowObjectFor(engine, other);
+        v = realmWindowFor(engine, other);
     } else if (!strcmp(name, "document")) {
         v = documentObjectFor(engine, d);
     } else if (!strcmp(name, "location")) {
@@ -5640,18 +5704,29 @@ int windowGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValu
         }
 
         v = antb_make_number(engine, (double)(strstr(name, "Width") ? width : height));
-    } else if (isFrameIndex(name)) {
-        WebCore::Frame* frame = frameOfDocument(d);
-        WebCore::Frame* child = (frame && frame->tree()) ? frame->tree()->child(atoi(name)) : 0;
-
-        if (child && child->document())
-            v = windowObjectFor(engine, child->document());
     } else {
-        AntbValue* global = antb_global(engine);
+        /* window[N] (child frame by position) and window["name"] (frame name or
+         * the id/name of a frame owner element). */
+        WebCore::Frame* frame = frameOfDocument(d);
+        WebCore::Frame* child = isFrameIndex(name)
+                              ? ((frame && frame->tree()) ? frame->tree()->child(atoi(name)) : 0)
+                              : childFrameNamed(d, name);
 
-        if (global) {
-            v = antb_get_prop(engine, global, name);
-            antb_value_release(global);
+        if (child && child->document()) {
+            v = realmWindowFor(engine, child->document());
+        } else if (!isRealmGlobal) {
+            AntbValue* global = antb_global(engine);
+
+            if (global) {
+                v = antb_get_prop(engine, global, name);
+                antb_value_release(global);
+            }
+        } else {
+            /* A realm's global object: a miss here is a real miss, and asking
+             * the global would re-enter this getter. Returning "not handled"
+             * lets the engine continue to the prototype chain (Object.prototype
+             * and co). */
+            return 0;
         }
     }
 
@@ -5898,6 +5973,24 @@ static void installDocumentScopedGlobals(AntbEngine* engine, AntbValue* global,
     }
 }
 
+/* Installs the window catch-all getter on a realm's global object: `window`,
+ * `self` and `frames` ARE that object, so the indexed/named window properties
+ * (frames[0], frames["kid"], window[0], window.name, window.length) live here
+ * and not only on the legacy frame proxy. Called on every bind to refresh the
+ * document the getter answers for. */
+static void installWindowGlobalGetter(AntbEngine* engine, AntbValue* global,
+                                      WebCore::Document* document)
+{
+    /* With one shared global for every view frame, that object is the TOP
+     * window: a frame document binding over it must not change who `window`
+     * answers for, or `window[0]` would describe the frame. */
+    if (!perFrameRealmEnabled() && document->topDocument())
+        document = document->topDocument();
+
+    antb_set_native(global, document, AGB_TAG_WINDOW);
+    antb_define_property(engine, global, "", windowGetter, &s_windowGlobalMarker);
+}
+
 void installFrameGlobals(AntbEngine* engine, WebCore::Document* document)
 {
     AntbValue* global;
@@ -5930,6 +6023,7 @@ void installFrameGlobals(AntbEngine* engine, WebCore::Document* document)
     if (docObj)
         antb_set_prop(engine, global, "document", docObj);
     installDocumentScopedGlobals(engine, global, document);
+    installWindowGlobalGetter(engine, global, document);
 
     v = topWindow ? topWindow : selfWindow;
     if (v)
@@ -6011,8 +6105,11 @@ static void installChildFrameGlobals(AntbEngine* engine, WebCore::Document* docu
         antb_value_release(v);
     }
 
-    /* window.addEventListener/... read the node off the global object. */
+    /* window.addEventListener/... read the node off the global object.
+     * AGB_TAG_WINDOW is a second native entry (tags are independent): it lets
+     * windowGetter answer for this frame's window from other realms. */
     antb_set_native(global, document, AGB_TAG_NODE);
+    installWindowGlobalGetter(engine, global, document);
 
     if (docObj)
         antb_value_release(docObj);
