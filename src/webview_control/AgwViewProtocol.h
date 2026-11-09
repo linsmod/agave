@@ -74,7 +74,13 @@ typedef enum {
     AGW_VIEW_EVENT_UNRESPONSIVE,    /* a = busy ms */
     AGW_VIEW_EVENT_COMMAND_DROPPED, /* a = AgwViewCommandKind, b = expected epoch,
                                      * c = current epoch, text = reason */
-    AGW_VIEW_EVENT_EXIT             /* a = exit code */
+    AGW_VIEW_EVENT_EXIT,            /* a = exit code */
+    /* Host callbacks the renderer cannot perform itself (no windows / no host
+     * state in that process). One-way: the host applies the effect. */
+    AGW_VIEW_EVENT_CLIPBOARD,       /* text = UTF-8, b = 1 when it was too large
+                                     * to carry (a = its byte length, text empty) */
+    AGW_VIEW_EVENT_CURSOR,          /* a = MC_CURSOR */
+    AGW_VIEW_EVENT_HISTORY          /* a = back count, b = forward count */
 } AgwViewEventKind;
 
 /* Service kinds carried by AGW_VIEW_EVENT_SERVICE_REQUEST. v1 only needs the

@@ -32,6 +32,10 @@
  * payload's size). Not a hard wire limit: the renderer accepts any contiguous
  * arena text up to AGW_IPC_TEXT_BYTES. */
 #define AGW_IPC_INLINE_TEXT 16384
+/* Largest text one event can carry (pushEvent caps there; the control keeps one
+ * buffer of this size per event of a poll batch). Clipboard copies are the
+ * reason it is not smaller. */
+#define AGW_IPC_EVENT_TEXT_MAX (AGW_IPC_TEXT_BYTES / 2)
 /* Sanity cap for a payload section: a host that asks for more than this is
  * refused instead of asked to allocate it. */
 #define AGW_IPC_PAYLOAD_MAX (64 * 1024 * 1024)

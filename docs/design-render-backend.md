@@ -107,6 +107,8 @@ RVVM 后端用 guest 内存 + `virtpass_browser` 的 ecall；local 后端只是�
   这样没有固定超大容量、没有分块状态机，也不需要把大文本塞进 arena；超过 `AGW_IPC_PAYLOAD_MAX`（64 MB）或
   段打不开时回 `COMMAND_DROPPED`，宿主能看到原因而不是"injected 但没效果"。
 - 一个 view 有四个命名事件：`_evt`（有命令）、`_int`（中断/看门狗）、`_txt`（arena/槽位腾出）、`_pay`（载荷已复制）。
+- 事件文本同样带上限：`pushEvent()` 每条最多 `AGW_IPC_EVENT_TEXT_MAX`（32 KB，事件 arena 的一半），
+  控制端按这个大小给一批事件各留一份拷贝；超过的事件不静默截断，`CLIPBOARD` 带 `b=1` + 原长度让宿主知道。
 - 布局带 `AGW_IPC_VERSION`，渲染进程启动时校验；版本不符直接退出，不按错误布局读共享段。
 
 ### 4.2 guest → host（事件 + 帧）
@@ -119,7 +121,8 @@ RVVM 后端用 guest 内存 + `virtpass_browser` 的 ecall；local 后端只是�
 | `DOCUMENT` | `epoch` | 主 frame 提交了新文档（`Page::documentEpoch`）；宿主据此给后续命令盖章。**静态页面提交后可能没有任何其他事件**，缺了它宿主的代数会停在上一代 |
 | `COMMAND_DROPPED` | `kind, expected_epoch, current_epoch, reason` | 后端没能执行某条命令（文档已换 / 没有可用文档）。宿主转成 `on_command_dropped`；本地后端用 `submit` 返回 0 表达同一件事 |
 | `CONTEXT_MENU` | `x,y, link 长度, image 长度, text` | 引擎要弹右键菜单（`cb_context_menu`）；渲染进程没有窗口，只能把 link/image/选区文本交给宿主去建菜单（R161） |
-| `SERVICE_REQUEST` | `open_window/close_window`（v1 已接）/ `dialog/download/clipboard/file_picker`（待做） | 一级请求/应答（跨进程必须，ndk 路径没有）。`open_window` 的文本是 `"name\nurl"`：**具名窗口由控件登记**，后端只管把"页面要开一个窗口"传上去（R158） |
+| `CLIPBOARD` / `CURSOR` / `HISTORY` | `utf8` / `MC_CURSOR` / `back,forward` | 宿主拥有的三件事，单向下发：页面发起复制（`cb_clipboard_set_data`，含 inspector 的 Copy element info）、鼠标光标（`cb_set_cursor`）、前进/后退计数（`cb_history_status`）。不走服务通道是因为都不需要应答（R171）；**粘贴**（`cb_clipboard_data_len/get_data`）需要同步应答，仍待 B4 |
+| `SERVICE_REQUEST` | `open_window/close_window`（v1 已接）/ `dialog/download/clipboard 读/file_picker`（待做） | 一级请求/应答（跨进程必须，ndk 路径没有）。`open_window` 的文本是 `"name\nurl"`：**具名窗口由控件登记**，后端只管把"页面要开一个窗口"传上去（R158） |
 | `UNRESPONSIVE` | `busy_ms` | 接现有看门狗，按 tab 报告（advisory） |
 | `EXIT` / `CRASH` | `code` | 后端死亡 → sad tab + reload 新实例 |
 

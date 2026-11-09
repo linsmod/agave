@@ -1664,8 +1664,17 @@ void Frame::setIsActive(bool flag)
     // Because RenderObject::selectionBackgroundColor() and
     // RenderObject::selectionForegroundColor() check if the frame is active,
     // we have to update places those colors were painted.
-    if (d->m_view)
+    //
+    // Measuring the old selection rect requires a laid-out tree. Focus can
+    // arrive while the DOM is still dirty (the host evaluates a script that
+    // builds nodes and focuses the view right after, e.g. injecting vConsole),
+    // and RenderBlock::selectionGapRects() asserts !needsLayout(). Flush here:
+    // the same layout would otherwise happen on the next frame, just after the
+    // assertion.
+    if (d->m_view) {
+        d->m_doc->updateLayoutIgnorePendingStylesheets();
         d->m_view->updateContents(enclosingIntRect(selectionRect()));
+    }
 
     // Caret appears in the active frame.
     if (flag)

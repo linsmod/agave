@@ -188,6 +188,39 @@ static void onError(int err, const char* failedUrl)
               failedUrl, failedUrl ? (int)strlen(failedUrl) : 0);
 }
 
+/* The OS clipboard belongs to the host process (it already owns the Win32
+ * writer for the local backend). The renderer only reports the text the page
+ * copied; this is one-way, no reply is needed. */
+static void onClipboardSetData(void* data, unsigned int len)
+{
+    if (!data || !len)
+        return;
+
+    if ((int)len > AGW_IPC_EVENT_TEXT_MAX) {
+        /* One event carries at most this much (see AgwViewIpc.h). Report the
+         * size so the host does not write a silently truncated clipboard. */
+        rlog("[render] clipboard text too large for one event (%u bytes)\n", len);
+        pushEvent(AGW_VIEW_EVENT_CLIPBOARD, (int)len, 1, 0, 0, NULL, 0);
+        return;
+    }
+
+    pushEvent(AGW_VIEW_EVENT_CLIPBOARD, 0, 0, 0, 0, (const char*)data, (int)len);
+}
+
+/* Cursor and back/forward state are host UI: the renderer reports them and the
+ * control applies them (same callbacks the local backend hands to the host). */
+static void onSetCursor(MC_CURSOR cursor)
+{
+    pushEvent(AGW_VIEW_EVENT_CURSOR, (int)cursor, 0, 0, 0, NULL, 0);
+}
+
+static void onHistoryStatus(MaCrossView* view, unsigned int backCount,
+                            unsigned int forwardCount)
+{
+    (void)view;
+    pushEvent(AGW_VIEW_EVENT_HISTORY, (int)backCount, (int)forwardCount, 0, 0, NULL, 0);
+}
+
 /* agavePostMessage() is the page -> host channel (the probe reports its result
  * through it); it must cross the boundary like every other event. */
 static void onPostMessage(const char* message)
@@ -700,6 +733,14 @@ int main(int argc, char** argv)
         info.cb_context_menu     = onContextMenu;
         info.cb_open_window      = onOpenWindow;
         info.cb_close_window     = onCloseWindow;
+        /* Host-owned UI callbacks: the copy path (clipboard), the mouse cursor
+         * and the back/forward counts. Without them a process view silently
+         * lost "copy from the page" (inspector's Copy element info), never
+         * changed the cursor and kept the shell's back/forward buttons
+         * disabled. */
+        info.cb_clipboard_set_data = onClipboardSetData;
+        info.cb_set_cursor         = onSetCursor;
+        info.cb_history_status     = onHistoryStatus;
         macross_set_callback(&info);
     }
 

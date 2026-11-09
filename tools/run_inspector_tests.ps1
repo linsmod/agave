@@ -149,6 +149,30 @@ Check 'clipboard holds element info JSON' ($clip -match '"kind":"agave-element"'
 Check 'element info keeps the page url' ($clip -match '"url":"file:') "clipboard=$clip"
 Check 'native context menu callback suppressed' (-not ($r.Err -match 'context menu at')) 'shell on_context_menu ran'
 
+"== 4. vConsole (286 KiB): DOM mutation followed by host focus"
+# The shell evals the bundle, then focuses the view. vConsole leaves layout
+# dirty, so Frame::setIsActive used to measure the selection before layout and
+# trip RenderBlock::selectionGapRects' ASSERT(!needsLayout()) (R170).
+$vcOut = Join-Path $tmp 'vconsole.out'
+$vcErr = Join-Path $tmp 'vconsole.err'
+$vcJs = Join-Path $tmp 'vconsole_eval.js'
+Set-Content -Path $vcJs -Encoding ascii -Value @'
+probeExit("vc=" + !!window.__agaveVConsole +
+  " root=" + !!document.getElementById("__vconsole") +
+  " panel=" + !!(document.querySelector && document.querySelector(".vc-switch")));
+'@
+Remove-Item $vcOut, $vcErr -ErrorAction SilentlyContinue
+$vc = Start-Process -FilePath $exe -WindowStyle Hidden -PassThru -ArgumentList @(
+    '--probe', $page, '--inject', 'vconsole',
+    '--eval-file', $vcJs,
+    '--wait', '300', '--settle', '2500', '--timeout', '40000'
+) -RedirectStandardOutput $vcOut -RedirectStandardError $vcErr
+$vc.WaitForExit(40000) | Out-Null
+$vcText = (Get-Content $vcOut -Raw -ErrorAction SilentlyContinue) +
+          (Get-Content $vcErr -Raw -ErrorAction SilentlyContinue)
+Check 'vconsole probe exit 0' ($vc.ExitCode -eq 0) "exit=$($vc.ExitCode) out=$vcText"
+Check 'vconsole mounts after the focus' ($vcText -match 'vc=true root=true panel=true') $vcText
+
 ""
 if ($script:failed -eq 0) {
     "inspector: $($script:checks)/$($script:checks) checks passed"

@@ -439,6 +439,10 @@ static int agwSubmitSimple(AgaveWebView* item, int kind, int a, int b, int c, in
 static int agwSubmitText(AgaveWebView* item, int kind, const char* text,
                          int a, int b, int c, int d);
 
+/* The Win32 clipboard writer shared by the local backend's callback and the
+ * process backend's CLIPBOARD event. */
+static void agwOnClipboardSetData(void* data, unsigned int len);
+
 
 /* Frees the control once the engine thread is done with it. destroy() may be
  * called while the engine is inside macross_view_update on this item, or while
@@ -938,7 +942,7 @@ static void agwOnError(int err, const char* failedUrl)
     }
 }
 
-static void agwOnCursor(MC_CURSOR cursor)
+static void agwApplyCursor(MC_CURSOR cursor)
 {
     LPCSTR name = IDC_ARROW;
 
@@ -953,6 +957,11 @@ static void agwOnCursor(MC_CURSOR cursor)
     }
 
     SetCursor(LoadCursorA(NULL, name));
+}
+
+static void agwOnCursor(MC_CURSOR cursor)
+{
+    agwApplyCursor(cursor);
 }
 
 
@@ -2083,6 +2092,35 @@ static void agwDispatchBackendEvent(AgaveWebView* item, const AgwViewEvent* ev)
     case AGW_VIEW_EVENT_MESSAGE:
         if (item->callbacks.on_message)
             item->callbacks.on_message(item, ev->text ? ev->text : "", item->user);
+        break;
+
+    case AGW_VIEW_EVENT_CLIPBOARD:
+        /* The page copied text (navigator.clipboard.writeText / Ctrl+C's
+         * Pasteboard path). The renderer has no clipboard callback of its own:
+         * the host owns the OS clipboard, so apply it here through the same
+         * Win32 writer the local backend uses. */
+        if (ev->b) {
+            agbLog(AGB_LOG_SHELL,
+                   "clipboard text too large for the event channel (%d bytes)", ev->a);
+            break;
+        }
+        if (ev->text && ev->textLen > 0)
+            agwOnClipboardSetData((void*)ev->text, (unsigned int)ev->textLen);
+        break;
+
+    case AGW_VIEW_EVENT_CURSOR:
+        agwApplyCursor((MC_CURSOR)ev->a);
+        break;
+
+    case AGW_VIEW_EVENT_HISTORY:
+        /* Same state the local backend's cb_history_status updates; the shell
+         * reads it through agave_webview_can_back/forward. */
+        if (getenv("AGB_HISTORY_DEBUG"))
+            fprintf(stderr, "[hist] view=%p back=%d fwd=%d\n", (void*)item, ev->a, ev->b);
+        agwLock();
+        item->backCount = ev->a;
+        item->forwardCount = ev->b;
+        agwUnlock();
         break;
 
     case AGW_VIEW_EVENT_CONTEXT_MENU: {

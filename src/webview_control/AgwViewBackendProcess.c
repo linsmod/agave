@@ -74,7 +74,7 @@ typedef struct {
     /* One text slot per event of a poll batch: every AgwViewEvent in one batch
      * must keep its own text, or a later event would overwrite an earlier one
      * before the caller dispatches it. */
-    char          evtTextBuf[8][1024];
+    char          evtTextBuf[8][AGW_IPC_EVENT_TEXT_MAX + 1];
 
     /* AGB_IPC_STATS=1: frame publish -> this process seeing the event (M1 of
      * the design), printed every 30 frames. */
@@ -787,7 +787,7 @@ static int processPoll(void* view, AgwViewEvent* out, int maxEvents)
             pv->docEpoch = wire->docEpoch;
 
 
-        if (wire->textLen > 0 && wire->textLen < (int)sizeof(pv->evtTextBuf[0])) {
+        if (wire->textLen > 0 && wire->textLen <= AGW_IPC_EVENT_TEXT_MAX) {
             char* slot = pv->evtTextBuf[n];
 
             if (wire->textOffset >= 0 &&
