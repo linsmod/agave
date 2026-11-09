@@ -157,9 +157,19 @@ $vcOut = Join-Path $tmp 'vconsole.out'
 $vcErr = Join-Path $tmp 'vconsole.err'
 $vcJs = Join-Path $tmp 'vconsole_eval.js'
 Set-Content -Path $vcJs -Encoding ascii -Value @'
-probeExit("vc=" + !!window.__agaveVConsole +
-  " root=" + !!document.getElementById("__vconsole") +
-  " panel=" + !!(document.querySelector && document.querySelector(".vc-switch")));
+var root = document.getElementById("__vconsole");
+var sw = document.querySelector(".vc-switch");
+if (sw) sw.click();
+setTimeout(function () {
+  var f = document.querySelector(".vc-scroller-footer");
+  var v = document.querySelector(".vc-scroller-viewport");
+  var fr = f ? f.getBoundingClientRect() : null;
+  var vr = v ? v.getBoundingClientRect() : null;
+  var layout = !!(fr && vr && fr.height > 0 && Math.abs(fr.bottom - vr.bottom) <= 1);
+  probeExit("vc=" + !!window.__agaveVConsole + " root=" + !!root +
+    " panel=" + !!sw + " open=" + (root && String(root.className).indexOf("vc-toggle") >= 0) +
+    " layout=" + layout);
+}, 700);
 '@
 Remove-Item $vcOut, $vcErr -ErrorAction SilentlyContinue
 $vc = Start-Process -FilePath $exe -WindowStyle Hidden -PassThru -ArgumentList @(
@@ -171,7 +181,7 @@ $vc.WaitForExit(40000) | Out-Null
 $vcText = (Get-Content $vcOut -Raw -ErrorAction SilentlyContinue) +
           (Get-Content $vcErr -Raw -ErrorAction SilentlyContinue)
 Check 'vconsole probe exit 0' ($vc.ExitCode -eq 0) "exit=$($vc.ExitCode) out=$vcText"
-Check 'vconsole mounts after the focus' ($vcText -match 'vc=true root=true panel=true') $vcText
+Check 'vconsole opens its panel and lays it out' ($vcText -match 'vc=true root=true panel=true open=true layout=true') $vcText
 
 ""
 if ($script:failed -eq 0) {

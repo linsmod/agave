@@ -1668,13 +1668,14 @@ void Frame::setIsActive(bool flag)
     // Measuring the old selection rect requires a laid-out tree. Focus can
     // arrive while the DOM is still dirty (the host evaluates a script that
     // builds nodes and focuses the view right after, e.g. injecting vConsole),
-    // and RenderBlock::selectionGapRects() asserts !needsLayout(). Flush here:
-    // the same layout would otherwise happen on the next frame, just after the
-    // assertion.
-    if (d->m_view) {
-        d->m_doc->updateLayoutIgnorePendingStylesheets();
+    // and RenderBlock::selectionGapRects() asserts !needsLayout(). Do not force
+    // a layout here: that layout would run with whatever styles are pending at
+    // focus time and can leave a just-injected overlay laid out with placeholder
+    // styles (the vConsole panel looked unstyled). A dirty view repaints the
+    // changed area anyway; only the old selection color needs this update, and
+    // skipping it while layout is dirty is safe.
+    if (d->m_view && !d->m_view->needsLayout())
         d->m_view->updateContents(enclosingIntRect(selectionRect()));
-    }
 
     // Caret appears in the active frame.
     if (flag)

@@ -310,7 +310,7 @@ Add-Case -Name 'paint' -Url (File-Url (Join-Path $pages 'cap_hidden_view.html'))
     }
 
 Add-Case -Name 'input' -Url (File-Url (Join-Path $pages 'cap_typing.html')) `
-    -Wait 800 -Settle 300 -Extra @('--keys', 'ab1') `
+    -Wait 1000 -Settle 300 -Extra @('--keys', 'ab1') `
     -Js 'probeExit("value=" + document.getElementById("text").value);' `
     -Check {
         param($r)
@@ -346,17 +346,17 @@ Add-Case -Name 'large-eval' -Url (File-Url (Join-Path $pages 'blank.html')) `
         return $null
     }
 
-# vConsole (286 KiB) injects and mounts. Besides the payload it covers the
-# focus-after-DOM-mutation path: the shell focuses the view right after the
-# eval, and Frame::setIsActive used to measure the selection on a dirty tree
-# (ASSERT in RenderBlock::selectionGapRects, R170).
+# vConsole (286 KiB) injects, mounts and opens its panel on a switch click.
+# Besides the payload it covers the focus-after-DOM-mutation path (R170), the
+# legacy event factory Svelte's createEventDispatcher needs (R172) and the
+# scroller's layout (ResizeObserver poll + UA form margin, R173/R174).
 Add-Case -Name 'vconsole' -Url (File-Url (Join-Path $pages 'inspector_demo.html')) `
     -Wait 400 -Settle 2500 -Extra @('--inject', 'vconsole') `
-    -Js 'probeExit("vc=" + !!window.__agaveVConsole + " root=" + !!document.getElementById("__vconsole") + " panel=" + !!(document.querySelector && document.querySelector(".vc-switch")));' `
+    -Js 'var root=document.getElementById("__vconsole"), sw=document.querySelector(".vc-switch"); if (sw) sw.click(); setTimeout(function(){ var f=document.querySelector(".vc-scroller-footer"), v=document.querySelector(".vc-scroller-viewport"); var fr=f?f.getBoundingClientRect():null, vr=v?v.getBoundingClientRect():null; var layout=!!(fr&&vr&&fr.height>0&&Math.abs(fr.bottom-vr.bottom)<=1); probeExit("vc=" + !!window.__agaveVConsole + " root=" + !!root + " panel=" + !!sw + " open=" + (root && String(root.className).indexOf("vc-toggle") >= 0) + " layout=" + layout); }, 700);' `
     -Check {
         param($r)
         if ($r.Code -ne 0) { return "exit=$($r.Code)" }
-        if ($r.Text -notmatch 'vc=true root=true panel=true') { return $r.Text }
+        if ($r.Text -notmatch 'vc=true root=true panel=true open=true layout=true') { return $r.Text }
         return $null
     }
 

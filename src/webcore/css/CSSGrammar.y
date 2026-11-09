@@ -1069,14 +1069,27 @@ declaration:
 
 property:
     IDENT maybe_space {
-        $1.lower();
         DeprecatedString str = deprecatedString($1);
         const char* s = str.ascii();
         int l = str.length();
         CSSParser* p = static_cast<CSSParser*>(parser);
-        p->lastPropertyName = String(s);
-        /* Custom properties ('--x') have no generated id. */
-        $$ = (l > 5 && !strncmp(s, "-agb-", 5)) ? CSS_PROP_CUSTOM_PROPERTY : getPropertyID(s, l);
+        /* Custom properties are case-sensitive: '--VC-BG-0' and
+         * 'var(--VC-BG-0)' have to agree. Only ordinary property names are
+         * lowercased (getPropertyID is case-insensitive); lowercasing a custom
+         * property here made the definition '-agb-vc-bg-0' while the var()
+         * reference kept its case, so every uppercase design token resolved to
+         * nothing (vConsole's whole stylesheet is written that way, R173). */
+        if (l > 5 && !strncmp(s, "-agb-", 5)) {
+            p->lastPropertyName = String(s);
+            $$ = CSS_PROP_CUSTOM_PROPERTY;
+        } else {
+            $1.lower();
+            str = deprecatedString($1);
+            s = str.ascii();
+            l = str.length();
+            p->lastPropertyName = String(s);
+            $$ = getPropertyID(s, l);
+        }
     }
   ;
 

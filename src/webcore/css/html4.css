@@ -276,7 +276,10 @@ ol ul, ul ol, ul ul, ol ol {
 
 form {
     display: block;
-    margin: 0__qem 0 1em 0
+    /* Chrome's UA stylesheet has no bottom margin on <form> (WebKit 2008 had
+     * 1em). vConsole stacks its command/filter rows as two <form>s inside the
+     * footer, which added 13px between them (R174). */
+    margin: 0
 }
 
 label {

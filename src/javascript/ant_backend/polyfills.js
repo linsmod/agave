@@ -808,22 +808,52 @@
     }
 
     if (typeof g.ResizeObserver === 'undefined') {
+        /* A real ResizeObserver: one shared poller for every observer in this
+         * realm. The old shim called the callback exactly once after observe()
+         * and then never again, so anything mounted while hidden (vConsole's
+         * panel is display:none until the switch is clicked) kept its 0x0
+         * measurements forever: the log scroller sized its items to 0 and put
+         * the command bar at the top (R174). offsetWidth/offsetHeight are used
+         * on purpose: they force layout, while the bridge's
+         * getBoundingClientRect() does not. */
+        var _roList = [];
+        var _roTimer = 0;
+        function _roTick() {
+            _roTimer = 0;
+            var any = false;
+            for (var i = 0; i < _roList.length; ++i) {
+                var ro = _roList[i];
+                if (!ro._targets.length) continue;
+                any = true;
+                ro._check();
+            }
+            if (any) _roTimer = g.setTimeout(_roTick, 150);
+        }
+        function _roWake(ro) {
+            if (_roList.indexOf(ro) < 0) _roList.push(ro);
+            if (!_roTimer) _roTimer = g.setTimeout(_roTick, 0);
+        }
         function ResizeObserver(callback) {
             if (typeof callback !== 'function')
                 throw new TypeError('ResizeObserver: callback is not a function');
             this._cb = callback;
             this._targets = [];
-            this._timer = 0;
+            this._sizes = [];
         }
         ResizeObserver.prototype._check = function () {
             var entries = [];
             for (var i = 0; i < this._targets.length; ++i) {
-                var r = rectOf(this._targets[i]);
+                var el = this._targets[i];
+                var w = el.offsetWidth || 0;
+                var h = el.offsetHeight || 0;
+                var last = this._sizes[i];
+                if (last && last.width === w && last.height === h) continue;
+                this._sizes[i] = { width: w, height: h };
                 entries.push({
-                    target: this._targets[i],
-                    contentRect: { left: 0, top: 0, width: r.width, height: r.height, x: 0, y: 0 },
-                    borderBoxSize: [{ inlineSize: r.width, blockSize: r.height }],
-                    contentBoxSize: [{ inlineSize: r.width, blockSize: r.height }]
+                    target: el,
+                    contentRect: { left: 0, top: 0, width: w, height: h, x: 0, y: 0 },
+                    borderBoxSize: [{ inlineSize: w, blockSize: h }],
+                    contentBoxSize: [{ inlineSize: w, blockSize: h }]
                 });
             }
             if (entries.length) {
@@ -833,14 +863,20 @@
         ResizeObserver.prototype.observe = function (el) {
             if (!el || this._targets.indexOf(el) >= 0) return;
             this._targets.push(el);
-            var self = this;
-            fireAsync(function () { self._check(); });
+            this._sizes.push(null);
+            _roWake(this);
         };
         ResizeObserver.prototype.unobserve = function (el) {
             var i = this._targets.indexOf(el);
-            if (i >= 0) this._targets.splice(i, 1);
+            if (i >= 0) {
+                this._targets.splice(i, 1);
+                this._sizes.splice(i, 1);
+            }
         };
-        ResizeObserver.prototype.disconnect = function () { this._targets = []; };
+        ResizeObserver.prototype.disconnect = function () {
+            this._targets = [];
+            this._sizes = [];
+        };
         g.ResizeObserver = ResizeObserver;
     }
 }());

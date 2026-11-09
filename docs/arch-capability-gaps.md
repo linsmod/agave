@@ -162,7 +162,7 @@ agave_shell.exe --probe ../tools/pages/cap_input_events.html     --pre-eval "doc
 | `change` | 支持（失焦时） | 未在测试页覆盖（需要 blur 用例） |
 | `paste`/`cut`/`copy` | 合成事件可派发；**写出**有路：`navigator.clipboard.writeText`（见 §1）、Ctrl+C 走 `Editor::copy()` → Pasteboard → `cb_clipboard_set_data` | `ClipboardEvent` 对象没有（事件里拿不到 `clipboardData`），`execCommand('copy')` / `readText()` 仍缺 | 部分 |
 | 事件顺序 | **`keydown > keyup > keypress > beforeinput > input`** | Chrome 是 `keydown > keypress > beforeinput > input > keyup`；宿主按键投递顺序所致 |
-| `document.createEvent` / `new MouseEvent()` | **不支持** | `typeof document.createEvent === 'undefined'`（2026-11-06 实测），页面无法合成事件；`dispatchEvent` 本身可用（见 R45 用例） |
+| `document.createEvent` / `new MouseEvent()` | **已支持（R172，prelude shim）** | `document.createEvent('CustomEvent')` + `initCustomEvent`（含 `detail`）是 Svelte `createEventDispatcher` / vConsole 开关的路径；`Event`/`MouseEvent`/`KeyboardEvent` 构造函数可用，`dispatchEvent` 本身可用（R45）。残留：legacy 的 `initMouseEvent` / `initUIEvent` 没实现（老库的 MouseEvents 路径），需要时再补 |
 
 ## 2. CSS
 

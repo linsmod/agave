@@ -3221,14 +3221,25 @@ yyreduce:
 /* Line 1806 of yacc.c  */
 #line 996 "/home/zhangjipeng/macross-browser/source/webcore/css/CSSGrammar.y"
     {
-        (yyvsp[(1) - (2)].string).lower();
         DeprecatedString str = deprecatedString((yyvsp[(1) - (2)].string));
         const char* s = str.ascii();
         int l = str.length();
         CSSParser* p = static_cast<CSSParser*>(parser);
-        p->lastPropertyName = String(s);
-        /* Custom properties ('--x') have no generated id. */
-        (yyval.prop_id) = (l > 5 && !strncmp(s, "-agb-", 5)) ? CSS_PROP_CUSTOM_PROPERTY : getPropertyID(s, l);
+        /* Custom properties are case-sensitive: '--VC-BG-0' and
+         * 'var(--VC-BG-0)' have to agree. Only ordinary property names are
+         * lowercased; lowercasing a custom property here made the definition
+         * '-agb-vc-bg-0' while the var() reference kept its case (R173). */
+        if (l > 5 && !strncmp(s, "-agb-", 5)) {
+            p->lastPropertyName = String(s);
+            (yyval.prop_id) = CSS_PROP_CUSTOM_PROPERTY;
+        } else {
+            (yyvsp[(1) - (2)].string).lower();
+            str = deprecatedString((yyvsp[(1) - (2)].string));
+            s = str.ascii();
+            l = str.length();
+            p->lastPropertyName = String(s);
+            (yyval.prop_id) = getPropertyID(s, l);
+        }
     }
     break;
 

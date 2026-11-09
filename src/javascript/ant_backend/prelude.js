@@ -568,6 +568,47 @@
       if (typeof g[_ctors[_ci]] === 'undefined') g[_ctors[_ci]] = function () { return null; };
     }
   }
+  /* document.createEvent + CustomEvent.prototype.initCustomEvent.
+   *
+   * Svelte's createEventDispatcher (what vConsole's switch uses to open the
+   * panel, and what any older library calls) does:
+   *     var e = document.createEvent('CustomEvent');
+   *     e.initCustomEvent(type, bubbles, cancelable, detail);
+   * The DOM bridge exposes the Event/CustomEvent constructors but neither the
+   * legacy factory nor initCustomEvent, so that line died with
+   * "undefined is not a function" and the click handler never ran (R172).
+   * `detail` is a getter-only field on the engine's CustomEvent prototype, so
+   * the init method defines an own data property that shadows it. */
+  if (typeof g.document !== 'undefined' && g.document &&
+      typeof g.document.createEvent !== 'function') {
+    g.document.createEvent = function (type) {
+      var t = String(type == null ? '' : type).toLowerCase();
+      try {
+        if (t === 'customevent') return new g.CustomEvent('');
+        if ((t === 'mouseevent' || t === 'mouseevents') &&
+            typeof g.MouseEvent === 'function') return new g.MouseEvent('');
+        if ((t === 'keyboardevent' || t === 'keyevents') &&
+            typeof g.KeyboardEvent === 'function') return new g.KeyboardEvent('');
+        return new g.Event('');
+      } catch (e) {
+        return new g.Event('');
+      }
+    };
+  }
+  if (typeof g.CustomEvent === 'function' && g.CustomEvent.prototype &&
+      typeof g.CustomEvent.prototype.initCustomEvent !== 'function') {
+    g.CustomEvent.prototype.initCustomEvent = function (type, bubbles, cancelable, detail) {
+      if (typeof this.initEvent === 'function') this.initEvent(type, bubbles, cancelable);
+      try {
+        Object.defineProperty(this, 'detail', {
+          value: detail, writable: true, enumerable: true, configurable: true
+        });
+      } catch (e) {
+        try { this.detail = detail; } catch (e2) {}
+      }
+      return undefined;
+    };
+  }
   /* base64 -> ArrayBuffer. Binary bodies cross the bridge as base64 because
      WebCore::String cannot carry NUL or non-UTF-8 bytes (wasm/zip/images). */
   if (typeof g.__agbB64ToBuffer !== 'function') {
