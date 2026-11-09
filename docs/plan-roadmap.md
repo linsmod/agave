@@ -771,6 +771,10 @@
     → **引擎放进 VM 必须以 JIT 为前提**。
   - 分批：B0 接口 + local（行为零变化）→ B1 协议 v1 → B2 process 后端 → B3 rvvm 后端 →
     B4 服务通道 + `window.open` 异步（与 S4 WindowProxy 一起）→ B5 冻结/压测/profile 策略。
+  **B3 的跨仓库接口已出**（2026-11-09）：`virtpass_browser v1` 规格见
+  [ref-virtpass-browser.md](ref-virtpass-browser.md)（两跳拓扑、guest 分配共享控制块 + `BP_*` ecall、
+  中断 50ms 轮询、帧搬运一次拷贝、RVVM 侧待实现清单与验收）；agave 侧 `AgwViewBackendRvvm` 与
+  process 后端共享 90%，风险在 guest 端口。
 - 验收：两个 tab，一个跑 `while(true){}`，另一个点击/刷新在 200 ms 内响应（当前要等 1.5 s 中断）；
   其余验收数字见设计文档 §1/§8。**验收 1 已可复现**（`AGB_VIEW_BACKEND=process` +
   `agave_multiview_probe.exe`：B 的延迟 31 ms，local 对照 `blocked=1`；收在

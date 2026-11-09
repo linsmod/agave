@@ -43,6 +43,7 @@
 | [hist-lessons.md](hist-lessons.md) | R 系列经验库：现象 → 根因 → 修法 → 验证 | 遇到眼熟的 bug、想推翻旧结论 |
 | [plan-roadmap.md](plan-roadmap.md) | 待办与验收标准（P0/P1/P2） | 想知道"接下来做什么" |
 | [plan-realm-document-binding.md](plan-realm-document-binding.md) | **realm document 绑定实施计划 B0–B4**（自包含、断点续做）：文件拆分、步骤、命令、进度表 | 接手/继续 R130 之后的 realm 修复 |
+| [ref-virtpass-browser.md](ref-virtpass-browser.md) | **virtpass_browser v1**（跨仓库接口规格，交付 RVVM 侧）：两跳拓扑、共享控制块、ecall 表、中断/帧搬运、RVVM 侧待实现清单、验收 | 做 S3 B3（RVVM 渲染后端）/ 与 RVVM 侧对接 |
 | [ref-ant-engine.md](ref-ant-engine.md) | ant/桥接**哪份是真的**、改引擎链路、ant 的反直觉 | 碰到 JS 引擎、桥接、worker、wasm |
 | [ref-code-index.md](ref-code-index.md) | 函数/机制锚点索引 | 知道机制名、要找函数 |
 

@@ -177,6 +177,17 @@ RVVM 后端用 guest 内存 + `virtpass_browser` 的 ecall；local 后端只是�
 | M4 | 真实软件光栅（`ps_*` 填充，不是 memset）在 guest 的成本 | 整帧 ≤5 ms | guest 内软画是否可行 |
 | M5 | damage blit 在桥上下文里的实测（同地址空间 memcpy + 合成） | ≤0.1 ms/帧 | 主路径确认 |
 
+**已在 `process` 传输上实测（2026-11-09，1100×800，`AGB_IPC_STATS=1`）**：
+
+- M5：共享 canvas → mirror 的一次拷贝 **~0.45 ms/帧**（1100×800 逐帧 430–700 µs，视缓存状态；首帧冷启动 ~3.1 ms），
+  即 ~7 GB/s；这与 §6 的估算一致，所以 RVVM 路径每帧搬一次是可接受的。
+- M1：帧发布 → 控件 poll 看到 `FRAME` 的延迟 **avg 15.8 ms / max 23 ms**——但这里面
+  含渲染进程的画帧时间和控件循环的 6 ms 轮询节奏，**不是协议地板**；它说明"轮询式
+  收帧"就是这个量级，RVVM 的 `BP_WAIT` 是事件驱动（见 ref-virtpass-browser.md），
+  那一路应显著更低，等 guest 样本跑起来再量一次。
+- 帧率：探针页（每帧有定时器工作）在 2.3 s 内出了 66 帧 ≈ 28 fps，其中拷贝占 ~0.6 ms/帧。
+- M2/M3/M4 仍未测：M4 决定"guest 内软画"可行性，M2/M3 要等 RVVM 的 `BP_WAIT` 与批量命令。
+
 ## 7. 迁移与回退
 
 - 开关：`AGB_VIEW_BACKEND=local|process|rvvm`（默认 `local`），单 tab 可覆盖；
@@ -212,7 +223,13 @@ RVVM 后端用 guest 内存 + `virtpass_browser` 的 ecall；local 后端只是�
 5. **R150 与后端冻结的关系**：local 用 `visible` 标志；process/rvvm 用 `VIEW_VISIBLE` 命令，
    首帧整幅重绘语义必须一致（同一条验收用例）。
 
-## 10. 附：与现有 RVVM 桥的对照
+## 10. RVVM 侧接口规格（交付件）
+
+跨仓库 ABI（两跳拓扑、共享控制块、ecall 表、中断/帧搬运、RVVM 侧待实现清单、验收）在
+[ref-virtpass-browser.md](ref-virtpass-browser.md)。本文件只定义 agave 侧的协议与后端；B3 的
+agave 工作量因此很小（AgwViewBackendRvvm.c 与 process 后端共享 90%）。
+
+## 11. 附：与现有 RVVM 桥的对照
 
 | 维度 | 现有 NDK/cmdpost 桥 | `virtpass_browser` v1 |
 |---|---|---|

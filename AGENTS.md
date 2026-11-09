@@ -20,6 +20,7 @@ agave 是**从零移植的浏览器**：WebKit 2008 的 WebCore（解析/布局/
 | JS/DOM/CSS **能力缺口**（不支持清单 + 一条命令复测） | [docs/arch-capability-gaps.md](docs/arch-capability-gaps.md) |
 | `video`/`audio` 媒体元素（尺寸、播放状态机、元数据、抽帧） | [docs/arch-media.md](docs/arch-media.md) |
 | ant/桥接哪份是真的、函数/机制锚点 | [docs/ref-ant-engine.md](docs/ref-ant-engine.md)、[docs/ref-code-index.md](docs/ref-code-index.md) |
+| RVVM 渲染后端（B3）的跨仓库接口 | [docs/ref-virtpass-browser.md](docs/ref-virtpass-browser.md) |
 | 提交/回归页/文档/代码风格约定 | [docs/dev-conventions.md](docs/dev-conventions.md) |
 | 历史缺陷：现象 → 根因 → 修法 → 验证（R 系列） | [docs/hist-lessons.md](docs/hist-lessons.md) |
 | 设计记录（**不是现状**） | [docs/design-per-view-js-context.md](docs/design-per-view-js-context.md)、[docs/design-frame-window.md](docs/design-frame-window.md)、[docs/design-per-frame-realm.md](docs/design-per-frame-realm.md)、[docs/design-realm-document-binding.md](docs/design-realm-document-binding.md)、[docs/design-render-backend.md](docs/design-render-backend.md)（S3 多 tab 并行 / 可插拔渲染后端） |
