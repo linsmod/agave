@@ -65,6 +65,10 @@ typedef enum {
     AGW_VIEW_EVENT_URL,             /* text */
     AGW_VIEW_EVENT_STATUS,          /* text */
     AGW_VIEW_EVENT_MESSAGE,         /* text: agavePostMessage() reached the host */
+    AGW_VIEW_EVENT_CONTEXT_MENU,    /* a,b = x,y; c,d = link/image byte lengths;
+                                     * text = link + image + selection text. The
+                                     * host answers by building the menu (the
+                                     * engine cannot: no windows in this process) */
     AGW_VIEW_EVENT_DOCUMENT,        /* a = new document epoch (a document committed) */
     AGW_VIEW_EVENT_SERVICE_REQUEST, /* a = service kind, text = args (B4) */
     AGW_VIEW_EVENT_UNRESPONSIVE,    /* a = busy ms */

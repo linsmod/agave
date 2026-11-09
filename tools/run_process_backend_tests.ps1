@@ -456,6 +456,23 @@ if ($crashOk -and $sadOk) {
 Assert-NoRenderer 'crash report' | Out-Null
 Remove-Item $sadPage -ErrorAction SilentlyContinue
 
+# 18. right click: the menu request is raised in the renderer and has to cross
+#     the boundary (renderer -> CONTEXT_MENU event -> control -> on_context_menu).
+#     It used to be wired in-process only, so a process-backend view had no
+#     context menu at all.
+$ctx = Invoke-Probe -Page (Join-Path $pages 'window_links.html') -Wait 300 -Settle 300 `
+    -Js 'probeExit("done");' -Extra @('--right-click', '60,40')
+$ctxText = $ctx.Stdout + $ctx.Stderr
+
+if ($ctx.Code -eq 0 -and $ctxText -match '\[ctx\] menu x=60 y=40 link=.*window_target\.html') {
+    Write-Host "PASS  context menu: right click reaches the host through the renderer"
+} else {
+    $failures++
+    Write-Host "FAIL  context menu did not reach the host"
+    Write-Host (($ctxText -split "`n" | Where-Object { $_ -match 'ctx|context menu|exit\]' } | Select-Object -Last 3) -join "`n")
+}
+Assert-NoRenderer 'context menu' | Out-Null
+
 Remove-Item (Join-Path $build 'process_backend_out.txt'),
             (Join-Path $build 'process_backend_err.txt'),
             (Join-Path $build 'process_backend_eval.js') -ErrorAction SilentlyContinue

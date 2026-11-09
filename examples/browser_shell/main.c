@@ -3026,6 +3026,12 @@ static int  g_probeKeysDone;      /* the --keys list was typed out             *
 static int  g_probeClickList[PROBE_MAX_CLICKS][2]; /* --click: viewport points  */
 static int  g_probeClickCount;
 static int  g_probeClickIndex;    /* next --click to deliver                   */
+/* --right-click x,y: the same mouse path with the right button, so the
+ * context-menu chain (renderer -> event -> control -> host) can be checked
+ * headlessly. */
+static int  g_probeRightList[PROBE_MAX_CLICKS][2];
+static int  g_probeRightCount;
+static int  g_probeRightIndex;
 static char g_probePreScript[2048]; /* --pre-eval: runs once before --keys     */
 static char g_probeIme[512];        /* --ime: posted as WM_IME_CHAR           */
 static int  g_probePreDone;       /* --pre-eval was executed                   */
@@ -3548,11 +3554,19 @@ static void probeOnContextMenu(AgaveWebView* view, int x, int y,
 {
     (void)view;
     (void)user;
-    (void)text;
 
     agbLog(AGB_LOG_PROBE, "context menu at %d,%d link=%s image=%s",
            x, y, linkUrl && linkUrl[0] ? linkUrl : "(none)",
            imageUrl && imageUrl[0] ? imageUrl : "(none)");
+
+    /* Stable stdout line: the process backend's context-menu chain (renderer ->
+     * event -> control -> host) is checked against it. */
+    printf("[ctx] menu x=%d y=%d link=%s image=%s selection=%lu\n",
+           x, y,
+           linkUrl && linkUrl[0] ? linkUrl : "(none)",
+           imageUrl && imageUrl[0] ? imageUrl : "(none)",
+           (unsigned long)(text ? strlen(text) : 0));
+    fflush(stdout);
 }
 
 static void probeOnCloseWindow(AgaveWebView* view, void* user)
@@ -4060,6 +4074,24 @@ static int probeRun(const char* url)
                         PostMessageA(target, WM_MOUSEMOVE, 0, at);
                         PostMessageA(target, WM_LBUTTONDOWN, MK_LBUTTON, at);
                         PostMessageA(target, WM_LBUTTONUP, 0, at);
+                    }
+                    SetTimer(g_probeWnd, PROBE_TIMER_EVAL, 400, NULL);
+                    continue;
+                }
+
+                if (g_probeRightIndex < g_probeRightCount) {
+                    HWND target = (HWND)agave_webview_hwnd(g_probeView);
+                    int rx = g_probeRightList[g_probeRightIndex][0];
+                    int ry = g_probeRightList[g_probeRightIndex][1];
+
+                    ++g_probeRightIndex;
+                    if (target) {
+                        LPARAM at = MAKELPARAM(rx, ry);
+
+                        agbLog(AGB_LOG_PROBE, "right click %d,%d", rx, ry);
+                        PostMessageA(target, WM_MOUSEMOVE, 0, at);
+                        PostMessageA(target, WM_RBUTTONDOWN, MK_RBUTTON, at);
+                        PostMessageA(target, WM_RBUTTONUP, 0, at);
                     }
                     SetTimer(g_probeWnd, PROBE_TIMER_EVAL, 400, NULL);
                     continue;
@@ -4611,6 +4643,19 @@ static void parseShellArgv(void)
         } else if (!strcmp(argv[i], "--keys") && i + 1 < argc) {
             strncpy(g_probeKeys, argv[++i], sizeof(g_probeKeys) - 1);
             g_probeKeys[sizeof(g_probeKeys) - 1] = 0;
+        } else if (!strcmp(argv[i], "--right-click") && i + 1 < argc) {
+            int rx = 0, ry = 0;
+
+            if (sscanf(argv[++i], "%d,%d", &rx, &ry) == 2 && rx >= 0 && ry >= 0
+                    && g_probeRightCount < PROBE_MAX_CLICKS) {
+                g_probeRightList[g_probeRightCount][0] = rx;
+                g_probeRightList[g_probeRightCount][1] = ry;
+                ++g_probeRightCount;
+            } else {
+                fprintf(stderr, "[shell] --right-click wants x,y (e.g. 100,220), got %s\n", argv[i]);
+                g_argError = 1;
+                return;
+            }
         } else if (!strcmp(argv[i], "--click") && i + 1 < argc) {
             int cx = 0, cy = 0;
 

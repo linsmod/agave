@@ -188,6 +188,59 @@ static void onPostMessage(const char* message)
         pushEvent(AGW_VIEW_EVENT_MESSAGE, 0, 0, 0, 0, message, (int)strlen(message));
 }
 
+/* The engine wants a context menu: it cannot show one (no windows in this
+ * process), so the request travels to the control, which asks the host. The
+ * payload is link + image + selection text, split by the two lengths carried in
+ * c and d (a NUL separator would truncate a selection that contains one). */
+static void onContextMenu(MaCrossView* view, const MC_CONTEXT_MENU_DATA* menu)
+{
+    char blob[4096];
+    int linkLen = 0;
+    int imageLen = 0;
+    int textLen = 0;
+    int x = 0;
+    int y = 0;
+
+    (void)view;
+
+    if (menu) {
+        x = menu->location.x;
+        y = menu->location.y;
+
+        if (menu->link_url)
+            linkLen = (int)strlen(menu->link_url);
+        if (menu->image_url)
+            imageLen = (int)strlen(menu->image_url);
+        if (menu->text)
+            textLen = (int)strlen(menu->text);
+    }
+
+    if (linkLen + imageLen + textLen > (int)sizeof(blob) - 1) {
+        int room = (int)sizeof(blob) - 1;
+
+        if (linkLen > room) { linkLen = room; imageLen = 0; textLen = 0; room = 0; }
+        else room -= linkLen;
+
+        if (imageLen > room) { imageLen = room; textLen = 0; room = 0; }
+        else room -= imageLen;
+
+        if (textLen > room)
+            textLen = room;
+    }
+
+    if (linkLen && menu->link_url)
+        memcpy(blob, menu->link_url, (size_t)linkLen);
+    if (imageLen && menu->image_url)
+        memcpy(blob + linkLen, menu->image_url, (size_t)imageLen);
+    if (textLen && menu->text)
+        memcpy(blob + linkLen + imageLen, menu->text, (size_t)textLen);
+
+    blob[linkLen + imageLen + textLen] = 0;
+
+    pushEvent(AGW_VIEW_EVENT_CONTEXT_MENU, x, y, linkLen, imageLen, blob,
+              linkLen + imageLen + textLen);
+}
+
 /* Window lifecycle. This process cannot create a window (the control owns the
  * host-facing API and the popup would live in yet another process), so both
  * requests travel as service events: open_window carries "name\nurl", and the
@@ -500,6 +553,7 @@ int main(int argc, char** argv)
         info.cb_set_status       = onStatus;
         info.cb_loading_progress = onProgress;
         info.cb_error            = onError;
+        info.cb_context_menu     = onContextMenu;
         info.cb_open_window      = onOpenWindow;
         info.cb_close_window     = onCloseWindow;
         macross_set_callback(&info);

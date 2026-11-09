@@ -740,6 +740,48 @@ static char* agwDupOrNull(const char* text)
     return copy;
 }
 
+/* Hands a context-menu request to the UI thread. The engine calls this from the
+ * engine thread, in the middle of dispatching the DOM contextmenu event; the
+ * host answers by showing a menu, and a TrackPopupMenu against a window owned by
+ * the UI thread does nothing when it is called from another thread (and
+ * OpenClipboard then fails too). So copy the payload and let the UI thread build
+ * the menu. The strings die with the caller, which is why the copies exist
+ * (same pattern as AgwDownloadEntry). Local backend and the process backend's
+ * CONTEXT_MENU event both end up here. */
+static void agwQueueContextMenu(AgaveWebView* item, int x, int y,
+                                const char* link, const char* image, const char* text)
+{
+    AgwContextPayload* payload;
+
+    if (!item || !item->callbacks.on_context_menu)
+        return;
+
+    payload = (AgwContextPayload*)calloc(1, sizeof(AgwContextPayload));
+
+    if (!payload)
+        return;
+
+    payload->x = x;
+    payload->y = y;
+    payload->link = agwDupOrNull(link);
+    payload->image = agwDupOrNull(image);
+    payload->text = agwDupOrNull(text);
+
+    agbLog(AGB_LOG_NAV, "context menu at %d,%d link=%s image=%s text=%d bytes",
+           payload->x, payload->y,
+           payload->link ? payload->link : "(none)",
+           payload->image ? payload->image : "(none)",
+           payload->text ? (int)strlen(payload->text) : 0);
+
+    /* Dropped messages (control destroyed first) leak only this payload. */
+    if (!item->hwnd || !PostMessageA(item->hwnd, AGW_MSG_CONTEXT, 0, (LPARAM)payload)) {
+        free(payload->link);
+        free(payload->image);
+        free(payload->text);
+        free(payload);
+    }
+}
+
 static void agwOnContextMenu(MaCrossView* view, const MC_CONTEXT_MENU_DATA* menu)
 {
     AgaveWebView* item = agwByView(view);
@@ -747,42 +789,12 @@ static void agwOnContextMenu(MaCrossView* view, const MC_CONTEXT_MENU_DATA* menu
     if (!item)
         item = g_lastActive;
 
-    if (!item || !item->callbacks.on_context_menu)
-        return;
-
-    /* The engine calls this from the engine thread, in the middle of dispatching
-     * the DOM contextmenu event. The host answers by showing a menu: a
-     * TrackPopupMenu against a window owned by the UI thread does nothing when
-     * it is called from another thread, and OpenClipboard() then fails too. So
-     * copy the payload and let the UI thread build the menu. The engine's
-     * strings and the MC_CONTEXT_MENU_DATA itself die when this returns, which
-     * is why the copies exist (same pattern as AgwDownloadEntry). */
-    {
-        AgwContextPayload* payload = (AgwContextPayload*)calloc(1, sizeof(AgwContextPayload));
-
-        if (!payload)
-            return;
-
-        payload->x = menu ? menu->location.x : 0;
-        payload->y = menu ? menu->location.y : 0;
-        payload->link = agwDupOrNull(menu ? menu->link_url : NULL);
-        payload->image = agwDupOrNull(menu ? menu->image_url : NULL);
-        payload->text = agwDupOrNull(menu ? menu->text : NULL);
-
-        agbLog(AGB_LOG_NAV, "context menu at %d,%d link=%s image=%s text=%d bytes",
-               payload->x, payload->y,
-               payload->link ? payload->link : "(none)",
-               payload->image ? payload->image : "(none)",
-               payload->text ? (int)strlen(payload->text) : 0);
-
-        /* Dropped messages (control destroyed first) leak only this payload. */
-        if (!item->hwnd || !PostMessageA(item->hwnd, AGW_MSG_CONTEXT, 0, (LPARAM)payload)) {
-            free(payload->link);
-            free(payload->image);
-            free(payload->text);
-            free(payload);
-        }
-    }
+    agwQueueContextMenu(item,
+                        menu ? menu->location.x : 0,
+                        menu ? menu->location.y : 0,
+                        menu ? menu->link_url : NULL,
+                        menu ? menu->image_url : NULL,
+                        menu ? menu->text : NULL);
 }
 
 static void agwOnUpdateNow(MaCrossView* view)
@@ -2049,6 +2061,51 @@ static void agwDispatchBackendEvent(AgaveWebView* item, const AgwViewEvent* ev)
         if (item->callbacks.on_message)
             item->callbacks.on_message(item, ev->text ? ev->text : "", item->user);
         break;
+
+    case AGW_VIEW_EVENT_CONTEXT_MENU: {
+        /* The renderer cannot show a menu (no windows in its process): it sends
+         * the link/image/selection text and we build it through the same path
+         * the local backend's cb_context_menu uses. */
+        char link[2048];
+        char image[2048];
+        char selection[2048];
+        int linkLen = ev->c;
+        int imageLen = ev->d;
+        int total = ev->textLen;
+        int textLen;
+
+        if (linkLen < 0) linkLen = 0;
+        if (imageLen < 0) imageLen = 0;
+        if (total < 0) total = 0;
+        if (total > AGW_IPC_TEXT_BYTES) total = AGW_IPC_TEXT_BYTES;
+
+        textLen = total - linkLen - imageLen;
+        if (textLen < 0) textLen = 0;
+
+        link[0] = image[0] = selection[0] = 0;
+
+        if (ev->text) {
+            if (linkLen > (int)sizeof(link) - 1) linkLen = (int)sizeof(link) - 1;
+            if (imageLen > (int)sizeof(image) - 1) imageLen = (int)sizeof(image) - 1;
+            if (textLen > (int)sizeof(selection) - 1) textLen = (int)sizeof(selection) - 1;
+
+            /* The blob is link + image + text, concatenated: lengths, not
+             * separators, so a selection containing a newline survives. */
+            if (linkLen + imageLen + textLen > total)
+                textLen = total - linkLen - imageLen;
+            if (textLen < 0) textLen = 0;
+
+            memcpy(link, ev->text, (size_t)linkLen);
+            link[linkLen] = 0;
+            memcpy(image, ev->text + linkLen, (size_t)imageLen);
+            image[imageLen] = 0;
+            memcpy(selection, ev->text + linkLen + imageLen, (size_t)textLen);
+            selection[textLen] = 0;
+        }
+
+        agwQueueContextMenu(item, ev->a, ev->b, link, image, selection);
+        break;
+    }
 
     case AGW_VIEW_EVENT_SERVICE_REQUEST: {
         /* A backend that cannot create windows itself asks us: we own the
