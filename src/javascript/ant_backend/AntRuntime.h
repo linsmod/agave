@@ -91,9 +91,13 @@ void queueDeferredModule(void* document, const char* url, const char* source);
  * the notifier below when it arrives - the tokenizer keeps parsing blocked
  * until then and runs the module in the parse flow, so DOMContentLoaded
  * stays behind module execution, per spec. */
-typedef void (*ModuleEntryNotifyHook)(const char* url, const char* source, int failed);
+/* `owner` is the parser (tokenizer) that requested the entry module; the
+ * runtime hands it back on arrival so the body resumes *that* parser instead of
+ * whichever tokenizer happens to be waiting (a process-wide single waiter
+ * clobbered a second tab parsing a module entry at the same time). */
+typedef void (*ModuleEntryNotifyHook)(const char* url, const char* source, int failed, void* owner);
 void setModuleEntryNotifyHook(ModuleEntryNotifyHook hook);
-void fetchAndQueueModuleScript(const char* url);
+void fetchAndQueueModuleScript(const char* url, void* owner);
 
 /* Binds the page's document to the JS `document` object (task 2 acceptance):
  * `document.title` reads/writes WebCore::Document::title(). `document` is a

@@ -367,14 +367,30 @@
 - **仍未做**：WebCore 的 `s_moduleEntryWaiter`（HTMLTokenizer.cpp）仍是文件级单 waiter —— 两个 tab 同时
   解析入口 module 会互相覆盖；ES module registry 仍按 engine（P1-f）。
 
-### P1-f ES module registry 按 realm（依赖 P1-e，**待做**）
+### P1-f ES module registry 按 realm（**已完成 2026-11-09**）
 
-- 现状：ant 的 `js->modules.state` 在 `ant_t` 上、不在 `realm/fields.h` 的镜像表里，所以同一
-  engine 里的两个 frame realm 共享 module map（规范要求每个 realm 一份）。
-- 动作：`realm/fields.h` 加 `ANT_REALM_FIELD(modules)`；`realm_mark_one()` 标记
-  `modules.cache/parent/main/constructor` 与 builtins cache；realm 销毁时清各自的 `ant_esm_state_t`
-  （`esm_loader_cache_cleanup` 目前只清当前 realm）。
-- 验收：P1-e 的"两个 iframe 各自执行一次"用例在 `AGB_PER_FRAME_REALM=1` 下成立。
+- 修前：ant 的 `js->modules` 在 `ant_t` 上、不在 `realm/fields.h` 的镜像表里，所以同一 engine 里的
+  两个 frame realm 共享 module map（规范要求每个 realm 一份；两个 frame import 同一 URL 只有第一个
+  真的求值，第二个拿到它的 namespace）。还有一个更隐蔽的初始化缺口：新 realm 的
+  `builtins.vm_main_context_loader` 是 0，而经典脚本 unit 的 `import_handler` 也是 0，
+  `0 == 0` 让 `import()` 走了 vm-context 分支（global `import`，主 realm 的 loader）。
+- 已做：
+  1. `realm/fields.h` 加 `ANT_REALM_FIELD(modules)`（ESM registry、require 缓存、evaluation stack 全部
+     跟 realm 走）；`realm_mark_one()` 标记 `modules.cjs.*`、`hooks`、`import_meta`（非当前 realm 的
+     值不在 isolate 根里）。
+  2. `js_realm_init_intrinsics()` 给新 realm 的 module 字段设真正的空值（零在 NaN box 里是**数字**，
+     不是 undefined）。
+  3. `esm_state_free()` 拆出来：realm 销毁时释放自己的 `ant_esm_state`；
+     `esm_loader_cache_cleanup()` 同步清当前 realm 的镜像（避免 js_destroy 与 realm_free 双释放）；
+     新 realm 的 state 继承 engine 的 VFS bundle（`--bundle` 场景）。
+  4. `js_vm_dynamic_import()` 的 sentinel 判断加 `handler &&`，未初始化 realm 不再误走 vm-context 分支。
+  5. agave 侧 `s_moduleEntryWaiter`（HTMLTokenizer 的文件级单 waiter）改成 **per-tokenizer**：
+     `fetchAndQueueModuleScript(url, owner)` 把 tokenizer 当 owner 传下去，body 到达时回到请求它的
+     那个 parser（两个 tab 同时解析入口模块不再互相覆盖）。
+- 验收：ant `tests/test_realm_modules.c`（meson `test-realm-modules`）：main 两次 import=1、新 realm
+  0→1、切回 main 仍 1、realm 再入仍 1（缓存）、第二个 realm=1、50 个短命 realm 各求值一次；
+  `tests/test_realm_*.cjs` 全过；`run_script_mode_tests.ps1` 的 `frame module entry + per-realm import()` 通过；
+  agave 全部常规套件绿。
 
 
 ### P1-c 清 `g_documentParsed` 死标志

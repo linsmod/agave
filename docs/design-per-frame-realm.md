@@ -49,7 +49,10 @@ view（一个 AgaveWebView）
 - **DOM 包装按 realm 分**：同一个 DOM node 在父/子 realm 里有不同的 wrapper 对象
   （`parent.document.body !== document.body`，规范如此）。
 - **模块表按 realm**：ES module map 属于 realm，不再进程级共享（规范如此；也修掉两个 frame
-  重复求值/单例覆盖的问题）。**尚未实现**（`js->modules.state` 仍是引擎级）。
+  重复求值/单例覆盖的问题）。**已实现（P1-f，2026-11-09）**：`js->modules`（ESM registry、require
+  缓存、evaluation stack）进了 `realm/fields.h` 的镜像表，realm 销毁时释放各自的
+  `ant_esm_state`；验收是 ant `tests/test_realm_modules.c`（两个 realm 各 `import('./x.js')` 一次，
+  各自 `globalThis.__sharedLoads === 1`）。
 
 ### 3.1 prelude / polyfills 注入几次
 
@@ -93,16 +96,17 @@ view（一个 AgaveWebView）
 - **S2 wrapper 按 realm**：DOM 包装加 realm 维度；`parent.document.body !== document.body`。
   验收：跨 frame 节点比较/事件目标正确；`cap_dom.html`、`cap_window_identity.html` 全绿。
   **状态：已完成**（ant `4494171c`：wrapper 表键 `(js, realm, ptr, tag)`、`gc_unpin_permanent`、
-  `antb_release_realm`；agave 掉帧时释放该 realm 的 wrapper）。已知偏差（S3/S4 修）：
-  模块表仍按引擎、iframe 的 DCL 仍不单独派发、`parent` 是父 realm 的 global 而不是 WindowProxy。
+  `antb_release_realm`；agave 掉帧时释放该 realm 的 wrapper）。已知偏差（S4 修）：
+  iframe 的 DCL 仍不单独派发、`parent` 是父 realm 的 global 而不是 WindowProxy。
 - **S3 事件/定时器/模块按 realm**：派发、回调、模块求值都先切到目标 realm。
   验收：iframe 的 DCL 单独派发；两个 frame 各跑一份同一 module 不互相覆盖；worker 回归不变。
   **状态：事件 + 定时器/realm binding 已完成**（`Document::finishedParsing()` 绑定本 document 后
   flush 模块再派发唯一的 DCL，iframe 由此获得自己的 DCL，同时修掉 P0-c 双发；frame 的 `load` 走
   `dispatchFrameDocumentEvent`；R130 把 `__agbBind` 的 per-view document slot 改成 realm 编号，
   每个 realm 各有一份 document/docObj binding，子 frame 的定时器与回调不再把父文档写进自己的
-  document 对象）。**未完成**：ES module map 仍是引擎级（`js->modules.state`），
-  两个 frame import 同一模块仍共享实例；要按 realm 得把 loader 状态搬进 realm 字段；
+  document 对象）。**已补齐（P1-f，2026-11-09）**：ES module map 也按 realm
+  （`js->modules` 进 realm 镜像表；realm 销毁释放各自的 `ant_esm_state`），两个 frame import
+  同一模块各求值一次（ant `tests/test_realm_modules.c`）；
   getter 仍读 ambient `g_document`（`location`/`history`/`document.write` 等）的问题与
   收尾计划见 [design-realm-document-binding.md](design-realm-document-binding.md)。
 - **S4 WindowProxy 转发**：`parent`/`top`/`frames`/`length`/`name`/`frameElement`、`postMessage.source`。

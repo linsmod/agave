@@ -117,7 +117,8 @@ WebCore 内部的渲染管线（DOM → 样式 → 渲染树 → 布局 → 绘�
   `activateSlot()` 切回对应文档。
 - **frame 与 window**：每个 realm 的 `window`/`self` 就是该 realm 的全局对象；`parent`/`top` 是
   父/顶层 realm 的全局对象（同 VM，属性访问和调用照常，`parent !== self`、`top.Array !== Array`）。
-  ES module map 仍是引擎级（两个 frame import 同一模块共享实例，S3 待做）。
+  **ES module map 也按 realm**（P1-f）：`js->modules` 在 realm 镜像表里，两个 frame import 同一 URL
+  各求值一次、各得自己的 namespace（HTML 规范：module map 属于 environment settings object）。
 - **进程级共享**：generation 计数器、桥的 wrapper/class/method-trampoline 表（wrapper 按
   `(js, realm, ptr, tag)` 存，class 和 method 表按 engine 归属）。模块调度（fetch session、
   pending、routed entry、deferred 队列、body 缓存）**按 view**（S2，roadmap P1-a）；

@@ -3032,6 +3032,7 @@ static bool moduleOffline(void)
 struct EntryScriptStamp {
     unsigned long generation;
     unsigned long documentGeneration;
+    void* owner;                /* the tokenizer that is blocked on it */
 };
 
 #define g_moduleEntryScripts \
@@ -3043,14 +3044,15 @@ void setModuleEntryNotifyHook(ModuleEntryNotifyHook hook)
     g_moduleEntryNotifyHook = hook;
 }
 
-static void notifyModuleEntry(const std::string& url, const std::string* source, bool failed)
+static void notifyModuleEntry(const std::string& url, const std::string* source, bool failed,
+                              void* owner)
 {
     if (!g_moduleEntryNotifyHook)
         return;
 
     g_moduleEntryNotifyHook(url.c_str(),
                             (source && !source->empty() && !failed) ? source->c_str() : NULL,
-                            failed ? 1 : 0);
+                            failed ? 1 : 0, owner);
 }
 static int moduleFetchLimit(void)
 {
@@ -3369,6 +3371,7 @@ struct ArrivedEntryBody {
     std::string url;
     std::string source;
     bool failed;
+    void* owner;   /* the tokenizer waiting for it */
 };
 
 #define g_arrivedEntryBodies \
@@ -3410,6 +3413,7 @@ static void moduleEntryScriptArrived(const std::string& url, const ModuleEntry* 
         body.url = url;
         body.source = entry->body;
         body.failed = false;
+        body.owner = stamp.owner;
 
         if (!g_arrivedEntryBodies)
             g_arrivedEntryBodies = new std::vector<ArrivedEntryBody>();
@@ -3420,6 +3424,7 @@ static void moduleEntryScriptArrived(const std::string& url, const ModuleEntry* 
 
         body.url = url;
         body.failed = true;
+        body.owner = stamp.owner;
 
         if (!g_arrivedEntryBodies)
             g_arrivedEntryBodies = new std::vector<ArrivedEntryBody>();
@@ -3876,7 +3881,7 @@ static void moduleStart(const std::string& url, bool force)
  * of CachedScript, so the entry script and its imports share one cache and
  * one cancel owner). Cache hits notify synchronously - the caller guards
  * against reentrancy the same way the CachedScript ref() path does. */
-void fetchAndQueueModuleScript(const char* url)
+void fetchAndQueueModuleScript(const char* url, void* owner)
 {
     std::string u(url ? url : "");
     ModuleEntry* entry;
@@ -3897,7 +3902,7 @@ void fetchAndQueueModuleScript(const char* url)
     }
 
     if (entry->done) {
-        notifyModuleEntry(u, &entry->body, entry->failed);
+        notifyModuleEntry(u, &entry->body, entry->failed, owner);
         return;
     }
 
@@ -3909,6 +3914,7 @@ void fetchAndQueueModuleScript(const char* url)
 
         stamp.generation = currentGeneration();
         stamp.documentGeneration = currentDocumentGeneration();
+        stamp.owner = owner;
         (*g_moduleEntryScripts)[u] = stamp;
     }
     moduleStart(u, false);
@@ -3919,7 +3925,7 @@ void fetchAndQueueModuleScript(const char* url)
     entry = moduleEntryFor(u);
 
     if (entry->done)
-        notifyModuleEntry(u, &entry->body, entry->failed);
+        notifyModuleEntry(u, &entry->body, entry->failed, owner);
 }
 
 /* Queues the static imports of a freshly received module. */
@@ -4502,7 +4508,7 @@ void pumpAsyncRequests(void)
 
         for (size_t i = 0; i < arrived.size(); ++i)
             notifyModuleEntry(arrived[i].url, arrived[i].failed ? NULL : &arrived[i].source,
-                              arrived[i].failed);
+                              arrived[i].failed, arrived[i].owner);
     }
 
     if (g_engine) {
@@ -5184,7 +5190,7 @@ static void cancelInFlightResources(unsigned long generation)
 
         while (it != g_moduleEntryScripts->end()) {
             if (it->second.generation == generation) {
-                notifyModuleEntry(it->first, NULL, true);
+                notifyModuleEntry(it->first, NULL, true, it->second.owner);
                 g_moduleEntryScripts->erase(it++);
             } else
                 ++it;

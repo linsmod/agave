@@ -82,17 +82,17 @@ using namespace HTMLNames;
 using namespace EventNames;
 
 #if ENABLE(ANTJS)
-/* The tokenizer waiting for a routed entry module's body (single slot:
- * blocking external scripts are serialized by the tokenizer state machine).
- * The Ant runtime notifies it from the frame loop, OUTSIDE its network pump -
- * the module then runs in the parse flow (scriptExecution), never inside a
- * network callback. */
-static HTMLTokenizer* s_moduleEntryWaiter = 0;
-
-static void moduleEntryNotifyTrampoline(const char* url, const char* source, int failed)
+/* Called from the frame loop when a routed entry module's body arrives (outside
+ * its network pump). `owner` is the tokenizer that requested it - the runtime
+ * hands the pointer back, so two tabs parsing module entries at the same time
+ * each resume their own parser (the old process-wide single waiter clobbered
+ * the other tab). */
+static void moduleEntryNotifyTrampoline(const char* url, const char* source, int failed, void* owner)
 {
-    if (s_moduleEntryWaiter && s_moduleEntryWaiter->waitsForModuleEntry(url))
-        s_moduleEntryWaiter->notifyModuleEntry(source, failed != 0);
+    HTMLTokenizer* waiter = static_cast<HTMLTokenizer*>(owner);
+
+    if (waiter && waiter->waitsForModuleEntry(url))
+        waiter->notifyModuleEntry(source, failed != 0);
 }
 #endif
 
@@ -541,8 +541,7 @@ HTMLTokenizer::State HTMLTokenizer::scriptHandler(State state)
                  * entries keep the CachedScript path. */
                 bool moduleEntryScript = scriptNode && !asyncScript && !m_parserStopped
                     && AntRuntime::isRunning()
-                    && static_cast<HTMLScriptElement*>(scriptNode.get())->isModuleScript()
-                    && (!s_moduleEntryWaiter || s_moduleEntryWaiter == this);
+                    && static_cast<HTMLScriptElement*>(scriptNode.get())->isModuleScript();
 #else
                 bool moduleEntryScript = false;
 #endif
@@ -571,16 +570,17 @@ HTMLTokenizer::State HTMLTokenizer::scriptHandler(State state)
                         s_hookRegistered = true;
                     }
 
-                    s_moduleEntryWaiter = this;
                     m_awaitingModuleEntry = true;
                     m_pendingModuleUrl = scriptSrc.deprecatedString();
 
                     /* A cache hit notifies synchronously (like a CachedScript
                      * ref() that executes right away); m_requestingScript
-                     * keeps that reentrant resume from touching src. */
+                     * keeps that reentrant resume from touching src. The
+                     * tokenizer itself is the entry's owner, so the body comes
+                     * back to this parser even if another tab is waiting too. */
                     bool savedRequestingScript = m_requestingScript;
                     m_requestingScript = true;
-                    AntRuntime::fetchAndQueueModuleScript(scriptSrc.utf8().data());
+                    AntRuntime::fetchAndQueueModuleScript(scriptSrc.utf8().data(), this);
                     m_requestingScript = savedRequestingScript;
 #endif
                 } else if ((asyncScript || deferScript) && !m_parserStopped
@@ -1766,8 +1766,6 @@ void HTMLTokenizer::stopParsing()
     /* A waiting routed entry would never resume: give the wait slot up (the
      * Ant runtime also fails pending entries on realm teardown, which lands
      * here as a no-op once the waiter is cleared). */
-    if (s_moduleEntryWaiter == this)
-        s_moduleEntryWaiter = 0;
     m_awaitingModuleEntry = false;
     m_pendingModuleUrl = DeprecatedString();
     scriptNode.release();
@@ -1961,8 +1959,6 @@ HTMLTokenizer::~HTMLTokenizer()
     reset();
     delete parser;
 
-    if (s_moduleEntryWaiter == this)
-        s_moduleEntryWaiter = 0;
 }
 
 
@@ -2004,8 +2000,6 @@ void HTMLTokenizer::notifyModuleEntry(const char* source, bool failed)
     RefPtr<Node> n = scriptNode.release();
     DeprecatedString url(m_pendingModuleUrl);
 
-    if (s_moduleEntryWaiter == this)
-        s_moduleEntryWaiter = 0;
     m_pendingModuleUrl = DeprecatedString();
     m_awaitingModuleEntry = false;
 
