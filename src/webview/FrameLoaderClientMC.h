@@ -70,7 +70,7 @@ public:
     virtual void dispatchDidFirstLayout();
     virtual void dispatchWillFirstLayout();
 
-    virtual Frame* dispatchCreatePage();
+    virtual Frame* dispatchCreatePage(const ResourceRequest& request, const String& frameName);
     virtual void dispatchShow();
 
     virtual void dispatchDecidePolicyForMIMEType(FramePolicyFunction, const String& MIMEType, const ResourceRequest&);

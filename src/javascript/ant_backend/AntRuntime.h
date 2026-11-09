@@ -15,7 +15,7 @@ namespace AntRuntime {
 
 /* window.open() goes through this hook: the embedding layer decides whether a
  * new view is created (return non-zero) or the popup is blocked (return 0). */
-typedef int (*OpenWindowHook)(const char* url);
+typedef int (*OpenWindowHook)(const char* url, const char* name);
 void setOpenWindowHook(OpenWindowHook hook);
 
 /* window.agavePostMessage(str) hands a string to the embedding host. */

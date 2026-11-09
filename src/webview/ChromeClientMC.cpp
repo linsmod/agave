@@ -179,8 +179,12 @@ Page* ChromeClientMC::createWindow(Frame* frame, const FrameLoadRequest& request
 		if ((width == -1) || (height == -1))
 			normal = true;
 
+        /* The target name rides along: a host that keeps named windows uses it
+         * to reuse the existing tab ("_blank" or "" means "no name"). */
+        String targetName = request.frameName();
         _mc_view* view = cb_open_window(request.resourceRequest().url().url().utf8().data(),
-                                                					styles, (normal ? 0 : &rc));
+                                        targetName.isNull() ? "" : targetName.utf8().data(),
+                                        styles, (normal ? 0 : &rc));
         if (view) {
             Page * page = view->view->mainframe()->page();
             page->chrome()->setWindowFeature(features);

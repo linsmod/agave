@@ -34,7 +34,7 @@ void (*cb_loading_progress)(_mc_view*, unsigned int, int);
 void (*cb_history_status)(_mc_view*, unsigned int, unsigned int);
 void (*cb_show_tooltip)(_mc_view*, int, int, const char*);
 
-_mc_view* (*cb_open_window)(const char*, unsigned int, const _mc_rect*);
+_mc_view* (*cb_open_window)(const char*, const char*, unsigned int, const _mc_rect*);
 void (*cb_close_window)(_mc_view*);
 
 _mc_popup_menu* (*cb_create_popup_menu)(const _mc_rect*);

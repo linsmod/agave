@@ -140,22 +140,14 @@ static int agwCommandIsNavigation(int type)
     }
 }
 
-/* Commands whose meaning is a document, not a view: they were written for the
- * page that was on screen when the host issued them. Navigation, zoom, resize,
- * visibility and download control are view-level and can always run. */
+/* Commands that were written *for a document*: a script the host composed for
+ * the page it was looking at. Only eval is one - input is not. A click or a key
+ * means "the user acted on whatever is there now", exactly like a browser, so
+ * input is delivered to the current document (and a click during a navigation
+ * starts the navigation, it must never be discarded as stale). */
 static int agwCommandIsDocumentScoped(int type)
 {
-    switch (type) {
-    case AGW_CMD_EVAL:
-    case AGW_CMD_MOUSE:
-    case AGW_CMD_KEY:
-    case AGW_CMD_CHAR:
-    case AGW_CMD_SEARCH:
-    case AGW_CMD_CONTEXT:
-        return 1;
-    default:
-        return 0;
-    }
+    return type == AGW_CMD_EVAL;
 }
 
 static const char* agwCommandKindName(int type)
@@ -320,6 +312,11 @@ struct AgaveWebView {
     int                visible;
     int                forceFullPaint;
 
+    /* The window name this view answers to ("" = unnamed). Set when the page
+     * opened it with a target name; the registry walks g_views for it (see
+     * agwOpenWindowFor). */
+    char               windowName[128];
+
     /* The document epoch of the page this view is showing (see
      * macross_view_document_epoch). Refreshed on the engine thread before each
      * queued command is dispatched, and posted on the UI thread onto the
@@ -431,6 +428,11 @@ static AgaveWebView* agwByView(MaCrossView* view)
  * backend receives, so a remote backend can refuse a stale one exactly like the
  * in-process path does. */
 static uint32_t g_submitDocEpoch;
+
+/* Window lifecycle (named windows are routed here; defined with the popup
+ * helpers further down). */
+static AgaveWebView* agwOpenWindowFor(AgaveWebView* origin, const char* url,
+                                      const char* name, int loadNow);
 
 static int agwSubmitSimple(AgaveWebView* item, int kind, int a, int b, int c, int d);
 static int agwSubmitText(AgaveWebView* item, int kind, const char* text,
@@ -613,7 +615,7 @@ static void agwPost(int type, AgaveWebView* view, const char* text,
 
     agwLock();
     command.viewId = view ? view->id : 0;
-    command.docEpoch = view ? (uint32_t)view->docEpoch : 0;
+    command.docEpoch = (view && agwCommandIsDocumentScoped(type)) ? (uint32_t)view->docEpoch : 0;
     if (command.viewId > 0 &&
         ((g_queueTail + 1) % AGW_QUEUE_SIZE) != g_queueHead) {
         g_queue[g_queueTail] = command;
@@ -624,13 +626,17 @@ static void agwPost(int type, AgaveWebView* view, const char* text,
 
     /* Queued and nobody is draining: the engine is inside a script right now
      * (that is why the command cannot run). A navigation means the page it is
-     * blocking is going away, so abort the script here rather than leaving the
-     * navigation stuck behind it until the watchdog fires. The check has to
-     * follow the enqueue - asking "is this queued?" before queueing it was
-     * always false, so this interrupt never happened. */
-    if (queued && agwCommandIsNavigation(type)) {
-        if (antb_engines_js_depth() > 0)
-            antb_interrupt_all_engines();
+     * blocking is going away, so abort that script here instead of leaving the
+     * navigation behind it until the watchdog fires (100 ms).
+     *
+     * Only the view this command belongs to: the engine thread runs every view,
+     * so "something is in JS" does not mean "this navigation's page is in JS".
+     * Without the view check, opening a popup from a page's own script (or
+     * navigating another tab) aborted the caller - window.open threw
+     * "Script execution interrupted" (R158). */
+    if (queued && agwCommandIsNavigation(type) && view->busy &&
+        antb_engines_js_depth() > 0) {
+        antb_interrupt_all_engines();
     }
 
     if (!queued && command.heapText)
@@ -2043,6 +2049,38 @@ static void agwDispatchBackendEvent(AgaveWebView* item, const AgwViewEvent* ev)
             item->callbacks.on_message(item, ev->text ? ev->text : "", item->user);
         break;
 
+    case AGW_VIEW_EVENT_SERVICE_REQUEST: {
+        /* A backend that cannot create windows itself asks us: we own the
+         * host-facing window API (on_new_window / on_activate_view), and the
+         * view that asked is `item` - the one its page belongs to. */
+        if (ev->a == AGW_VIEW_SERVICE_OPEN_WINDOW) {
+            /* text = "name\nurl" (both from the page). */
+            char payload[2048];
+            char* split;
+            const char* name;
+            const char* url;
+
+            strncpy(payload, ev->text ? ev->text : "", sizeof(payload) - 1);
+            payload[sizeof(payload) - 1] = 0;
+
+            split = strchr(payload, '\n');
+            if (split) {
+                *split = 0;
+                name = payload;
+                url = split + 1;
+            } else {
+                name = "";
+                url = payload;
+            }
+
+            agwOpenWindowFor(item, url, name, 1);
+        } else if (ev->a == AGW_VIEW_SERVICE_CLOSE_WINDOW) {
+            if (item->callbacks.on_close_window)
+                item->callbacks.on_close_window(item, item->user);
+        }
+        break;
+    }
+
     case AGW_VIEW_EVENT_COMMAND_DROPPED: {
         /* The renderer refused a command: its document moved on while the
          * command was in flight, or nothing could run it. Report it exactly
@@ -2784,102 +2822,144 @@ static AgaveWebView* agwCreatePopupControl(AgaveWebView* from)
     return created;
 }
 
-/* The engine asks for a new window (a link with target=_blank).
+/* ---- named windows -------------------------------------------------------
+ * A window has a name when the page asked for one: <a target="foo">,
+ * <form target="foo">, window.open(url, 'foo'). The host owns the registry
+ * because the engine cannot see other tabs (and, with the process backend,
+ * cannot see them at all: every renderer has its own page tree). Keeping the
+ * name here gives one behaviour on both backends:
  *
- * It needs a live _mc_view* back: the engine loads the URL into the frame it
- * gets (FrameLoaderClientMC::dispatchCreatePage asks for "about:blank" and
- * then loads the real URL itself). Creating the engine view is queued work,
- * so without doing it here the callback returned a NULL view, the engine
- * gave up on the new window and the tab stayed blank.
+ *   name found   -> navigate that view (when the caller does not load for us)
+ *                   and tell the host to bring the tab forward
+ *   name unknown -> create a view, register the name, let the host make a tab
  *
- * We are on the engine thread here, so creating the view right away is the
- * same work the queued resize command would do, only in time. */
-static MaCrossView* agwOnOpenWindow(const char* url, unsigned int flags, const MC_RECT* rect)
+ * "_blank" and "" are not names: they always mean a new window. */
+static AgaveWebView* agwFindWindowByName(const char* name)
 {
-    AgaveWebView* origin = NULL;
-    AgaveWebView* created = NULL;
+    AgaveWebView* found = NULL;
     int i;
 
-    (void)flags;
-    (void)rect;
+    if (!name || !name[0] || !strcmp(name, "_blank"))
+        return NULL;
 
-    /* macross does not tell us which view opened the window; use the first live
-     * control as the reference for the host window. */
+    agwLock();
     for (i = 0; i < g_viewCount; ++i) {
-        if (g_views[i] && g_views[i]->hwnd && !g_views[i]->destroyed) {
-            origin = g_views[i];
+        AgaveWebView* v = g_views[i];
+
+        if (v && !v->destroyed && v->windowName[0] && !strcmp(v->windowName, name)) {
+            found = v;
             break;
         }
     }
+    agwUnlock();
+
+    return found;
+}
+
+/* The host learns that a view it already has should be shown now (a named
+ * target navigated another tab). Engine thread: the host must not block. */
+static void agwActivateView(AgaveWebView* item)
+{
+    if (item && item->callbacks.on_activate_view)
+        item->callbacks.on_activate_view(item, item->user);
+}
+
+/* Creates or reuses the window `name` refers to and (when loadNow) points it at
+ * `url`. Returns the control, NULL when the host refused it.
+ *
+ * loadNow = 0 means the engine loads the URL into the returned view itself
+ * (the cb_open_window path: FrameLoader::createWindow loads the request after
+ * this returns); loadNow = 1 is every other entry point. */
+static AgaveWebView* agwOpenWindowFor(AgaveWebView* origin, const char* url,
+                                      const char* name, int loadNow)
+{
+    AgaveWebView* target;
 
     if (!origin)
         return NULL;
 
-    created = agwCreatePopupControl(origin);
+    target = agwFindWindowByName(name);
 
-    if (!created)
+    if (target) {
+        agbLog(AGB_LOG_NAV, "named window '%s' reused for %s", name, url ? url : "");
+
+        if (loadNow && url && url[0] && strcmp(url, "about:blank") != 0)
+            agave_webview_navigate(target, url);
+
+        agwActivateView(target);
+        return target;
+    }
+
+    target = agwCreatePopupControl(origin);
+
+    if (!target)
         return NULL;
 
-    /* Create the engine view now - the caller loads the URL into it. */
-    agwEnsureSurface(created, created->wantWidth, created->wantHeight);
+    agbLog(AGB_LOG_NAV, "popup create url=%s", (url && url[0]) ? url : "about:blank");
 
-    if (!created->view) {
-        agave_webview_destroy(created);
+    if (name && name[0] && strcmp(name, "_blank") != 0) {
+        strncpy(target->windowName, name, sizeof(target->windowName) - 1);
+        target->windowName[sizeof(target->windowName) - 1] = 0;
+    }
+
+    /* The engine view has to exist before cb_open_window returns: the caller
+     * loads into it immediately (dispatchCreatePage asks for about:blank and
+     * then loads the real URL itself). Creating it is normally queued work, so
+     * without this the callback returned NULL and the tab stayed blank. */
+    agwEnsureSurfaceEx(target, target->wantWidth, target->wantHeight, 0);
+
+    if (!target->view) {
+        agave_webview_destroy(target);
         return NULL;
     }
 
-    /* Host side navigation: only when the engine does not load the URL
-     * itself. The engine's new-window path always asks for "about:blank" and
-     * loads the real URL into the frame it gets back; navigating the popup to
-     * about:blank as well would cancel that load. The context menu path
-     * (ChromeClient::createWindow) passes the real URL and nobody loads it
-     * for us, so we do it here. */
-    if (url && url[0] && strcmp(url, "about:blank") != 0)
-        agave_webview_navigate(created, url);
+    if (loadNow && url && url[0] && strcmp(url, "about:blank") != 0)
+        agave_webview_navigate(target, url);
 
     if (origin->callbacks.on_new_window) {
-        if (!origin->callbacks.on_new_window(origin, created, url ? url : "", origin->user)) {
+        if (!origin->callbacks.on_new_window(origin, target, url ? url : "", origin->user)) {
             agbLog(AGB_LOG_NAV, "popup blocked by host");
-            agave_webview_destroy(created);
+            agave_webview_destroy(target);
             return NULL;
         }
     }
 
-    return created->view;
+    return target;
 }
 
-/* window.open(): create a sibling control and let the host decide. */
-
-int agave_control_open_window(const char* url)
+/* Anything that opens a window needs a live view to hang it off: take the
+ * first one (the engine does not tell us which view asked, and every view
+ * belongs to the same host window). */
+static AgaveWebView* agwFirstLiveView(void)
 {
-    AgaveWebView* origin = NULL;
-    AgaveWebView* created = NULL;
     int i;
 
     for (i = 0; i < g_viewCount; ++i) {
-        if (g_views[i] && g_views[i]->hwnd && !g_views[i]->destroyed) {
-            origin = g_views[i];
-            break;
-        }
+        if (g_views[i] && g_views[i]->hwnd && !g_views[i]->destroyed)
+            return g_views[i];
     }
 
-    if (!origin)
-        return 0;
+    return NULL;
+}
 
-    created = agave_webview_create_popup(origin, url && url[0] ? url : "about:blank");
+/* The engine asks for a new window (link/form target, or a frame tree miss). */
+static MaCrossView* agwOnOpenWindow(const char* url, const char* name,
+                                    unsigned int flags, const MC_RECT* rect)
+{
+    AgaveWebView* target;
 
-    if (!created)
-        return 0;
+    (void)flags;
+    (void)rect;
 
-    if (origin->callbacks.on_new_window) {
-        if (!origin->callbacks.on_new_window(origin, created, url ? url : "", origin->user)) {
-            agbLog(AGB_LOG_NAV, "popup blocked by host");
-            agave_webview_destroy(created);
-            return 0;
-        }
-    }
+    target = agwOpenWindowFor(agwFirstLiveView(), url, name, 0);
 
-    return 1;
+    return target ? target->view : NULL;
+}
+
+/* window.open(): nobody loads the URL for us, so the control does it. */
+int agave_control_open_window(const char* url, const char* name)
+{
+    return agwOpenWindowFor(agwFirstLiveView(), url, name, 1) ? 1 : 0;
 }
 
 /* ------------------------------------------------------------------------- */

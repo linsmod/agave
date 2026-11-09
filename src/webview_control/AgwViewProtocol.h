@@ -73,6 +73,15 @@ typedef enum {
     AGW_VIEW_EVENT_EXIT             /* a = exit code */
 } AgwViewEventKind;
 
+/* Service kinds carried by AGW_VIEW_EVENT_SERVICE_REQUEST. v1 only needs the
+ * window lifecycle: a backend that cannot create a window itself (it lives in
+ * another process) asks the control, which owns the host-facing window API. */
+typedef enum {
+    AGW_VIEW_SERVICE_NONE = 0,
+    AGW_VIEW_SERVICE_OPEN_WINDOW = 1,  /* text = "name\nurl", b = MC window flags */
+    AGW_VIEW_SERVICE_CLOSE_WINDOW = 2  /* the view's page called window.close() */
+} AgwViewServiceKind;
+
 /* Capability bits reported by AGW_VIEW_EVENT_READY. */
 #define AGW_VIEW_CAP_DAMAGE   0x1  /* host understands damage rectangles */
 #define AGW_VIEW_CAP_GL       0x2  /* host may composite through GL */

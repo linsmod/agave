@@ -11275,6 +11275,7 @@ int globalOpenWindow(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
                      AntbValue* out, void*)
 {
     char* url = (argc > 0) ? antb_to_utf8(args[0]) : NULL;
+    char* name = (argc > 1) ? antb_to_utf8(args[1]) : NULL;
     int created = 0;
     AntbValue* v;
     std::string resolved;
@@ -11291,9 +11292,11 @@ int globalOpenWindow(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
     }
 
     if (g_openWindowHook)
-        created = g_openWindowHook(resolved.empty() ? (url ? url : "") : resolved.c_str());
+        created = g_openWindowHook(resolved.empty() ? (url ? url : "") : resolved.c_str(),
+                                   name ? name : "");
 
     antb_free(url);
+    antb_free(name);
 
     v = antb_make_number(engine, created ? 1.0 : 0.0);
 

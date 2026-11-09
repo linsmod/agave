@@ -40,7 +40,7 @@ extern void (*cb_change_focus)(_mc_view*, const _mc_rect*);
 
 extern void (*cb_start_layout)(_mc_view*);
 
-extern _mc_view* (*cb_open_window)(const char*, unsigned int, const _mc_rect*);
+extern _mc_view* (*cb_open_window)(const char*, const char*, unsigned int, const _mc_rect*);
 extern void (*cb_close_window)(_mc_view*);
 
 extern void (*cb_set_cursor)(_mc_cursor cursor);

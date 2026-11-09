@@ -283,12 +283,41 @@ static void* processCreate(void* owner, MC_BYTE* buffer, int width, int height, 
         static int crashUsed = 0;
         const char* crash = crashUsed ? NULL : getenv("AGB_RENDER_CRASH_MS");
 
-        if (crash && atoi(crash) > 0) {
-            crashUsed = 1;
-            snprintf(cmdline, sizeof(cmdline), "\"%s\" --ipc \"%s\" --crash-after %s",
-                     pv->exePath, pv->ipcName, crash);
-        } else {
-            snprintf(cmdline, sizeof(cmdline), "\"%s\" --ipc \"%s\"", pv->exePath, pv->ipcName);
+        /* --owner: the control that spawned this renderer (diagnostics).
+         * --tag: AGB_RENDER_TAG passed straight through, so a test can tell its
+         * own renderers from ones a developer's shell is using. A test only
+         * ever touches renderers carrying its own tag; everything else is
+         * somebody else's process and must be left alone. */
+        {
+            char tag[80] = "";
+            const char* env = getenv("AGB_RENDER_TAG");
+            size_t k;
+
+            if (env) {
+                for (k = 0; env[k] && k < sizeof(tag) - 1; ++k) {
+                    char ch = env[k];
+
+                    if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+                        (ch >= '0' && ch <= '9') || ch == '-' || ch == '_')
+                        tag[k] = ch;
+                    else
+                        tag[k] = '_';
+                }
+                tag[k] = 0;
+            }
+
+            if (crash && atoi(crash) > 0) {
+                crashUsed = 1;
+                snprintf(cmdline, sizeof(cmdline),
+                         "\"%s\" --ipc \"%s\" --owner %lu%s%s --crash-after %s",
+                         pv->exePath, pv->ipcName, (unsigned long)GetCurrentProcessId(),
+                         tag[0] ? " --tag " : "", tag, crash);
+            } else {
+                snprintf(cmdline, sizeof(cmdline),
+                         "\"%s\" --ipc \"%s\" --owner %lu%s%s",
+                         pv->exePath, pv->ipcName, (unsigned long)GetCurrentProcessId(),
+                         tag[0] ? " --tag " : "", tag);
+            }
         }
     }
 

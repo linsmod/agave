@@ -78,23 +78,40 @@ function Invoke-Probe {
     }
 }
 
+# Renderers this run owns. Every renderer carries `--tag <AGB_RENDER_TAG>` from
+# the control that spawned it, and this script gives each run a fresh tag, so:
+# a renderer without our tag belongs to a developer's own shell - never counted,
+# never killed. (The owner pid is in the command line too, for diagnostics.)
+$script:runTag = 'agvtest' + ([guid]::NewGuid().ToString('N').Substring(0, 12))
+$env:AGB_RENDER_TAG = $script:runTag
+
+function Get-StrayRenderers {
+    $stray = @()
+    foreach ($p in (Get-CimInstance Win32_Process -Filter "Name='agave_render_host.exe'" -ErrorAction SilentlyContinue)) {
+        if ($p.CommandLine -and $p.CommandLine.Contains($script:runTag))
+            { $stray += $p }
+    }
+    return $stray
+}
+
 function Assert-NoRenderer {
     param([string]$What)
 
     # Teardown is asynchronous: the control interrupts, sends EXIT and only then
     # waits/kills, so a renderer may still be unwinding when the probe returns.
     # Give it a moment before calling it a leak.
-    for ($i = 0; $i -lt 20; $i++) {
-        $left = @(Get-Process agave_render_host -ErrorAction SilentlyContinue)
+    for ($i = 0; $i -lt 30; $i++) {
+        $left = @(Get-StrayRenderers)
         if ($left.Count -eq 0) { return $true }
         Start-Sleep -Milliseconds 100
     }
 
-    $left = @(Get-Process agave_render_host -ErrorAction SilentlyContinue)
+    $left = @(Get-StrayRenderers)
     if ($left.Count -gt 0) {
         $script:failures++
-        Write-Host ("FAIL  {0}: {1} renderer process(es) left behind" -f $What, $left.Count)
-        $left | Stop-Process -Force
+        Write-Host ("FAIL  {0}: {1} orphaned renderer process(es): {2}" -f $What, $left.Count,
+                    (($left | ForEach-Object { $_.ProcessId }) -join ', '))
+        $left | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
         return $false
     }
     return $true

@@ -543,7 +543,8 @@ void FrameLoaderClientMC::setMainFrameDocumentReady(bool)
         cb_set_status(m_frame->view()->containingView(), statusDoneDefaultLabel().utf8().data());
 }
 
-Frame* FrameLoaderClientMC::dispatchCreatePage()
+Frame* FrameLoaderClientMC::dispatchCreatePage(const ResourceRequest& request,
+                                               const String& frameName)
 {
     agbLog(AGB_LOG_NAV, "popup open (window.open/target=_blank)");
 
@@ -560,7 +561,13 @@ Frame* FrameLoaderClientMC::dispatchCreatePage()
             false, false };
 
         unsigned int styles = 0x3F; // a full feature window not modal.
-        _mc_view* view = cb_open_window("about:blank", styles, NULL);
+        /* The URL and the target name are known here - hand them to the host.
+         * An in-process host returns a view and the loader loads into it; a host
+         * whose views live in another process returns NULL, and the URL it just
+         * received is what its own window/tab navigates to. */
+        _mc_view* view = cb_open_window(request.url().url().utf8().data(),
+                                        frameName.isNull() ? "_blank" : frameName.utf8().data(),
+                                        styles, NULL);
         if (view){
             view->view->mainframe()->page()->chrome()->setWindowFeature(features);
             return view->view->mainframe();

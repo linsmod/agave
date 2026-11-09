@@ -168,6 +168,45 @@ static void onPostMessage(const char* message)
         pushEvent(AGW_VIEW_EVENT_MESSAGE, 0, 0, 0, 0, message, (int)strlen(message));
 }
 
+/* Window lifecycle. This process cannot create a window (the control owns the
+ * host-facing API and the popup would live in yet another process), so both
+ * requests travel as service events: open_window carries "name\nurl", and the
+ * control reuses a named window or makes a new tab. */
+static MaCrossView* onOpenWindow(const char* url, const char* name,
+                                 unsigned int flags, const MC_RECT* rect)
+{
+    char payload[2048];
+
+    (void)rect;
+
+    snprintf(payload, sizeof(payload), "%s\n%s", name ? name : "", url ? url : "");
+    pushEvent(AGW_VIEW_EVENT_SERVICE_REQUEST, AGW_VIEW_SERVICE_OPEN_WINDOW,
+              (int)flags, 0, 0, payload, (int)strlen(payload));
+
+    /* No view to return: the window is created by the control, in its own
+     * process. The request has already carried the URL there. */
+    return NULL;
+}
+
+static void onCloseWindow(MaCrossView* view)
+{
+    (void)view;
+    pushEvent(AGW_VIEW_EVENT_SERVICE_REQUEST, AGW_VIEW_SERVICE_CLOSE_WINDOW,
+              0, 0, 0, NULL, 0);
+}
+
+/* window.open(): same request over the same channel; returning 1 gives the page
+ * its (stub) window object instead of null. */
+static int onOpenWindowHook(const char* url, const char* name)
+{
+    char payload[2048];
+
+    snprintf(payload, sizeof(payload), "%s\n%s", name ? name : "", url ? url : "");
+    pushEvent(AGW_VIEW_EVENT_SERVICE_REQUEST, AGW_VIEW_SERVICE_OPEN_WINDOW,
+              0, 0, 0, payload, (int)strlen(payload));
+    return 1;
+}
+
 static void onInvalidate(MaCrossView* view, const MC_RECT* rect)
 {
     (void)view;
@@ -424,10 +463,13 @@ int main(int argc, char** argv)
         info.cb_set_status       = onStatus;
         info.cb_loading_progress = onProgress;
         info.cb_error            = onError;
+        info.cb_open_window      = onOpenWindow;
+        info.cb_close_window     = onCloseWindow;
         macross_set_callback(&info);
     }
 
     macross_set_post_message_hook(onPostMessage);
+    macross_set_open_window_hook(onOpenWindowHook);
 
     {
     }

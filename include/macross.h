@@ -547,8 +547,13 @@ MACROSS_API MC_STATUS macross_view_set_visible(MaCrossView* view, int visible);
  * The engine asks this hook to create a new view. Returning non-zero means the
  * hook created (and took ownership of) a new MaCrossView; the engine will load
  * the URL into it. Returning 0 blocks the popup.
+ *
+ * \param utf8_url  The URL the script asked for.
+ * \param utf8_name The window name (`window.open(url, name)`), "" when empty.
+ *                  A host that keeps named windows routes a repeated name to the
+ *                  existing one instead of creating another.
  */
-typedef int (*MC_OPEN_WINDOW_HOOK)(const char* utf8_url);
+typedef int (*MC_OPEN_WINDOW_HOOK)(const char* utf8_url, const char* utf8_name);
 MACROSS_API void macross_set_open_window_hook(MC_OPEN_WINDOW_HOOK hook);
 
 /**
@@ -1309,17 +1314,22 @@ typedef struct _mc_callback_t {
 	void (*cb_context_menu)(MaCrossView* view, const MC_CONTEXT_MENU_DATA* menu);
 
     /**
-     * \fn MaCrossView* (*cb_open_window)(const char* utf8_url, unsigned int flags, const MC_RECT* rect)
+     * \fn MaCrossView* (*cb_open_window)(const char* utf8_url, const char* utf8_name, unsigned int flags, const MC_RECT* rect)
      * \brief The callback function. 
 	 * 			which is used to open a new window.
      *
      * \param utf8_url  The URL visited by this window, with encoding UTF-8.
+     * \param utf8_name The target/window name ("_blank" for no name, or the
+     *                  <a target="..."> / form target). A host that keeps a
+     *                  registry of named windows returns the existing view for
+     *                  a name it already has, so a named target reuses that tab.
      * \param flags     The window flags.
      * \param rect      The rectangle of this window. NULL for normal.
 	 *
      * \return The new webview on success, NULL on failed.
      */
-    MaCrossView* (*cb_open_window)(const char* utf8_url, unsigned int flags, const MC_RECT* rect);
+    MaCrossView* (*cb_open_window)(const char* utf8_url, const char* utf8_name,
+                                   unsigned int flags, const MC_RECT* rect);
 
     /**
      * \fn void (*cb_close_window)(MaCrossView* view)

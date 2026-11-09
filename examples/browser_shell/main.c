@@ -648,6 +648,10 @@ static void applyZoomToActive(void)
 static void setActiveTab(int index);
 static void createTab(const char* url);
 static void onCloseWindow(AgaveWebView* view, void* user);
+static void onActivateView(AgaveWebView* view, void* user);
+/* Set when --probe was given: defined with the probe harness further down, used
+ * by the callbacks above. */
+static int g_probeMode;
 
 /* Page Visibility for the whole shell: exactly the active tab is visible, and
  * nothing is when the window is minimized (Chrome does the same, and a minimized
@@ -2073,6 +2077,7 @@ static void createTab(const char* url)
     callbacks.on_context_menu = onContextMenu;
     callbacks.on_unresponsive = onUnresponsive;
     callbacks.on_command_dropped = onCommandDropped;
+    callbacks.on_activate_view = onActivateView;
 
     tab->used = 1;
     tab->view = agave_webview_create(g_hwnd, 0, TAB_HEIGHT + TOOLBAR_H,
@@ -2464,6 +2469,27 @@ static void onCloseWindow(AgaveWebView* view, void* user)
         PostMessageA(g_hwnd, AGW_SHELL_CLOSE_TAB, (WPARAM)view, 0);
 }
 
+/* A named target (target="foo" / window.open(url,"foo")) navigated a tab the
+ * shell already has: bring it forward. Same rule as close - the tab table is
+ * main-thread state, so the switch happens there. */
+#define AGW_SHELL_ACTIVATE_TAB (WM_APP + 23)
+
+static void onActivateView(AgaveWebView* view, void* user)
+{
+    (void)user;
+
+    agbLog(AGB_LOG_SHELL, "activate view (named window target)");
+
+    if (g_probeMode) {
+        printf("activate=1\n");
+        fflush(stdout);
+        return;
+    }
+
+    if (g_hwnd)
+        PostMessageA(g_hwnd, AGW_SHELL_ACTIVATE_TAB, 0, (LPARAM)view);
+}
+
 static LRESULT CALLBACK shellProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
     switch (message) {
@@ -2473,6 +2499,19 @@ static LRESULT CALLBACK shellProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM
         for (i = 0; i < MAX_TABS; ++i) {
             if (g_tabs[i].used && g_tabs[i].view == (AgaveWebView*)wParam) {
                 closeTab(i);
+                break;
+            }
+        }
+        return 0;
+    }
+
+    case AGW_SHELL_ACTIVATE_TAB: {
+        int i;
+
+        for (i = 0; i < MAX_TABS; ++i) {
+            if (g_tabs[i].used && g_tabs[i].view == (AgaveWebView*)lParam) {
+                if (i != g_activeTab)
+                    setActiveTab(i);
                 break;
             }
         }
@@ -3760,6 +3799,7 @@ static int probeRun(const char* url)
     callbacks.on_context_menu = probeOnContextMenu;
     callbacks.on_unresponsive = probeOnUnresponsive;
     callbacks.on_command_dropped = probeOnCommandDropped;
+    callbacks.on_activate_view = onActivateView;
 
     g_probeView = agave_webview_create(g_probeWnd, 0, 0, 1100, 800, &callbacks, NULL);
     if (!g_probeView) {
@@ -4180,8 +4220,31 @@ static int probeRun(const char* url)
     }
 
     if (g_probeNewView) {
-        const char* u = agave_webview_url(g_probeNewView);
-        const char* t = agave_webview_title(g_probeNewView);
+        const char* u;
+        const char* t;
+        int waited;
+
+        /* The new tab loads asynchronously (another renderer under the process
+         * backend): give it a moment to reach its own title before reporting,
+         * so the suite can assert what the window ended up showing. The message
+         * loop below is gone at this point, so pump by hand. */
+        for (waited = 0; waited < 150; ++waited) {
+            MSG msg;
+
+            while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) {
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+
+            t = agave_webview_title(g_probeNewView);
+            if (t && t[0])
+                break;
+
+            Sleep(20);
+        }
+
+        u = agave_webview_url(g_probeNewView);
+        t = agave_webview_title(g_probeNewView);
 
         printf("[%9.1fms] [probe] new window url=%s title=%s\n", agbLogElapsedMs(),
                u && u[0] ? u : "(none)", t && t[0] ? t : "(none)");

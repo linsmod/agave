@@ -156,7 +156,21 @@ WebView::WebView(struct _mc_view* view, unsigned char* buffer, int width, int he
     frameView->deref();
 
     d->m_frame->init();
-    d->m_frame->page()->setGroupName(String("PageGroup"));
+
+    /* One group per view. The group is the "frame namespace" the loader searches
+     * for a named target: sharing one group across every view meant a named
+     * target could be resolved to a frame in *another* tab inside the engine,
+     * so the host never heard about it - it could neither reuse the tab (that
+     * worked by accident) nor switch to it (it never did), and it could not work
+     * across processes at all (process backend). With a private group the
+     * loader asks the host (cb_open_window carries the target name) and the host
+     * owns the named-window registry. Dialogs still pause only their own page,
+     * which is what happens with the process backend anyway. */
+    {
+        static unsigned s_pageGroupId;
+
+        d->m_frame->page()->setGroupName(String("PageGroup-") + String::number(++s_pageGroupId));
+    }
 }
 
 WebView::~WebView()

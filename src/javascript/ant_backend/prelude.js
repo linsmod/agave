@@ -440,9 +440,12 @@
       finally { g.__agbActivateSlot(old); }
     };
   };
-  g.open = function (url) {
+  g.open = function (url, name) {
     var ok = false;
-    try { ok = !!__agbOpenWindow(url == null ? '' : String(url)); } catch (e) { ok = false; }
+    try {
+      ok = !!__agbOpenWindow(url == null ? '' : String(url),
+                             name == null ? '' : String(name));
+    } catch (e) { ok = false; }
     if (!ok) return null;
     return { closed: false, focus: function () {}, blur: function () {},
       close: function () { this.closed = true; }, postMessage: function () {} };

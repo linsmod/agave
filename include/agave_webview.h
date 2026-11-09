@@ -102,6 +102,13 @@ typedef struct AgaveWebViewCallback {
                             unsigned int busy_ms, const char* stack_path,
                             void* user);
 
+    /* A view the host already has should be shown now: a page navigated it
+     * through a named target (target="foo" / window.open(url,"foo")) and the
+     * browser semantics are "that tab comes forward". Fires on the engine
+     * thread - post to your UI thread instead of switching widgets inline.
+     * Optional; hosts with a single view or no tab strip can ignore it. */
+    void (*on_activate_view)(AgaveWebView* view, void* user);
+
     /* A command the host issued could not be delivered to the page: the view
      * had no page yet, the engine was not in a state to run it, or - the case
      * this exists for - the document it was issued against was replaced by a
