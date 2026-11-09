@@ -755,6 +755,11 @@
   动作：把 `requestAnimationFrame` 换成宿主的真 rAF（帧泵里按可见 view 出帧），或在垫片里按
   `document.hidden` 把回调排队、`visibilitychange` 恢复时补发；判据：隐藏 tab 的 rAF 计数停止增长，
   显示后恢复，`run_hidden_view_tests.ps1` 加一条。
+- 已知缺口（新发现 2026-11-09，待查）：**导航期间提交的宿主命令可能被静默丢掉**。`agave_multiview_probe`
+  的 local 对照偶尔拿不到 `blocked=1`——A 的 `while(true){}` 根本没开始跑（已改成先 `title='spin'` 再死循环，
+  探针自己确认"确实卡住了"）。怀疑是 eval 命令落在了 document 切换窗口里：命令进了队列，但处理时文档已经换了。
+  这影响任何"加载中就把脚本/输入塞进去"的宿主（shell 的地址栏回车、脚本注入）。动作：给队列项加一个
+  目标文档代数，跨代丢弃时回调一次明确错误（而不是无声无息）；判据：导航中 eval 要么执行、要么报错，不许两种都没有。
 - **路线已定（2026-11-09）**：不是"每 view 一条引擎线程"，而是**渲染后端可插拔**
   （local / Win32 子进程 / RVVM 实例，共用一个"渲染后端协议"），设计、协议 v1、三后端映射、
   分批计划与实测数据都在 [design-render-backend.md](design-render-backend.md)。
@@ -778,7 +783,9 @@
 - 验收：两个 tab，一个跑 `while(true){}`，另一个点击/刷新在 200 ms 内响应（当前要等 1.5 s 中断）；
   其余验收数字见设计文档 §1/§8。**验收 1 已可复现**（`AGB_VIEW_BACKEND=process` +
   `agave_multiview_probe.exe`：B 的延迟 31 ms，local 对照 `blocked=1`；收在
-  `run_process_backend_tests.ps1` 的 7 项里）。
+  `run_process_backend_tests.ps1` 的 13 项里）。process 传输上的两项实测已进设计文档 §6.3：
+  一次镜像拷贝 ~0.45 ms/帧（1100×800，首帧冷启动 ~3.1 ms），帧发布→控件 poll 平均 15.8 ms
+  （轮询节奏的下限，RVVM 那一路用事件驱动的 `BP_WAIT` 不该复现这个数）。
 
 ### P2 工具栏文本闪烁（`<` / `>` 在刷新时闪）
 
