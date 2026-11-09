@@ -57,7 +57,15 @@ exe 旁的 `prelude.js` / `polyfills.js`（运行时 JS 资产，可热替换）
 | 显示 | `agave_webview_set_zoom` / `agave_webview_zoom` |
 | 其它 | `agave_webview_set_focus` / `set_user_agent` / `set_download_dir` / `set_log` |
 
-回调：`on_title`、`on_url`、`on_progress`、`on_status`、`on_error`、`on_download`、`on_new_window`（保留，引擎当前不触发）。
+回调：`on_title`、`on_url`、`on_progress`、`on_status`、`on_error`、`on_crashed`、`on_message`、
+`on_dialog`、`on_context_menu`、`on_close_window`、`on_unresponsive`、`on_command_dropped`、
+`on_download`、`on_new_window`（保留，引擎当前不触发）。
+
+**入队命令的契约**（R157）：`agave_webview_eval` 这类入队操作没有返回值，所以"没送到"必须能被听见——
+每条命令要么执行、要么回调一次 `on_command_dropped(view, kind, reason, user)`。原因只有三种：
+视图还没有页面（`no page yet`）、后端里没有可用文档（`no live document`）、命令等到导航提交之后才
+轮到自己（`document replaced by a navigation`，按文档代数丢弃，不会拿去脚本新页面）。导航/缩放/尺寸/
+可见性不属于任何文档，永远不丢。
 
 ## 线程模型
 

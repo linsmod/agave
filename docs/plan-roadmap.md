@@ -755,11 +755,11 @@
   动作：把 `requestAnimationFrame` 换成宿主的真 rAF（帧泵里按可见 view 出帧），或在垫片里按
   `document.hidden` 把回调排队、`visibilitychange` 恢复时补发；判据：隐藏 tab 的 rAF 计数停止增长，
   显示后恢复，`run_hidden_view_tests.ps1` 加一条。
-- 已知缺口（新发现 2026-11-09，待查）：**导航期间提交的宿主命令可能被静默丢掉**。`agave_multiview_probe`
-  的 local 对照偶尔拿不到 `blocked=1`——A 的 `while(true){}` 根本没开始跑（已改成先 `title='spin'` 再死循环，
-  探针自己确认"确实卡住了"）。怀疑是 eval 命令落在了 document 切换窗口里：命令进了队列，但处理时文档已经换了。
-  这影响任何"加载中就把脚本/输入塞进去"的宿主（shell 的地址栏回车、脚本注入）。动作：给队列项加一个
-  目标文档代数，跨代丢弃时回调一次明确错误（而不是无声无息）；判据：导航中 eval 要么执行、要么报错，不许两种都没有。
+- 已修（2026-11-09，R157）：**导航期间提交的宿主命令不再静默消失**。命令按"发出时的文档代数"盖章，
+  跨代就丢弃并回调 `on_command_dropped(view, kind, reason, user)`；本地后端用 `submit` 返回 0 表达同一件事，
+  远端后端回 `COMMAND_DROPPED` 事件（`AGB_VIEW_EVENT_DOCUMENT` 保证静态页面提交后宿主也学得到新代数）。
+  判据（`run_process_backend_tests.ps1` 16 项）：无页面时的 eval、navigate 刚返回就 eval、`AGB_IPC_STALE_EPOCH=1`
+  三种情形都必须"执行或报错"。顺带修掉 `agwPost()` 里 `queued` 判空早于入队的死条件——导航现在真的会打断卡住脚本。
 - **路线已定（2026-11-09）**：不是"每 view 一条引擎线程"，而是**渲染后端可插拔**
   （local / Win32 子进程 / RVVM 实例，共用一个"渲染后端协议"），设计、协议 v1、三后端映射、
   分批计划与实测数据都在 [design-render-backend.md](design-render-backend.md)。

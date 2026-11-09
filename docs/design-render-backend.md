@@ -98,9 +98,23 @@ RVVM 后端用 guest 内存 + `virtpass_browser` 的 ecall；local 后端只是�
 | `VIEW_READY` | `abi_version, capabilities` | 版本/能力协商（缩放、damage、GL 合成） |
 | `FRAME` | `buffer_id, seq, damage[4n], format, stride` | **主路径**：BGRA 画布 + 脏矩形；每帧 ack 后才回收 buffer |
 | `TITLE` / `PROGRESS` / `URL` | `utf8` / `pct` | 与现有回调一致 |
+| `DOCUMENT` | `epoch` | 主 frame 提交了新文档（`Page::documentEpoch`）；宿主据此给后续命令盖章。**静态页面提交后可能没有任何其他事件**，缺了它宿主的代数会停在上一代 |
+| `COMMAND_DROPPED` | `kind, expected_epoch, current_epoch, reason` | 后端没能执行某条命令（文档已换 / 没有可用文档）。宿主转成 `on_command_dropped`；本地后端用 `submit` 返回 0 表达同一件事 |
 | `SERVICE_REQUEST` | `open_window/dialog/download/clipboard/file_picker/fetch?` | 一级请求/应答（跨进程必须，ndk 路径没有） |
 | `UNRESPONSIVE` | `busy_ms` | 接现有看门狗，按 tab 报告（advisory） |
 | `EXIT` / `CRASH` | `code` | 后端死亡 → sad tab + reload 新实例 |
+
+### 4.2.1 命令归属：文档代数
+
+宿主发出的命令要么执行、要么得到一个明确的"丢弃"，不允许无声消失（R157）。做法是给每条
+**记录型命令**（eval / 输入 / 查找 / 右键）盖上"发出时的文档代数"：
+
+- 代数由引擎提供（`Page::documentEpoch`，`Frame::setDocument()` 在**主 frame** 上自增），
+  宿主的镜像值每轮引擎迭代刷新；命中的命令照跑。
+- 后端在执行前比对：代数不一致 → 丢弃并回 `COMMAND_DROPPED`；本地后端直接在 drain 时比对。
+- 导航 / zoom / resize / visibility 不属于任何文档，不盖代数、永不被丢。
+- `docEpoch == 0` 表示"未盖章"（还没有文档），此时不做比对，由后端自己判断能不能跑。
+
 
 ### 4.3 帧与背压
 

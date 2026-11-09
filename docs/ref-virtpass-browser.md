@@ -78,8 +78,20 @@ host 无法安全地进 guest 上下文；50ms 轮询把"卡死 tab 关闭/中�
 结构体与 agave 的 `AgwViewCommand` / `AgwViewEvent` 一一对应（`AgwViewProtocol.h`），
 B 跳用 `AgwIpcCommand` / `AgwIpcEvent` 的 wire 形态（文本用 offset 而非指针）。
 **语义不变**：可见性、焦点、resize、鼠标/键盘/文本/预编辑、导航/reload/stop/back/forward/eval/
-search/zoom/context-menu；事件侧 ready/frame/title/progress/url/status/message/service-request/
-unresponsive/exit。
+search/zoom/context-menu；事件侧 ready/frame/title/progress/url/status/message/document/
+command-dropped/service-request/unresponsive/exit。
+
+v1 的 wire 结构体各多一个 `docEpoch`（`uint32_t`，追加在末尾，偏移不变）：
+
+- `AgwIpcCommand.docEpoch`：命令发出时的文档代数（`macross_view_document_epoch`）。
+  guest 在执行前比对：`cmdEpoch && 当前代数 && 两者不等` → 丢弃并回 `COMMAND_DROPPED`，
+  **不要**把命令套到新文档上执行（agave 侧 `AgwViewBackendProcess.c` 与
+  `examples/render_host/main.c` 是现成实现，照抄即可）。
+- `AgwIpcEvent.docEpoch`：事件产生时的代数。`DOCUMENT` 事件（`a` = 新代数）必须在
+  **每次主 frame 提交文档后**发一次，即使这一帧没有任何别的事件——静态页面否则会让宿主
+  停在旧代数，然后误丢导航后的第一条命令。
+- `COMMAND_DROPPED`（`a` = 命令 kind，`b` = 期望代数，`c` = 当前代数，`text` = 原因短语）：
+  宿主把它变成 `on_command_dropped`。这是"命令要么执行、要么报错"的唯一出口。
 
 新增字段：`interruptRequested`（`volatile LONG`，放在 `AgwIpcHeader` 保留区）。
 服务 kind 枚举 v1：`1 open_window, 2 dialog, 3 download, 4 clipboard, 5 file_picker,

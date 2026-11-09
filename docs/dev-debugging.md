@@ -61,6 +61,13 @@ process 下 --shot 抓的是共享 canvas 拷进 mirror 的那一帧。
 AGB_IPC_STATS=1 打开 S3 的两条量化输出（stderr）：renderer 发布帧时打时间戳，控件每 2 s 汇总一行
 `[ipc] frames=<n> latency_avg_us=… max_us=…`（发布→poll 看到 FRAME 的延迟）；控件每次镜像拷贝打
 `[ipc] copy_us=…`（共享段 → 控件 mirror 的一次 memcpy，1100×800 约 430–700 µs、首帧冷启动 ~3.1 ms）。
+**命令没有执行时查什么**：`on_command_dropped` 回调（宿主自报 `dropped=<n> kind=eval reason=…`），
+`AGB_CMD_LOG=1` 还会把同样的行写进 `agb_*.log`。原因短语就三种——`no page yet`（视图还没有页面）、
+`no live document`（后端里没有可用文档）、`document replaced by a navigation`（命令排在导航提交之后，
+按文档代数丢掉，R157）。`AGB_IPC_STALE_EPOCH=1` 是渲染进程的测试钩子：把收到的每条盖章命令都当成
+过期，用来确定性复现"拒收 → 事件 → 控件 → 宿主"这条链（真实窗口太窄，撞不稳）。
+探针侧两个开关对应这件事：`--eval-before-nav <js>`（还没有页面时 eval）和 `--eval-early <js>`
+（navigate 刚返回就 eval；配 `--nav-after` 可以覆盖"旧文档还在屏上"的那一半）。
 所有 renderer 都挂在一个 KILL_ON_JOB_CLOSE 的 Job Object 上：控制进程无论怎么结束，renderer 都会
 被一起收掉（正常关 tab 仍走 interrupt → EXIT → Terminate 的干净路径）。
 多 view 的并行判据用 uild-zig-native\agave_multiview_probe.exe：两个 view，A 跑
