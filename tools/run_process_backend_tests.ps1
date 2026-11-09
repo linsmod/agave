@@ -181,7 +181,8 @@ $text = (Get-Content $mvOut -Raw) -as [string]
 $pong = if ($text -match 'pong_ms=(\d+)') { [int]$Matches[1] } else { -1 }
 $alive = if ($text -match 'alive_ms=(\d+)') { [int]$Matches[1] } else { -1 }
 
-if ($p.ExitCode -eq 0 -and $pong -ge 0 -and $pong -lt 200 -and $alive -ge 0 -and $alive -lt 300) {
+if ($p.ExitCode -eq 0 -and $pong -ge 0 -and $pong -lt 200 -and $alive -ge 0 -and
+    $alive -lt 300 -and $text -notmatch 'spin=0') {
     Write-Host ("PASS  process backend: stuck tab does not block the other (pong={0} ms), interrupt reaches it ({1} ms)" -f $pong, $alive)
 } else {
     $failures++
@@ -198,7 +199,7 @@ $p = Start-Process -FilePath $mv -NoNewWindow -PassThru -Wait `
      -RedirectStandardOutput $mvOut -RedirectStandardError (Join-Path $build 'multiview_err.txt')
 $text = (Get-Content $mvOut -Raw) -as [string]
 
-if ($p.ExitCode -eq 0 -and $text -match 'blocked=1') {
+if ($p.ExitCode -eq 0 -and $text -match 'blocked=1' -and $text -notmatch 'spin=0') {
     Write-Host "PASS  local baseline: the stuck tab blocks the other (shared engine thread)"
 } else {
     $failures++
@@ -247,7 +248,41 @@ if ($p.ExitCode -eq 0 -and $destroy -ge 0 -and $destroy -lt 500) {
 Assert-NoRenderer 'hung-tab close' | Out-Null
 Remove-Item $mvOut -ErrorAction SilentlyContinue
 
-# 9. default backend: the local path still runs the same page
+# 9. protocol cost: AGB_IPC_STATS reports frame publish -> control poll latency and
+#    the mirror copy. The copy is the number the RVVM handoff cares about (one
+#    full copy per frame on that path); the latency includes this loop's poll
+#    cadence, so the bound is loose.
+$env:AGB_IPC_STATS = '1'
+try {
+    $stats = Invoke-Probe -Page (Join-Path $pages 'cap_hidden_view.html') -Wait 1600 -Settle 200 `
+        -Js 'probeExit("stats");'
+} finally {
+    Remove-Item Env:AGB_IPC_STATS -ErrorAction SilentlyContinue
+}
+$statsText = $stats.Stdout + $stats.Stderr
+$copyMax = 0
+$copyMin = 0
+foreach ($m in [regex]::Matches($statsText, 'copy_us=(\d+)')) {
+    $v = [int]$m.Groups[1].Value
+    if ($v -gt $copyMax) { $copyMax = $v }
+    if ($copyMin -eq 0 -or $v -lt $copyMin) { $copyMin = $v }
+}
+$frameLines = [regex]::Matches($statsText, 'frames=\d+ latency_avg_us=\d+ max_us=\d+')
+
+# The first frame of a process copies cold (page cache miss + first touch of the
+# mirror DIB), so it is 2.5-3.2 ms; every later copy is ~0.5-0.7 ms. Bound the
+# steady state (min) and keep a loose sanity ceiling on the cold one, otherwise
+# this case flakes on whichever run happens to stop after one frame.
+if ($stats.Code -eq 0 -and $frameLines.Count -gt 0 -and $copyMin -gt 0 -and
+    $copyMin -lt 2000 -and $copyMax -lt 8000) {
+    Write-Host ("PASS  protocol stats: copy min {0} us / max {1} us" -f $copyMin, $copyMax)
+} else {
+    $failures++
+    Write-Host ("FAIL  protocol stats (exit {0}, frames={1}, copyMin={2}, copyMax={3})" -f $stats.Code, $frameLines.Count, $copyMin, $copyMax)
+}
+Assert-NoRenderer 'stats' | Out-Null
+
+# 10. default backend: the local path still runs the same page
 $local = Invoke-Probe -Page (Join-Path $pages 'cap_hidden_view.html') `
     -Js 'probeExit("title=" + document.title);' -Backend $null
 

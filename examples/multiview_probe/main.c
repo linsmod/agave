@@ -33,6 +33,7 @@ typedef struct {
     volatile LONG loaded;
     volatile LONG pongAt;   /* GetTickCount() of the last "pong" */
     volatile LONG aliveAt;  /* GetTickCount() of the last "alive" */
+    volatile LONG spinAt;   /* GetTickCount() of the last "spin" (A got stuck) */
 } ProbeView;
 
 /* document.title is per view in both backends (the local one routes the title
@@ -55,6 +56,8 @@ static void onTitle(AgaveWebView* view, const char* title, void* user)
         InterlockedExchange(&pv->pongAt, now);
     else if (!strcmp(title, "alive"))
         InterlockedExchange(&pv->aliveAt, now);
+    else if (!strcmp(title, "spin"))
+        InterlockedExchange(&pv->spinAt, now);
 }
 
 static void onMessage(AgaveWebView* view, const char* message, void* user)
@@ -206,10 +209,22 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    /* A gets stuck; B must still answer. */
+    /* A gets stuck; B must still answer. The title is set *before* the loop so
+     * this side can tell "A is really spinning" from "A's eval never ran" - the
+     * latter used to happen when the eval was posted before A's document was
+     * ready, and it made the local baseline look unblocked (flaky case). */
     if (!noBlock) {
-        agave_webview_eval(a.view, "while (true) {}");
+        int attempt;
+
+        for (attempt = 0; attempt < 2 && !a.spinAt; ++attempt) {
+            agave_webview_eval(a.view, "document.title='spin'; while (true) {}");
+            waitFlag(&a.spinAt, attempt == 0 ? 2000 : 3000);
+        }
+
         pump(150);
+
+        if (!a.spinAt)
+            printf("spin=0\n");   /* A never got stuck: the numbers below lie */
     }
 
     t0 = (LONG)GetTickCount();

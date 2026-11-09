@@ -1925,6 +1925,7 @@ static int agwCopyRemoteFrame(AgaveWebView* item)
     int w = 0, h = 0, pitch = 0;
     uint32_t seq = 0;
     int copied = 0;
+    LARGE_INTEGER copyStart = {0}, copyFreq = {0};
 
     if (!item || !item->backendView || !item->backend || !item->backend->frame)
         return 0;
@@ -1932,6 +1933,9 @@ static int agwCopyRemoteFrame(AgaveWebView* item)
     src = item->backend->frame(item->backendView, &w, &h, &pitch, &seq);
     if (!src)
         return 0;
+
+    QueryPerformanceCounter(&copyStart);
+    QueryPerformanceFrequency(&copyFreq);
 
     agwLock();
     if (item->mirrorBits && item->width > 0 && item->height > 0 && w > 0 && h > 0) {
@@ -1951,6 +1955,15 @@ static int agwCopyRemoteFrame(AgaveWebView* item)
         copied = 1;
     }
     agwUnlock();
+
+    if (getenv("AGB_IPC_STATS") && copied) {
+        LARGE_INTEGER now;
+
+        QueryPerformanceCounter(&now);
+        fprintf(stderr, "[ipc] copy_us=%lld\n",
+                (long long)((now.QuadPart - copyStart.QuadPart) * 1000000 / copyFreq.QuadPart));
+        fflush(stderr);
+    }
 
     if (copied) {
         AgwFrameAck ack;

@@ -96,6 +96,18 @@ static void pushEvent(int kind, int a, int b, int c, int d,
     }
 }
 
+/* Microseconds from QueryPerformanceCounter: both sides run on one machine and
+ * share the counter, so a frame event's stamp is comparable in the control
+ * (the M1 measurement of the design). */
+static int64_t qpcUs(void)
+{
+    LARGE_INTEGER c, f;
+
+    QueryPerformanceCounter(&c);
+    QueryPerformanceFrequency(&f);
+    return (int64_t)(c.QuadPart * 1000000 / f.QuadPart);
+}
+
 static void pushFrameEvent(uint32_t seq, int width, int height)
 {
     LONG slot = InterlockedIncrement(&g_hdr->eventWrite) - 1;
@@ -103,6 +115,7 @@ static void pushFrameEvent(uint32_t seq, int width, int height)
 
     memset(ev, 0, sizeof(*ev));
     ev->kind = AGW_VIEW_EVENT_FRAME;
+    ev->timeUs = qpcUs();
     ev->frameBufferId = 1;
     ev->frameSeq = seq;
     ev->damage[0] = 0;

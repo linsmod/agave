@@ -20,6 +20,15 @@
 #include "AgwViewIpc.h"
 #include "../webview/AgbLog.h"
 
+static int64_t qpcUs(void)
+{
+    LARGE_INTEGER c, f;
+
+    QueryPerformanceCounter(&c);
+    QueryPerformanceFrequency(&f);
+    return (int64_t)(c.QuadPart * 1000000 / f.QuadPart);
+}
+
 /* One kill-on-close job for every renderer this process starts: whatever ends
  * the control (a clean shutdown, a crash, the probe calling ExitProcess) takes
  * the rendersers with it, instead of leaving orphans behind. */
@@ -64,6 +73,12 @@ typedef struct {
      * must keep its own text, or a later event would overwrite an earlier one
      * before the caller dispatches it. */
     char          evtTextBuf[8][1024];
+
+    /* AGB_IPC_STATS=1: frame publish -> this process seeing the event (M1 of
+     * the design), printed every 30 frames. */
+    unsigned long framesSeen;
+    int64_t       frameLatencySumUs;
+    int64_t       frameLatencyMaxUs;
 } ProcessView;
 
 /* The renderer sits next to the host executable (agave_shell / the embedder):
@@ -476,6 +491,25 @@ static int processPoll(void* view, AgwViewEvent* out, int maxEvents)
                 slot[wire->textLen] = 0;
                 ev->text = slot;
                 ev->textLen = wire->textLen;
+            }
+        }
+
+
+        if (ev->kind == AGW_VIEW_EVENT_FRAME && wire->timeUs > 0 && getenv("AGB_IPC_STATS")) {
+            int64_t latency = qpcUs() - wire->timeUs;
+
+            if (latency < 0)
+                latency = 0;
+
+            pv->frameLatencySumUs += latency;
+            if (latency > pv->frameLatencyMaxUs)
+                pv->frameLatencyMaxUs = latency;
+            if (++pv->framesSeen % 30 == 0) {
+                fprintf(stderr, "[ipc] frames=%lu latency_avg_us=%lld max_us=%lld\n",
+                        pv->framesSeen,
+                        (long long)(pv->frameLatencySumUs / (int64_t)pv->framesSeen),
+                        (long long)pv->frameLatencyMaxUs);
+                fflush(stderr);
             }
         }
 

@@ -58,6 +58,9 @@ AGB_RENDER_LOG=1 让 renderer 把命令/事件记录到 **exe 旁的 gave_rende
 专门复测"渲染进程崩溃 → 控件报 load error 而不是卡住"；AGB_PROBE_RESPAWN=1 让探针在崩溃后对同一
 view load_html 一个页面，验证"崩溃后视图可重新拉起"（shell 的 sad tab 走同一条路）。
 process 下 --shot 抓的是共享 canvas 拷进 mirror 的那一帧。
+AGB_IPC_STATS=1 打开 S3 的两条量化输出（stderr）：renderer 发布帧时打时间戳，控件每 2 s 汇总一行
+`[ipc] frames=<n> latency_avg_us=… max_us=…`（发布→poll 看到 FRAME 的延迟）；控件每次镜像拷贝打
+`[ipc] copy_us=…`（共享段 → 控件 mirror 的一次 memcpy，1100×800 约 430–700 µs、首帧冷启动 ~3.1 ms）。
 所有 renderer 都挂在一个 KILL_ON_JOB_CLOSE 的 Job Object 上：控制进程无论怎么结束，renderer 都会
 被一起收掉（正常关 tab 仍走 interrupt → EXIT → Terminate 的干净路径）。
 多 view 的并行判据用 uild-zig-native\agave_multiview_probe.exe：两个 view，A 跑
