@@ -27,9 +27,10 @@ ant 的反直觉行为（字面量属性名、`typeof`、`delete` 等）见 [ref
 
 - **UNC 路径**：`\\server\share` 会规范成 `file://server/share/...`，但 file loader 不认 URL 的 host
   （会变成 `file:///share/...` 而加载失败）。要支持得改 `ResourceHandle` 的 file 分支（R23）。
-- **入口模块管线的 5 条限制**：动态插入/async 入口仍走 CachedScript；入口 `<script>` 的 `load`/`error` 不派发；
-  `import.meta.url` 对 file: 模块显示伪装 URL（`http://file.ant/...`）；DCL 之后到达的 inline 模块不再执行；
-  iframe 的模块入口回退 CachedScript。详见 [arch-module-loading.md](arch-module-loading.md)。
+- **入口模块管线的 4 条限制**：动态插入/async 入口仍走 CachedScript；入口 `<script>` 的 `load`/`error` 不派发；
+  `import.meta.url` 对 file: 模块显示伪装 URL（`http://file.ant/...`）；DCL 之后到达的 inline 模块不再执行。
+  iframe 的模块入口（inline 与 `src=`）与 frame 内的 `import()` 已能执行（P1-e，2026-11-09）。
+  详见 [arch-module-loading.md](arch-module-loading.md)。
 - **一个 view 一个 engine，多个 frame 多个 realm**：同一进程的控件共用一条引擎线程；每个 frame 文档
   有自己的 realm（独立全局/intrinsics/wrapper，默认开启），模块 map 仍按引擎共享（S3 待做），
   `parent`/`top` 是父/顶层 realm 的全局对象而不是 WindowProxy（S4 待做）。细节见

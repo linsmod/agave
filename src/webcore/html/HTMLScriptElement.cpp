@@ -322,10 +322,10 @@ void HTMLScriptElement::evaluateScript(const String& URL, const String& script)
                 AntRuntime::queueModule(URL.utf8().data(), script.utf8().data(),
                                         document());
             } else {
-                /* "evaluating", not "running": the body is about to enter the
-                 * engine, which may still reroute it - module-lookalike
-                 * sources are re-queued by AntRuntime::evaluate(), and the
-                 * queue/running lines there carry the actual outcome. */
+                /* Classic script: evaluated as such. Module-ness was decided
+                 * above from the tag's type - the engine no longer sniffs the
+                 * source (a classic script may legally start with `import(`, a
+                 * dynamic import). */
                 agbLog(AGB_LOG_PARSE, "script (async/dynamic) evaluating url=%s len=%u",
                        URL.isEmpty() ? "(inline)" : URL.utf8().data(),
                        (unsigned)script.length());

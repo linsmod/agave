@@ -4265,82 +4265,6 @@ bool isRunning()
     return g_engine != NULL;
 }
 
-/* Scripts reach the engine through the tokenizer path, which does not know the
- * <script> carried type="module", so module syntax is detected here instead: a
- * script starting with import/export is evaluated as an ES module, which also
- * makes its relative imports resolve against the script URL. */
-static bool looksLikeModule(const char* src, size_t len)
-{
-    size_t i = 0;
-
-    for (; i < len; ++i) {
-        char c = src[i];
-
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n')
-            continue;
-        if (c == '/' && i + 1 < len && src[i + 1] == '/') {
-            while (i < len && src[i] != '\n') ++i;
-            continue;
-        }
-        if (c == '/' && i + 1 < len && src[i + 1] == '*') {
-            i += 2;
-            while (i + 1 < len && !(src[i] == '*' && src[i + 1] == '/')) ++i;
-            ++i;
-            continue;
-        }
-        break;
-    }
-
-    if (i >= len)
-        return false;
-
-    /* <script type="module"> whose first statement is not an import still has to
-     * be treated as a module. Imports are line-based in practice, so look for a
-     * line that starts with import/xport. */
-    {
-        for (size_t at = i; at < len; ) {
-            while (at < len && (src[at] == ' ' || src[at] == '\t')) ++at;
-
-            if (at + 6 <= len && (!strncmp(src + at, "import", 6) || !strncmp(src + at, "export", 6))) {
-                char after = (at + 6 < len) ? src[at + 6] : ' ';
-
-                if (after == ' ' || after == '\t' || after == '{' || after == '*')
-                    return true;
-            }
-
-            while (at < len && src[at] != '\n') ++at;
-            if (at < len) ++at;
-        }
-    }
-
-    if (len - i >= 6 && !strncmp(src + i, "import", 6)) {
-        size_t j = i + 6;
-
-        for (; j < len; ++j) {
-            char c = src[j];
-
-            if (c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '(' || c == '.' || c == '{' || c == '*')
-                return true;
-            break;
-        }
-        return false;
-    }
-
-    if (len - i >= 6 && !strncmp(src + i, "export", 6)) {
-        size_t j = i + 6;
-
-        for (; j < len; ++j) {
-            char c = src[j];
-
-            if (c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '{' || c == '*')
-                return true;
-            break;
-        }
-        return false;
-    }
-
-    return false;
-}
 
 /* Nesting depth of script evaluation: if it is > 1 while the load event is
  * dispatched, the VM is re-entering and that is worth knowing. */
@@ -4432,19 +4356,13 @@ int evaluate(const char* src, size_t len, char** out, char** err)
     if (!g_engine || !src)
         return 0;
 
-    /* ES module syntax cannot be evaluated as a classic script, and modules are
-     * deferred by spec: running one while the parser is still building the
-     * document makes it look for nodes that do not exist yet. The queue owns
-     * the decision (and the log): queueModule waits for the post-parse flush
-     * while this document parses, evaluates now once it ended - before the
-     * flush there was no third option, a lookalike queued after the flush sat
-     * in the queue forever. */
-    if (looksLikeModule(src, len)) {
-        std::string body(src, len);
-
-        queueModule(g_currentFilename.c_str(), body.c_str(), g_document);
-        return 1;
-    }
+    /* Which scripts are modules is the parser's decision, not the source's:
+     * HTMLTokenizer::scriptExecution() and HTMLScriptElement::isModuleScript()
+     * know the tag's type and route module scripts to evaluateModule()/
+     * queueModule() before they get here. This entry is the classic path, and
+     * sniffing the body for `import`/`export` here misclassified a classic
+     * script whose first token was `import(` (valid dynamic import) as a
+     * module. */
 
     collectXhrJobs();
     flushStorageIfDirty();
@@ -4612,13 +4530,29 @@ void pumpAsyncRequests(void)
     }
 }
 
+/* The engine only joins module specifiers against http(s) URL bases
+ * (esm_is_url), so file:// URLs are masqueraded as "http://file.ant/<path>"
+ * when handed to it (see the masquerade note by kEngineFileUrlPrefix below). */
+static bool isFileUrl(const std::string& u);
+static std::string engineUrlForFile(const std::string& fileUrl);
+
 void setFilename(const char* name)
 {
     if (name)
         g_currentFilename = name;
 
-    if (g_engine && name)
-        antb_set_filename(g_engine, name);
+    if (g_engine && name) {
+        /* The engine's view of the script URL: file: scripts must resolve
+         * `import()` and relative imports in the masqueraded space too, not
+         * only module entries (which already translate at evaluateModule). */
+        if (isFileUrl(name)) {
+            std::string masqueraded = engineUrlForFile(name);
+
+            antb_set_filename(g_engine, masqueraded.c_str());
+        } else {
+            antb_set_filename(g_engine, name);
+        }
+    }
 }
 
 /* --- ES modules ---------------------------------------------------------- */
@@ -4718,16 +4652,13 @@ static void destroyModuleCache(RuntimeState* state)
 int evaluateModule(const char* src, size_t len, const char* filename, char** out, char** err);
 
 /* Starts downloading the import graph of a module script as soon as its body is
- * available, without waiting for the deferred execution. */
-void prefetchModuleGraph(const char* url, const char* source)
+ * available, without waiting for the deferred execution. `isModule` comes from
+ * the parser (the tokenizer knows the tag's type): scanning a classic script for
+ * `from './x'` matched arbitrary string literals and flooded the connection
+ * pool with bogus requests, starving the scripts the parser was waiting for. */
+void prefetchModuleGraph(const char* url, const char* source, int isModule)
 {
-    if (!url || !source)
-        return;
-
-    /* Only module sources: scanning a classic script for `from './x'` matches
-     * arbitrary string literals and flooded the connection pool with bogus
-     * requests, starving the scripts the parser was waiting for. */
-    if (!looksLikeModule(source, strlen(source)))
+    if (!url || !source || !isModule)
         return;
 
     modulePrefetchImports(std::string(url), std::string(source));
@@ -4781,11 +4712,27 @@ void flushDeferredModules(void* document)
 {
     std::vector<DeferredModule> pending;
 
-    /* The frame's initial empty document reaches DOMContentLoaded as well; it
+    /* The initial empty document of a frame reaches DOMContentLoaded too; it
      * has no body and no deferred work, so it must not seal the queue for the
-     * page that replaces it (both share one realm generation). */
-    if (!document || !((WebCore::Document*)document)->body())
-        return;
+     * page that replaces it (both share one realm generation). A real document
+     * whose content is all head-level (a page that is only <script
+     * type="module">) has no body yet at this point - that must still flush. */
+    {
+        bool hasQueued = g_deferredModules && !g_deferredModules->empty();
+
+        if (!document || (!((WebCore::Document*)document)->body() && !hasQueued)) {
+            if (getenv("AGB_MODULE_DEBUG"))
+                fprintf(stderr, "[flush] skip doc=%p body=%d queued=%d\n", document,
+                        document ? (((WebCore::Document*)document)->body() ? 1 : 0) : -1,
+                        g_deferredModules ? (int)g_deferredModules->size() : 0);
+            return;
+        }
+    }
+
+    if (getenv("AGB_MODULE_DEBUG"))
+        fprintf(stderr, "[flush] doc=%p body=1 queued=%d gen=%lu docgen=%lu\n",
+                document, g_deferredModules ? (int)g_deferredModules->size() : 0,
+                currentGeneration(), currentDocumentGeneration());
 
     /* Mark the flush first: an empty queue returns early, but a defer script
      * that arrives after this point must not wait for a flush that already
@@ -4869,6 +4816,10 @@ void queueDeferredModule(void* document, const char* url, const char* source)
 
     if (!g_deferredModules)
         g_deferredModules = new std::vector<DeferredModule>();
+
+    if (getenv("AGB_MODULE_DEBUG"))
+        fprintf(stderr, "[queue] doc=%p state=%p gen=%lu docgen=%lu\n", document,
+                (void*)g_currentState, currentGeneration(), currentDocumentGeneration());
 
     DeferredModule module;
 
@@ -13657,7 +13608,6 @@ extern "C" int agb_dump_js_stack_for(void* context, const char* path)
 
     return antb_dump_js_stack_to_file(state->engine, path);
 }
-
 
 
 

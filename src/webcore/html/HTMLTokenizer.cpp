@@ -730,10 +730,11 @@ HTMLTokenizer::State HTMLTokenizer::scriptExecution(const DeprecatedString& str,
     /* Module scripts are deferred until the document is parsed, but their import
      * graph should start downloading now, the way other browsers do when they see
      * the tag. Waiting for execution made a 154 module graph start only after
-     * DOMContentLoaded. */
+     * DOMContentLoaded. `isModule` is this parser's verdict (the tag's type),
+     * so classic scripts are never scanned for import specifiers. */
 #if ENABLE(ANTJS)
     if (AntRuntime::isRunning())
-        AntRuntime::prefetchModuleGraph(url.utf8().data(), str.utf8().data());
+        AntRuntime::prefetchModuleGraph(url.utf8().data(), str.utf8().data(), isModule ? 1 : 0);
 #endif
 
 #if ENABLE(KJS)

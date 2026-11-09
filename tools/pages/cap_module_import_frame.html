@@ -1,0 +1,17 @@
+<!doctype html><meta charset="utf-8"><title>module import frame</title>
+<!-- P1-e: the parent's classic script and the frame's classic script each do
+     import() of the same module. Each realm evaluates it once (its own
+     window.__sharedLoads), the frame's inline module runs, and the module
+     semantics come from the parser (both scripts start with `var`, but the
+     frame also has a real type=module tag). -->
+<iframe id="f" src="./cap_module_import_frame_child.html"></iframe>
+<script>
+var marker = 1;
+setTimeout(function () {
+    import('./cap_module_import_shared.js').then(function (m) {
+        window.__ownImport = m.bump();
+    }, function (e) {
+        window.__ownImport = -1;
+    });
+}, 0);
+</script>

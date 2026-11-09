@@ -1,0 +1,12 @@
+<!doctype html><meta charset="utf-8"><title>classic script starting with import()</title>
+<!-- P1-e: `import(` at the start of a classic <script> is a dynamic import, not
+     module syntax - the engine must not sniff the source and reroute the script
+     through the module queue (it used to: `looksLikeModule()` misclassified it,
+     so the promise never settled and classic semantics were lost). -->
+<script>
+import('./cap_module_import_shared.js').then(function (m) {
+    window.__firstToken = m.bump();
+}, function (e) {
+    window.__firstToken = -1;
+});
+</script>

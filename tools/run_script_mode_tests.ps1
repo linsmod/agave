@@ -195,6 +195,42 @@ if ($cs.Code -ne 0) {
     if (-not $csMissing) { Write-Host 'PASS  document.currentScript (inline/external/defer/async/nested, null elsewhere)' }
 }
 
+# 6. Module semantics come from the parser (P1-e): the frame's inline module
+#    runs, a frame's classic script can import(), and each realm evaluates the
+#    shared module once (its own window.__sharedLoads). Before P1-e the frame's
+#    module never ran, the frame's import() rejected with
+#    ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING, and a classic script starting with
+#    `import(` was rerouted through the module queue by a source sniff.
+$modUrl = 'file:///' + ((Join-Path $root 'tools/pages/cap_module_import_frame.html') -replace '\\', '/')
+$modJs = "var f=document.getElementById('f');probeExit([f.contentWindow.__dynImport, window.__ownImport, f.contentWindow.__inlineModule].join(String.fromCharCode(124)))"
+$mod = Invoke-Probe -Url $modUrl -Js $modJs -Wait 2000 -Settle 300
+
+if ($mod.Code -ne 0) {
+    $failures++
+    Write-Host ("FAIL  frame modules / per-realm import: exit {0}" -f $mod.Code)
+    Write-Host (($mod.Stderr -split "`n" | Select-Object -Last 8) -join "`n")
+} elseif ($mod.Stdout -notmatch '1\|1\|1') {
+    $failures++
+    Write-Host "FAIL  frame modules / per-realm import: wrong payload"
+    Write-Host (($mod.Stdout -split "`n" | Select-Object -Last 4) -join "`n")
+} else {
+    Write-Host 'PASS  frame module entry + per-realm import()'
+}
+
+# 7. A classic <script> whose first token is `import(` is a classic script with a
+#    dynamic import - not module syntax.
+$firstUrl = 'file:///' + ((Join-Path $root 'tools/pages/cap_module_import_first_token.html') -replace '\\', '/')
+$first = Invoke-Probe -Url $firstUrl -Js 'probeExit(String(window.__firstToken))' -Wait 1500 -Settle 300
+
+if ($first.Code -ne 0 -or $first.Stdout -notmatch '1') {
+    $failures++
+    Write-Host ("FAIL  classic script starting with import(): exit {0}" -f $first.Code)
+    Write-Host (($first.Stderr -split "`n" | Select-Object -Last 6) -join "`n")
+    Write-Host (($first.Stdout -split "`n" | Select-Object -Last 4) -join "`n")
+} else {
+    Write-Host 'PASS  classic script starting with import( (dynamic import, not a module)'
+}
+
 Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 
 if ($failures -gt 0) {

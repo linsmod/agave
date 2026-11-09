@@ -343,25 +343,31 @@
   入口 module 会互相覆盖），也要在 P1-e 里按 document 分表；模块 body 缓存按 view 意味着
   父/子文档 import 同一 URL 时共用一个表项，子文档离场会取消它（等 P1-f 的 per-realm registry 消掉）。
 
-### P1-e frame 里的 ESM：入口模块与动态 import 都不可用
+### P1-e frame 里的 ESM：入口模块与动态 import（**已完成 2026-11-09**）
 
-- 现状（2026-11-09 实测）：`<iframe>` 里的 `<script type="module" src=...>` 不执行（探针读
-  `contentWindow.__modInstance` 是 `undefined`，日志里只有 `script (module) queued for parse end`
-  没有后续）；frame 里的 `import('./x.js')` 报
-  `TypeError [ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING]: A dynamic import callback was not specified.`
-  （VM 的 import 回调没装到这个 realm）。
-- 另外两条动态 import 的坑（主 frame 也踩）：
-  ① `setTimeout(function(){ import('./x.js') })` 报 `Cannot resolve module: ./x.js` —— 基 URL
-     只在顶层求值时设置，异步回调里丢了；
-  ② `<script>` 正文**以 `import(` 开头**时被 `looksLikeModule()` 误判成模块脚本（`import(` 是
-     合法的经典脚本语法），于是被当模块排队/走模块路径。
-- 动作：①frame realm 绑定/进入时也装 dynamic-import 回调（ant 侧 `js_set_dynamic_import_callback`
-  或等价物，桥要透传）；②把"当前脚本 URL"放进 realm 状态，`import()` 从那里取基 URL；
-  ③`looksLikeModule()` 对 `import(` 返回 false（动态 import 不是模块语法）。
+- 修前（2026-11-09 实测）：`<iframe>` 里的 `<script type="module" src=...>` / inline 模块不执行（只有
+  "queued for parse end"，没有后续）；frame 里的 `import()` 报
+  `ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING`；经典脚本里的 `import()` 在 timer 回调里报
+  `Cannot resolve module`。
+- 已修（三处）：
+  1. **模块语义交给解析器**：删掉 `AntRuntime::looksLikeModule()` 的源码嗅探（它把以 `import(` 开头的
+     经典脚本误判成模块）。`HTMLTokenizer::scriptExecution(isModule)` / `HTMLScriptElement::isModuleScript()`
+     是唯一判定；`prefetchModuleGraph(url, source, isModule)` 也由解析器传标志，不再扫经典脚本。
+  2. **frame 的模块队列会 flush**：`flushDeferredModules()` 过去要求 `document->body()`，而"整页只有
+     head 级内容（只有 `<script type=module>`）"的真实 frame 文档在 finishParsing 时还没有 body，模块
+     永远留在队列里。现在正文只在"没有 body **且** 队列为空"（= frame 初始空文档）时跳过。
+  3. **动态 import 的基 URL**：ant 侧给每个 eval/经典脚本的 code unit 记下 `import_base_path`
+     （`js_eval_bytecode_mode_result`），`sv_op_import` 在无 callback 时用包含调用的函数
+     （`func->debug->filename`）作基 URL，经 `js_dynamic_import_from()` 走普通 ESM loader；file: 页面
+     的基 URL 由 agave 的 `setFilename()` 转成 `http://file.ant/` 伪装空间（与模块入口一致）。
 - 验收：两个 iframe 各自 `import('./shared_mod.js')` 各执行一次（`window.__sharedLoads` 各自 1）；
-  timer 里的 `import()` 能解析相对 URL；经典脚本首行 `import(...)` 正常当经典脚本执行。
+  frame 的 inline/`src=` 模块入口执行；以 `import(` 开头的经典脚本按经典脚本执行且动态 import 成功；
+  `run_script_mode/realm/nav/worker/xhr/tab-lifecycle/typing/hang/layout` 全绿；ant 侧
+  `tests/test_dynamic_import_script_base.js` + `test_vm_dynamic_import_missing.cjs` 通过。
+- **仍未做**：WebCore 的 `s_moduleEntryWaiter`（HTMLTokenizer.cpp）仍是文件级单 waiter —— 两个 tab 同时
+  解析入口 module 会互相覆盖；ES module registry 仍按 engine（P1-f）。
 
-### P1-f ES module registry 按 realm（依赖 P1-e）
+### P1-f ES module registry 按 realm（依赖 P1-e，**待做**）
 
 - 现状：ant 的 `js->modules.state` 在 `ant_t` 上、不在 `realm/fields.h` 的镜像表里，所以同一
   engine 里的两个 frame realm 共享 module map（规范要求每个 realm 一份）。

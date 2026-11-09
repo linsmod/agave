@@ -65,7 +65,7 @@ int evaluateModule(const char* src, size_t len, const char* filename, char** out
  * `document` is the owning document: if the post-parse flush already ran for
  * it, the module evaluates immediately instead of queueing. */
 void queueModule(const char* url, const char* source, void* document = 0);
-void prefetchModuleGraph(const char* url, const char* source);
+void prefetchModuleGraph(const char* url, const char* source, int isModule);
 
 /* `document` is the WebCore::Document that finished parsing (the queue is
  * flushed per document, and every entry is bound to its own document before it

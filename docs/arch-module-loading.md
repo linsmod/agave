@@ -76,9 +76,15 @@ file:// 模块的伪装层（不破坏 ant 限制模块https设定）：
   ② 入口 script 元素的 load/error 事件暂不派发
   ③ import.meta.url 伪装形态
   ④ DCL 后到达的 inline 模块排队不执行
-  ⑤ iframe 等待位单槽冲突时回退 CachedScript
-
 ```
+
+模块语义由**解析器**决定（`HTMLTokenizer::scriptExecution(isModule)` / `HTMLScriptElement::isModuleScript()`），
+引擎不再嗅探源码（P1-e）：经典脚本里的 `import()` 是合法的动态 import，不会被误判成模块。
+iframe 的 inline/`src=` 模块入口与 frame 内的 `import()` 都能执行；动态 import 的基 URL 来自
+包含它的那个脚本（`func->debug->filename`），file: 页面用与模块入口相同的 `http://file.ant/` 伪装空间解析。
+WebCore 侧 `HTMLTokenizer.cpp` 的 `s_moduleEntryWaiter` 仍是文件级单 waiter（两个 tab 同时解析入口模块会
+互相覆盖，见 plan-roadmap P1-e）。
+
 
 ## 代码锚点
 
