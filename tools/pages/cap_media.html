@@ -25,7 +25,7 @@ window.reportMedia = function () {
                 v.canPlayType(''), v.canPlayType('bogus/x')].join('|'));
 
   /* --- initial state -------------------------------------------------- */
-  d('init', 'paused=' + v.paused + ' ended=' + v.ended + ' rs=' + v.readyState
+  d('init', 'paused=' + (v.paused ? 1 : 0) + ' ended=' + (v.ended ? 1 : 0) + ' rs=' + v.readyState
             + ' ns=' + v.networkState + ' ct=' + v.currentTime + ' dur=' + v.duration
             + ' vol=' + v.volume + ' muted=' + v.muted);
 

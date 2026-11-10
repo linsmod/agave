@@ -25,20 +25,20 @@ window.reportLoaded = function () {
   return 'meta: dur=' + v.duration.toFixed(2)
     + ' dim=' + v.videoWidth + 'x' + v.videoHeight
     + ' rs=' + v.readyState + ' ns=' + v.networkState
-    + ' paused=' + v.paused
+    + ' paused=' + (v.paused ? 1 : 0)
     + ' events=' + log.join(',');
 };
 
 window.startPlayback = function () {
   var rate = v.playbackRate;
   v.play();
-  return 'afterPlayCall: paused=' + v.paused + ' rs=' + v.readyState
+  return 'afterPlayCall: paused=' + (v.paused ? 1 : 0) + ' rs=' + v.readyState
     + ' ct=' + v.currentTime.toFixed(3) + ' rate=' + rate;
 };
 
 window.readPlayback = function () {
-  return 'later: paused=' + v.paused + ' ct=' + v.currentTime.toFixed(3)
-    + ' dur=' + v.duration.toFixed(2) + ' ended=' + v.ended
+  return 'later: paused=' + (v.paused ? 1 : 0) + ' ct=' + v.currentTime.toFixed(3)
+    + ' dur=' + v.duration.toFixed(2) + ' ended=' + (v.ended ? 1 : 0)
     + ' events=' + log.join(',');
 };
 
@@ -49,13 +49,13 @@ window.finishPlayback = function () {
 };
 
 window.readEnded = function () {
-  return 'ended: paused=' + v.paused + ' ended=' + v.ended
+  return 'ended: paused=' + (v.paused ? 1 : 0) + ' ended=' + (v.ended ? 1 : 0)
     + ' ct=' + v.currentTime.toFixed(3) + ' events=' + log.join(',');
 };
 
 window.pauseAndRead = function () {
   v.pause();
-  return 'paused=' + v.paused + ' events=' + log.join(',');
+  return 'paused=' + (v.paused ? 1 : 0) + ' events=' + log.join(',');
 };
 </script>
 </body>

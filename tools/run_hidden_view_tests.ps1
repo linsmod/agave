@@ -87,7 +87,7 @@ function Invoke-Probe {
 }
 
 # 1. hidden view: JS keeps running, paint stops
-$hidden = Invoke-Probe -Js 'probeExit("ticks=" + window.__ticks + " hidden=" + document.hidden + " seen=" + window.__hiddenSeen);' -Extra @('--hide-after', '300')
+$hidden = Invoke-Probe -Js 'probeExit("ticks=" + window.__ticks + " hidden=" + (+!!document.hidden) + " seen=" + window.__hiddenSeen);' -Extra @('--hide-after', '300')
 
 $ticks = if ($hidden.Stdout -match 'ticks=(\d+)') { [int]$Matches[1] } else { -1 }
 $first = $hidden.Points | Select-Object -First 1

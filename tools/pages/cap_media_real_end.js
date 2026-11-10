@@ -28,8 +28,8 @@
     out.push('seekTo=' + target.toFixed(3) + ' dur=' + el.duration.toFixed(3));
 
     setTimeout(function () {
-      out.push('ended=' + el.ended
-        + ' paused=' + el.paused
+      out.push('ended=' + (el.ended ? 1 : 0)
+        + ' paused=' + (el.paused ? 1 : 0)
         + ' ct=' + el.currentTime.toFixed(3)
         + ' real=' + el._agbRealPlayback
         + ' events=' + log.join(','));

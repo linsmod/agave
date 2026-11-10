@@ -10,7 +10,7 @@ window.reportSource = function () {
   return 'sources=' + v.childNodes.length
     + ' picked=' + (v.currentSrc ? v.currentSrc.split('/').pop() : '(none)')
     + ' dur=' + v.duration + ' dim=' + v.videoWidth + 'x' + v.videoHeight
-    + ' | newAudio=' + (a ? a.tagName + '/' + a.paused : 'null');
+    + ' | newAudio=' + (a ? a.tagName + '/' + (a.paused ? 1 : 0) : 'null');
 };
 </script>
 </body></html>

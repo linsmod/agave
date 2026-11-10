@@ -18,8 +18,8 @@
 
   function snap(tag) {
     out.push(tag + ': ct=' + el.currentTime.toFixed(3)
-      + ' paused=' + el.paused
-      + ' ended=' + el.ended
+      + ' paused=' + (el.paused ? 1 : 0)
+      + ' ended=' + (el.ended ? 1 : 0)
       + ' real=' + el._agbRealPlayback
       + ' rs=' + el.readyState
       + ' dur=' + el.duration.toFixed(2));

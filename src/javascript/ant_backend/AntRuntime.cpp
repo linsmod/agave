@@ -2531,7 +2531,7 @@ int titleGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue
     if (!strcmp(name, "hidden")) {
         /* document.hidden is the counterpart of visibilityState, not the
          * element attribute. */
-        AntbValue* v = antb_make_number(engine, documentHidden() ? 1 : 0);
+        AntbValue* v = antb_make_boolean(engine, documentHidden() ? 1 : 0);
 
         if (!v)
             return 0;
@@ -9353,6 +9353,92 @@ int nodeDocumentElementFromPoint(AntbEngine* engine, AntbValue* self, AntbValue*
     return 1;
 }
 
+/* ---- reflected attributes (A3) ------------------------------------------- *
+ * The 2008 IDL declares many attributes the facade never implemented: before
+ * the generated tables existed they were simply invisible (`'x' in el` false),
+ * so nobody noticed. Now the accessor exists and nodeGetter returns undefined -
+ * this table answers them the way Chrome's reflected IDL attributes work.
+ *
+ * Only pure reflection is here. Anything whose value is DOM state rather than
+ * the attribute (input.checked, canvas.width, textarea.selectionStart,
+ * form.elements/length, element.form, form.method's normalisation) stays on the
+ * A3 worklist: answering it with the raw attribute would be wrong. */
+enum ReflectKind {
+    REFLECT_STRING_ATTR,
+    REFLECT_BOOL_ATTR,
+    REFLECT_LONG_ATTR,
+    REFLECT_ELEMENT_PREFIX,
+    REFLECT_ELEMENT_LOCALNAME
+};
+
+struct ReflectDef {
+    const char* name;
+    unsigned    kind;
+    const char* attr;   /* HTML attribute name (unused for the element kinds) */
+};
+
+static const ReflectDef kReflected[] = {
+    /* HTMLAnchorElement */
+    { "coords",        REFLECT_STRING_ATTR, "coords" },
+    { "hreflang",      REFLECT_STRING_ATTR, "hreflang" },
+    { "rev",           REFLECT_STRING_ATTR, "rev" },
+    { "shape",         REFLECT_STRING_ATTR, "shape" },
+    { "target",        REFLECT_STRING_ATTR, "target" },
+
+    /* HTMLFormElement (acceptCharset/encoding are the odd attribute names) */
+    { "acceptCharset", REFLECT_STRING_ATTR, "accept-charset" },
+    { "encoding",      REFLECT_STRING_ATTR, "enctype" },
+    { "enctype",       REFLECT_STRING_ATTR, "enctype" },
+    { "method",        REFLECT_STRING_ATTR, "method" },
+
+    /* HTMLInputElement / HTMLImageElement / HTMLIFrameElement legacy attributes */
+    { "accept",        REFLECT_STRING_ATTR, "accept" },
+    { "align",         REFLECT_STRING_ATTR, "align" },
+    { "useMap",        REFLECT_STRING_ATTR, "usemap" },
+    { "longDesc",      REFLECT_STRING_ATTR, "longdesc" },
+    { "marginHeight",  REFLECT_LONG_ATTR,   "marginheight" },
+    { "marginWidth",   REFLECT_LONG_ATTR,   "marginwidth" },
+    { "scrolling",     REFLECT_STRING_ATTR, "scrolling" },
+
+    /* Content attributes whose IDL name differs from the attribute name
+     * (button.value / input.defaultValue both read the value attribute; a
+     * bespoke branch above handles the live value of a form control). */
+    { "value",         REFLECT_STRING_ATTR, "value" },
+    { "defaultValue",  REFLECT_STRING_ATTR, "value" },
+
+    /* HTMLOptionElement / HTMLElement */
+    { "label",         REFLECT_STRING_ATTR, "label" },
+    { "accessKey",     REFLECT_STRING_ATTR, "accesskey" },
+
+    /* boolean attributes (presence == true, like Chrome's reflected booleans) */
+    { "disabled",      REFLECT_BOOL_ATTR,   "disabled" },
+    { "multiple",      REFLECT_BOOL_ATTR,   "multiple" },
+    { "readOnly",      REFLECT_BOOL_ATTR,   "readonly" },
+    { "defaultChecked", REFLECT_BOOL_ATTR,  "checked" },
+    { "defaultSelected", REFLECT_BOOL_ATTR, "selected" },
+
+    /* long attributes */
+    { "maxLength",     REFLECT_LONG_ATTR,   "maxlength" },
+    { "size",          REFLECT_LONG_ATTR,   "size" },
+    { "cols",          REFLECT_LONG_ATTR,   "cols" },
+    { "rows",          REFLECT_LONG_ATTR,   "rows" },
+
+    /* Element DOM properties, not attributes */
+    { "prefix",        REFLECT_ELEMENT_PREFIX,    "" },
+    { "localName",     REFLECT_ELEMENT_LOCALNAME, "" }
+};
+
+static const ReflectDef* findReflected(const char* name)
+{
+    size_t i;
+
+    for (i = 0; i < sizeof(kReflected) / sizeof(kReflected[0]); ++i) {
+        if (!strcmp(kReflected[i].name, name))
+            return &kReflected[i];
+    }
+    return 0;
+}
+
 int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue* out, void*)
 {
     /* Internal bookkeeping names must not go back through the bridge: reading
@@ -9473,7 +9559,7 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
             return assignNull(engine, out);
         v = wrapNode(engine, sibling);
     } else if (!strcmp(name, "isConnected")) {
-        v = antb_make_number(engine, nodeIsConnected(n) ? 1 : 0);
+        v = antb_make_boolean(engine, nodeIsConnected(n) ? 1 : 0);
     } else if (!strcmp(name, "namespaceURI")) {
         /* Vue's hydration picks the render namespace (svg/mathml/html) from
          * element.namespaceURI; without it `hydrate()` threw on
@@ -9525,7 +9611,7 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
         WebCore::HTMLImageElement* image = static_cast<WebCore::HTMLImageElement*>(n);
 
         if (!strcmp(name, "complete"))
-            v = antb_make_number(engine, image->complete() ? 1 : 0);
+            v = antb_make_boolean(engine, image->complete() ? 1 : 0);
         else if (!strcmp(name, "naturalWidth"))
             v = antb_make_number(engine, image->naturalWidth());
         else if (!strcmp(name, "naturalHeight"))
@@ -9771,7 +9857,7 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
             WebCore::HTMLOptionElement* option = static_cast<WebCore::HTMLOptionElement*>(element);
 
             if (!strcmp(name, "selected")) {
-                v = antb_make_number(engine, option->selected() ? 1 : 0);
+                v = antb_make_boolean(engine, option->selected() ? 1 : 0);
             } else if (!strcmp(name, "index")) {
                 v = antb_make_number(engine, (double)option->index());
             } else if (!strcmp(name, "text")) {
@@ -10023,6 +10109,62 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
                 ? WebCore::String("class") : WebCore::String(name);
             WebCore::String s = static_cast<WebCore::Element*>(n)->getAttribute(attrName);
             v = antb_make_string(engine, s.utf8().data());
+        }
+    }
+
+    /* Last resort before the expando fallback: attributes the IDL declares and
+     * the facade has no bespoke branch for. These are pure HTML reflection -
+     * string attributes as-is, boolean attributes by presence, long ones parsed -
+     * exactly what Chrome's reflected IDL attributes do. A bespoke branch above
+     * always wins, so this can only turn `undefined` into a real value.
+     *
+     * Deliberately *not* here: attributes whose value is a DOM property, not the
+     * attribute (input.checked, canvas.width, form.method's normalisation,
+     * textarea.selectionStart, form.elements/length, element.form). Those need
+     * the engine's state machine and stay on the A3 worklist. */
+    if (!v && n->isElementNode()) {
+        WebCore::Element* el = static_cast<WebCore::Element*>(n);
+        const ReflectDef* reflected = findReflected(name);
+
+        if (reflected) {
+            if (reflected->kind == REFLECT_STRING_ATTR) {
+                WebCore::String s = el->getAttribute(WebCore::AtomicString(reflected->attr));
+                v = antb_make_string(engine, s.utf8().data());
+            } else if (reflected->kind == REFLECT_BOOL_ATTR) {
+                v = antb_make_boolean(engine,
+                        el->hasAttribute(WebCore::AtomicString(reflected->attr)) ? 1 : 0);
+            } else if (reflected->kind == REFLECT_LONG_ATTR) {
+                WebCore::String s = el->getAttribute(WebCore::AtomicString(reflected->attr));
+                int value = s.isEmpty() ? 0 : s.toInt();
+                v = antb_make_number(engine, (double)value);
+            } else if (reflected->kind == REFLECT_ELEMENT_PREFIX) {
+                WebCore::String s = el->prefix();
+                if (s.isNull())
+                    v = antb_make_null(engine);
+                else
+                    v = antb_make_string(engine, s.utf8().data());
+            } else if (reflected->kind == REFLECT_ELEMENT_LOCALNAME) {
+                WebCore::String s = el->localName();
+                v = antb_make_string(engine, s.utf8().data());
+            }
+        }
+    }
+
+
+    /* DOM-state attributes the reflection table deliberately leaves out: the
+     * value comes from the engine's state, not from the attribute. */
+    if (!v && n->isElementNode()) {
+        WebCore::Element* el = static_cast<WebCore::Element*>(n);
+
+        if (!strcmp(name, "isContentEditable")) {
+            v = antb_make_boolean(engine, n->isContentEditable() ? 1 : 0);
+        } else if (el->hasTagName(WebCore::HTMLNames::canvasTag)) {
+            WebCore::HTMLCanvasElement* canvas = static_cast<WebCore::HTMLCanvasElement*>(el);
+
+            if (!strcmp(name, "width"))
+                v = antb_make_number(engine, (double)canvas->width());
+            else if (!strcmp(name, "height"))
+                v = antb_make_number(engine, (double)canvas->height());
         }
     }
 
@@ -10326,6 +10468,43 @@ int nodeSetter(AntbEngine* engine, AntbValue* self, const char* name, const Antb
             static_cast<WebCore::Element*>(n)->removeAttribute(WebCore::String(name), ec);
         return 1;
     }
+    /* A3: the same reflection table nodeGetter answers from, on the write path -
+     * `a.hreflang = 'en'`, `input.disabled = true`, `textarea.cols = 42` become
+     * attribute writes exactly like Chrome's reflected IDL attributes. A bespoke
+     * setter above always wins (form controls' live value, className, ...). */
+    if (n->isElementNode()) {
+        const ReflectDef* reflected = findReflected(name);
+
+        if (reflected && reflected->kind != REFLECT_ELEMENT_PREFIX
+                       && reflected->kind != REFLECT_ELEMENT_LOCALNAME) {
+            WebCore::Element* el = static_cast<WebCore::Element*>(n);
+            WebCore::ExceptionCode ec = 0;
+            WebCore::AtomicString attr(reflected->attr);
+
+            if (reflected->kind == REFLECT_STRING_ATTR) {
+                char* text = antb_to_utf8(value);
+
+                if (text) {
+                    el->setAttribute(attr, WebCore::String::fromUTF8(text), ec);
+                    antb_free(text);
+                    return 1;
+                }
+            } else if (reflected->kind == REFLECT_BOOL_ATTR) {
+                if (antb_to_boolean(value))
+                    el->setAttribute(attr, WebCore::String(""), ec);
+                else
+                    el->removeAttribute(attr, ec);
+                return 1;
+            } else if (reflected->kind == REFLECT_LONG_ATTR) {
+                char buf[32];
+
+                snprintf(buf, sizeof(buf), "%d", (int)antb_to_number(value));
+                el->setAttribute(attr, WebCore::String(buf), ec);
+                return 1;
+            }
+        }
+    }
+
     /* Attribute reflection for the common reflected properties: `img.src = ...`
      * and friends are plain attribute writes in the DOM. Kept to a whitelist so
      * that arbitrary JS fields (handlers, expando data) never become attributes. */
@@ -10968,7 +11147,7 @@ int nodeHasChildNodes(AntbEngine* engine, AntbValue* self, AntbValue**, int,
     WebCore::Node* n = nodeOf(self);
 
     if (n) {
-        AntbValue* v = antb_make_number(engine, n->hasChildNodes() ? 1 : 0);
+        AntbValue* v = antb_make_boolean(engine, n->hasChildNodes() ? 1 : 0);
 
         if (v) {
             antb_value_assign(out, v);
@@ -10992,7 +11171,7 @@ int nodeHasAttribute(AntbEngine* engine, AntbValue* self, AntbValue** args, int 
     name = antb_to_utf8(args[0]);
     if (name) {
         bool has = static_cast<WebCore::Element*>(n)->hasAttribute(WebCore::String::fromUTF8(name));
-        AntbValue* v = antb_make_number(engine, has ? 1 : 0);
+        AntbValue* v = antb_make_boolean(engine, has ? 1 : 0);
         if (v) {
             antb_value_assign(out, v);
             antb_value_release(v);
@@ -11014,7 +11193,7 @@ int nodeContains(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc
         return 1;
 
     {
-        AntbValue* v = antb_make_number(engine, (other && (other == n || other->isDescendantOf(n))) ? 1 : 0);
+        AntbValue* v = antb_make_boolean(engine, (other && (other == n || other->isDescendantOf(n))) ? 1 : 0);
         if (v) {
             antb_value_assign(out, v);
             antb_value_release(v);
@@ -13549,21 +13728,21 @@ bool mediaElementProperty(AntbEngine* engine, WebCore::HTMLMediaElement* media,
 
     /* --- booleans --- */
     if (!strcmp(name, "paused"))
-        { AntbValue* v = antb_make_number(engine, media->paused() ? 1 : 0); if (!v) return true; antb_value_assign(out, v); antb_value_release(v); return true; }
+        { AntbValue* v = antb_make_boolean(engine, media->paused() ? 1 : 0); if (!v) return true; antb_value_assign(out, v); antb_value_release(v); return true; }
     if (!strcmp(name, "ended"))
-        { AntbValue* v = antb_make_number(engine, media->ended() ? 1 : 0); if (!v) return true; antb_value_assign(out, v); antb_value_release(v); return true; }
+        { AntbValue* v = antb_make_boolean(engine, media->ended() ? 1 : 0); if (!v) return true; antb_value_assign(out, v); antb_value_release(v); return true; }
     if (!strcmp(name, "seeking"))
-        { AntbValue* v = antb_make_number(engine, media->seeking() ? 1 : 0); if (!v) return true; antb_value_assign(out, v); antb_value_release(v); return true; }
+        { AntbValue* v = antb_make_boolean(engine, media->seeking() ? 1 : 0); if (!v) return true; antb_value_assign(out, v); antb_value_release(v); return true; }
     if (!strcmp(name, "muted"))
-        { AntbValue* v = antb_make_number(engine, media->muted() ? 1 : 0); if (!v) return true; antb_value_assign(out, v); antb_value_release(v); return true; }
+        { AntbValue* v = antb_make_boolean(engine, media->muted() ? 1 : 0); if (!v) return true; antb_value_assign(out, v); antb_value_release(v); return true; }
     if (!strcmp(name, "loop"))
-        { AntbValue* v = antb_make_number(engine, media->loop() ? 1 : 0); if (!v) return true; antb_value_assign(out, v); antb_value_release(v); return true; }
+        { AntbValue* v = antb_make_boolean(engine, media->loop() ? 1 : 0); if (!v) return true; antb_value_assign(out, v); antb_value_release(v); return true; }
     if (!strcmp(name, "autoplay"))
-        { AntbValue* v = antb_make_number(engine, media->autoplay() ? 1 : 0); if (!v) return true; antb_value_assign(out, v); antb_value_release(v); return true; }
+        { AntbValue* v = antb_make_boolean(engine, media->autoplay() ? 1 : 0); if (!v) return true; antb_value_assign(out, v); antb_value_release(v); return true; }
     if (!strcmp(name, "controls"))
-        { AntbValue* v = antb_make_number(engine, media->controls() ? 1 : 0); if (!v) return true; antb_value_assign(out, v); antb_value_release(v); return true; }
+        { AntbValue* v = antb_make_boolean(engine, media->controls() ? 1 : 0); if (!v) return true; antb_value_assign(out, v); antb_value_release(v); return true; }
     if (!strcmp(name, "defaultMuted"))
-        { AntbValue* v = antb_make_number(engine, media->defaultMuted() ? 1 : 0); if (!v) return true; antb_value_assign(out, v); antb_value_release(v); return true; }
+        { AntbValue* v = antb_make_boolean(engine, media->defaultMuted() ? 1 : 0); if (!v) return true; antb_value_assign(out, v); antb_value_release(v); return true; }
 
     /* --- strings --- */
     if (!strcmp(name, "src"))
@@ -13575,7 +13754,7 @@ bool mediaElementProperty(AntbEngine* engine, WebCore::HTMLMediaElement* media,
      * element, 0 when the simulated ticker is the fallback (no ffmpeg).
      * tools/run_media_tests.ps1 uses it to tell the two apart. */
     if (!strcmp(name, "_agbRealPlayback"))
-        { AntbValue* v = antb_make_number(engine, media->isRealPlayback() ? 1 : 0); if (!v) return true; antb_value_assign(out, v); antb_value_release(v); return true; }
+        { AntbValue* v = antb_make_boolean(engine, media->isRealPlayback() ? 1 : 0); if (!v) return true; antb_value_assign(out, v); antb_value_release(v); return true; }
     if (!strcmp(name, "poster"))
         { AntbValue* v = antb_make_string(engine, media->poster().utf8().data()); if (!v) return true; antb_value_assign(out, v); antb_value_release(v); return true; }
     if (!strcmp(name, "preload"))

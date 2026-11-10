@@ -10,7 +10,7 @@
     var ids = ['empty', 'nocontent', 'truncated', 'ok'], out = [];
     for (var i = 0; i < ids.length; i++) {
         var img = document.getElementById(ids[i]);
-        out.push(ids[i] + '=' + (img ? img.complete : 'missing') +
+        out.push(ids[i] + '=' + (img ? (img.complete ? 1 : 0) : 'missing') +
                  '/' + (img ? img.naturalWidth : -1));
     }
     probeExit(out.join(' '));

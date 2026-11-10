@@ -307,6 +307,33 @@
       return ('multiple' in i) && ('maxLength' in t) && ('async' in s);
     })());
     ok('Element.prototype.remove', typeof document.createElement('div').remove === 'function');
+    /* A3: IDL attributes the facade had no branch for are answered by reflection
+     * (string attributes, boolean attributes by presence, long ones parsed) or
+     * by the DOM property where Chrome does that (canvas size, contentEditable). */
+    ok('reflected string attribute', (function () {
+      var a = document.createElement('a'), f = document.createElement('form');
+      a.hreflang = 'en'; f.method = 'post';
+      return a.hreflang === 'en' && f.method === 'post' && a.getAttribute('hreflang') === 'en';
+    })());
+    ok('reflected boolean attribute', (function () {
+      var i = document.createElement('input');
+      i.disabled = true;
+      return i.disabled === true && i.hasAttribute('disabled') === true;
+    })());
+    ok('reflected long attribute', (function () {
+      var t = document.createElement('textarea');
+      t.cols = 42;
+      return t.cols === 42 && t.getAttribute('cols') === '42';
+    })());
+    ok('element prefix/localName', (function () {
+      var d = document.createElement('div');
+      return d.localName === 'div' && d.prefix === null;
+    })());
+    ok('canvas size is DOM state', (function () {
+      var c = document.createElement('canvas');
+      return c.width === 300 && c.height === 150;
+    })());
+    ok('isContentEditable is DOM state', document.createElement('div').isContentEditable === false);
     ok('id accessor on Element.prototype', (function () {
       var d = Object.getOwnPropertyDescriptor(Element.prototype, 'id');
       return !!d && typeof d.get === 'function' && typeof d.set === 'function' &&
