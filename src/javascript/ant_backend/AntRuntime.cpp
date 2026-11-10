@@ -9536,6 +9536,7 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
     if (!n)
         return 0;
 
+
     /* Event handler properties: read back the function nodeSetter stored. */
     if (name && !strncmp(name, "on", 2) && name[2]) {
         AntbValue* fn = findNodeEventHandler(n, name + 2);
@@ -9661,6 +9662,22 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
         } else {
             return assignNull(engine, out);
         }
+    } else if (!strcmp(name, "data") && n->isCharacterDataNode()) {
+        /* CharacterData.data: text/comment content (the generated table declares
+         * it, so without this the accessor answered undefined). */
+        WebCore::String data = static_cast<WebCore::CharacterData*>(n)->data();
+
+        v = antb_make_string(engine, data.utf8().data());
+    } else if (!strcmp(name, "length") && n->isCharacterDataNode()) {
+        /* Answered here, and returned immediately: a later (independent) block
+         * in this function claims "length" for <select> and bails out for any
+         * non-element, which would discard the value computed here. */
+        v = antb_make_number(engine, (double)static_cast<WebCore::CharacterData*>(n)->length());
+        if (!v)
+            return 0;
+        antb_value_assign(out, v);
+        antb_value_release(v);
+        return 1;
     } else if (!strcmp(name, "innerText") || !strcmp(name, "outerText")) {
         if (!n->isElementNode())
             return 1;
@@ -10322,6 +10339,7 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
      * wrapper itself, which this hook cannot read back - every write built a
      * fresh side object and dropped its fields, so React lost
      * input._wrapperState and reported "reading 'initialChecked'". */
+
     if (!v) {
         AntbValue* expando = expandoFor(engine, n, false);
 
@@ -10589,6 +10607,17 @@ int nodeSetter(AntbEngine* engine, AntbValue* self, const char* name, const Antb
                 input->setIndeterminate(value ? antb_to_boolean(value) != 0 : false);
             return 1;
         }
+    }
+
+    if (!strcmp(name, "data") && n->isCharacterDataNode()) {
+        char* text = antb_to_utf8(value);
+        WebCore::ExceptionCode ec = 0;
+
+        if (!text)
+            return 0;
+        static_cast<WebCore::CharacterData*>(n)->setData(WebCore::String::fromUTF8(text), ec);
+        antb_free(text);
+        return 1;
     }
 
     if (!strcmp(name, "value") && n->isElementNode()) {
@@ -15672,6 +15701,8 @@ static int attrHostGet(AntbEngine* engine, AntbValue* self, const char* name,
     else
         result = isDocumentWrapper(self) ? titleGetter(engine, self, name, out, NULL)
                                          : nodeGetter(engine, self, name, out, NULL);
+
+
 
     if (want && previous != want) {
         antb_realm_enter(engine, previous);

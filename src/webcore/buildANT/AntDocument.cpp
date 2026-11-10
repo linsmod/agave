@@ -71,7 +71,7 @@ static const AntbMethodDef kDocumentDefMethods[] = {
 
 const AntbInterfaceDef kDocumentDef = {
     "Document",
-    "EventTargetNode",
+    "Node",
     kDocumentDefAttributes, 29,
     kDocumentDefMethods, 29,
     0, 0

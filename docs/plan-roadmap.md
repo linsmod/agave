@@ -273,7 +273,9 @@
 > `CSSStyleDeclaration`）已对齐 Chrome；架构层完成了生成管线 + 派发表 + 归属规则。剩余工作拆成 G1：
 > 计划与验收见 `issues/wip/dom-bindings-next.md`，条目见 `issues/INDEX.md` #17。
 
-- G1-1 接口覆盖 18 → ~40（Window/EventTarget/Text/Comment/CharacterData/DocumentFragment/HTMLDocument/表格族/SVG）——
+- G1-1 接口覆盖 18 → 41（**2026-11-11 完成**：CharacterData/Text/Comment/DocumentFragment、表格族、Style/Meta/Body/
+  Heading/Quote/Pre/OList/UList/BR/HR、SVGElement/SVGSVGElement、Window；`AGB_BINDING_CHECK=1` = 41 interfaces /
+  457 attrs / 134 methods / 0 missing owner。`HTMLDocument` 的表被移除——它的成员在 Chrome 里属于 Document）。
   统一走 `tools/gen_bindings.ps1 -Generator ANT` + Chrome 归属对拍。
 - G1-2 `el.attributes` 变真 `NamedNodeMap`（`length`/`item`/`getNamedItem`/索引 own key）。
 - G1-3 `ParentNode`/`ChildNode` 七个方法从 `polyfills.js` 落成 C++（删 JS 补丁，行数可见下降）。

@@ -91,7 +91,20 @@ $expected = @(
     @{ Name = 'HTMLElement';  Attrs = 15; Methods = 3;  Constants = 0 },
     @{ Name = 'Document';     Attrs = 29; Methods = 29; Constants = 0 },
     @{ Name = 'HTMLCollection'; Attrs = 1; Methods = 3; Constants = 0 },
-    @{ Name = 'NodeList';     Attrs = 1;  Methods = 1;  Constants = 0 }
+    @{ Name = 'NodeList';     Attrs = 1;  Methods = 1;  Constants = 0 },
+    # G1-1 coverage (18 -> 41 interfaces): the value-carrying interfaces added
+    # there are pinned too, so a table that stops being compiled in (or an IDL
+    # change nobody re-generated) fails here instead of at runtime.
+    @{ Name = 'CharacterData'; Attrs = 2;  Methods = 5;  Constants = 0 },
+    @{ Name = 'Text';          Attrs = 0;  Methods = 1;  Constants = 0 },
+    @{ Name = 'Comment';       Attrs = 0;  Methods = 0;  Constants = 0 },
+    @{ Name = 'DocumentFragment'; Attrs = 0; Methods = 0; Constants = 0 },
+    @{ Name = 'HTMLTableElement'; Attrs = 14; Methods = 8; Constants = 0 },
+    @{ Name = 'HTMLTableRowElement'; Attrs = 8; Methods = 2; Constants = 0 },
+    @{ Name = 'HTMLTableCellElement'; Attrs = 15; Methods = 0; Constants = 0 },
+    @{ Name = 'HTMLStyleElement'; Attrs = 4; Methods = 0; Constants = 0 },
+    @{ Name = 'SVGElement';    Attrs = 3;  Methods = 0;  Constants = 0 },
+    @{ Name = 'Window';        Attrs = 157; Methods = 12; Constants = 0 }
 )
 
 if ($table.Code -ne 0) {
@@ -126,7 +139,7 @@ if ($table.Code -ne 0) {
             Write-Host ("FAIL  generated tables: {0} table(s) have no owning interface class (nothing installed)" -f $summary.Groups[2].Value)
             $tableFailures++
         }
-        if ([int]$summary.Groups[1].Value -lt $expected.Count) {
+        if ([int]$summary.Groups[1].Value -lt 41) {
             Write-Host ("FAIL  generated tables: only {0} interfaces registered, expected at least {1}" -f $summary.Groups[1].Value, $expected.Count)
             $tableFailures++
         }

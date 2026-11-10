@@ -62,7 +62,7 @@ static const AntbMethodDef kElementDefMethods[] = {
 
 const AntbInterfaceDef kElementDef = {
     "Element",
-    "EventTargetNode",
+    "Node",
     kElementDefAttributes, 18,
     kElementDefMethods, 21,
     0, 0

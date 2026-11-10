@@ -374,6 +374,32 @@
       return c.width === 300 && c.height === 150;
     })());
     ok('isContentEditable is DOM state', document.createElement('div').isContentEditable === false);
+    /* G1-1: the interfaces added to the generated tables keep their identity
+     * (Text/Comment/CharacterData/DocumentFragment, the table elements and SVG). */
+    ok('text/comment/fragment interfaces', (function () {
+      var t = document.createTextNode('abc'), c = document.createComment('xy');
+      var f = document.createDocumentFragment();
+      return t instanceof Text && t instanceof CharacterData && t instanceof Node &&
+             c instanceof Comment && c instanceof CharacterData &&
+             f instanceof DocumentFragment && f instanceof Node &&
+             Object.prototype.toString.call(t) === '[object Text]';
+    })());
+    ok('CharacterData data/length', (function () {
+      var t = document.createTextNode('abc'), c = document.createComment('xy');
+      t.data = 'zz';
+      return t.data === 'zz' && t.length === 2 && c.data === 'xy' && c.length === 2;
+    })());
+    ok('table elements have their interfaces', (function () {
+      var table = document.createElement('table'), tr = document.createElement('tr');
+      var td = document.createElement('td'), th = document.createElement('th');
+      var tbody = document.createElement('tbody');
+      return table instanceof HTMLTableElement && tr instanceof HTMLTableRowElement &&
+             td instanceof HTMLTableCellElement && th instanceof HTMLTableCellElement &&
+             tbody instanceof HTMLTableSectionElement &&
+             table instanceof HTMLElement && table instanceof Node;
+    })());
+    ok('document/window interfaces', document instanceof HTMLDocument &&
+       document instanceof Document && window instanceof Window);
     /* element.style is a real CSSStyleDeclaration (Chrome's shape), not a shim
      * object: instanceof, @@toStringTag, identity, array-like indexed access and
      * the cssText / getPropertyValue / setProperty surface. */

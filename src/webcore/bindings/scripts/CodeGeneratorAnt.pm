@@ -73,6 +73,15 @@ my @kOwnershipMoves = (
     [ 'HTMLSelectElement',   'tabIndex',  'HTMLElement', 'ANTB_ATTR_WRITABLE', 'long' ],
     [ 'HTMLTextAreaElement', 'accessKey', 'HTMLElement', 'ANTB_ATTR_WRITABLE', 'DOMString' ],
     [ 'HTMLTextAreaElement', 'tabIndex',  'HTMLElement', 'ANTB_ATTR_WRITABLE', 'long' ],
+
+    # Inherited members the 2008 IDL repeats on a derived interface: Element's
+    # table already has them, so the move is a pure drop on the source side
+    # (the generator dedupes the target) - which is what Chrome's chain shows.
+    [ 'HTMLBodyElement', 'scrollLeft',   'Element', 'ANTB_ATTR_WRITABLE', 'long' ],
+    [ 'HTMLBodyElement', 'scrollTop',    'Element', 'ANTB_ATTR_WRITABLE', 'long' ],
+    [ 'HTMLBodyElement', 'scrollWidth',  'Element', 0,                    'long' ],
+    [ 'HTMLBodyElement', 'scrollHeight', 'Element', 0,                    'long' ],
+    [ 'SVGElement', 'id', 'Element', 'ANTB_ATTR_WRITABLE', 'DOMString' ],
 );
 
 # Methods whose owning interface the 2008 IDL gets wrong (same rule as
@@ -95,7 +104,19 @@ my @kMethodOwnershipMoves = (
     [ 'HTMLTextAreaElement', 'focus', 'HTMLElement', 0, 'void' ],
     [ 'HTMLTextAreaElement', 'blur',  'HTMLElement', 0, 'void' ],
     [ 'Node', 'hasAttributes', 'Element', 0, 'boolean' ],
+
 );
+
+# The IDL name is not always the DOM name the engine exposes: the page/window
+# IDL still says "DOMWindow" while the runtime's interface class is "Window"
+# (B1 named it after the global). Emitted tables must use the DOM name, or
+# AGB_BINDING_CHECK reports a table with no owning class and nothing installs.
+my %kIfaceRename = ( 'DOMWindow' => 'Window' );
+
+# WebKit 2008's IDLs call Node "EventTargetNode" in every `: parent` clause; the
+# runtime's interface is Node. The parent is documentation for this backend (the
+# class tree comes from the runtime), but a wrong name there is misleading.
+my %kParentRename = ( 'EventTargetNode' => 'Node' );
 
 sub movedOutOf
 {
@@ -197,6 +218,7 @@ sub GenerateInterface
     my $defines = shift;
 
     my $name = $dataNode->name;
+    $name = $kIfaceRename{$name} if $kIfaceRename{$name};
 
     # Interfaces that only exist as mixins (SVGTests, SVGLangSpace, ...) are
     # marked ObjCProtocol: they are implemented by other interfaces, never an
@@ -210,6 +232,7 @@ sub GenerateInterface
     my @parents = @{$dataNode->parents};
     if (@parents) {
         $parent = $codeGenerator->StripModule($parents[0]);
+        $parent = $kParentRename{$parent} if $kParentRename{$parent};
     }
 
     # ---------------------------------------------------------------- attributes
@@ -240,7 +263,10 @@ sub GenerateInterface
     }
 
     my $movedIn = movedInto($name);
-    my %already = map { my $n = $_; $n =~ s/^.*"(\w+)".*$/$1/; ($n => 1) } @attrLines;
+    # Key on the entry's *first* quoted token (the name). A greedy
+    # ^.*"(\w+)".*$ would capture the type ("long"), which silently broke the
+    # duplicate check and injected a member twice.
+    my %already = map { my $n = $_; ($n =~ /^\s*\{\s*"(\w+)"/) ? ($1 => 1) : () } @attrLines;
     foreach my $move (@{$movedIn}) {
         my $flagText = $move->[3] ? $move->[3] : "0";
 
@@ -286,7 +312,7 @@ sub GenerateInterface
         $methodCount++;
     }
 
-    my %methodAlready = map { my $n = $_; $n =~ s/^.*"(\w+)".*$/$1/; ($n => 1) } @methodLines;
+    my %methodAlready = map { my $n = $_; ($n =~ /^\s*\{\s*"(\w+)"/) ? ($1 => 1) : () } @methodLines;
     foreach my $move (@{methodMovedInto($name)}) {
         next if $methodAlready{$move->[1]};
         $methodAlready{$move->[1]} = 1;
@@ -358,6 +384,8 @@ EOF
 }
 
 1;
+
+
 
 
 
