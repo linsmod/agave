@@ -10811,6 +10811,117 @@ static char* eventTypeOf(AntbEngine* engine, AntbValue* arg)
     return antb_to_utf8(arg);
 }
 
+/* True when the event asked the dispatch to stop (stopPropagation /
+ * stopImmediatePropagation, or the legacy cancelBubble). */
+static bool eventStopped(AntbEngine* engine, AntbValue* evt)
+{
+    AntbValue* v;
+
+    if (!engine || !evt)
+        return false;
+
+    v = antb_get_prop(engine, evt, "__stoppedImmediate");
+    if (v) {
+        bool stopped = antb_to_boolean(v) != 0;
+        antb_value_release(v);
+        if (stopped)
+            return true;
+    }
+
+    v = antb_get_prop(engine, evt, "__stopped");
+    if (v) {
+        bool stopped = antb_to_boolean(v) != 0;
+        antb_value_release(v);
+        if (stopped)
+            return true;
+    }
+
+    v = antb_get_prop(engine, evt, "cancelBubble");
+    if (v) {
+        bool stopped = antb_to_boolean(v) != 0;
+        antb_value_release(v);
+        if (stopped)
+            return true;
+    }
+    return false;
+}
+
+/* Runs the listeners `node` has for `type`: the snapshot, the calls and the
+ * `once` cleanup, which is what both the target phase and the bubbling phase
+ * need (they differ only in currentTarget/eventPhase). */
+static void dispatchListenersOnNode(AntbEngine* engine, WebCore::Node* node, const char* type,
+                                    AntbValue* evt, AntbValue* receiver, AntbValue* phaseFn,
+                                    int phase)
+{
+    std::vector<Listener>* list = listenersForRealm(receiverRealm(node));
+    std::vector<AntbValue*> snapshot;
+    size_t i;
+
+    if (!list || !type || !evt)
+        return;
+
+    for (i = 0; i < list->size(); ++i) {
+        Listener& l = (*list)[i];
+
+        if (l.node == node && l.type == type && l.fn)
+            snapshot.push_back(antb_retain(l.fn));
+    }
+
+    if (snapshot.empty())
+        return;
+
+    if (phaseFn)
+        setEventPhase(engine, phaseFn, evt, receiver, phase);
+
+    for (i = 0; i < snapshot.size(); ++i) {
+        AntbValue* argv[1];
+        AntbValue* value;
+
+        /* stopImmediatePropagation() must keep the rest of this node's listeners
+         * from running - the same check the engine's own dispatch does. */
+        if (i > 0 && eventStopped(engine, evt))
+            break;
+
+        argv[0] = evt;
+        value = antb_call(engine, snapshot[i], receiver, argv, 1, NULL);
+
+        if (!value) {
+            char* pending = antb_take_pending_error(engine);
+
+            if (pending) {
+                fprintf(stderr, "[antjs] (dispatchEvent %s) %s\n", type, pending);
+                free(pending);
+            }
+        } else {
+            antb_value_release(value);
+        }
+    }
+
+    /* once: drop the listeners this dispatch just called, by JS identity (the
+     * snapshot holds retained wrappers). */
+    for (i = 0; listenersForRealm(receiverRealm(node)) && i < listenersForRealm(receiverRealm(node))->size(); ) {
+        list = listenersForRealm(receiverRealm(node));
+        Listener& l = (*list)[i];
+        bool called = false;
+
+        if (l.once && l.node == node && l.type == type && l.fn) {
+            for (size_t k = 0; k < snapshot.size(); ++k) {
+                if (antb_value_same(l.fn, snapshot[k])) { called = true; break; }
+            }
+        }
+
+        if (called) {
+            antb_value_release(l.fn);
+            list->erase(list->begin() + i);
+        } else {
+            ++i;
+        }
+    }
+
+    for (i = 0; i < snapshot.size(); ++i)
+        antb_value_release(snapshot[i]);
+}
+
 int nodeDispatchEvent(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
                       AntbValue* out, void*)
 {
@@ -10818,7 +10929,6 @@ int nodeDispatchEvent(AntbEngine* engine, AntbValue* self, AntbValue** args, int
     char* type = (argc > 0) ? eventTypeOf(engine, args[0]) : NULL;
     AntbValue* evt = (argc > 0) ? args[0] : NULL;
     AntbValue* phaseFn = NULL;
-    std::vector<AntbValue*> snapshot;
 
     if (!n || !type || !evt) {
         antb_free(type);
@@ -10853,61 +10963,33 @@ int nodeDispatchEvent(AntbEngine* engine, AntbValue* self, AntbValue** args, int
         setEventPhase(engine, phaseFn, evt, self, 2);
     }
 
+    /* Target phase: listeners on the node the page called dispatchEvent on. */
+    dispatchListenersOnNode(engine, n, type, evt, self, phaseFn, 2);
+
+    /* Bubbling phase: the event walks up the tree while it says `bubbles` and
+     * nobody called stopPropagation(). Before this the JS-side dispatchEvent
+     * only ran the target's listeners, so `el.dispatchEvent(new Event('x',
+     * {bubbles:true}))` never reached the parent - the engine's own dispatch
+     * has always bubbled (issues §18.5, item 3). */
     {
-        std::vector<Listener>* list = listenersForRealm(receiverRealm(n));
+        AntbValue* bubblesValue = antb_get_prop(engine, evt, "bubbles");
+        bool bubbles = bubblesValue ? (antb_to_boolean(bubblesValue) != 0) : false;
 
-        if (list) {
-            for (size_t i = 0; i < list->size(); ++i) {
-                Listener& l = (*list)[i];
+        if (bubblesValue)
+            antb_value_release(bubblesValue);
 
-                if (l.node == n && l.type == type && l.fn)
-                    snapshot.push_back(antb_retain(l.fn));
+        if (bubbles) {
+            for (WebCore::Node* parent = n->parentNode(); parent && !eventStopped(engine, evt);
+                 parent = parent->parentNode()) {
+                AntbValue* receiver = wrapNode(engine, parent);
+
+                if (!receiver)
+                    continue;
+                dispatchListenersOnNode(engine, parent, type, evt, receiver, phaseFn, 3);
+                antb_value_release(receiver);
             }
         }
     }
-
-    /* Dispatch the snapshot, and hand the caller's own Event object through. */
-    for (size_t i = 0; i < snapshot.size(); ++i) {
-        AntbValue* argv[1];
-        AntbValue* value;
-
-        argv[0] = evt;
-        value = antb_call(engine, snapshot[i], self, argv, 1, NULL);
-        if (!value) {
-            char* pending = antb_take_pending_error(engine);
-
-            if (pending) {
-                fprintf(stderr, "[antjs] (dispatchEvent %s) %s\n", type, pending);
-                free(pending);
-            }
-        } else {
-            antb_value_release(value);
-        }
-    }
-
-    /* once: drop the listeners this dispatch just called. Identity is
-     * checked on the JS value, because the snapshot holds retained wrappers. */
-    for (size_t i = 0; listenersForRealm(receiverRealm(n)) && i < listenersForRealm(receiverRealm(n))->size(); ) {
-        std::vector<Listener>* list = listenersForRealm(receiverRealm(n));
-        Listener& l = (*list)[i];
-        bool called = false;
-
-        if (l.once && l.node == n && l.type == type && l.fn) {
-            for (size_t k = 0; k < snapshot.size(); ++k) {
-                if (antb_value_same(l.fn, snapshot[k])) { called = true; break; }
-            }
-        }
-
-        if (called) {
-            antb_value_release(l.fn);
-            list->erase(list->begin() + i);
-        } else {
-            ++i;
-        }
-    }
-
-    for (size_t i = 0; i < snapshot.size(); ++i)
-        antb_value_release(snapshot[i]);
 
     /* dispatchEvent() returns false when a cancelable event was cancelled. */
     {

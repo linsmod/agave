@@ -501,6 +501,26 @@
       el.addEventListener('probe2', function (e) { e.preventDefault(); });
       ok('dispatchEvent returns false when cancelled',
          el.dispatchEvent(new Event('probe2', { cancelable: true })) === false);
+
+      /* Bubbling: the JS-side dispatchEvent used to stop at the target, so a
+       * synthetic bubbling event never reached the parent (issues §18.5 item 3). */
+      var host = document.createElement('div');
+      host.appendChild(el);
+      /* currentTarget/eventPhase must be captured *inside* the handler: Chrome
+       * resets them (null/0) once dispatchEvent() returns, and so do we. */
+      var hostPhase = 0, hostCt = false, targetPhase = 0;
+      host.addEventListener('probe3', function (e) { hostPhase = e.eventPhase; hostCt = e.currentTarget === host; });
+      el.addEventListener('probe4', function (e) { targetPhase = e.eventPhase; });
+      el.dispatchEvent(new Event('probe3', { bubbles: true }));
+      ok('dispatchEvent bubbles to the parent', hostPhase === 3 && hostCt === true);
+      el.dispatchEvent(new Event('probe4'));
+      ok('non-bubbling event stays on the target', targetPhase === 2);
+
+      var stopped = 0;
+      host.addEventListener('probe5', function () { stopped++; });
+      el.addEventListener('probe5', function (e) { e.stopPropagation(); });
+      el.dispatchEvent(new Event('probe5', { bubbles: true }));
+      ok('stopPropagation stops the bubble', stopped === 0);
     })();
     /* A script-appended <iframe> loads about:blank synchronously, inside this
      * script. Binding the child document used to leave the engine on the child:
