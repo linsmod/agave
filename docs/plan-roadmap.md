@@ -253,6 +253,20 @@
 
 ## P1：机制收敛
 
+### P1-dom-attr-accessors popup 探针 eval 路由（2026-11-10 发现，**待查**）
+
+- 现象：B2-3 把属性改成接口原型 accessor 后，`run_nav_tests` 的 `window.open`、
+  `run_window_tests` 的 local `target=_blank`/命名 target、`run_tab_lifecycle_tests` 的 popup 用例
+  失败：probe 的 sanity eval 落在 popup 的 about:blank 文档里（`document.URL` undefined、
+  `probeExit` 未定义），主 view 的 `--eval` 于是拿不到退出信号（exit 4）。
+- 判据：`AGB_NO_DOM_ATTRS=1`（跳过属性 accessor 安装）这三个套件全过；页面 DOM 行为在真站点上
+  未复现，只影响探针路径。
+- 起点：`AgaveWebView.c` 的 `agwPost(AGW_CMD_EVAL, ...)`/`agwCommandIsDocumentScoped`（命令带
+  `docEpoch`，处理时是否按 `command.view` 而不是"当前活动 view"落地？），以及 `agwOpenWindowFor`
+  →`agwActivateView` 在 popup 创建/加载时的时序；`--eval-file` 的 sanity eval 和 round script 是
+  同一次定时器里连续 post 的两条命令，却落到了两个不同的 realm。
+- 详细记录：`issues/wip/ant-dom-bindings.md` §20.5。
+
 ### P1-z 图片解码离开 paint（L0–L3，2026-11-08 起；L0–L3 已完成，剩余见下）
 
 - 现状：`RenderImage::paint → BitmapImage::draw → ImageSource::createFrameAtIndex →

@@ -5852,6 +5852,11 @@ AntbValue* documentObjectFor(AntbEngine* engine, WebCore::Document* document)
     if (!docObj)
         return NULL;
 
+    /* Same as wrapNode(): remember the creating realm for the attribute
+     * accessors, which run on the engine-level prototype. */
+    if (!antb_get_native(docObj, AGB_TAG_WRAPREALM))
+        antb_set_native(docObj, (void*)antb_realm_current(engine), AGB_TAG_WRAPREALM);
+
     /* document.implementation: per document object, created on first wrap.
      * jQuery and others feature-test document.implementation.createHTMLDocument. */
     {
@@ -13755,6 +13760,14 @@ AntbValue* wrapNode(AntbEngine* engine, WebCore::Node* node)
     if (!v)
         return NULL;
 
+    /* Remember which realm this wrapper belongs to. The wrapper cache already
+     * keys by realm; attribute accessors need it because they run on the
+     * engine-level prototype and would otherwise wrap child-document nodes
+     * into the creating (main) realm. Set once: an existing wrapper keeps the
+     * realm it was created in. */
+    if (!antb_get_native(v, AGB_TAG_WRAPREALM))
+        antb_set_native(v, (void*)antb_realm_current(engine), AGB_TAG_WRAPREALM);
+
     return v;
 }
 
@@ -14979,6 +14992,359 @@ void resetInterfaceClasses()
     g_rangeClass = NULL;
 }
 
+/* ---- WebIDL attribute accessors (B2-3) ----------------------------------
+ * The facade catch-all (nodeGetter/titleGetter) used to answer every DOM
+ * attribute from an instance-level exotic hook, so attributes were invisible
+ * to `in`, Object.getOwnPropertyDescriptor(Interface.prototype, name) and
+ * for-in, and a generated IDL accessor would have been shadowed. These
+ * definitions put the common attributes on the interface prototypes as real
+ * WebIDL accessors (enumerable, configurable) whose implementation is the same
+ * facade dispatch, so behaviour does not change - only the property shape does.
+ */
+struct DomAttrDef {
+    const char* iface;
+    const char* name;
+    int         writable;
+};
+
+static bool isDocumentWrapper(AntbValue* self)
+{
+    WebCore::Node* node = nodeOf(self);
+
+    return node && node->nodeType() == 9;
+}
+
+/* WebIDL accessors live on the engine-level interface prototypes (created in
+ * the main realm), so the getter/setter would run with the main realm current
+ * and wrap nodes into that realm - but a wrapper must belong to the realm of
+ * the object it is read from (`cd.body` read by the parent is the parent's
+ * wrapper, the iframe's own body is the iframe's). Enter the receiver's
+ * document realm around the facade dispatch, the same way the class catch-all
+ * hook did before the accessors existed. */
+static AntbRealm* attributeRealm(AntbEngine* engine, AntbValue* self)
+{
+    AntbRealm* wrapperRealm = self
+        ? (AntbRealm*)antb_get_native(self, AGB_TAG_WRAPREALM) : NULL;
+    WebCore::Node* node;
+
+    if (wrapperRealm)
+        return wrapperRealm;
+
+    node = nodeOf(self);
+    if (!engine || !node || !node->document())
+        return NULL;
+    return receiverRealm(node);
+}
+
+static int attrHostGet(AntbEngine* engine, AntbValue* self, const char* name,
+                       AntbValue* out, void*)
+{
+    AntbRealm* want = attributeRealm(engine, self);
+    AntbRealm* previous = NULL;
+    int result;
+
+    if (want && (previous = antb_realm_current(engine)) != want)
+        antb_realm_enter(engine, want);
+
+    result = isDocumentWrapper(self) ? titleGetter(engine, self, name, out, NULL)
+                                     : nodeGetter(engine, self, name, out, NULL);
+
+    if (want && previous != want)
+        antb_realm_enter(engine, previous);
+    return result;
+}
+
+static int attrHostSet(AntbEngine* engine, AntbValue* self, const char* name,
+                       const AntbValue* value, void*)
+{
+    AntbRealm* want = attributeRealm(engine, self);
+    AntbRealm* previous = NULL;
+    int result;
+
+    if (want && (previous = antb_realm_current(engine)) != want)
+        antb_realm_enter(engine, want);
+
+    result = isDocumentWrapper(self) ? titleSetter(engine, self, name, value, NULL)
+                                     : nodeSetter(engine, self, name, value, NULL);
+
+    if (want && previous != want)
+        antb_realm_enter(engine, previous);
+    return result;
+}
+
+static const DomAttrDef kDomAttributes[] = {
+    /* Node */
+    { "Node", "nodeType",        0 },
+    { "Node", "nodeName",        0 },
+    { "Node", "parentNode",      0 },
+    { "Node", "parentElement",   0 },
+    { "Node", "firstChild",      0 },
+    { "Node", "lastChild",       0 },
+    { "Node", "nextSibling",     0 },
+    { "Node", "previousSibling", 0 },
+    { "Node", "ownerDocument",   0 },
+    { "Node", "childNodes",      0 },
+    { "Node", "isConnected",     0 },
+    { "Node", "textContent",     1 },
+    { "Node", "nodeValue",       1 },
+
+    /* Document (HTMLDocument inherits) */
+    { "Document", "readyState",      0 },
+    { "Document", "URL",             0 },
+    { "Document", "documentURI",     0 },
+    { "Document", "defaultView",     0 },
+    { "Document", "activeElement",   0 },
+    { "Document", "documentElement", 0 },
+    { "Document", "head",            0 },
+    { "Document", "characterSet",    0 },
+    { "Document", "charset",         0 },
+    { "Document", "inputEncoding",   0 },
+    { "Document", "contentType",     0 },
+    { "Document", "compatMode",      0 },
+    { "Document", "hidden",          0 },
+    { "Document", "visibilityState", 0 },
+    { "Document", "referrer",        0 },
+    { "Document", "domain",          0 },
+    { "Document", "location",        0 },
+    { "Document", "title",           1 },
+    { "Document", "cookie",          1 },
+    { "Document", "body",            0 },
+
+    /* Element */
+    { "Element", "tagName",            0 },
+    { "Element", "localName",          0 },
+    { "Element", "namespaceURI",       0 },
+    { "Element", "prefix",             0 },
+    { "Element", "children",           0 },
+    { "Element", "childElementCount",  0 },
+    { "Element", "firstElementChild",  0 },
+    { "Element", "lastElementChild",   0 },
+    { "Element", "nextElementSibling", 0 },
+    { "Element", "previousElementSibling", 0 },
+    { "Element", "clientWidth",        0 },
+    { "Element", "clientHeight",       0 },
+    { "Element", "clientTop",          0 },
+    { "Element", "clientLeft",         0 },
+    { "Element", "scrollWidth",        0 },
+    { "Element", "scrollHeight",       0 },
+    { "Element", "classList",          0 },
+    { "Element", "dataset",            0 },
+    { "Element", "attributes",         0 },
+    { "Element", "id",                 1 },
+    { "Element", "className",          1 },
+    { "Element", "innerHTML",          1 },
+    { "Element", "scrollTop",          1 },
+    { "Element", "scrollLeft",         1 },
+
+    /* HTMLElement */
+    { "HTMLElement", "offsetWidth",       0 },
+    { "HTMLElement", "offsetHeight",      0 },
+    { "HTMLElement", "offsetTop",         0 },
+    { "HTMLElement", "offsetLeft",        0 },
+    { "HTMLElement", "offsetParent",      0 },
+    { "HTMLElement", "isContentEditable", 0 },
+    { "HTMLElement", "title",             1 },
+    { "HTMLElement", "lang",              1 },
+    { "HTMLElement", "dir",               1 },
+    { "HTMLElement", "hidden",            1 },
+    { "HTMLElement", "tabIndex",          1 },
+    { "HTMLElement", "accessKey",         1 },
+    { "HTMLElement", "innerText",         1 },
+    { "HTMLElement", "outerText",         1 },
+    { "HTMLElement", "style",             1 },
+    { "HTMLElement", "contentEditable",   1 },
+    { "HTMLElement", "draggable",         1 },
+    { "HTMLElement", "spellcheck",        1 },
+
+    /* Inputs / forms */
+    { "HTMLInputElement", "value",          1 },
+    { "HTMLInputElement", "defaultValue",   1 },
+    { "HTMLInputElement", "checked",        1 },
+    { "HTMLInputElement", "defaultChecked", 1 },
+    { "HTMLInputElement", "disabled",       1 },
+    { "HTMLInputElement", "type",           1 },
+    { "HTMLInputElement", "name",           1 },
+    { "HTMLInputElement", "placeholder",    1 },
+    { "HTMLInputElement", "readOnly",       1 },
+    { "HTMLInputElement", "required",       1 },
+    { "HTMLInputElement", "maxLength",      1 },
+    { "HTMLInputElement", "size",           1 },
+    { "HTMLInputElement", "src",            1 },
+    { "HTMLInputElement", "alt",            1 },
+    { "HTMLInputElement", "min",            1 },
+    { "HTMLInputElement", "max",            1 },
+    { "HTMLInputElement", "step",           1 },
+    { "HTMLInputElement", "multiple",       1 },
+    { "HTMLInputElement", "accept",         1 },
+    { "HTMLInputElement", "autocomplete",   1 },
+    { "HTMLInputElement", "autofocus",      1 },
+    { "HTMLInputElement", "pattern",        1 },
+    { "HTMLInputElement", "form",           0 },
+    { "HTMLInputElement", "files",          0 },
+
+    { "HTMLTextAreaElement", "value",        1 },
+    { "HTMLTextAreaElement", "defaultValue", 1 },
+    { "HTMLTextAreaElement", "rows",         1 },
+    { "HTMLTextAreaElement", "cols",         1 },
+    { "HTMLTextAreaElement", "placeholder",  1 },
+    { "HTMLTextAreaElement", "disabled",     1 },
+    { "HTMLTextAreaElement", "readOnly",     1 },
+    { "HTMLTextAreaElement", "required",     1 },
+    { "HTMLTextAreaElement", "maxLength",    1 },
+    { "HTMLTextAreaElement", "wrap",         1 },
+    { "HTMLTextAreaElement", "name",         1 },
+    { "HTMLTextAreaElement", "autofocus",    1 },
+
+    { "HTMLSelectElement", "value",         1 },
+    { "HTMLSelectElement", "selectedIndex", 1 },
+    { "HTMLSelectElement", "multiple",      1 },
+    { "HTMLSelectElement", "size",          1 },
+    { "HTMLSelectElement", "disabled",      1 },
+    { "HTMLSelectElement", "required",      1 },
+    { "HTMLSelectElement", "name",          1 },
+    { "HTMLSelectElement", "options",       0 },
+    { "HTMLSelectElement", "length",        0 },
+    { "HTMLSelectElement", "form",          0 },
+
+    { "HTMLOptionElement", "value",           1 },
+    { "HTMLOptionElement", "text",            1 },
+    { "HTMLOptionElement", "selected",        1 },
+    { "HTMLOptionElement", "defaultSelected", 1 },
+    { "HTMLOptionElement", "disabled",        1 },
+    { "HTMLOptionElement", "label",           1 },
+    { "HTMLOptionElement", "index",           0 },
+    { "HTMLOptionElement", "form",            0 },
+
+    { "HTMLFormElement", "action",       1 },
+    { "HTMLFormElement", "method",       1 },
+    { "HTMLFormElement", "target",       1 },
+    { "HTMLFormElement", "enctype",      1 },
+    { "HTMLFormElement", "noValidate",   1 },
+    { "HTMLFormElement", "name",         1 },
+    { "HTMLFormElement", "acceptCharset", 1 },
+    { "HTMLFormElement", "elements",     0 },
+    { "HTMLFormElement", "length",       0 },
+
+    { "HTMLButtonElement", "value",    1 },
+    { "HTMLButtonElement", "disabled", 1 },
+    { "HTMLButtonElement", "type",     1 },
+    { "HTMLButtonElement", "name",     1 },
+    { "HTMLButtonElement", "form",     0 },
+
+    /* Links, media, canvas, frames */
+    { "HTMLAnchorElement",  "href",     1 },
+    { "HTMLAnchorElement",  "target",   1 },
+    { "HTMLAnchorElement",  "rel",      1 },
+    { "HTMLAnchorElement",  "download", 1 },
+    { "HTMLAnchorElement",  "hreflang", 1 },
+    { "HTMLAnchorElement",  "type",     1 },
+    { "HTMLAnchorElement",  "name",     1 },
+
+    { "HTMLImageElement", "src",           1 },
+    { "HTMLImageElement", "alt",           1 },
+    { "HTMLImageElement", "width",         1 },
+    { "HTMLImageElement", "height",        1 },
+    { "HTMLImageElement", "useMap",        1 },
+    { "HTMLImageElement", "isMap",         1 },
+    { "HTMLImageElement", "loading",       1 },
+    { "HTMLImageElement", "naturalWidth",  0 },
+    { "HTMLImageElement", "naturalHeight", 0 },
+    { "HTMLImageElement", "complete",      0 },
+    { "HTMLImageElement", "currentSrc",    0 },
+
+    { "HTMLLinkElement", "href",     1 },
+    { "HTMLLinkElement", "rel",      1 },
+    { "HTMLLinkElement", "type",     1 },
+    { "HTMLLinkElement", "media",    1 },
+    { "HTMLLinkElement", "disabled", 1 },
+
+    { "HTMLScriptElement", "src",     1 },
+    { "HTMLScriptElement", "type",    1 },
+    { "HTMLScriptElement", "async",   1 },
+    { "HTMLScriptElement", "defer",   1 },
+    { "HTMLScriptElement", "charset", 1 },
+    { "HTMLScriptElement", "text",    1 },
+
+    { "HTMLCanvasElement", "width",  1 },
+    { "HTMLCanvasElement", "height", 1 },
+
+    { "HTMLMediaElement", "src",            1 },
+    { "HTMLMediaElement", "currentTime",    1 },
+    { "HTMLMediaElement", "volume",         1 },
+    { "HTMLMediaElement", "muted",          1 },
+    { "HTMLMediaElement", "autoplay",       1 },
+    { "HTMLMediaElement", "loop",           1 },
+    { "HTMLMediaElement", "controls",       1 },
+    { "HTMLMediaElement", "playbackRate",   1 },
+    { "HTMLMediaElement", "defaultPlaybackRate", 1 },
+    { "HTMLMediaElement", "preload",        1 },
+    { "HTMLMediaElement", "duration",       0 },
+    { "HTMLMediaElement", "paused",         0 },
+    { "HTMLMediaElement", "ended",          0 },
+    { "HTMLMediaElement", "readyState",     0 },
+    { "HTMLMediaElement", "networkState",   0 },
+    { "HTMLMediaElement", "currentSrc",     0 },
+    { "HTMLMediaElement", "videoWidth",     0 },
+    { "HTMLMediaElement", "videoHeight",    0 },
+
+    { "HTMLIFrameElement", "src",         1 },
+    { "HTMLIFrameElement", "width",       1 },
+    { "HTMLIFrameElement", "height",      1 },
+    { "HTMLIFrameElement", "name",        1 },
+    { "HTMLIFrameElement", "scrolling",   1 },
+    { "HTMLIFrameElement", "frameBorder", 1 }
+};
+
+/* Event handler properties (`el.onclick`): nodeSetter stores them as
+ * listeners and nodeGetter reads them back, so the accessor is just the same
+ * dispatch. Chrome exposes them on HTMLElement.prototype and
+ * Document.prototype; having them there fixes `'onclick' in el`. */
+static const char* const kEventHandlerAttrs[] = {
+    "onclick", "ondblclick", "onmousedown", "onmouseup", "onmousemove",
+    "onmouseover", "onmouseout", "onmouseenter", "onmouseleave",
+    "onkeydown", "onkeyup", "onkeypress", "oninput", "onchange",
+    "onfocus", "onblur", "onfocusin", "onfocusout", "onsubmit", "onreset",
+    "onload", "onerror", "onscroll", "onwheel", "oncontextmenu",
+    "onpointerdown", "onpointerup", "onpointermove", "onpointerover", "onpointerout",
+    "ontouchstart", "ontouchend", "ontouchmove",
+    "ondragstart", "ondrag", "ondragend", "ondragover", "ondrop",
+    "onanimationstart", "onanimationend", "ontransitionend",
+    "oncopy", "oncut", "onpaste", "onselect"
+};
+
+static void installAttributeAccessors(AntbEngine* engine,
+                                      std::map<std::string, AntbClass*>& byName)
+{
+    size_t i;
+
+    if (getenv("AGB_NO_DOM_ATTRS"))
+        return;
+
+    for (i = 0; i < sizeof(kDomAttributes) / sizeof(kDomAttributes[0]); ++i) {
+        const DomAttrDef& def = kDomAttributes[i];
+        std::map<std::string, AntbClass*>::iterator it = byName.find(def.iface);
+
+        if (it == byName.end())
+            continue;
+        antb_class_define_attribute(engine, it->second, def.name,
+                                    attrHostGet, def.writable ? attrHostSet : NULL, NULL);
+    }
+
+    for (i = 0; i < sizeof(kEventHandlerAttrs) / sizeof(kEventHandlerAttrs[0]); ++i) {
+        static const char* const kOwners[] = { "HTMLElement", "Document" };
+        size_t owner;
+
+        for (owner = 0; owner < sizeof(kOwners) / sizeof(kOwners[0]); ++owner) {
+            std::map<std::string, AntbClass*>::iterator it = byName.find(kOwners[owner]);
+
+            if (it == byName.end())
+                continue;
+            antb_class_define_attribute(engine, it->second, kEventHandlerAttrs[i],
+                                        attrHostGet, attrHostSet, NULL);
+        }
+    }
+}
+
 void ensureInterfaceClasses(AntbEngine* engine)
 {
     std::map<std::string, AntbClass*> byName;
@@ -15107,6 +15473,11 @@ void ensureInterfaceClasses(AntbEngine* engine)
         antb_class_set_property_rw(engine, g_documentIface, "", titleGetter, titleSetter, NULL);
     if (g_htmlDocumentIface)
         antb_class_set_property_rw(engine, g_htmlDocumentIface, "", titleGetter, titleSetter, NULL);
+
+    /* Common attributes on the interface prototypes (B2-3). After the
+     * catch-alls: each definition registers a decline entry that makes the
+     * catch-all yield to the prototype accessor. */
+    installAttributeAccessors(engine, byName);
 
     /* DOM constants, inherited by every child interface object. */
     if (g_nodeClass) {

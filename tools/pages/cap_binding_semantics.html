@@ -262,9 +262,54 @@
       ok('new NodeList throws', threw);
     })();
 
-    /* ---- known gaps (B2 keeps these; A flips them) ------------------------ */
-    ok('HTMLElement.prototype.style absent (known gap)',
-       Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'style') === undefined);
+    /* ---- B2-3: attribute accessors on the interface prototypes ------------ */
+    ok('id accessor on Element.prototype', (function () {
+      var d = Object.getOwnPropertyDescriptor(Element.prototype, 'id');
+      return !!d && typeof d.get === 'function' && typeof d.set === 'function' &&
+             d.enumerable === true && d.configurable === true;
+    })());
+    ok('style accessor on HTMLElement.prototype',
+       typeof Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'style').get === 'function');
+    ok('in sees attributes', ('id' in div) && ('onclick' in div) && ('value' in input));
+    ok('document attributes on Document.prototype',
+       typeof Object.getOwnPropertyDescriptor(Document.prototype, 'title').get === 'function' &&
+       typeof Object.getOwnPropertyDescriptor(Document.prototype, 'readyState').get === 'function');
+    ok('attribute getter still reflects the DOM', (function () {
+      var t = document.createElement('div');
+      t.setAttribute('title', 'T');
+      return t.title === 'T';
+    })());
+    ok('attribute setter still writes the DOM', (function () {
+      var t = document.createElement('div');
+      t.id = 'acc';
+      return t.getAttribute('id') === 'acc';
+    })());
+    ok('reflected boolean via accessor', (function () {
+      var t = document.createElement('div');
+      t.hidden = true;
+      return !!t.hidden === true && t.hasAttribute('hidden');
+    })());
+    ok('read-only attribute stays read-only', (function () {
+      var t = document.createElement('div');
+      t.nodeType = 9;
+      return t.nodeType === 1 && t.hasOwnProperty('nodeType') === false;
+    })());
+    ok('expando write still works', (function () {
+      var t = document.createElement('div');
+      t.__customField = 5;
+      return t.__customField === 5;
+    })());
+    ok('for-in sees attributes', (function () {
+      for (var k in div) if (k === 'id') return true;
+      return false;
+    })());
+
+    /* ---- known gaps (A flips these) --------------------------------------- */
+    /* `style` is now a real accessor on HTMLElement.prototype (B2-3), but the
+     * object it returns is still the facade shim, not a CSSStyleDeclaration. */
+    ok('HTMLElement.prototype.style is an accessor (known gap: value is a shim)',
+       typeof Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'style').get === 'function' &&
+       !(div.style instanceof CSSStyleDeclaration));
     /* ---- B2: window identity ---------------------------------------------- */
     ok('window instanceof Window', window instanceof Window);
     ok('window proto is Window.prototype', protoIs(window, Window.prototype));
