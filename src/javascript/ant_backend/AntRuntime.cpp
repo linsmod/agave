@@ -8805,6 +8805,15 @@ struct AgbCollection {
     int                kind;
     std::string        name;
     std::vector<AntbValue*> items;   /* AgbCollectionStatic: retained wrappers */
+    /* getElementsByClassName used to walk the whole subtree on every length /
+     * index read, so a loop over the collection was O(n^2). The walk result is
+     * cached and rebuilt only when the document's DOM tree version changes
+     * (`Document::domTreeVersion()` is bumped by every insert/remove), so the
+     * cached pointers are only ever dereferenced while the tree is unchanged. */
+    std::vector<WebCore::Node*>* nodes;
+    unsigned           nodesVersion;
+    bool               nodesValid;
+    AgbCollection() : document(NULL), root(NULL), kind(0), nodes(NULL), nodesVersion(0), nodesValid(false) {}
 };
 
 static bool isElementClassToken(WebCore::Element* element, const std::string& wanted)
@@ -8866,6 +8875,38 @@ static bool collectionIsStatic(AgbCollection* c)
     return c && c->kind == AgbCollectionStatic;
 }
 
+/* Elements of `c` whose class list contains c->name, cached per DOM version.
+ * Only valid while c->nodesValid && nodesVersion == document->domTreeVersion():
+ * a mutation bumps the version, so a removed node can never be handed out from
+ * the cache (the next read rebuilds). */
+static const std::vector<WebCore::Node*>& classCollectionNodes(AgbCollection* c)
+{
+    static const std::vector<WebCore::Node*> empty;
+
+    if (!c || !c->root)
+        return empty;
+
+    {
+        unsigned version = c->document ? c->document->domTreeVersion() : 0;
+
+        if (c->nodesValid && c->nodesVersion == version && c->nodes)
+            return *c->nodes;
+
+        if (!c->nodes)
+            c->nodes = new std::vector<WebCore::Node*>();
+        c->nodes->clear();
+
+        for (WebCore::Node* n = c->root->firstChild(); n; n = n->traverseNextNode(c->root))
+            if (n->isElementNode()
+                    && isElementClassToken(static_cast<WebCore::Element*>(n), c->name))
+                c->nodes->push_back(n);
+
+        c->nodesVersion = version;
+        c->nodesValid = true;
+        return *c->nodes;
+    }
+}
+
 static unsigned collectionCount(AgbCollection* c)
 {
     if (!c)
@@ -8909,15 +8950,7 @@ static unsigned collectionCount(AgbCollection* c)
     }
 
     /* getElementsByClassName: the 2008 tree has no live class collection. */
-    {
-        unsigned count = 0;
-
-        for (WebCore::Node* n = c->root->firstChild(); n; n = n->traverseNextNode(c->root))
-            if (n->isElementNode()
-                    && isElementClassToken(static_cast<WebCore::Element*>(n), c->name))
-                ++count;
-        return count;
-    }
+    return (unsigned)classCollectionNodes(c).size();
 }
 
 static WebCore::Node* collectionItemAt(AgbCollection* c, unsigned index)
@@ -8960,16 +8993,9 @@ static WebCore::Node* collectionItemAt(AgbCollection* c, unsigned index)
     }
 
     {
-        unsigned i = 0;
+        const std::vector<WebCore::Node*>& nodes = classCollectionNodes(c);
 
-        for (WebCore::Node* n = c->root->firstChild(); n; n = n->traverseNextNode(c->root)) {
-            if (n->isElementNode()
-                    && isElementClassToken(static_cast<WebCore::Element*>(n), c->name)) {
-                if (i++ == index)
-                    return n;
-            }
-        }
-        return NULL;
+        return index < nodes.size() ? nodes[index] : NULL;
     }
 }
 
@@ -9137,6 +9163,8 @@ static void releaseCollection(AgbCollection* c, bool releaseValues)
                 antb_value_release(c->items[i]);
     }
     c->items.clear();
+    delete c->nodes;
+    c->nodes = NULL;
     delete c;
 }
 
