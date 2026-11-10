@@ -131,6 +131,9 @@ AntbValue* windowForDocument(AntbEngine*, WebCore::Document*);
 AntbValue* realmWindowFor(AntbEngine*, WebCore::Document*);
 int windowGetter(AntbEngine*, AntbValue*, const char*, AntbValue*, void*);
 int windowSetter(AntbEngine*, AntbValue*, const char*, const AntbValue*, void*);
+/* Built where the keyboard/mouse detail helpers live (namespace AntRuntime);
+ * the anonymous-namespace dispatchers call it through makeEventObject(). */
+AntbValue* makeEventObjectForDispatch(const std::string&, WebCore::Node*, WebCore::Event*);
 }
 
 namespace {
@@ -1031,6 +1034,56 @@ int nodeDocumentAdoptNode(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*,
 int nodeDocumentElementFromPoint(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeDocumentHasFocus(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 template <typename Collection> AntbValue* wrapNodeList(AntbEngine*, Collection*);
+
+/* The JS event facade (prelude.js) owns the event interface prototypes; these
+ * helpers let the C dispatcher build events through it and update the
+ * per-listener currentTarget/eventPhase slots it creates. */
+static AntbValue* makeEventObject(const std::string& type, WebCore::Node* target, WebCore::Event* event)
+{
+    return AntRuntime::makeEventObjectForDispatch(type, target, event);
+}
+
+/* prelude's __agbEventPhase(evt, current, phase): currentTarget/eventPhase are
+ * own data properties on facade events and have to be defined on a native
+ * Event (its prototype accessors are getter-only), so the update goes through
+ * the JS layer. */
+static AntbValue* eventPhaseFn(AntbEngine* engine)
+{
+    AntbValue* global = antb_global(engine);
+    AntbValue* fn;
+
+    if (!global)
+        return NULL;
+    fn = antb_get_prop(engine, global, "__agbEventPhase");
+    antb_value_release(global);
+    return fn;   /* caller releases */
+}
+
+static void setEventPhase(AntbEngine* engine, AntbValue* fn, AntbValue* evt,
+                          AntbValue* current, int phase)
+{
+    AntbValue* args[3];
+    AntbValue* nullValue = NULL;
+    AntbValue* phaseValue;
+    AntbValue* result;
+
+    if (!fn || !evt)
+        return;
+    if (!current)
+        nullValue = antb_make_null(engine);
+    phaseValue = antb_make_number(engine, (double)phase);
+    args[0] = evt;
+    args[1] = current ? current : nullValue;
+    args[2] = phaseValue;
+    result = antb_call(engine, fn, NULL, args, 3, NULL);
+    if (result)
+        antb_value_release(result);
+    if (phaseValue)
+        antb_value_release(phaseValue);
+    if (nullValue)
+        antb_value_release(nullValue);
+}
+
 int nodeGetContext(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeToDataURL(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 
@@ -6376,6 +6429,11 @@ static void installSharedWebGlobals(AntbEngine* engine, WebCore::Document* docum
         "MessageChannel", "MessagePort", "BroadcastChannel",
         "structuredClone", "crypto",
         "EventTarget", "AbortController", "AbortSignal", "DOMException",
+        /* The ant events module only initialises the main realm, so a frame
+         * realm was left with prelude stubs for these: `new Event()` there
+         * produced an empty object and the event facade had no native base.
+         * Copy the constructors like EventTarget (R176). */
+        "Event", "CustomEvent", "MessageEvent", "ErrorEvent", "PromiseRejectionEvent",
         "ReadableStream", "WritableStream", "TransformStream",
         "CompressionStream", "DecompressionStream"
     };
@@ -9895,17 +9953,42 @@ int nodeDispatchEvent(AntbEngine* engine, AntbValue* self, AntbValue** args, int
 {
     WebCore::Node* n = nodeOf(self);
     char* type = (argc > 0) ? eventTypeOf(engine, args[0]) : NULL;
+    AntbValue* evt = (argc > 0) ? args[0] : NULL;
+    AntbValue* phaseFn = NULL;
     std::vector<AntbValue*> snapshot;
 
-    (void)out;
-
-    if (!n || !type) {
+    if (!n || !type || !evt) {
         antb_free(type);
         return 0;
     }
 
     if (getenv("AGB_EVT_DEBUG"))
         agbLog(AGB_LOG_EVT, "JS dispatchEvent(%s) on node=%p", type, (void*)n);
+
+    /* target/currentTarget belong to the node the page dispatched on; the
+     * event stays untrusted (the page built it, not the engine). The facade
+     * keeps those slots as own data properties, and the same helper also
+     * patches a native Event, whose prototype accessors are getter-only. */
+    phaseFn = eventPhaseFn(engine);
+    if (phaseFn) {
+        AntbValue* global = antb_global(engine);
+        AntbValue* targetFn = global ? antb_get_prop(engine, global, "__agbEventSetTarget") : NULL;
+
+        if (global)
+            antb_value_release(global);
+        if (targetFn) {
+            AntbValue* targetArgs[2];
+            AntbValue* result;
+
+            targetArgs[0] = evt;
+            targetArgs[1] = self;
+            result = antb_call(engine, targetFn, NULL, targetArgs, 2, NULL);
+            if (result)
+                antb_value_release(result);
+            antb_value_release(targetFn);
+        }
+        setEventPhase(engine, phaseFn, evt, self, 2);
+    }
 
     {
         std::vector<Listener>* list = listenersForRealm(receiverRealm(n));
@@ -9923,9 +10006,20 @@ int nodeDispatchEvent(AntbEngine* engine, AntbValue* self, AntbValue** args, int
     /* Dispatch the snapshot, and hand the caller's own Event object through. */
     for (size_t i = 0; i < snapshot.size(); ++i) {
         AntbValue* argv[1];
+        AntbValue* value;
 
-        argv[0] = (argc > 0) ? args[0] : NULL;
-        antb_call(engine, snapshot[i], self, argv, argv[0] ? 1 : 0, NULL);
+        argv[0] = evt;
+        value = antb_call(engine, snapshot[i], self, argv, 1, NULL);
+        if (!value) {
+            char* pending = antb_take_pending_error(engine);
+
+            if (pending) {
+                fprintf(stderr, "[antjs] (dispatchEvent %s) %s\n", type, pending);
+                free(pending);
+            }
+        } else {
+            antb_value_release(value);
+        }
     }
 
     /* once: drop the listeners this dispatch just called. Identity is
@@ -9951,6 +10045,38 @@ int nodeDispatchEvent(AntbEngine* engine, AntbValue* self, AntbValue** args, int
 
     for (size_t i = 0; i < snapshot.size(); ++i)
         antb_value_release(snapshot[i]);
+
+    /* dispatchEvent() returns false when a cancelable event was cancelled. */
+    {
+        bool prevented = false;
+        bool cancelable = true;
+        AntbValue* v;
+
+        v = antb_get_prop(engine, evt, "defaultPrevented");
+        if (v) { prevented = antb_to_boolean(v) != 0; antb_value_release(v); }
+        if (!prevented) {
+            v = antb_get_prop(engine, evt, "__prevented");
+            if (v) { prevented = antb_to_boolean(v) != 0; antb_value_release(v); }
+        }
+        v = antb_get_prop(engine, evt, "cancelable");
+        if (v) { cancelable = antb_to_boolean(v) != 0; antb_value_release(v); }
+
+        /* Chrome resets currentTarget before dispatchEvent() returns. */
+        if (phaseFn)
+            setEventPhase(engine, phaseFn, evt, NULL, 0);
+
+        if (out) {
+            AntbValue* result = antb_make_boolean(engine, (prevented && cancelable) ? 0 : 1);
+
+            if (result) {
+                antb_value_assign(out, result);
+                antb_value_release(result);
+            }
+        }
+    }
+
+    if (phaseFn)
+        antb_value_release(phaseFn);
 
     antb_free(type);
     return 1;
@@ -11040,7 +11166,9 @@ int globalFramePostMessage(AntbEngine* engine, AntbValue*, AntbValue** args, int
     if (!engine || argc < 1 || !g_listeners)
         return 1;
 
-    event = antb_make_object(engine);
+    /* A MessageEvent instance, not a plain object: receivers check
+     * `e instanceof MessageEvent` / Object.prototype.toString. */
+    event = makeEventObject("message", g_document, NULL);
     if (!event)
         return 1;
 
@@ -14487,6 +14615,12 @@ void ensureInterfaceClasses(AntbEngine* engine)
     g_unknownElementIface   = byName["HTMLUnknownElement"];
     g_windowClass           = byName["Window"];
 
+    /* Window inherits EventTarget in the DOM. prelude relinks each realm's
+     * global object to this prototype, which is what makes `window instanceof
+     * Window` / `window instanceof EventTarget` / `[object Window]` hold. */
+    if (g_windowClass && builtinProto)
+        antb_class_set_parent_value(engine, g_windowClass, builtinProto, builtinCtor);
+
     /* Implemented classes that are not element interfaces get the same shape,
      * so `x instanceof CSSStyleDeclaration` / `Range` / `TextTrack` work. */
     cssomEnsureClasses();
@@ -14757,16 +14891,12 @@ void dispatchWindowEventState(const char* type, AntbValue* state)
     }
 
     {
-        AntbValue* evt = antb_make_object(g_engine);
+        /* A real event of the right interface (popstate → PopStateEvent,
+         * pagehide → PageTransitionEvent, …): window listeners get an Event
+         * instance instead of a plain object. */
+        AntbValue* evt = makeEventObject(type, g_document, NULL);
 
         if (evt) {
-            AntbValue* t = antb_make_string(g_engine, type);
-
-            if (t) {
-                antb_set_prop(g_engine, evt, "type", t);
-                antb_value_release(t);
-            }
-
             if (state) {
                 antb_set_prop(g_engine, evt, "state", state);
             } else {
@@ -15040,13 +15170,51 @@ static void codeForIdentifier(const std::string& ki, std::string* out)
  * `input` event that follows carries it as `data`. */
 static std::string g_lastTextInputData;
 
-static AntbValue* makeEventObject(const std::string& type, WebCore::Node* target, WebCore::Event* event)
+/* Event interface for a WebCore event (or for a synthetic window event, whose
+ * `event` is NULL). Chrome's mapping: mouse → MouseEvent (wheel → WheelEvent),
+ * key → KeyboardEvent, text insertion → InputEvent, everything else
+ * UIEvent/Event. */
+static const char* eventInterfaceFor(WebCore::Event* event, const std::string& type)
+{
+    if (event) {
+        if (event->isWheelEvent())
+            return "WheelEvent";
+        if (event->isMouseEvent())
+            return "MouseEvent";
+        if (event->isKeyboardEvent())
+            return "KeyboardEvent";
+        if (event->isTextEvent())
+            return "InputEvent";
+        if (event->isUIEvent())
+            return "UIEvent";
+    }
+    if (type == "focus" || type == "blur" || type == "focusin" || type == "focusout")
+        return "FocusEvent";
+    if (type == "popstate")
+        return "PopStateEvent";
+    if (type == "hashchange")
+        return "HashChangeEvent";
+    if (type == "pagehide" || type == "pageshow")
+        return "PageTransitionEvent";
+    if (type == "message" || type == "messageerror")
+        return "MessageEvent";
+    if (type == "resize")
+        return "UIEvent";
+    return "Event";
+}
+
+/* prelude's __agbEventPhase(evt, current, phase) is defined with the other
+ * dispatcher helpers at the top of this file (they must be reachable from the
+ * anonymous-namespace dispatchers too). */
+
+AntbValue* makeEventObjectForDispatch(const std::string& type, WebCore::Node* target, WebCore::Event* event)
 {
     AntbValue* global;
     AntbValue* factory;
     AntbValue* wrappedTarget;
-    AntbValue* args[2];
+    AntbValue* args[5];
     AntbValue* evt = NULL;
+    unsigned i;
     global = antb_global(g_engine);
     if (!global)
         return NULL;
@@ -15057,33 +15225,31 @@ static AntbValue* makeEventObject(const std::string& type, WebCore::Node* target
     wrappedTarget = wrapNode(g_engine, target);
     args[0] = antb_make_string(g_engine, type.c_str());
     args[1] = wrappedTarget;
-    if (args[0])
-        evt = antb_call(g_engine, factory, NULL, args, 2, NULL);
-    if (args[0])
-        antb_value_release(args[0]);
-    if (wrappedTarget)
-        antb_value_release(wrappedTarget);
+    args[2] = antb_make_string(g_engine, eventInterfaceFor(event, type));
+    args[3] = antb_make_number(g_engine, (event && !event->bubbles()) ? 0.0 : 1.0);
+    args[4] = antb_make_number(g_engine, (event && !event->cancelable()) ? 0.0 : 1.0);
+    if (args[0]) {
+        char* callErr = NULL;
+
+        evt = antb_call(g_engine, factory, NULL, args, 5, &callErr);
+        if (callErr) {
+            if (getenv("AGB_EVT_DEBUG"))
+                fprintf(stderr, "[antjs] event factory (%s): %s\n", type.c_str(), callErr);
+            free(callErr);
+        }
+    }
+    for (i = 0; i < 5; ++i) {
+        if (args[i])
+            antb_value_release(args[i]);
+    }
     antb_value_release(factory);
     if (!evt)
         return NULL;
-    /* Engine-dispatched events are trusted; a JS dispatchEvent() passes the
-     * caller's own Event object through nodeDispatchEvent and keeps it false. */
-    {
-        AntbValue* trusted = antb_make_number(g_engine, 1.0);
-        if (trusted) {
-            antb_set_prop(g_engine, evt, "isTrusted", trusted);
-            antb_value_release(trusted);
-        }
-    }
+    /* target / currentTarget / isTrusted / eventPhase come from
+     * __agbMakeEvent: the engine is the trusted source, while a JS
+     * dispatchEvent() passes the caller's own object through nodeDispatchEvent
+     * and keeps isTrusted false. */
     if (event) {
-        struct { const char* name; double value; } nums[] = {
-            { "timeStamp", (double)event->timeStamp() },
-        };
-        unsigned i;
-        for (i = 0; i < sizeof(nums) / sizeof(nums[0]); ++i) {
-            AntbValue* v = antb_make_number(g_engine, nums[i].value);
-            if (v) { antb_set_prop(g_engine, evt, nums[i].name, v); antb_value_release(v); }
-        }
         /* MouseEvent / KeyboardEvent details, when present. */
         if (event->isMouseEvent()) {
             WebCore::MouseEvent* mouse = static_cast<WebCore::MouseEvent*>(event);
@@ -15190,7 +15356,8 @@ static AntbValue* makeEventObject(const std::string& type, WebCore::Node* target
  * `return "..."` guard). */
 static void runListenersFor(WebCore::Node* node, const std::string& type, AntbValue* evt,
                             AntbValue* currentTarget, bool& stopped, bool& stoppedImmediate,
-                            std::string* stringReturn = NULL)
+                            std::string* stringReturn = NULL,
+                            AntbValue* phaseFn = NULL, int phase = 2)
 {
     AntbValue* value = NULL;
     std::vector<Listener>* list = listenersForRealm(receiverRealm(node));
@@ -15216,6 +15383,9 @@ static void runListenersFor(WebCore::Node* node, const std::string& type, AntbVa
         }
         {
             AntbValue* args[1];
+            /* Chrome updates currentTarget/eventPhase for every handler. */
+            if (phaseFn)
+                setEventPhase(g_engine, phaseFn, evt, currentTarget, phase);
             args[0] = evt;
             value = antb_call(g_engine, l.fn, currentTarget, args, evt ? 1 : 0, NULL);
         }
@@ -15294,13 +15464,21 @@ void dispatchEvent(void* nodePtr, void* eventPtr)
         }
 
         AntbValue* evt = makeEventObject(type, node, event);
+        AntbValue* phaseFn = eventPhaseFn(g_engine);
 
         if (getenv("AGB_EVT_DEBUG") && (type == "load" || type == "DOMContentLoaded"))
             agbLog(AGB_LOG_EVT, "WebCore event %s on node=%p", type.c_str(), (void*)node);
         bool stopped = false;
         bool stoppedImmediate = false;
-        if (!evt)
+        if (!evt) {
+            char* pending = antb_take_pending_error(g_engine);
+
+            if (pending) {
+                fprintf(stderr, "[antjs] (event %s) event object failed: %s\n", type.c_str(), pending);
+                free(pending);
+            }
             return;
+        }
 
         if (textInputEvt) {
             const char* text = textInputEvt->data().utf8().data();
@@ -15330,14 +15508,21 @@ void dispatchEvent(void* nodePtr, void* eventPtr)
                     fprintf(stderr, "[evt-trace] %s node=%p listeners=%d\n",
                             type.c_str(), (void*)current, matched);
                 }
-                runListenersFor(current, type, evt, wrapper, stopped, stoppedImmediate);
+                runListenersFor(current, type, evt, wrapper, stopped, stoppedImmediate,
+                                NULL, phaseFn, current == node ? 2 : 3);
                 antb_value_release(wrapper);
             }
         }
+        /* Chrome resets currentTarget after the dispatch. */
+        if (phaseFn)
+            setEventPhase(g_engine, phaseFn, evt, NULL, 0);
         /* preventDefault in JS must reach the engine, or links still navigate. */
         bool preventedInJs = false;
         {
             AntbValue* prevented = antb_get_prop(g_engine, evt, "__prevented");
+
+            if (!prevented)
+                prevented = antb_get_prop(g_engine, evt, "defaultPrevented");
             if (prevented) {
                 if (antb_to_boolean(prevented)) {
                     preventedInJs = true;
@@ -15375,6 +15560,8 @@ void dispatchEvent(void* nodePtr, void* eventPtr)
             }
         }
 
+        if (phaseFn)
+            antb_value_release(phaseFn);
         antb_value_release(evt);
     }
 }

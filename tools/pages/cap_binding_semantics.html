@@ -181,6 +181,87 @@
     ok('nodeList is array (known gap)', Array.isArray(document.querySelectorAll('div')));
     ok('HTMLElement.prototype.style absent (known gap)',
        Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'style') === undefined);
+    /* ---- B2: window identity ---------------------------------------------- */
+    ok('window instanceof Window', window instanceof Window);
+    ok('window proto is Window.prototype', protoIs(window, Window.prototype));
+    ok('window toString', Object.prototype.toString.call(window) === '[object Window]');
+    ok('window constructor', window.constructor === Window);
+    ok('window instanceof EventTarget', window instanceof EventTarget);
+    ok('window instanceof Object', window instanceof Object);
+    ok('self is window', self === window);
+    ok('window has own document', Object.prototype.hasOwnProperty.call(window, 'document'));
+
+    /* ---- B2: event interface objects (Chrome values: issues §18) ---------- */
+    ok('new Event instanceof Event', new Event('x') instanceof Event);
+    ok('new Event instanceof Object', new Event('x') instanceof Object);
+    ok('plain event tag', Object.prototype.toString.call(new Event('x')) === '[object Event]');
+    ok('plain event bubbles default', new Event('x').bubbles === false);
+    ok('MouseEvent instance chain', (function () {
+      var m = new MouseEvent('click', { clientX: 5 });
+      return (m instanceof MouseEvent) && (m instanceof UIEvent) && (m instanceof Event) &&
+             m.clientX === 5 && m.detail === 0 &&
+             Object.prototype.toString.call(m) === '[object MouseEvent]' &&
+             m.constructor === MouseEvent;
+    })());
+    ok('event ctor chain', protoIs(MouseEvent.prototype, UIEvent.prototype) &&
+       protoIs(UIEvent.prototype, Event.prototype));
+    ok('KeyboardEvent extends UIEvent', new KeyboardEvent('keydown') instanceof UIEvent);
+    ok('FocusEvent extends UIEvent', new FocusEvent('f') instanceof UIEvent);
+    ok('InputEvent extends UIEvent', new InputEvent('input') instanceof UIEvent);
+    ok('WheelEvent extends MouseEvent', new WheelEvent('w') instanceof MouseEvent);
+    ok('CustomEvent still Event', new CustomEvent('c', { detail: 3 }) instanceof Event);
+    ok('createEvent MouseEvent', document.createEvent('MouseEvent') instanceof MouseEvent);
+    ok('createEvent Event', document.createEvent('Event') instanceof Event);
+
+    /* Engine-dispatched click: a real MouseEvent; target/currentTarget are
+     * valid while a handler runs and reset afterwards, as in Chrome. */
+    (function () {
+      var host = document.createElement('div');
+      var parent = document.createElement('section');
+      document.body.appendChild(parent);
+      parent.appendChild(host);
+      var inner = null, outer = null, seen = null;
+      host.addEventListener('click', function (e) {
+        inner = { target: e.target, current: e.currentTarget, phase: e.eventPhase,
+                  trusted: e.isTrusted };
+        seen = e;
+      });
+      parent.addEventListener('click', function (e) {
+        outer = { target: e.target, current: e.currentTarget, phase: e.eventPhase };
+      });
+      host.click();
+      ok('click instanceof MouseEvent/UIEvent/Event', !!seen &&
+         (seen instanceof MouseEvent) && (seen instanceof UIEvent) && (seen instanceof Event));
+      ok('click tag/constructor', !!seen &&
+         Object.prototype.toString.call(seen) === '[object MouseEvent]' &&
+         seen.constructor === MouseEvent);
+      /* Chrome marks a scripted el.click() untrusted; this engine cannot tell
+       * a user click from a scripted one yet, so engine dispatch is trusted. */
+      ok('click engine dispatch trusted', !!inner && inner.trusted === true);
+      ok('click target/currentTarget/phase', !!inner && inner.target === host &&
+         inner.current === host && inner.phase === 2);
+      ok('click bubbles to parent', !!outer && outer.target === host &&
+         outer.current === parent && outer.phase === 3);
+      ok('currentTarget reset after dispatch', !!seen && seen.currentTarget === null &&
+         seen.eventPhase === 0);
+    })();
+
+    /* Page-dispatched event: target set, untrusted, cancelable contract. */
+    (function () {
+      var el = document.createElement('div');
+      document.body.appendChild(el);
+      var seen = null;
+      var ret;
+      el.addEventListener('probe', function (e) { seen = e; });
+      ret = el.dispatchEvent(new Event('probe', { bubbles: true, cancelable: true }));
+      ok('dispatchEvent target/tag', !!seen && seen.target === el &&
+         Object.prototype.toString.call(seen) === '[object Event]');
+      ok('dispatchEvent untrusted', !!seen && seen.isTrusted === false);
+      ok('dispatchEvent return true', ret === true);
+      el.addEventListener('probe2', function (e) { e.preventDefault(); });
+      ok('dispatchEvent returns false when cancelled',
+         el.dispatchEvent(new Event('probe2', { cancelable: true })) === false);
+    })();
   } catch (e) {
     fail.push('threw: ' + (e && e.message ? e.message : e));
   }

@@ -516,16 +516,223 @@
   }
   if (!g.performance.now) { g.performance.now = function () { return (new Date()).getTime(); }; }
   if (!g.performance.getEntriesByType) { g.performance.getEntriesByType = function () { return []; }; }
-  g.__agbMakeEvent = function (type, target) {
-    return {
-      type: type, target: target, currentTarget: target,
-      bubbles: true, cancelable: true, eventPhase: 2, timeStamp: (new Date()).getTime(),
-      defaultPrevented: false, returnValue: true,
-      __prevented: false, __stopped: false, __stoppedImmediate: false,
-      preventDefault: function () { this.__prevented = true; this.defaultPrevented = true; this.returnValue = false; },
-      stopPropagation: function () { this.__stopped = true; },
-      stopImmediatePropagation: function () { this.__stopped = true; this.__stoppedImmediate = true; }
+  /* ---- window identity (B2) -------------------------------------------
+   * `window` is the realm's global object, so it was a bare Object with
+   * @@toStringTag "global": `window instanceof Window` was false and
+   * Object.prototype.toString said [object global]. Relinking the global's
+   * [[Prototype]] to Window.prototype (which the bridge already chains to
+   * EventTarget.prototype) makes instanceof/constructor/toString agree with a
+   * browser, without moving any of the window's own properties. */
+  (function () {
+    var W = g.Window;
+    if (typeof W !== 'function' || !W.prototype) return;
+    if (Object.getPrototypeOf && Object.getPrototypeOf(g) === W.prototype) {
+      /* already relinked (same realm, new document) */
+    } else if (Object.setPrototypeOf) {
+      try { Object.setPrototypeOf(g, W.prototype); } catch (e) {}
+    }
+    try {
+      if (typeof Symbol === 'function' && Symbol.toStringTag && Object.defineProperty)
+        Object.defineProperty(g, Symbol.toStringTag, { value: 'Window', configurable: true });
+    } catch (e) {}
+  })();
+  /* ---- event interface objects (B2) ------------------------------------
+   * Engine-dispatched events used to be plain objects, so `e instanceof Event`
+   * was false and Object.prototype.toString gave [object Object]. The kernel
+   * already ships a real native Event (accessors, native preventDefault that
+   * cancels WebCore defaults, EventTarget dispatch). This block keeps it as
+   * the base and adds the interface prototypes on top:
+   *
+   *   MouseEvent.prototype -> UIEvent.prototype -> Event.prototype -> Object
+   *
+   * A facade instance is a real native Event whose [[Prototype]] is re-linked
+   * to its interface (Object.setPrototypeOf keeps the native brand, so every
+   * accessor and method still runs on it) plus own data properties for the
+   * interface fields. __agbMakeEvent() builds events that way, and the C
+   * dispatcher keeps reading the same cancel flags.
+   *
+   * UIEvent/FocusEvent/... used to be bare polyfill constructors inheriting
+   * Event.prototype, so reading an inherited accessor on one of their instances
+   * (`new UIEvent('x').type`) threw "Value of this must be of type Event". */
+  (function () {
+    try {
+    var nativeE = g.Event;
+    var E = (typeof nativeE === 'function' && nativeE.prototype) ? nativeE : null;
+    if (!E) {
+      /* A realm created after engine bootstrap historically had no kernel
+       * Event (the events module only initialises the main realm). The host
+       * now copies the real constructors into frame realms; this fallback
+       * keeps the facade working in any realm that still lacks one. */
+      E = function Event(type, options) {
+        var opts = options || {};
+        var ev = {
+          type: type == null ? '' : String(type),
+          target: null, currentTarget: null, eventPhase: 0,
+          bubbles: !!opts.bubbles, cancelable: !!opts.cancelable,
+          defaultPrevented: false, returnValue: true, composed: false,
+          isTrusted: false, timeStamp: (new Date()).getTime(),
+          __prevented: false, __stopped: false, __stoppedImmediate: false
+        };
+        ev.preventDefault = function () {
+          this.__prevented = true; this.defaultPrevented = true; this.returnValue = false;
+        };
+        ev.stopPropagation = function () { this.__stopped = true; };
+        ev.stopImmediatePropagation = function () {
+          this.__stopped = true; this.__stoppedImmediate = true;
+        };
+        ev.composedPath = function () { return []; };
+        return ev;
+      };
+      E.prototype = {};
+      own(E.prototype, 'constructor', E, false);
+      setTag(E.prototype, 'Event');
+      if (typeof g.Event === 'undefined')
+        g.Event = E;
+    }
+
+    /* Helpers first: __agbMakeEvent calls them even if building the interface
+     * prototypes below throws in some unusual realm. */
+    g.__agbEventPhase = function (evt, current, phase) {
+      if (!evt) return;
+      own(evt, 'currentTarget', current === undefined ? null : current, true);
+      own(evt, 'eventPhase', phase | 0, true);
     };
+    g.__agbEventSetTarget = function (evt, target) {
+      if (!evt) return;
+      own(evt, 'target', target === undefined ? null : target, true);
+    };
+    g.__agbEventTrusted = function (evt) {
+      if (!evt) return;
+      own(evt, 'isTrusted', true, true);
+    };
+
+    if (typeof E !== 'function' || !E.prototype) return;
+
+    function own(obj, name, value, enumerable) {
+      try {
+        Object.defineProperty(obj, name, {
+          value: value, writable: true, enumerable: !!enumerable, configurable: true
+        });
+      } catch (e) {
+        try { obj[name] = value; } catch (e2) {}
+      }
+    }
+    function setTag(proto, name) {
+      try {
+        if (typeof Symbol === 'function' && Symbol.toStringTag && Object.defineProperty)
+          Object.defineProperty(proto, Symbol.toStringTag, { value: name, configurable: true });
+      } catch (e) {}
+    }
+    /* flags the C dispatcher reads; native methods must still run so
+     * WebCore's own default handling (links, beforeinput) sees the cancel. */
+    if (!E.prototype.__agbFlagsPatched) {
+      var nPrevent = E.prototype.preventDefault;
+      var nStop = E.prototype.stopPropagation;
+      var nStopImm = E.prototype.stopImmediatePropagation;
+      if (typeof nPrevent === 'function') E.prototype.preventDefault = function () {
+        own(this, '__prevented', true, false);
+        return nPrevent.call(this);
+      };
+      if (typeof nStop === 'function') E.prototype.stopPropagation = function () {
+        own(this, '__stopped', true, false);
+        return nStop.call(this);
+      };
+      if (typeof nStopImm === 'function') E.prototype.stopImmediatePropagation = function () {
+        own(this, '__stopped', true, false);
+        own(this, '__stoppedImmediate', true, false);
+        return nStopImm.call(this);
+      };
+      own(E.prototype, '__agbFlagsPatched', 1, false);
+    }
+
+    /* (name, parent ctor or null, [field, default, ...]) */
+    function iface(name, parent, fields) {
+      var Ctor = function (type, options) {
+        var ev;
+        try { ev = new E(type == null ? '' : String(type), options || {}); }
+        catch (e) { ev = new E(''); }
+        try { Object.setPrototypeOf(ev, Ctor.prototype); } catch (e) {}
+        var opts = options || {};
+        for (var i = 0; i < fields.length; i += 2) {
+          var key = fields[i];
+          own(ev, key, opts[key] === undefined ? fields[i + 1] : opts[key], true);
+        }
+        return ev;
+      };
+      Ctor.prototype = Object.create(parent ? parent.prototype : E.prototype);
+      try {
+        Object.defineProperty(Ctor.prototype, 'constructor', {
+          value: Ctor, writable: true, enumerable: false, configurable: true
+        });
+      } catch (e) { Ctor.prototype.constructor = Ctor; }
+      setTag(Ctor.prototype, name);
+      try { Object.defineProperty(Ctor, 'name', { value: name, configurable: true }); } catch (e) {}
+      own(Ctor, 'NONE', 0, false);
+      g[name] = Ctor;
+      return Ctor;
+    }
+
+    /* The kernel's Event.prototype is a null-prototype object, so even a plain
+     * native event was not `instanceof Object`. Link it (CustomEvent/… already
+     * inherit from Event.prototype, so the whole event family gets it). */
+    try {
+      if (Object.getPrototypeOf && Object.getPrototypeOf(E.prototype) === null &&
+          Object.setPrototypeOf)
+        Object.setPrototypeOf(E.prototype, Object.prototype);
+    } catch (e) {}
+
+    var uiEvent = iface('UIEvent', null,
+      ['view', null, 'detail', 0]);
+    var mouse = iface('MouseEvent', uiEvent,
+      ['detail', 0, 'screenX', 0, 'screenY', 0, 'clientX', 0, 'clientY', 0,
+       'pageX', 0, 'pageY', 0, 'button', 0, 'buttons', 0, 'relatedTarget', null,
+       'ctrlKey', false, 'shiftKey', false, 'altKey', false, 'metaKey', false,
+       'movementX', 0, 'movementY', 0]);
+    iface('KeyboardEvent', uiEvent,
+      ['key', '', 'code', '', 'location', 0, 'ctrlKey', false, 'shiftKey', false,
+       'altKey', false, 'metaKey', false, 'repeat', false, 'isComposing', false,
+       'keyCode', 0, 'charCode', 0, 'which', 0]);
+    iface('FocusEvent', uiEvent, ['relatedTarget', null]);
+    iface('InputEvent', uiEvent, ['data', null, 'inputType', '', 'isComposing', false]);
+    iface('WheelEvent', mouse,
+      ['deltaX', 0, 'deltaY', 0, 'deltaZ', 0, 'deltaMode', 0]);
+    iface('PointerEvent', mouse,
+      ['pointerId', 0, 'pointerType', '', 'isPrimary', false, 'width', 1, 'height', 1,
+       'pressure', 0, 'tangentialPressure', 0, 'tiltX', 0, 'tiltY', 0, 'twist', 0]);
+    iface('DragEvent', mouse, ['dataTransfer', null]);
+    iface('CompositionEvent', uiEvent, ['data', '', 'locale', '']);
+    iface('ClipboardEvent', null, ['clipboardData', null]);
+    iface('TouchEvent', uiEvent,
+      ['touches', [], 'targetTouches', [], 'changedTouches', [],
+       'ctrlKey', false, 'shiftKey', false, 'altKey', false, 'metaKey', false]);
+    iface('MessageEvent', null,
+      ['data', null, 'origin', '', 'lastEventId', '', 'source', null, 'ports', []]);
+    iface('PopStateEvent', null, ['state', null]);
+    iface('HashChangeEvent', null, ['oldURL', '', 'newURL', '']);
+    iface('PageTransitionEvent', null, ['persisted', false]);
+
+    /* C updates currentTarget/eventPhase as it walks the tree (the helpers
+     * are defined above, before the prototypes). */
+    } catch (err) { g.__agbEventError = String(err); }
+  })();
+  /* (type, target, kind, bubbles, cancelable): every value-carrying field is
+   * an own data property, so the C dispatcher's later writes (clientX, key,
+   * data, state, persisted) update them. */
+  g.__agbMakeEvent = function (type, target, kind, bubbles, cancelable) {
+    var Ctor = (kind && typeof g[kind] === 'function') ? g[kind] : null;
+    var ev = null;
+    var opts = { bubbles: bubbles !== false, cancelable: cancelable !== false };
+    if (Ctor) {
+      try { ev = new Ctor(type == null ? '' : String(type), opts); } catch (e) { ev = null; }
+    }
+    if (!ev) {
+      try { ev = new g.Event(type == null ? '' : String(type), opts); }
+      catch (e) { ev = {}; }
+    }
+    g.__agbEventSetTarget(ev, target === undefined ? null : target);
+    g.__agbEventPhase(ev, target === undefined ? null : target, 2);
+    g.__agbEventTrusted(ev);
+    return ev;
   };
   g.__agbMakeClassList = function (el) {
     return {
@@ -1326,7 +1533,8 @@
   }
 
   function _agbWorkerEvent(w, type, native) {
-    var ev = g.__agbMakeEvent(type, w);
+    var ev = g.__agbMakeEvent(type, w,
+      (type === 'message' || type === 'messageerror') ? 'MessageEvent' : 'Event');
     ev.data = native ? native.data : undefined;
     ev.origin = (native && native.origin) ? native.origin : '';
     ev.lastEventId = '';
@@ -1351,7 +1559,7 @@
     if (w._failed || w._terminated) return;
     w._failed = true;
     try { if (g.console && g.console.error) g.console.error('Worker error: ' + message); } catch (e) {}
-    var ev = g.__agbMakeEvent('error', w);
+    var ev = g.__agbMakeEvent('error', w, 'Event');
     ev.message = String(message);
     ev.filename = w._url;
     ev.lineno = 0;
