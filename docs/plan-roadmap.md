@@ -266,6 +266,16 @@
   类表的问题。详细记录：`docs/hist-lessons.md` R182、`issues/wip/ant-dom-bindings.md` §22。
 - 验收（已满足）：三个套件恢复全绿；全量 `run_all_tests.ps1` 20 套件 250.9 s 0 failed。
 
+### P1-bind 脚本动态插入 iframe 后 eval/脚本"停住"（2026-11-10 发现，**待查**）
+
+- 现象：`var f=document.createElement('iframe'); document.body.appendChild(f); probeExit('x')` 在探针 eval 里执行 →
+  子 frame 的 about:blank 导航开始后，后面的语句不执行，探针 exit 4；无 JS 报错、无崩溃。静态 `<iframe>` 不受影响，
+  `run_realm_tests`/`run_nav_tests` 全绿。
+- 影响：页面脚本动态插入 iframe 之后的逻辑可能整体不执行（页面可见）。
+- 起点：`FrameLoaderClientMC` 创建子 frame/realm 时是否顶掉当前 realm（`contextActivate`/`contextLeave` 的 `bindStack`
+  配对、`KJSProxy::evaluate` 的 keepAlive/bindDocument），与 R182 同一片状态。
+- 详细记录：`issues/wip/ant-dom-bindings.md` §28.6。
+
 ### P1-z 图片解码离开 paint（L0–L3，2026-11-08 起；L0–L3 已完成，剩余见下）
 
 - 现状：`RenderImage::paint → BitmapImage::draw → ImageSource::createFrameAtIndex →
