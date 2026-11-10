@@ -197,6 +197,16 @@ bool HTMLScriptElement::isModuleScript() const
     return type.domString().stripWhiteSpace().lower() == "module";
 }
 
+bool HTMLScriptElement::isImportMapScript() const
+{
+    const AtomicString& type = getAttribute(typeAttr);
+
+    if (type.isEmpty())
+        return false;
+
+    return type.domString().stripWhiteSpace().lower() == "importmap";
+}
+
 bool HTMLScriptElement::shouldExecuteAsJavaScript()
 {
     /* <script nomodule> is the legacy-browser fallback: an engine with module

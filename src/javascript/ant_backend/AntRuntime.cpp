@@ -275,6 +275,11 @@ struct DocumentRuntime {
      * CSSOM wrappers use. */
     WebCore::DOMSelection* selection;
     std::vector<WebCore::Range*>* rangeRefs;
+    /* <script type="importmap"> parsed into a std::map<std::string,std::string>
+     * (specifier -> absolute URL). Owned by the document: dropped in
+     * releaseDocumentRuntime, so a navigation never resolves a specifier
+     * through the previous page's map. NULL when the document has no map. */
+    void* importMap;
 };
 
 /* Every realm (one document) gets a fresh id. Resources that can outlive
@@ -301,7 +306,7 @@ static RuntimeState* g_currentState = &g_emptyState;
  * document is bound (startup, teardown) reads the empty document's fields
  * instead of dereferencing a null pointer. */
 static DocumentRuntime  g_emptyDocument = {
-    &g_emptyState, NULL, NULL, NULL, NULL, false, false, -1, 0, NULL, NULL, NULL, NULL
+    &g_emptyState, NULL, NULL, NULL, NULL, false, false, -1, 0, NULL, NULL, NULL, NULL, NULL
 };
 static DocumentRuntime* g_currentDocument = &g_emptyDocument;
 
@@ -792,6 +797,13 @@ static void releaseDocumentRuntime(DocumentRuntime* document, bool releaseValues
          * refs on nodes/this document; drop them with the document so a
          * detached page cannot be kept alive by a JS Range left behind. */
         selectionReleaseRefs(document);
+    }
+
+    /* The import map is host-side bookkeeping, not a VM value: it must go away
+     * even on the engine-gone path (releaseValues == false). */
+    if (document->importMap) {
+        delete (std::map<std::string, std::string>*)document->importMap;
+        document->importMap = NULL;
     }
 
     if (documents) {
@@ -3455,6 +3467,249 @@ static bool moduleReadLocalFile(const std::string& url, std::string* body)
     return true;
 }
 
+/* --- HTML import maps ---------------------------------------------------- *
+ * <script type="importmap"> (JSON) is captured by the tokenizer and registered
+ * here before any module runs. The bridge asks importMapResolve() for every
+ * bare module specifier: a hit hands back the mapped URL, a miss returns NULL
+ * and the engine keeps its own resolution (Node-style package lookup, which is
+ * what ant does for a CLI module).
+ *
+ * Lifetime: the parsed map belongs to the document's DocumentRuntime and is
+ * freed by releaseDocumentRuntime(), so a navigation never resolves a
+ * specifier through the previous page's map. Only the first map of a document
+ * is used, per the standard.
+ *
+ * Targets are resolved against the document base URL here (relative targets are
+ * legal), and for file:// documents the result is translated into the engine's
+ * masqueraded http://file.ant/ space like every other module filename. */
+static bool importMapLookup(const std::string& specifier, std::string* out)
+{
+    std::map<std::string, std::string>* map;
+
+    if (!g_currentDocument || !g_currentDocument->importMap || !out)
+        return false;
+
+    map = (std::map<std::string, std::string>*)g_currentDocument->importMap;
+
+    {
+        std::map<std::string, std::string>::const_iterator exact = map->find(specifier);
+
+        if (exact != map->end()) {
+            *out = exact->second;
+            return true;
+        }
+    }
+
+    /* Prefix entries end with '/': the longest match wins and the rest of the
+     * specifier is appended to the target (HTML import map semantics). */
+    {
+        std::string bestKey;
+        std::string bestTarget;
+        std::map<std::string, std::string>::const_iterator it = map->begin();
+
+        for (; it != map->end(); ++it) {
+            const std::string& key = it->first;
+
+            if (key.empty() || key[key.size() - 1] != '/')
+                continue;
+            if (specifier.size() <= key.size() || specifier.compare(0, key.size(), key) != 0)
+                continue;
+            if (key.size() <= bestKey.size())
+                continue;
+
+            bestKey = key;
+            bestTarget = it->second;
+        }
+
+        if (!bestKey.empty()) {
+            *out = bestTarget + specifier.substr(bestKey.size());
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/* The bridge resolver (antb_set_import_map_resolver): a malloc'd URL, or NULL
+ * for "not in the map". Runs inside module resolution, so it must not call back
+ * into JS - it only reads the parsed map. */
+static char* importMapResolve(const char* specifier, const char* base)
+{
+    std::string mapped;
+
+    (void)base;   /* the map belongs to the document being evaluated, which is
+                   * the current binding while a module resolves */
+
+    if (!specifier || !specifier[0] || !importMapLookup(std::string(specifier), &mapped))
+        return NULL;
+
+    {
+        char* out = (char*)malloc(mapped.size() + 1);
+
+        if (out)
+            memcpy(out, mapped.c_str(), mapped.size() + 1);
+        return out;
+    }
+}
+
+/* A mapped bare specifier as the module cache/fetcher sees it, or "" when the
+ * map has no entry. Used by the prefetcher to start the download early. */
+static std::string importMapResolveUrl(const std::string& specifier)
+{
+    std::string mapped;
+
+    if (!importMapLookup(specifier, &mapped))
+        return std::string();
+
+    return mapped;
+}
+
+/* Object.keys(value) through the engine (no key enumeration in the bridge). */
+static AntbValue* objectOwnKeys(AntbValue* object)
+{
+    AntbValue* global = antb_global(g_engine);
+    AntbValue* constructor = global ? antb_get_prop(g_engine, global, "Object") : NULL;
+    AntbValue* keysFn = constructor ? antb_get_prop(g_engine, constructor, "keys") : NULL;
+    AntbValue* keys = NULL;
+
+    if (keysFn) {
+        AntbValue* args[1];
+
+        args[0] = object;
+        keys = antb_call(g_engine, keysFn, constructor, args, 1, NULL);
+    }
+    if (keysFn)
+        antb_value_release(keysFn);
+    if (constructor)
+        antb_value_release(constructor);
+    if (global)
+        antb_value_release(global);
+    return keys;
+}
+
+/* Parses the import map JSON with the engine's JSON.parse (ant ships one; no
+ * second parser here) and stores specifier -> absolute URL. Returns NULL for
+ * malformed JSON or a map with no entries. */
+static std::map<std::string, std::string>* parseImportMapJson(const char* json,
+                                                              WebCore::Document* document)
+{
+    std::map<std::string, std::string>* map = new std::map<std::string, std::string>();
+    AntbValue* global = antb_global(g_engine);
+    AntbValue* jsonCtor = global ? antb_get_prop(g_engine, global, "JSON") : NULL;
+    AntbValue* parse = jsonCtor ? antb_get_prop(g_engine, jsonCtor, "parse") : NULL;
+    AntbValue* text = antb_make_string(g_engine, json);
+    AntbValue* parsed = NULL;
+
+    if (getenv("AGB_MODULE_DEBUG"))
+        fprintf(stderr, "[importmap] parse %u bytes\n", (unsigned)strlen(json));
+
+    if (parse && text) {
+        AntbValue* args[1];
+
+        args[0] = text;
+        parsed = antb_call(g_engine, parse, jsonCtor, args, 1, NULL);
+    }
+
+    if (parsed) {
+        AntbValue* imports = antb_get_prop(g_engine, parsed, "imports");
+        AntbValue* keys = imports ? objectOwnKeys(imports) : NULL;
+
+        if (keys) {
+            AntbValue* lengthValue = antb_get_prop(g_engine, keys, "length");
+            int count = lengthValue ? (int)antb_to_number(lengthValue) : 0;
+            WebCore::KURL baseUrl(document->baseURL());
+            int i;
+
+            for (i = 0; i < count; ++i) {
+                AntbValue* keyValue = antb_array_get(keys, i);
+                char* key = (keyValue && antb_is_string(keyValue)) ? antb_to_utf8(keyValue) : NULL;
+
+                if (key && key[0]) {
+                    AntbValue* targetValue = antb_get_prop(g_engine, imports, key);
+
+                    if (targetValue && antb_is_string(targetValue)) {
+                        char* target = antb_to_utf8(targetValue);
+
+                        if (target && target[0]) {
+                            WebCore::String resolved =
+                                WebCore::KURL(baseUrl, WebCore::String::fromUTF8(target).deprecatedString()).url();
+                            std::string url = resolved.utf8().data();
+
+                            /* file:// import map targets live in the same
+                             * masqueraded space as module filenames. */
+                            if (isFileUrl(url))
+                                url = engineUrlForFile(url);
+                            (*map)[key] = url;
+                        }
+
+                        if (target)
+                            antb_free(target);
+                    }
+                    if (targetValue)
+                        antb_value_release(targetValue);
+                }
+
+                if (key)
+                    antb_free(key);
+                if (keyValue)
+                    antb_value_release(keyValue);
+            }
+
+            if (lengthValue)
+                antb_value_release(lengthValue);
+            antb_value_release(keys);
+        }
+
+        if (imports)
+            antb_value_release(imports);
+        antb_value_release(parsed);
+    }
+
+    if (text)
+        antb_value_release(text);
+    if (parse)
+        antb_value_release(parse);
+    if (jsonCtor)
+        antb_value_release(jsonCtor);
+    if (global)
+        antb_value_release(global);
+
+    return map;
+}
+
+/* <script type="importmap">: registers this document's map (called by the
+ * tokenizer). A document keeps its first map; later ones are ignored. */
+void registerImportMap(const char* json, void* documentPtr)
+{
+    WebCore::Document* document = (WebCore::Document*)documentPtr;
+    DocumentRuntime* runtime;
+    std::map<std::string, std::string>* map;
+
+    if (!g_engine || !json || !json[0] || !document)
+        return;
+
+    runtime = documentRuntimeFor(g_currentState, document);
+
+    if (!runtime)
+        return;
+
+    if (runtime->importMap) {
+        agbLog(AGB_LOG_PARSE, "import map ignored (document already has one)");
+        return;
+    }
+
+    map = parseImportMapJson(json, document);
+
+    if (!map || map->empty()) {
+        delete map;
+        return;
+    }
+
+    runtime->importMap = map;
+
+    agbLog(AGB_LOG_PARSE, "import map registered (%u entries)", (unsigned)map->size());
+}
+
 /* Bodies of routed entry scripts that arrived inside a network pump callback.
  * JS must not run there (see pumpAsyncRequests): the body is deposited here
  * and handed to the WebCore notify hook after the pump, so the waiting
@@ -4042,6 +4297,19 @@ static void modulePrefetchImports(const std::string& url, const std::string& bod
                 if (!specifier.empty() && specifier[0] == '.') {
                     ++found;
                     moduleStart(moduleUrlJoin(url, specifier), false);
+                } else if (!specifier.empty() && specifier[0] != '/') {
+                    /* A bare specifier: only the document's import map can say
+                     * where it points (GitHub's react/react-dom). Prefetch the
+                     * mapped URL when it is a network one; file-masqueraded
+                     * targets are left to the engine's fetch path, which knows
+                     * how to translate them. */
+                    std::string mapped = importMapResolveUrl(specifier);
+
+                    if (!mapped.empty() && mapped.compare(0, 5, "http:") == 0
+                            && !isEngineFileUrl(mapped)) {
+                        ++found;
+                        moduleStart(mapped, false);
+                    }
                 }
 
                 pos = close;
@@ -4201,6 +4469,10 @@ bool start()
     antb_set_context_activate(contextActivate);
     antb_set_context_leave(contextLeave);
     antb_set_module_fetcher(moduleFetch);
+    /* HTML import maps: bare module specifiers resolve through the current
+     * document's <script type="importmap"> (see importMapResolve). Process
+     * wide like the fetcher; both are idempotent. */
+    antb_set_import_map_resolver(importMapResolve);
 
     /* Unhandled promise rejections must be logged, not fatal: one bad page
      * promise used to call process_exit_with(EXIT_FAILURE) and close the browser. */
@@ -4222,6 +4494,9 @@ void* createContext()
     antb_set_logger(antbLogSink, 0);
     /* Process-wide and idempotent; both engine-creation paths install it. */
     Agb::installTextCodecProvider();
+    /* Likewise: the import-map resolver is process wide and reads the current
+     * document's map, so installing it again here is harmless. */
+    antb_set_import_map_resolver(importMapResolve);
     AntbEngine* engine = antb_engine_create((const void*)&stack_anchor);
 
     if (!engine)
@@ -6170,6 +6445,72 @@ void installFrameGlobals(AntbEngine* engine, WebCore::Document* document)
  * object; `parent`/`top` are the parent realm's global objects. Same VM, so
  * property access and calls work across realms, while identity now differs
  * (`parent !== self`, `top.Array !== Array`) as the spec requires. */
+/* Frame realms are created by the bridge, and ant's per-realm bootstrap only
+ * covers intrinsics plus the timers the bridge installs itself: the web globals
+ * from ant_bootstrap_modules (URL, URLSearchParams, TextEncoder/Decoder, atob,
+ * Blob/File/FileReader, FormData, Headers, Request/Response, WebSocket,
+ * EventSource, MessageChannel/Port, BroadcastChannel, structuredClone, crypto,
+ * EventTarget, AbortController/Signal, DOMException, the streams) exist only on
+ * the *main* realm's global. Without them iframe code that touches any of them
+ * throws ReferenceError - monaco's isolated playground iframe died on
+ * `URLSearchParams` and the playground never rendered.
+ *
+ * They are copied from the parent realm's global (same VM, so a cross-realm
+ * reference is valid) and only when the frame realm still lacks the name: a
+ * page/frame that installed its own shim keeps it. The copy runs before
+ * prelude/polyfills for the realm, so the URLSearchParams wrapper sees the
+ * native constructor. */
+static void installSharedWebGlobals(AntbEngine* engine, WebCore::Document* document)
+{
+    static const char* const kNames[] = {
+        "URL", "URLSearchParams", "URLPattern",
+        "TextEncoder", "TextDecoder", "TextEncoderStream", "TextDecoderStream",
+        "atob", "btoa",
+        "Blob", "File", "FileReader", "FormData", "Headers",
+        "Request", "Response",
+        "WebSocket", "EventSource",
+        "MessageChannel", "MessagePort", "BroadcastChannel",
+        "structuredClone", "crypto",
+        "EventTarget", "AbortController", "AbortSignal", "DOMException",
+        "ReadableStream", "WritableStream", "TransformStream",
+        "CompressionStream", "DecompressionStream"
+    };
+    WebCore::Document* parent = document ? document->parentDocument() : NULL;
+    AntbRealm* parentRealm = parent ? realmOfDocument(engine, parent) : NULL;
+    AntbValue* source = parentRealm ? antb_realm_global(engine, parentRealm) : NULL;
+    AntbValue* target = antb_global(engine);
+    size_t i;
+
+    if (!source || !target) {
+        if (source)
+            antb_value_release(source);
+        if (target)
+            antb_value_release(target);
+        return;
+    }
+
+    for (i = 0; i < sizeof(kNames) / sizeof(kNames[0]); ++i) {
+        AntbValue* value = antb_get_prop(engine, source, kNames[i]);
+
+        if (!value)
+            continue;
+
+        {
+            AntbValue* existing = antb_get_prop(engine, target, kNames[i]);
+
+            if (!existing)
+                antb_set_prop(engine, target, kNames[i], value);
+            else
+                antb_value_release(existing);
+        }
+
+        antb_value_release(value);
+    }
+
+    antb_value_release(source);
+    antb_value_release(target);
+}
+
 static void installChildFrameGlobals(AntbEngine* engine, WebCore::Document* document)
 {
     AntbValue* global;
@@ -6248,6 +6589,7 @@ static void bindFrameRealm(AntbEngine* engine, DocumentRuntime* runtime)
 
     if (!runtime->installed) {
         installGlobalApi(engine, global);
+        installSharedWebGlobals(engine, runtime->document);
         runtime->installed = true;
     }
 
@@ -8583,6 +8925,13 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
         const WebCore::AtomicString& ns = n->namespaceURI();
         v = antb_make_string(engine, ns.isEmpty() ? "http://www.w3.org/1999/xhtml"
                                                   : ns.deprecatedString().utf8().data());
+    } else if (!strcmp(name, "baseURI")) {
+        /* Node.baseURI: the document base URL (DOM4), answered for every node.
+         * Pages resolve their own relative URLs against it (monaco's playground
+         * does `document.baseURI.toString()` before anything else), and the
+         * property was simply absent - the read was `undefined`. */
+        WebCore::String base = n->baseURI();
+        v = antb_make_string(engine, base.utf8().data());
     } else if (!strcmp(name, "nodeValue")) {
         /* Text/Comment carry data; every other node type is null. */
         if (n->isTextNode() || n->isCommentNode()) {

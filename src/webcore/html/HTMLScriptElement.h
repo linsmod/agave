@@ -55,6 +55,9 @@ public:
 
     bool shouldExecuteAsJavaScript();
     bool isModuleScript() const;
+    /* <script type="importmap">: the inline JSON import map. The tokenizer
+     * captures the body (it is not executed as script). */
+    bool isImportMapScript() const;
     void evaluateScript(const String &URL, const String &script);
 
     String text() const;

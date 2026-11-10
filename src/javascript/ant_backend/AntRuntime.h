@@ -86,6 +86,13 @@ void queueDeferredScript(void* document, const char* url, const char* source, vo
  * v.qq.com mount its Vue app before #channel-app existed. */
 void queueDeferredModule(void* document, const char* url, const char* source);
 
+/* <script type="importmap">: registers this document's import map (UTF-8 JSON
+ * as written in the tag). The bridge parses it once, resolves every target
+ * against the document base URL, and answers bare module specifiers through it
+ * (HTML import maps). Only the first map of a document is kept - a later one is
+ * ignored, per the standard. `document` is a WebCore::Document*. */
+void registerImportMap(const char* json, void* document);
+
 /* External <script type="module" src>: loads the body through the module
  * fetcher (the same cache and cancel owner as its imports) and hands it to
  * the notifier below when it arrives - the tokenizer keeps parsing blocked

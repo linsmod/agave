@@ -21,6 +21,16 @@
 #   5. document.currentScript (R95): the <script> element while its code runs
 #      (inline, external, defer, async, dynamic, nested), null for modules and
 #      for anything that runs after the script returned.
+#   6. per-frame module entry + per-realm import() (P1-e);
+#   7. a classic script whose first token is `import(` is not a module;
+#   8. Node.baseURI / document.baseURI (R176): <base href> applied, every node
+#      reports the document base URL;
+#   9. HTML import maps (R176): bare specifiers resolve through
+#      <script type="importmap"> (exact + trailing-slash prefix), relative
+#      imports still work, an unmapped bare specifier still fails.
+#  10. browser shims (R176): the URLSearchParams wrapper iterates / reports
+#      size + toStringTag, and a frame realm gets the web globals (URL,
+#      TextEncoder, Blob, Headers, DOMException, ...) the main realm has.
 #
 # Usage:
 #   pwsh -File tools/run_script_mode_tests.ps1
@@ -229,6 +239,56 @@ if ($first.Code -ne 0 -or $first.Stdout -notmatch '1') {
     Write-Host (($first.Stdout -split "`n" | Select-Object -Last 4) -join "`n")
 } else {
     Write-Host 'PASS  classic script starting with import( (dynamic import, not a module)'
+}
+
+# 8. Node.baseURI / document.baseURI (R176). monaco's playground evaluates
+#    `document.baseURI.toString()` at the top of its bundle; the property did
+#    not exist on the bridge, so the template threw and the playground module
+#    aborted. The page writes its four checks into window.__baseuri.
+$buUrl = 'file:///' + ((Join-Path $root 'tools/pages/cap_baseuri.html') -replace '\\', '/')
+$bu = Invoke-Probe -Url $buUrl -Js 'probeExit(String(window.__baseuri))' -Wait 1500 -Settle 300
+
+if ($bu.Code -ne 0 -or $bu.Stdout -notmatch '1\|1\|1\|1') {
+    $failures++
+    Write-Host ("FAIL  document.baseURI: exit {0}" -f $bu.Code)
+    Write-Host (($bu.Stdout + $bu.Stderr) -split "`n" | Select-Object -Last 8 | Out-String)
+} else {
+    Write-Host 'PASS  document.baseURI / Node.baseURI (with <base href>)'
+}
+
+# 9. HTML import maps (R176). GitHub ships <script type="importmap"> for
+#    react/react-dom/...; without it the bare specifier was opened as a file
+#    ("Cannot open module: react") and every React entry module failed. The
+#    page writes "<exact>|<prefix>|<relative>" and the rejection of an unmapped
+#    bare specifier.
+$imUrl = 'file:///' + ((Join-Path $root 'tools/pages/importmap/index.html') -replace '\\', '/')
+$im = Invoke-Probe -Url $imUrl -Wait 2500 -Settle 800 `
+    -Js 'probeExit(String(window.__imap) + "/" + String(window.__imapDynamic))'
+
+if ($im.Code -ne 0 -or $im.Stdout -notmatch 'hello\|helper\|relative/rejected') {
+    $failures++
+    Write-Host ("FAIL  import map: exit {0}" -f $im.Code)
+    Write-Host (($im.Stdout + $im.Stderr) -split "`n" | Select-Object -Last 8 | Out-String)
+} else {
+    Write-Host 'PASS  import map (exact + prefix bare specifiers, relative, unmapped rejects)'
+}
+
+# 10. Browser shims (R176): the URLSearchParams wrapper is a plain JS object
+#     that delegates to the native one, so it has to forward every member -
+#     `for (const [k, v] of params)` reads Symbol.iterator (monaco's playground
+#     died with "not iterable" without it). A frame realm is created by the
+#     bridge, which only installs ant's intrinsics + timers; the web globals are
+#     copied from the parent realm (monaco's isolated playground iframe threw
+#     "URLSearchParams is not defined").
+$polyUrl = 'file:///' + ((Join-Path $root 'tools/pages/cap_polyfills.html') -replace '\\', '/')
+$poly = Invoke-Probe -Url $polyUrl -Js 'probeExit(String(window.__poly))' -Wait 2500 -Settle 1500
+
+if ($poly.Code -ne 0 -or $poly.Stdout -notmatch 'usp:function,2,a=1,2,\[object URLSearchParams\]\|frameMissing:\|frameUsp:function') {
+    $failures++
+    Write-Host ("FAIL  browser shims: exit {0}" -f $poly.Code)
+    Write-Host (($poly.Stdout + $poly.Stderr) -split "`n" | Select-Object -Last 8 | Out-String)
+} else {
+    Write-Host 'PASS  URLSearchParams wrapper iteration + frame-realm web globals'
 }
 
 Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue

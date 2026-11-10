@@ -1,0 +1,73 @@
+<!doctype html>
+<!--
+  tools/pages/cap_polyfills.html - browser shims that live in polyfills.js /
+  the realm bootstrap (jsdom gaps).
+
+  1. URLSearchParams wrapper: iteration (`for ... of`, Symbol.iterator), `size`
+     and the toStringTag. monaco's playground parsed its URL with
+     `new URLSearchParams(...)` and iterated it; the wrapper delegated every
+     method but never forwarded Symbol.iterator, so the module died with
+     "not iterable" and the playground rendered nothing.
+  2. Frame realms: ant's per-realm bootstrap only installs intrinsics + timers,
+     so a child frame's global lacked the web globals (URL, URLSearchParams,
+     TextEncoder, Blob, Headers, DOMException, ...). The bridge copies them from
+     the parent realm; monaco's isolated playground iframe broke without it.
+
+  Result: window.__poly = "usp:<iter>,<count>,<first>,<size>,<tag>|frameMissing:<names>|frameUsp:<type>"
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<title>polyfills</title>
+</head>
+<body>
+<script>
+(function () {
+    var out = {};
+
+    try {
+        var u = new URLSearchParams('a=1&b=2');
+        var count = 0;
+        var first = '';
+        for (var p of u) {
+            if (!count)
+                first = p[0] + '=' + p[1];
+            count++;
+        }
+        out.usp = typeof u[Symbol.iterator] + ',' + count + ',' + first + ',' + u.size + ','
+                + Object.prototype.toString.call(u);
+    } catch (e) {
+        out.usp = 'ERR ' + e;
+    }
+
+    var names = ['URL', 'URLSearchParams', 'TextEncoder', 'TextDecoder', 'atob', 'btoa',
+                 'Blob', 'FormData', 'Headers', 'Request', 'Response', 'DOMException',
+                 'structuredClone', 'crypto', 'EventTarget', 'AbortController',
+                 'ReadableStream', 'WebSocket', 'EventSource', 'MessageChannel'];
+
+    var frame = document.createElement('iframe');
+    frame.src = 'blank.html';
+    document.body.appendChild(frame);
+
+    setTimeout(function () {
+        var missing = [];
+        var frameUsp = 'noframe';
+        try {
+            var w = frame.contentWindow;
+            if (w) {
+                frameUsp = typeof w.URLSearchParams;
+                for (var i = 0; i < names.length; i++)
+                    if (typeof w[names[i]] === 'undefined')
+                        missing.push(names[i]);
+            }
+        } catch (e) {
+            missing.push('ERR ' + e);
+        }
+        window.__poly = 'usp:' + out.usp + '|frameMissing:' + missing.join(',')
+                      + '|frameUsp:' + frameUsp;
+        document.title = 'poly=' + window.__poly;
+    }, 600);
+})();
+</script>
+</body>
+</html>

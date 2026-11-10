@@ -818,7 +818,12 @@ void Document::setDocumentURI(const String &uri)
 
 String Document::baseURI() const
 {
-    return documentURI();
+    /* The document *base* URL (a <base href> changes it), not the document
+     * URL: relative fetches/URLs resolve against it, and pages read it to do
+     * the same in script. monaco's playground builds its bootstrap script from
+     * `document.baseURI.toString()` at the top of its bundle - undefined there
+     * aborted the whole playground. */
+    return baseURL();
 }
 
 Element* Document::elementFromPoint(int x, int y) const

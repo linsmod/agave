@@ -1,0 +1,38 @@
+<!doctype html>
+<!--
+  tools/pages/cap_baseuri.html - Node.baseURI / document.baseURI (jsdom gap).
+
+  monaco's playground builds its bootstrap <script> from
+  `document.baseURI.toString()` at the top of its bundle; the property was
+  absent (undefined), the template threw, and the whole playground module
+  aborted. The document *base* URL follows <base href>; every node reports it.
+
+  Result: window.__baseuri = "<docHrefSub>|<elementMatches>|<textNodeMatches>|<isString>"
+  (run_script_mode_tests.ps1 asserts 1|1|1|1).
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<title>baseuri</title>
+<base href="sub/">
+</head>
+<body>
+<div id="x">hello <span id="y">world</span></div>
+<script>
+(function () {
+    var x = document.getElementById('x');
+    var text = x.firstChild;
+    var base = document.baseURI;
+    var result = [
+        /\/sub\/$/.test(String(base)) ? 1 : 0,   /* <base href> applied        */
+        x.baseURI === base ? 1 : 0,              /* element inherits it         */
+        (text && text.baseURI === base) ? 1 : 0, /* text node inherits it       */
+        typeof base === 'string' ? 1 : 0         /* not undefined/null          */
+    ].join('|');
+
+    window.__baseuri = result;
+    document.title = 'baseuri=' + result + ' base=' + base;
+})();
+</script>
+</body>
+</html>

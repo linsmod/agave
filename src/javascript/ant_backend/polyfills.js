@@ -324,9 +324,22 @@
     URLSearchParams.prototype.keys = function () { return this.__agbNativeParams.keys(); };
     URLSearchParams.prototype.values = function () { return this.__agbNativeParams.values(); };
     URLSearchParams.prototype.entries = function () { return this.__agbNativeParams.entries(); };
+    /* The wrapper is a plain JS object: it does not inherit the native
+     * prototype, so every member has to be forwarded. `for (const [k, v] of
+     * params)` / spread read Symbol.iterator, and monaco's playground parses
+     * its URL that way - without it the module died with "not iterable". */
+    URLSearchParams.prototype[Symbol.iterator] = URLSearchParams.prototype.entries;
     URLSearchParams.prototype.forEach = function (fn, thisArg) {
         this.__agbNativeParams.forEach(function (value, key) { fn.call(thisArg, value, key, this); });
     };
+    Object.defineProperty(URLSearchParams.prototype, 'size', {
+        configurable: true,
+        get: function () { return this.__agbNativeParams.size; }
+    });
+    Object.defineProperty(URLSearchParams.prototype, Symbol.toStringTag, {
+        configurable: true,
+        get: function () { return 'URLSearchParams'; }
+    });
 
     g.URLSearchParams = URLSearchParams;
 }());

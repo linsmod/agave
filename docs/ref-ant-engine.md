@@ -120,3 +120,9 @@ git -C H:\ant-v16 rev-parse HEAD
   JIT 代码走 `jit_active_depth`；需要更精确时把两者一起报。
 - 日志：ant 不直接依赖 agave 的 `AgbLog.h`；桥通过 `antb_set_logger` 回调，
   `AntRuntime.cpp` 把 `[flag]` 行接回 agave 的统一日志。
+- **宿主钩子（进程级、只装一次）**：`antb_set_module_fetcher` 提供 http(s) 模块 body；
+  `antb_set_import_map_resolver`（R176）提供 HTML import map 的裸 specifier 解析（`<script
+  type="importmap">` 的 `imports`，精确 + 尾斜杠前缀），引擎只在 **URL 基址 + 裸名** 时问它，
+  miss 仍回退 Node 式解析。resolver 在**模块解析过程中同步执行**，只能读宿主自己的表，
+  **不能回调 JS/eval**。agave 侧实现：`AntRuntime.cpp` 的 `moduleFetch` / `importMapResolve`，
+  地图解析/生命周期见 `registerImportMap` 与 `DocumentRuntime::importMap`。

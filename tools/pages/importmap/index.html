@@ -1,0 +1,43 @@
+<!doctype html>
+<!--
+  tools/pages/importmap/index.html - HTML import maps (jsdom gap).
+
+  GitHub ships exactly this shape: a JSON <script type="importmap"> that maps
+  bare specifiers (`react`, `react-dom/client`, ...) to bundled asset URLs, and
+  every module then writes `import { x } from "react"`. Without import-map
+  support ant resolved the bare name as a file path and failed with
+  "Cannot open module: react", so every module that imported React died.
+
+  window.__imap            = "<exact>|<prefix>|<relative>"
+  window.__imapDynamic     = "rejected" for a bare specifier the map does not
+                             define (the fallback must still fail loudly)
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<title>importmap</title>
+<script type="importmap">
+{
+  "imports": {
+    "greet": "./greet.js",
+    "lib/": "./lib/"
+  }
+}
+</script>
+</head>
+<body>
+<script type="module">
+    import { greet } from 'greet';
+    import { label } from 'lib/helper.js';
+    import { rel } from './rel.js';
+
+    window.__imap = greet + '|' + label + '|' + rel;
+
+    import('not-mapped-anywhere').then(function () {
+        window.__imapDynamic = 'resolved';
+    }, function () {
+        window.__imapDynamic = 'rejected';
+    });
+</script>
+</body>
+</html>

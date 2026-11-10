@@ -505,6 +505,10 @@ HTMLTokenizer::State HTMLTokenizer::scriptHandler(State state)
      * module semantics (export / import.meta / dynamic import), which the
      * classic path rejects. */
     bool inlineModuleScript = false;
+    /* Set for inline <script type="importmap">: the body is the document's
+     * import map (JSON), not script. It must be registered before the first
+     * module resolves, which the parse order guarantees. */
+    bool inlineImportMapScript = false;
 
     // (Bugzilla 3837) Scripts following a frameset element should not execute or, 
     // in the case of extern scripts, even load.
@@ -615,6 +619,7 @@ HTMLTokenizer::State HTMLTokenizer::scriptHandler(State state)
 #endif
             doScriptExec = static_cast<HTMLScriptElement*>(scriptNode.get())->shouldExecuteAsJavaScript();
             inlineModuleScript = static_cast<HTMLScriptElement*>(scriptNode.get())->isModuleScript();
+            inlineImportMapScript = static_cast<HTMLScriptElement*>(scriptNode.get())->isImportMapScript();
             inlineScriptElement = static_cast<HTMLScriptElement*>(scriptNode.get());
             scriptNode = 0;
         }
@@ -626,6 +631,18 @@ HTMLTokenizer::State HTMLTokenizer::scriptHandler(State state)
     currToken.tagName = scriptTag.localName();
     currToken.beginTag = false;
     processToken();
+
+    /* <script type="importmap">: the body is the document's import map (JSON),
+     * not code. Register it before the parse gets to any module script, so a
+     * bare specifier can resolve through it (GitHub imports `react` through
+     * an import map). It never executes, so no document.currentScript. */
+    if (inlineImportMapScript) {
+#if ENABLE(ANTJS)
+        if (inlineScriptElement)
+            AntRuntime::registerImportMap(String(scriptCode, scriptCodeSize).utf8().data(),
+                                          inlineScriptElement->document());
+#endif
+    }
 
     state.setInScript(false);
     
