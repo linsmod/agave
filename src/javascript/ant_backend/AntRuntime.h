@@ -110,6 +110,8 @@ void fetchAndQueueModuleScript(const char* url, void* owner);
  * `document.title` reads/writes WebCore::Document::title(). `document` is a
  * pointer to a WebCore::Document. Safe to call on every script evaluation. */
 void bindDocument(void* document);
+/* The document the engine is bound to right now (NULL before the first bind). */
+void* boundDocument();
 
 /* Delivers completed async requests (XHR) to the page. Call from the frame loop. */
 void pumpAsyncRequests(void);

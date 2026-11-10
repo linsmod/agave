@@ -3824,13 +3824,28 @@ void Document::finishedParsing()
      * has to be dispatched while this document's realm is the active one -
      * with per-frame realms the engine may still be in the realm of whichever
      * frame ran last. This is also the single DOMContentLoaded for frames:
-     * FrameLoaderClientMC used to dispatch a second one by hand (P0-c). */
+     * FrameLoaderClientMC used to dispatch a second one by hand (P0-c).
+     *
+     * A *frame* document can reach here from inside the parent's script (a
+     * script-appended <iframe> loads about:blank synchronously), so the binding
+     * has to be given back: without the restore the caller's remaining
+     * statements ran in the frame's realm - `document.title = x` right after
+     * `body.appendChild(iframe)` wrote the child's title (issues §28.6). */
+    void* outerDocument = AntRuntime::boundDocument();
     AntRuntime::bindDocument(this);
     AntRuntime::flushDeferredModules(this);
 #endif
 
     ExceptionCode ec = 0;
     dispatchEvent(new Event(DOMContentLoadedEvent, true, false), ec);
+
+#if ENABLE(ANTJS)
+    /* Only a frame can be parsed inside another document's script; a main frame
+     *'s finishedParsing must leave its own binding in place (a navigation would
+     * otherwise be undone by the restore). */
+    if (parentDocument() && outerDocument && outerDocument != (void*)this)
+        AntRuntime::bindDocument(outerDocument);
+#endif
 
     if (Frame* f = frame())
         f->loader()->finishedParsing();

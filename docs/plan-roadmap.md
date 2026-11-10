@@ -266,17 +266,17 @@
   类表的问题。详细记录：`docs/hist-lessons.md` R182、`issues/wip/ant-dom-bindings.md` §22。
 - 验收（已满足）：三个套件恢复全绿；全量 `run_all_tests.ps1` 20 套件 250.9 s 0 failed。
 
-### P1-bind 脚本动态插入 iframe 后 eval/脚本"停住"（2026-11-10 发现，**待查**）
+### P1-bind 脚本动态插入 iframe 后脚本"停住"（2026-11-10 已修 R183）
 
 - 现象（2026-11-10 晚修正）：脚本里 `appendChild(iframe)` 之后，**调用方脚本的剩余部分在子 frame 的 realm 里执行**
   （`window.__after` 丢失、`document.title` 落到子文档）；探针 eval 里表现为 `probeExit` 找不到 → exit 4。
   内联解析期、timer 回调、探针 eval 都触发；`AGB_PER_FRAME_REALM=0` 也触发；静态 `<iframe>` 不受影响。
   `AGB_BIND_TRACE=1` 打印 `bindDocument()` 的 target/prev/JS depth（本次为此加的诊断开关）。
 - 影响：页面脚本动态插入 iframe 之后的逻辑可能整体不执行（页面可见）。
-- 起点：`bindDocument(子)` 与恢复`为什么不配对`——恢复点分散在 `dispatchFrameDocumentEvent`/`dispatchWindowEventFor`，
-  而 `Document::finishedParsing()` → `dispatchEvent()` 的嵌套顺序让最后一次绑定落在子文档；建议把绑定做成
-  `bindDocument()` 内的 push/pop 栈（同 `contextActivate`/`contextLeave` 的 `bindStack`）。
-- 详细记录：`issues/wip/ant-dom-bindings.md` §28.6。
+- 修法（已完成）：`bindDocument()` 显式 `antb_realm_enter(engine, runtime->realm)`；`Document::finishedParsing()`
+  在子 frame 上保存并归还调用方文档（主框架不归还，否则撤销导航）。`AGB_BIND_TRACE=1` 是这次加的诊断开关。
+  验收：`cap_binding_semantics.html` 的 "script-created iframe keeps the caller document"（169/169）。
+- 详细记录：`docs/hist-lessons.md` R183、`issues/wip/ant-dom-bindings.md` §28.6–§28.7。
 
 ### P1-z 图片解码离开 paint（L0–L3，2026-11-08 起；L0–L3 已完成，剩余见下）
 

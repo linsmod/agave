@@ -462,6 +462,23 @@
       ok('dispatchEvent returns false when cancelled',
          el.dispatchEvent(new Event('probe2', { cancelable: true })) === false);
     })();
+    /* A script-appended <iframe> loads about:blank synchronously, inside this
+     * script. Binding the child document used to leave the engine on the child:
+     * the rest of THIS script then ran in the child's realm, so `document.title`
+     * landed on the frame and globals written after appendChild were lost
+     * (issues §28.6). Last on purpose: the frame is left in the page. */
+    ok('script-created iframe keeps the caller document', (function () {
+      var before = document.title;
+      var f = document.createElement('iframe');
+      document.body.appendChild(f);
+      document.title = before + '!';
+      var mainOk = document.title === before + '!';
+      var childDoc = f.contentDocument;
+      var childOk = !childDoc || childDoc.title !== before + '!';
+      var globalOk = (window.__agbIfaceMarker = 'kept') === 'kept';
+      document.title = before;
+      return mainOk && childOk && globalOk;
+    })());
   } catch (e) {
     fail.push('threw: ' + (e && e.message ? e.message : e));
   }

@@ -6821,6 +6821,13 @@ void bindDocument(void* document)
     else if (!runtime->realm)
         runtime->realm = state->mainRealm;
 
+    /* The realm is part of the binding: the engine may be left in a frame realm
+     * by the previous dispatch (a script that appends an <iframe> binds the
+     * child while it runs), and installing this document's globals on the wrong
+     * global object silently moves the caller's `document` to that frame. */
+    if (runtime->realm && antb_realm_current(state->engine) != runtime->realm)
+        antb_realm_enter(state->engine, runtime->realm);
+
     activateDocument(runtime);
 
     ensureRealmDocumentContext();
@@ -16114,6 +16121,15 @@ void dispatchWindowEventFor(void* document, const char* type)
  * frame gets its own event on its own window. Bind the frame (which enters its
  * realm), run its deferred modules first for DOMContentLoaded, dispatch, then
  * bind the parent again so the embedding page continues in its own realm. */
+/* The document the engine is currently bound to (NULL before the first bind).
+ * Callers that bind temporarily (a frame's DCL/load inside the parent's script)
+ * use it to put the caller's document back: binding is not reference counted,
+ * it is a stack the callers have to keep balanced. */
+void* boundDocument()
+{
+    return (void*)g_document;
+}
+
 void dispatchFrameDocumentEvent(void* document, const char* type)
 {
     WebCore::Document* doc = (WebCore::Document*)document;
