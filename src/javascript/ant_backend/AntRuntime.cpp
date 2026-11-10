@@ -186,6 +186,32 @@ struct RuntimeState {
     struct RealmInterfaces* ifacesActive;
     std::map<void*, struct RealmInterfaces*>* realmIfaces;   /* AntbRealm* -> set */
     AntbClass*         nodeClass;
+    /* The rest of the class mirrors are per state (== per engine) for a reason:
+     * they used to be file-scope statics, so a second live engine (a popup)
+     * overwrote them while it built its own interface set. The first engine then
+     * wrapped its nodes into the *other* engine's classes - a cross-VM prototype
+     * whose every property read comes back undefined (issue #15 §20.5: the
+     * probe's eval saw `document.documentElement.tagName === undefined`). */
+    AntbClass*         documentIface;
+    AntbClass*         htmlDocumentIface;
+    AntbClass*         elementIface;
+    AntbClass*         htmLElementIface;
+    AntbClass*         svgElementIface;
+    AntbClass*         svgSvgIface;
+    AntbClass*         documentFragmentIface;
+    AntbClass*         characterDataIface;
+    AntbClass*         textIface;
+    AntbClass*         commentIface;
+    AntbClass*         unknownElementIface;
+    std::map<std::string, AntbClass*>* tagClasses;   /* tag -> element interface */
+    /* Engine-scoped aux interfaces (not part of the DOM tree; shared by every
+     * realm of this view). They were statics too, so the same cross-engine
+     * mix-up hit selection/range/media wrappers. */
+    AntbClass*         selectionClass;
+    AntbClass*         rangeClass;
+    AntbClass*         textTrackClass;
+    AntbClass*         textTrackListClass;
+    AntbClass*         textTrackCueClass;
     AntbClass*         canvasCtxClass;  /* CanvasRenderingContext2D (2d context) */
     AntbClass*         windowClass;     /* Window (per-frame window proxy) */
     AntbClass*         nodeListClass;   /* NodeList (B2-2) */
@@ -568,6 +594,23 @@ static void activateState(RuntimeState* state)
 #define g_engine        (g_currentState->engine)
 #define g_document      (g_currentDocument->document)
 #define g_nodeClass     (g_currentState->nodeClass)
+#define g_documentIface         (g_currentState->documentIface)
+#define g_htmlDocumentIface     (g_currentState->htmlDocumentIface)
+#define g_elementIface          (g_currentState->elementIface)
+#define g_htmLElementIface      (g_currentState->htmLElementIface)
+#define g_svgElementIface       (g_currentState->svgElementIface)
+#define g_svgSvgIface           (g_currentState->svgSvgIface)
+#define g_documentFragmentIface (g_currentState->documentFragmentIface)
+#define g_characterDataIface    (g_currentState->characterDataIface)
+#define g_textIface             (g_currentState->textIface)
+#define g_commentIface          (g_currentState->commentIface)
+#define g_unknownElementIface   (g_currentState->unknownElementIface)
+#define g_tagClasses            (g_currentState->tagClasses)
+#define g_selectionClass        (g_currentState->selectionClass)
+#define g_rangeClass            (g_currentState->rangeClass)
+#define g_textTrackClass        (g_currentState->textTrackClass)
+#define g_textTrackListClass    (g_currentState->textTrackListClass)
+#define g_textTrackCueClass     (g_currentState->textTrackCueClass)
 #define g_canvasCtxClass (g_currentState->canvasCtxClass)
 #define g_windowClass   (g_currentState->windowClass)
 #define g_nodeListClass (g_currentState->nodeListClass)
@@ -1198,7 +1241,7 @@ void installTextTrackClasses(AntbEngine*);
  * engine, before the document object exists, exposed per realm. */
 void ensureInterfaceClasses(AntbEngine*);
 AntbClass* classForNode(WebCore::Node*);
-void resetInterfaceClasses();
+void resetInterfaceClasses(RuntimeState* state);
 bool mediaElementProperty(AntbEngine*, WebCore::HTMLMediaElement*, const char*, AntbValue* out);
 bool mediaElementSetProperty(WebCore::HTMLMediaElement*, const char*, const AntbValue*);
 
@@ -5790,7 +5833,7 @@ static void teardownRealm(RuntimeState* state)
     g_cssRuleListClass = 0;
     g_mediaListClass = 0;
     g_cssDeclarationClass = 0;
-    resetInterfaceClasses();
+    resetInterfaceClasses(state);
     /* Per-realm interface sets (B2-4): the class objects die with the engine,
      * so only the bookkeeping is dropped here. */
     if (state->realmIfaces) {
@@ -13084,9 +13127,9 @@ int nodeToDataURL(AntbEngine* engine, AntbValue* self, AntbValue** args, int arg
 #define AGB_TAG_TRACKLIST 0x54524C31u   /* 'TRL1' */
 #define AGB_TAG_CUE       0x43554531u   /* 'CUE1' */
 
-static AntbClass* g_textTrackClass = NULL;
-static AntbClass* g_textTrackListClass = NULL;
-static AntbClass* g_textTrackCueClass = NULL;
+/* The TextTrack classes live in RuntimeState (g_textTrackClass & co): they are
+ * per engine, and a second engine must not reuse (or overwrite) the first
+ * engine's class objects. */
 
 /* The media element property table: one function serves every name so the
  * Node class stays the only class (see the canvas block above for the same
@@ -13882,8 +13925,8 @@ WebCore::Document* documentOf(AntbValue* self)
 #define AGB_TAG_SELECTION 0x53454C31u  /* 'SEL1' */
 #define AGB_TAG_RANGE     0x524E4731u  /* 'RNG1' */
 
-static AntbClass* g_selectionClass;
-static AntbClass* g_rangeClass;
+/* g_selectionClass / g_rangeClass live in RuntimeState (per engine): the class
+ * objects belong to the VM that created them. */
 
 enum {
     SEL_OP_TOSTRING, SEL_OP_GET_RANGE_AT, SEL_OP_ADD_RANGE, SEL_OP_REMOVE_ALL,
@@ -15031,45 +15074,51 @@ static const DomMethodDef kDomMethods[] = {
     { "HTMLCollection", "namedItem", collectionNamedItemMethod, NULL }
 };
 
-static AntbClass* g_documentIface       = NULL;
-static AntbClass* g_htmlDocumentIface   = NULL;
-static AntbClass* g_elementIface        = NULL;
-static AntbClass* g_htmLElementIface    = NULL;
-static AntbClass* g_svgElementIface     = NULL;
-static AntbClass* g_svgSvgIface         = NULL;
-static AntbClass* g_documentFragmentIface = NULL;
-static AntbClass* g_characterDataIface  = NULL;
-static AntbClass* g_textIface           = NULL;
-static AntbClass* g_commentIface        = NULL;
-static AntbClass* g_unknownElementIface = NULL;
-static std::map<std::string, AntbClass*>* g_tagClasses = NULL;
+/* The interface class mirrors (g_documentIface & co, g_tagClasses, the
+ * selection/media classes) live in RuntimeState and are reached through the
+ * g_* macros: one state is one engine, and they must never be shared between
+ * two engines that are alive at the same time (a tab and its popup). */
 
 /* Called by teardownRealm(): the classes belong to the engine that is going
  * away, so every pointer here must be dropped with it (a stale class would be
  * a use-after-free on the next document - the selection/media installers used
  * to keep their classes in statics and never reset them). */
-void resetInterfaceClasses()
+void resetInterfaceClasses(RuntimeState* state)
 {
-    g_documentIface = NULL;
-    g_htmlDocumentIface = NULL;
-    g_elementIface = NULL;
-    g_htmLElementIface = NULL;
-    g_svgElementIface = NULL;
-    g_svgSvgIface = NULL;
-    g_documentFragmentIface = NULL;
-    g_characterDataIface = NULL;
-    g_textIface = NULL;
-    g_commentIface = NULL;
-    g_unknownElementIface = NULL;
+    if (!state)
+        return;
+
+    state->nodeClass = NULL;
+    state->documentIface = NULL;
+    state->htmlDocumentIface = NULL;
+    state->elementIface = NULL;
+    state->htmLElementIface = NULL;
+    state->svgElementIface = NULL;
+    state->svgSvgIface = NULL;
+    state->documentFragmentIface = NULL;
+    state->characterDataIface = NULL;
+    state->textIface = NULL;
+    state->commentIface = NULL;
+    state->unknownElementIface = NULL;
+    state->windowClass = NULL;
+    state->nodeListClass = NULL;
+    state->htmlCollectionClass = NULL;
+    state->styleSheetListClass = NULL;
+    state->styleSheetClass = NULL;
+    state->cssRuleClass = NULL;
+    state->cssRuleListClass = NULL;
+    state->mediaListClass = NULL;
+    state->cssDeclarationClass = NULL;
 
     /* Owned by the per-realm interface sets (B2-4): clear the mirror only. */
-    g_tagClasses = NULL;
+    state->tagClasses = NULL;
 
-    g_textTrackClass = NULL;
-    g_textTrackListClass = NULL;
-    g_textTrackCueClass = NULL;
-    g_selectionClass = NULL;
-    g_rangeClass = NULL;
+    state->textTrackClass = NULL;
+    state->textTrackListClass = NULL;
+    state->textTrackCueClass = NULL;
+    state->selectionClass = NULL;
+    state->rangeClass = NULL;
+    state->canvasCtxClass = NULL;
 }
 
 /* ---- WebIDL attribute accessors (B2-3) ----------------------------------
@@ -15435,47 +15484,61 @@ static void installAttributeAccessors(AntbEngine* engine,
 
 /* struct RealmInterfaces is defined right after RuntimeState. */
 
-static RealmInterfaces* realmInterfaceSet(AntbRealm* realm)
+/* The set of one state (one engine) for a realm. NULL is a valid key: it is the
+ * single shared set of the AGB_PER_REALM_IFACES=0 escape hatch. */
+static RealmInterfaces* realmInterfaceSetIn(RuntimeState* state, AntbRealm* realm)
 {
     std::map<void*, RealmInterfaces*>::iterator it;
 
-    if (!g_currentState || !g_currentState->realmIfaces || !realm)
+    if (!state || !state->realmIfaces)
         return NULL;
 
-    it = g_currentState->realmIfaces->find((void*)realm);
-    return it == g_currentState->realmIfaces->end() ? NULL : it->second;
+    it = state->realmIfaces->find((void*)realm);
+    return it == state->realmIfaces->end() ? NULL : it->second;
+}
+
+/* Mirror one realm's interface set into `state`'s class pointers; the C
+ * dispatchers read them through the g_* macros. Writing the state explicitly
+ * (instead of through the macros) is what keeps two engines apart: a wrap for
+ * engine A must never be answered out of engine B's prototypes. */
+static void applyRealmInterfacesFor(RuntimeState* state, AntbRealm* realm)
+{
+    RealmInterfaces* set;
+
+    if (!state)
+        return;
+
+    set = realmInterfaceSetIn(state, realm);
+    state->ifacesActive = set;
+
+    state->nodeClass             = set ? set->nodeClass : NULL;
+    state->documentIface         = set ? set->documentIface : NULL;
+    state->htmlDocumentIface     = set ? set->htmlDocumentIface : NULL;
+    state->elementIface          = set ? set->elementIface : NULL;
+    state->htmLElementIface      = set ? set->htmLElementIface : NULL;
+    state->svgElementIface       = set ? set->svgElementIface : NULL;
+    state->svgSvgIface           = set ? set->svgSvgIface : NULL;
+    state->documentFragmentIface = set ? set->documentFragmentIface : NULL;
+    state->characterDataIface    = set ? set->characterDataIface : NULL;
+    state->textIface             = set ? set->textIface : NULL;
+    state->commentIface          = set ? set->commentIface : NULL;
+    state->unknownElementIface   = set ? set->unknownElementIface : NULL;
+    state->windowClass           = set ? set->windowClass : NULL;
+    state->nodeListClass         = set ? set->nodeListClass : NULL;
+    state->htmlCollectionClass   = set ? set->htmlCollectionClass : NULL;
+    state->tagClasses            = set ? set->tagClasses : NULL;
 }
 
 static void applyRealmInterfaces(AntbRealm* realm)
 {
-    RealmInterfaces* set = realmInterfaceSet(realm);
-
-    if (g_currentState)
-        g_currentState->ifacesActive = set;
-
-    g_nodeClass             = set ? set->nodeClass : NULL;
-    g_documentIface         = set ? set->documentIface : NULL;
-    g_htmlDocumentIface     = set ? set->htmlDocumentIface : NULL;
-    g_elementIface          = set ? set->elementIface : NULL;
-    g_htmLElementIface      = set ? set->htmLElementIface : NULL;
-    g_svgElementIface       = set ? set->svgElementIface : NULL;
-    g_svgSvgIface           = set ? set->svgSvgIface : NULL;
-    g_documentFragmentIface = set ? set->documentFragmentIface : NULL;
-    g_characterDataIface    = set ? set->characterDataIface : NULL;
-    g_textIface             = set ? set->textIface : NULL;
-    g_commentIface          = set ? set->commentIface : NULL;
-    g_unknownElementIface   = set ? set->unknownElementIface : NULL;
-    g_windowClass           = set ? set->windowClass : NULL;
-    g_nodeListClass         = set ? set->nodeListClass : NULL;
-    g_htmlCollectionClass   = set ? set->htmlCollectionClass : NULL;
-    g_tagClasses            = set ? set->tagClasses : NULL;
+    applyRealmInterfacesFor(g_currentState, realm);
 }
 
 static int g_buildingInterfaces = 0;
 
-/* One interface set per realm is the browser-faithful default; the switch is
- * the escape hatch while the per-realm cost is measured (and the A/B baseline
- * for the popup-probe regression, see issues §20.5). */
+/* One interface set per realm is the browser-faithful default; the switch goes
+ * back to a single shared set per engine, which is the A/B baseline for the
+ * per-realm cost and for any binding regression (R182). */
 static bool perRealmIfacesEnabled()
 {
     const char* value = getenv("AGB_PER_REALM_IFACES");
@@ -15485,18 +15548,40 @@ static bool perRealmIfacesEnabled()
 
 void ensureInterfaceClasses(AntbEngine* engine)
 {
+    RuntimeState* state;
     AntbRealm* realm;
+    RealmInterfaces* set;
 
-    if (!engine || !g_currentState || g_buildingInterfaces)
+    if (!engine || g_buildingInterfaces)
         return;
 
-    if (!g_currentState->realmIfaces)
-        g_currentState->realmIfaces = new std::map<void*, RealmInterfaces*>();
+    /* The classes belong to one engine, so they are looked up (and mirrored)
+     * in that engine's state - not in whichever state the engine thread happens
+     * to be in. */
+    state = stateForEngine(engine);
 
-    realm = perRealmIfacesEnabled() ? currentRealm() : NULL;
-    if (realmInterfaceSet(realm)) {
-        if (g_currentState->ifacesActive != realmInterfaceSet(realm))
-            applyRealmInterfaces(realm);
+    if (!state || state == &g_emptyState)
+        return;
+
+    if (!state->realmIfaces)
+        state->realmIfaces = new std::map<void*, RealmInterfaces*>();
+
+    realm = perRealmIfacesEnabled() ? antb_realm_current(engine) : NULL;
+    set = realmInterfaceSetIn(state, realm);
+
+    if (set) {
+        if (state->ifacesActive != set)
+            applyRealmInterfacesFor(state, realm);
+        return;
+    }
+
+    /* The build writes the mirrors through the g_* macros, so this engine must
+     * be the one the engine thread is in. Every call site (a wrap, a document
+     * bind, an expose) runs inside the engine's own context. */
+    if (g_currentState != state) {
+        agbLog(AGB_LOG_EVT,
+               "ensureInterfaceClasses: engine %p is not the current context, skipped",
+               (void*)engine);
         return;
     }
 
@@ -15666,9 +15751,11 @@ void ensureInterfaceClasses(AntbEngine* engine)
         set->nodeListClass = g_nodeListClass;
         set->htmlCollectionClass = g_htmlCollectionClass;
 
-        if (realm)
-            (*g_currentState->realmIfaces)[(void*)realm] = set;
-        g_currentState->ifacesActive = set;
+        /* Store it even for the NULL key: that is the shared set of the
+         * escape hatch, and without the entry every call would rebuild the
+         * whole class tree. */
+        (*state->realmIfaces)[(void*)realm] = set;
+        state->ifacesActive = set;
 
         /* Expose this realm's own constructors on its global. Expose skips
          * names already present, so a later antb_expose_classes() (or another

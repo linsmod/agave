@@ -38,12 +38,16 @@ pwsh -File tools/run_all_tests.ps1 -KeepLogs                # 保留每个套件
 远程样片）、`run_c3`（外部工作区 + 8899 端口，本来就不是标准回归）。每个套件打印
 `PASS/FAIL + 秒数`，最后给最慢的 5 个和总数；单个套件超过 180 s 会打 `WARN`（AGENTS rule 9）。
 
-> ⚠ **已知失败（2026-11-10，B2-3，未修）**：`run_nav_tests` 的 `window.open`、
-> `run_window_tests` 的 local `target=_blank`/命名 target、`run_tab_lifecycle_tests` 的 popup
-> 用例会失败——probe 的 sanity eval 落到了 popup 的 about:blank 文档（`probeExit` 未定义 /
-> `document.URL` undefined），不是页面 DOM 行为。`AGB_NO_DOM_ATTRS=1` 可跑旧路径对照（通过）。
-> 复现、影响面与排查起点见 `issues/wip/ant-dom-bindings.md` §20.5；`run_selection_tests` 在
-> 全量并发里偶发剪贴板被污染失败（单独跑 25/25 通过），与上面残留的 popup 进程有关。
+> ✅ **2026-11-10 已修（R182，B2-5）**：`run_nav_tests` 的 `window.open`、`run_window_tests` 的 local
+> `target=_blank`/命名 target、`run_tab_lifecycle_tests` 的 popup 用例曾经全挂，根因不是探针 eval 路由，
+> 而是**接口 class 镜像里有一半是进程级 static**：第二个 engine（popup）建类时覆盖了它们，主 engine
+> 之后包出的每个节点都是跨 VM 原型的空壳（`document.documentElement.tagName === undefined`）。
+> 现在镜像全部在 `RuntimeState`（per engine），三个套件恢复全绿；细节见 `docs/hist-lessons.md` R182
+> 与 `issues/wip/ant-dom-bindings.md` §22。`run_selection_tests` 仍会在全量并发里偶发剪贴板被污染
+> 失败（单独跑 25/25 通过），与套件之间的剪贴板争用有关。另：`run_layout_tests` 的
+> `<select>` mouse 用例（`--click 30,28` 开菜单 + `--click 30,79` 选第三项）在并发负载下偶发——
+> 日志里只有 `select mouse: want …` 没有 got，单独跑/重跑全绿，推测是两次 click 之间菜单创建
+> 的时序被拖慢；排查看 `tools/pages/check_form_select.js` 与 `agwPost` 的鼠标命令顺序。
 
 
 **软基线**（2026-11-09 实测，16 核本机；**不是断言**；下表是**串行**墙钟，默认并发整批 ≈ 245 s）：
