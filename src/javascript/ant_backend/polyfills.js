@@ -10,117 +10,101 @@
 
     var g = window;
 
-    /* --- modern DOM methods ------------------------------------------------ */
+    /* --- modern DOM methods ------------------------------------------------ *
+     * The engine now has one interface prototype per interface, so these have
+     * to land on the right prototype (they used to share one hidden prototype
+     * for every node). Mixin ownership follows the DOM:
+     *   ParentNode  append/prepend        Element, Document, DocumentFragment
+     *   ChildNode   before/after/remove/replaceWith   Element, CharacterData
+     *   Element     matches/closest
+     * and text.remove() keeps working through CharacterData. */
     if (document && document.createElement) {
-        var proto = Object.getPrototypeOf(document.createElement('div'));
-
-        if (proto) {
-            if (!proto.append) {
-                proto.append = function () {
-                    for (var i = 0; i < arguments.length; ++i) {
-                        var n = arguments[i];
-                        if (n === null || n === undefined) continue;
-                        this.appendChild(typeof n === 'string' ? document.createTextNode(n) : n);
-                    }
-                    return this;
-                };
-            }
-
-            if (!proto.prepend) {
-                proto.prepend = function () {
-                    var first = this.firstChild;
-                    for (var i = 0; i < arguments.length; ++i) {
-                        var n = arguments[i];
-                        if (n === null || n === undefined) continue;
-                        this.insertBefore(typeof n === 'string' ? document.createTextNode(n) : n, first);
-                    }
-                    return this;
-                };
-            }
-
-            if (!proto.before) {
-                proto.before = function () {
-                    var p = this.parentNode;
-                    if (!p) return;
-                    for (var i = 0; i < arguments.length; ++i) p.insertBefore(arguments[i], this);
-                };
-            }
-
-            if (!proto.after) {
-                proto.after = function () {
-                    var p = this.parentNode;
-                    if (!p) return;
-                    var next = this.nextSibling;
-                    for (var i = 0; i < arguments.length; ++i) p.insertBefore(arguments[i], next);
-                };
-            }
-
-            if (!proto.remove) {
-                proto.remove = function () {
-                    if (this.parentNode) this.parentNode.removeChild(this);
-                };
-            }
-
-            if (!proto.replaceWith) {
-                proto.replaceWith = function () {
-                    var p = this.parentNode;
-                    if (!p) return;
-                    var next = this.nextSibling;
-                    for (var i = 0; i < arguments.length; ++i) p.insertBefore(arguments[i], this);
-                    p.removeChild(this);
-                    if (next) this.nextSibling;
-                };
-            }
-
-            if (!proto.matches) {
-                proto.matches = function (sel) {
-                    var p = this.parentNode || this.ownerDocument;
-                    if (!p || !p.querySelectorAll) return false;
-                    var list = p.querySelectorAll(sel);
-                    for (var i = 0; i < list.length; ++i) if (list[i] === this) return true;
-                    return false;
-                };
-            }
-
-            if (!proto.closest) {
-                proto.closest = function (sel) {
-                    var n = this;
-                    while (n && n.nodeType === 1) {
-                        if (n.matches && n.matches(sel)) return n;
-                        n = n.parentNode;
-                    }
-                    return null;
-                };
-            }
-
-            if (!proto.hasAttribute || !('dataset' in document.createElement('div'))) {
-                /* dataset is nice to have but comes from the engine; ignore. */
-            }
+        function polyfillTarget(ctor) {
+            return (typeof ctor === 'function' && ctor.prototype) ? ctor.prototype : null;
         }
+
+        function defineMethod(proto, name, fn) {
+            if (!proto || proto[name]) return;
+            try { proto[name] = fn; } catch (e) { /* read only prototype */ }
+        }
+
+        var parentTargets = [polyfillTarget(Element), polyfillTarget(Document),
+                             polyfillTarget(DocumentFragment)];
+        var childTargets = [polyfillTarget(Element), polyfillTarget(CharacterData)];
+        var elementTarget = polyfillTarget(Element);
+
+        function appendFn() {
+            for (var i = 0; i < arguments.length; ++i) {
+                var n = arguments[i];
+                if (n === null || n === undefined) continue;
+                this.appendChild(typeof n === 'string' ? document.createTextNode(n) : n);
+            }
+            return this;
+        }
+        function prependFn() {
+            var first = this.firstChild;
+            for (var i = 0; i < arguments.length; ++i) {
+                var n = arguments[i];
+                if (n === null || n === undefined) continue;
+                this.insertBefore(typeof n === 'string' ? document.createTextNode(n) : n, first);
+            }
+            return this;
+        }
+        function beforeFn() {
+            var p = this.parentNode;
+            if (!p) return;
+            for (var i = 0; i < arguments.length; ++i) p.insertBefore(arguments[i], this);
+        }
+        function afterFn() {
+            var p = this.parentNode;
+            if (!p) return;
+            var next = this.nextSibling;
+            for (var i = 0; i < arguments.length; ++i) p.insertBefore(arguments[i], next);
+        }
+        function removeFn() {
+            if (this.parentNode) this.parentNode.removeChild(this);
+        }
+        function replaceWithFn() {
+            var p = this.parentNode;
+            if (!p) return;
+            var next = this.nextSibling;
+            for (var i = 0; i < arguments.length; ++i) p.insertBefore(arguments[i], this);
+            p.removeChild(this);
+            if (next) this.nextSibling;
+        }
+        function matchesFn(sel) {
+            var p = this.parentNode || this.ownerDocument;
+            if (!p || !p.querySelectorAll) return false;
+            var list = p.querySelectorAll(sel);
+            for (var i = 0; i < list.length; ++i) if (list[i] === this) return true;
+            return false;
+        }
+        function closestFn(sel) {
+            var n = this;
+            while (n && n.nodeType === 1) {
+                if (n.matches && n.matches(sel)) return n;
+                n = n.parentNode;
+            }
+            return null;
+        }
+
+        for (var t = 0; t < parentTargets.length; ++t) {
+            defineMethod(parentTargets[t], 'append', appendFn);
+            defineMethod(parentTargets[t], 'prepend', prependFn);
+        }
+        for (var c = 0; c < childTargets.length; ++c) {
+            defineMethod(childTargets[c], 'before', beforeFn);
+            defineMethod(childTargets[c], 'after', afterFn);
+            defineMethod(childTargets[c], 'remove', removeFn);
+            defineMethod(childTargets[c], 'replaceWith', replaceWithFn);
+        }
+        defineMethod(elementTarget, 'matches', matchesFn);
+        defineMethod(elementTarget, 'closest', closestFn);
     }
 
-    /* --- instanceof Node -------------------------------------------------- */
-    if (typeof Symbol !== 'undefined' && Symbol.hasInstance) {
-        var isNode = function (o) { return !!o && typeof o.nodeType === 'number'; };
-        var handlers = [
-            [Node, isNode],
-            [Element, function (o) { return isNode(o) && o.nodeType === 1; }],
-            [HTMLElement, function (o) { return isNode(o) && o.nodeType === 1; }],
-            [Text, function (o) { return isNode(o) && o.nodeType === 3; }],
-            [Comment, function (o) { return isNode(o) && o.nodeType === 8; }],
-            [DocumentFragment, function (o) { return isNode(o) && o.nodeType === 11; }]
-        ];
-
-        for (var h = 0; h < handlers.length; ++h) {
-            var ctor = handlers[h][0];
-            if (typeof ctor !== 'function') continue;
-            try {
-                Object.defineProperty(ctor, Symbol.hasInstance, {
-                    configurable: true, writable: true, value: handlers[h][1]
-                });
-            } catch (e) { /* read only constructor */ }
-        }
-    }
+    /* instanceof is answered by the interface prototype chain (Node ->
+     * EventTarget, HTMLElement -> Element -> Node, ...); the old
+     * Symbol.hasInstance overrides are gone, they hid SVG/prototype bugs. */
 
     /* --- <style>.sheet ----------------------------------------------------
      * Feature sniffing reads style.sheet.cssRules outside any try/catch, so an

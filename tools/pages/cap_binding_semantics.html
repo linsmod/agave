@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>binding semantics</title></head>
+<body>
+<div id="d">d</div><input id="i"><span id="s">s</span>
+<script>
+/* DOM binding semantics matrix (B1: interface prototypes, constructors,
+ * @@toStringTag, method ownership, descriptors, facade behaviour).
+ *
+ * Every assertion is a pair of the same JS a browser runs; run_binding_
+ * semantics_tests.ps1 checks that all of them pass and the page never threw.
+ * The expected values are the ones Chrome returns (see
+ * issues/wip/ant-dom-bindings.md §12); a "known gap" assertion documents a
+ * difference that a later stage (B2/A) is expected to flip. */
+(function () {
+  var pass = 0, fail = [], total = 0;
+
+  function ok(name, cond) {
+    total++;
+    if (cond) { pass++; } else { fail.push(name); }
+  }
+
+  function protoIs(a, b) { return Object.getPrototypeOf(a) === b; }
+
+  var div = document.getElementById('d');
+  var input = document.getElementById('i');
+  var span = document.getElementById('s');
+  var text = document.createTextNode('t');
+  var comment = document.createComment('c');
+  var frag = document.createDocumentFragment();
+
+  try {
+    /* ---- prototype chain -------------------------------------------------- */
+    ok('div proto', protoIs(div, HTMLDivElement.prototype));
+    ok('div parent proto', protoIs(HTMLDivElement.prototype, HTMLElement.prototype));
+    ok('html parent proto', protoIs(HTMLElement.prototype, Element.prototype));
+    ok('element parent proto', protoIs(Element.prototype, Node.prototype));
+    ok('node parent proto', protoIs(Node.prototype, EventTarget.prototype));
+    ok('event-target root', protoIs(EventTarget.prototype, Object.prototype));
+
+    /* ---- instanceof ------------------------------------------------------- */
+    ok('div instanceof HTMLDivElement', div instanceof HTMLDivElement);
+    ok('div instanceof HTMLElement', div instanceof HTMLElement);
+    ok('div instanceof Element', div instanceof Element);
+    ok('div instanceof Node', div instanceof Node);
+    ok('div instanceof EventTarget', div instanceof EventTarget);
+    ok('div instanceof Object', div instanceof Object);
+    ok('div !instanceof HTMLInputElement', !(div instanceof HTMLInputElement));
+    ok('div !instanceof HTMLSpanElement', !(div instanceof HTMLSpanElement));
+    ok('input instanceof HTMLInputElement', input instanceof HTMLInputElement);
+    ok('span instanceof HTMLSpanElement', span instanceof HTMLSpanElement);
+    ok('document instanceof HTMLDocument', document instanceof HTMLDocument);
+    ok('document instanceof Document', document instanceof Document);
+    ok('document instanceof Node', document instanceof Node);
+    ok('document instanceof EventTarget', document instanceof EventTarget);
+    ok('document !instanceof HTMLElement', !(document instanceof HTMLElement));
+
+    /* ---- constructors / toString ----------------------------------------- */
+    ok('div constructor', div.constructor === HTMLDivElement);
+    ok('div constructor name', div.constructor.name === 'HTMLDivElement');
+    ok('div toString', Object.prototype.toString.call(div) === '[object HTMLDivElement]');
+    ok('document toString', Object.prototype.toString.call(document) === '[object HTMLDocument]');
+    ok('document constructor', document.constructor === HTMLDocument);
+    ok('interface ctor inherits', protoIs(HTMLDivElement, HTMLElement));
+    ok('interface name', HTMLDivElement.name === 'HTMLDivElement');
+
+    /* ---- text / comment / fragment --------------------------------------- */
+    ok('text constructor', text.constructor === Text);
+    ok('text instanceof CharacterData', text instanceof CharacterData);
+    ok('text instanceof Node', text instanceof Node);
+    ok('text !instanceof Element', !(text instanceof Element));
+    ok('comment constructor', comment.constructor === Comment);
+    ok('fragment constructor', frag.constructor === DocumentFragment);
+    ok('fragment instanceof Node', frag instanceof Node);
+    ok('fragment !instanceof Element', !(frag instanceof Element));
+
+    /* ---- method ownership -------------------------------------------------- */
+    ok('Node.prototype.appendChild', typeof Node.prototype.appendChild === 'function');
+    ok('Node.prototype.getRootNode', typeof Node.prototype.getRootNode === 'function');
+    ok('Element.prototype.querySelector', typeof Element.prototype.querySelector === 'function');
+    ok('Element.prototype.getAttribute', typeof Element.prototype.getAttribute === 'function');
+    ok('Node.prototype.querySelector absent', Node.prototype.querySelector === undefined);
+    ok('HTMLElement.prototype.focus', typeof HTMLElement.prototype.focus === 'function');
+    ok('Element.prototype.focus absent', Element.prototype.focus === undefined);
+    ok('HTMLElement.prototype.click', typeof HTMLElement.prototype.click === 'function');
+    ok('HTMLFormElement.prototype.submit', typeof HTMLFormElement.prototype.submit === 'function');
+    ok('HTMLCanvasElement.prototype.getContext', typeof HTMLCanvasElement.prototype.getContext === 'function');
+    ok('HTMLMediaElement.prototype.play', typeof HTMLMediaElement.prototype.play === 'function');
+    ok('Document.prototype.getElementById', typeof Document.prototype.getElementById === 'function');
+    ok('Document.prototype.getElementsByTagName', typeof Document.prototype.getElementsByTagName === 'function');
+    ok('assigned method works', typeof div.appendChild === 'function' && typeof div.getAttribute === 'function');
+
+    /* ---- constants --------------------------------------------------------- */
+    ok('Node.ELEMENT_NODE', Node.ELEMENT_NODE === 1);
+    ok('Node.TEXT_NODE', Node.TEXT_NODE === 3);
+    ok('Node.DOCUMENT_NODE', Node.DOCUMENT_NODE === 9);
+    ok('inherited constant', HTMLDivElement.ELEMENT_NODE === 1);
+
+    /* ---- descriptors (WebIDL shape) --------------------------------------- */
+    (function () {
+      var d = Object.getOwnPropertyDescriptor(HTMLElement, 'prototype');
+      ok('ctor prototype attrs', !!d && d.writable === false && d.enumerable === false && d.configurable === false);
+    })();
+    (function () {
+      var d = Object.getOwnPropertyDescriptor(HTMLDivElement.prototype, 'constructor');
+      ok('prototype constructor attrs', !!d && d.writable === true && d.enumerable === false && d.configurable === true);
+    })();
+    ok('prototype @@toStringTag', HTMLDivElement.prototype[Symbol.toStringTag] === 'HTMLDivElement');
+
+    /* ---- illegal constructor ---------------------------------------------- */
+    (function () {
+      var threw = false;
+      try { new HTMLElement(); } catch (e) {
+        threw = (e instanceof TypeError) && /Illegal constructor/.test(e.message);
+      }
+      ok('new HTMLElement throws', threw);
+    })();
+    (function () {
+      var threw = false;
+      try { HTMLDivElement(); } catch (e) { threw = true; }
+      ok('calling interface throws', threw);
+    })();
+
+    /* ---- facade still the custom layer ------------------------------------ */
+    div.id = 'd2';
+    ok('id setter', div.getAttribute('id') === 'd2');
+    div.id = 'd';
+    div.className = 'cls';
+    ok('class setter', div.getAttribute('class') === 'cls');
+    input.value = 'abc';
+    ok('input value property', input.value === 'abc');
+    div.onclick = function () {};
+    ok('onclick property', typeof div.onclick === 'function');
+    ok('hasOwnProperty false', div.hasOwnProperty('id') === false && div.hasOwnProperty('nope') === false);
+    ok('in operator', ('appendChild' in div) && ('tagName' in div));
+    ok('for-in lists methods', (function () {
+      for (var k in div) { if (k === 'appendChild') return true; }
+      return false;
+    })());
+    ok('wrapper identity', document.getElementById('d') === div);
+    ok('ownerDocument identity', div.ownerDocument === document);
+
+    /* ---- polyfills on the right prototypes -------------------------------- */
+    var p = document.createElement('p');
+    document.body.appendChild(p);
+    p.appendChild(text);
+    ok('text.remove present', typeof text.remove === 'function');
+    text.remove();
+    ok('text.remove works', text.parentNode === null);
+    p.append('x');
+    ok('append works', p.childNodes.length >= 1);
+    ok('matches on Element', typeof div.matches === 'function' && div.matches('#d'));
+
+    /* ---- document API ------------------------------------------------------ */
+    ok('getElementById', document.getElementById('i') === input);
+    ok('querySelector', document.querySelector('#d') === div);
+    ok('querySelectorAll', document.querySelectorAll('div').length >= 1);
+    document.title = 'binding';
+    ok('title getter/setter', document.title === 'binding');
+    ok('readyState string', typeof document.readyState === 'string');
+
+    /* ---- already-wrapped classes ------------------------------------------ */
+    /* element.style is still the facade's plain shim (known gap): it reflects
+     * CSS properties but is not a CSSStyleDeclaration interface instance yet. */
+    div.style.color = 'red';
+    ok('style shim write', div.style.color === 'red');
+    ok('style is object (known gap)', typeof div.style === 'object' &&
+       !(div.style instanceof CSSStyleDeclaration));
+    ok('StyleSheetList global', typeof StyleSheetList === 'function');
+    ok('selection instanceof Selection', window.getSelection() instanceof Selection);
+    ok('range instanceof Range', document.createRange() instanceof Range);
+    (function () {
+      var canvas = document.createElement('canvas');
+      canvas.width = 8; canvas.height = 8;
+      var ctx = canvas.getContext('2d');
+      ok('canvas ctx instanceof', ctx instanceof CanvasRenderingContext2D);
+      ok('canvas ctx proto', protoIs(ctx, CanvasRenderingContext2D.prototype));
+    })();
+
+    /* ---- known gaps (B1 keeps these; B2/A flip them) ---------------------- */
+    ok('nodeList is array (known gap)', Array.isArray(document.querySelectorAll('div')));
+    ok('HTMLElement.prototype.style absent (known gap)',
+       Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'style') === undefined);
+  } catch (e) {
+    fail.push('threw: ' + (e && e.message ? e.message : e));
+  }
+
+  window.__bindingResult = { pass: pass, total: total, fail: fail };
+})();
+</script>
+</body>
+</html>

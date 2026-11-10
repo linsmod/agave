@@ -38,6 +38,7 @@ namespace WebCore { bool prefersDarkColorScheme(); }
 #include "DOMImplementation.h"
 #include "HTMLDocument.h"
 #include "Element.h"
+#include "SVGNames.h"
 #include "RenderObject.h"
 #include "Node.h"
 #include "CSSComputedStyleDeclaration.h"
@@ -118,6 +119,8 @@ namespace WebCore { bool prefersDarkColorScheme(); }
 #include <string>
 #include <vector>
 #include <set>
+
+static void ensureCanvasContextClass(AntbEngine*);
 
 namespace AntRuntime {
 void dispatchWindowEventState(const char* type, AntbValue* state);
@@ -527,14 +530,8 @@ static void activateState(RuntimeState* state)
 /* Per-document JS object. Every frame gets its own document object, so
  * `parent.document` and `document` are two different objects; the same
  * document always maps to the same object (`document === window.document`).
- * Keyed by (engine, document) because one document outlives many binds. */
-struct DocObjectEntry {
-    AntbEngine*        engine;
-    WebCore::Document* document;
-    AntbValue*         object;
-};
-
-static std::vector<DocObjectEntry>* g_docObjectCache = NULL;
+ * Identity is the bridge wrapper cache: the document is wrapped as an
+ * HTMLDocument interface instance, exactly like any other node. */
 
 struct WindowEntry {
     AntbEngine*        engine;
@@ -1060,6 +1057,12 @@ AntbValue* wrapTextTrack(AntbEngine*, WebCore::TextTrack*);
 AntbValue* wrapTextTrackList(AntbEngine*, WebCore::TextTrackList*);
 AntbValue* wrapTextTrackCue(AntbEngine*, WebCore::TextTrackCue*);
 void installTextTrackClasses(AntbEngine*);
+
+/* DOM interface registry (one bridge class per interface): created once per
+ * engine, before the document object exists, exposed per realm. */
+void ensureInterfaceClasses(AntbEngine*);
+AntbClass* classForNode(WebCore::Node*);
+void resetInterfaceClasses();
 bool mediaElementProperty(AntbEngine*, WebCore::HTMLMediaElement*, const char*, AntbValue* out);
 bool mediaElementSetProperty(WebCore::HTMLMediaElement*, const char*, const AntbValue*);
 
@@ -4722,7 +4725,7 @@ int evaluate(const char* src, size_t len, char** out, char** err)
     } guard(&g_evalDepth);
 
     if (getenv("AGB_EVT_DEBUG"))
-        agbLog(AGB_LOG_EVT, "evaluate enter depth=%d len=%d", g_evalDepth, (int)len);
+        agbLog(AGB_LOG_EVT, "evaluate enter depth=%d len=%d realm=%p", g_evalDepth, (int)len, (void*)currentRealm());
 
     if (out)
         *out = NULL;
@@ -5640,19 +5643,6 @@ static void teardownRealm(RuntimeState* state)
             }
         }
     }
-    /* The per-document objects of this realm die with the realm. */
-    if (g_docObjectCache) {
-        for (size_t i = 0; i < g_docObjectCache->size(); ) {
-            if ((*g_docObjectCache)[i].engine == state->engine) {
-                if ((*g_docObjectCache)[i].object)
-                    antb_value_release((*g_docObjectCache)[i].object);
-                g_docObjectCache->erase(g_docObjectCache->begin() + i);
-            } else {
-                ++i;
-            }
-        }
-    }
-
     /* The old page's listeners close over its DOM; they are released together
      * with the document records (each document owns its own listeners now). */
 
@@ -5661,7 +5651,8 @@ static void teardownRealm(RuntimeState* state)
     if (state->engine && g_document)
         antb_release_owner(state->engine, g_document);
 
-    /* The node class belongs to the old engine. */
+    /* The interface classes (and the media/selection classes they own) belong
+     * to the old engine. */
     g_nodeClass = 0;
     g_canvasCtxClass = 0;
     g_windowClass = 0;
@@ -5671,6 +5662,7 @@ static void teardownRealm(RuntimeState* state)
     g_cssRuleListClass = 0;
     g_mediaListClass = 0;
     g_cssDeclarationClass = 0;
+    resetInterfaceClasses();
     clearExpandoObjects();
     state->realmBound = false;
 
@@ -5766,92 +5758,41 @@ void beginNewRealm(void)
 AntbValue* documentObjectFor(AntbEngine* engine, WebCore::Document* document)
 {
     AntbValue* docObj;
-    size_t i;
+    AntbClass* klass;
 
     if (!engine || !document)
         return NULL;
 
-    if (g_docObjectCache) {
-        for (i = 0; i < g_docObjectCache->size(); ++i) {
-            DocObjectEntry& e = (*g_docObjectCache)[i];
+    /* The document is a regular interface instance: classForNode() picks
+     * HTMLDocument and the wrapper cache keeps `document === document.body.
+     * ownerDocument` true. Its methods live on Document.prototype (installed
+     * once per engine), not on every document object. */
+    ensureInterfaceClasses(engine);
+    klass = classForNode(document);
+    if (!klass)
+        return NULL;
 
-            if (e.engine == engine && e.document == document)
-                return e.object ? antb_retain(e.object) : NULL;
-        }
-    } else {
-        g_docObjectCache = new std::vector<DocObjectEntry>();
-    }
-
-    docObj = antb_make_object(engine);
+    docObj = antb_wrap_native_as_owner(engine, klass, document, AGB_TAG_NODE, document);
     if (!docObj)
         return NULL;
 
-    antb_define_property_rw(engine, docObj, "title", titleGetter, titleSetter, NULL);
-    antb_define_property_rw(engine, docObj, "cookie", titleGetter, titleSetter, NULL);
-
-    antb_define_method(engine, docObj, "getElementById", docGetElementById, NULL);
-    antb_define_method(engine, docObj, "createElement", docCreateElement, NULL);
-    antb_define_method(engine, docObj, "createElementNS", docCreateElementNS, NULL);
-    antb_define_method(engine, docObj, "createTextNode", docCreateTextNode, NULL);
-    antb_define_method(engine, docObj, "createComment", docCreateComment, NULL);
-    antb_define_method(engine, docObj, "createDocumentFragment", docCreateDocumentFragment, NULL);
-    /* DOM Selection API (what "select all / copy" buttons and text-selection
-     * UIs call). Without these getSelection/createRange/execCommand were
-     * undefined and every site took its "unsupported" branch. */
-    antb_define_method(engine, docObj, "getSelection", docGetSelection, NULL);
-    antb_define_method(engine, docObj, "createRange", docCreateRange, NULL);
-    antb_define_method(engine, docObj, "execCommand", docExecCommand, NULL);
-    antb_define_method(engine, docObj, "queryCommandSupported", docQueryCommandSupported, NULL);
-    antb_define_method(engine, docObj, "queryCommandEnabled", docQueryCommandEnabled, NULL);
-    antb_define_method(engine, docObj, "queryCommandState", docQueryCommandState, NULL);
-    /* document.implementation: jQuery and others feature-test
-     * document.implementation.createHTMLDocument(). */
+    /* document.implementation: per document object, created on first wrap.
+     * jQuery and others feature-test document.implementation.createHTMLDocument. */
     {
-        AntbValue* implObj = antb_make_object(engine);
-        if (implObj) {
-            antb_define_method(engine, implObj, "createHTMLDocument", docCreateHTMLDocument, NULL);
-            antb_define_method(engine, implObj, "hasFeature", docHasFeature, NULL);
-            antb_set_prop(engine, docObj, "implementation", implObj);
-            antb_value_release(implObj);
+        AntbValue* existing = antb_get_prop(engine, docObj, "implementation");
+
+        if (!existing) {
+            AntbValue* implObj = antb_make_object(engine);
+
+            if (implObj) {
+                antb_define_method(engine, implObj, "createHTMLDocument", docCreateHTMLDocument, NULL);
+                antb_define_method(engine, implObj, "hasFeature", docHasFeature, NULL);
+                antb_set_prop(engine, docObj, "implementation", implObj);
+                antb_value_release(implObj);
+            }
+        } else {
+            antb_value_release(existing);
         }
-    }
-    antb_define_method(engine, docObj, "createHTMLDocument", docCreateHTMLDocument, NULL);
-    antb_define_method(engine, docObj, "write", docWrite, NULL);
-    antb_define_method(engine, docObj, "writeln", docWriteln, NULL);
-    antb_define_method(engine, docObj, "addEventListener", nodeAddEventListener, NULL);
-    antb_define_method(engine, docObj, "removeEventListener", nodeRemoveEventListener, NULL);
-    antb_define_method(engine, docObj, "dispatchEvent", nodeDispatchEvent, NULL);
-    /* The document is a plain object (not a Node wrapper), so the node
-     * methods have to be installed on it explicitly. */
-    antb_define_method(engine, docObj, "getElementsByTagName", nodeGetElementsByTagName, NULL);
-    antb_define_method(engine, docObj, "getElementsByClassName", nodeGetElementsByClassName, NULL);
-    antb_define_method(engine, docObj, "hasChildNodes", nodeHasChildNodes, NULL);
-    antb_define_method(engine, docObj, "querySelector", nodeQuerySelector, NULL);
-    antb_define_method(engine, docObj, "querySelectorAll", nodeQuerySelectorAll, NULL);
-    antb_define_method(engine, docObj, "appendChild", nodeAppendChild, NULL);
-    antb_define_method(engine, docObj, "removeChild", nodeRemoveChild, NULL);
-    antb_define_method(engine, docObj, "insertBefore", nodeInsertBefore, NULL);
-    antb_define_method(engine, docObj, "replaceChild", nodeReplaceChild, NULL);
-    antb_define_method(engine, docObj, "getAttribute", nodeGetAttribute, NULL);
-    antb_define_method(engine, docObj, "setAttribute", nodeSetAttribute, NULL);
-    antb_define_method(engine, docObj, "hasAttribute", nodeHasAttribute, NULL);
-    antb_define_method(engine, docObj, "cloneNode", nodeCloneNode, NULL);
-    antb_define_method(engine, docObj, "contains", nodeContains, NULL);
-    antb_define_method(engine, docObj, "importNode", nodeDocumentImportNode, NULL);
-    antb_define_method(engine, docObj, "adoptNode", nodeDocumentAdoptNode, NULL);
-    antb_define_method(engine, docObj, "elementFromPoint", nodeDocumentElementFromPoint, NULL);
-    antb_define_method(engine, docObj, "hasFocus", nodeDocumentHasFocus, NULL);
-
-    /* Document is a Node: let the node APIs work directly on it. */
-    antb_set_native(docObj, document, AGB_TAG_NODE);
-
-    {
-        DocObjectEntry e;
-
-        e.engine   = engine;
-        e.document = document;
-        e.object   = antb_retain(docObj);
-        g_docObjectCache->push_back(e);
     }
 
     return docObj;
@@ -5984,9 +5925,10 @@ AntbValue* windowObjectFor(AntbEngine* engine, WebCore::Document* document)
     }
 
     if (!g_windowClass) {
-        g_windowClass = antb_class_create(engine, "Window");
+        g_windowClass = antb_class_create_iface(engine, "Window", NULL);
         if (!g_windowClass)
             return NULL;
+        antb_class_expose(engine, g_windowClass);
     }
 
     v = antb_wrap_native_as_owner(engine, g_windowClass, document, AGB_TAG_WINDOW, document);
@@ -6192,45 +6134,7 @@ static void installGlobalApi(AntbEngine* engine, AntbValue* global)
 
     ensureRealmDocumentContext();
 
-        if (!g_canvasCtxClass) {
-            g_canvasCtxClass = antb_class_create(g_engine, "CanvasRenderingContext2D");
-            if (g_canvasCtxClass) {
-                antb_class_add_method(g_engine, g_canvasCtxClass, "save", canvasCtxMethod, (void*)(intptr_t)CV_SAVE);
-                antb_class_add_method(g_engine, g_canvasCtxClass, "restore", canvasCtxMethod, (void*)(intptr_t)CV_RESTORE);
-                antb_class_add_method(g_engine, g_canvasCtxClass, "scale", canvasCtxMethod, (void*)(intptr_t)CV_SCALE);
-                antb_class_add_method(g_engine, g_canvasCtxClass, "rotate", canvasCtxMethod, (void*)(intptr_t)CV_ROTATE);
-                antb_class_add_method(g_engine, g_canvasCtxClass, "translate", canvasCtxMethod, (void*)(intptr_t)CV_TRANSLATE);
-                antb_class_add_method(g_engine, g_canvasCtxClass, "clearRect", canvasCtxMethod, (void*)(intptr_t)CV_CLEAR_RECT);
-                antb_class_add_method(g_engine, g_canvasCtxClass, "fillRect", canvasCtxMethod, (void*)(intptr_t)CV_FILL_RECT);
-                antb_class_add_method(g_engine, g_canvasCtxClass, "strokeRect", canvasCtxMethod, (void*)(intptr_t)CV_STROKE_RECT);
-                antb_class_add_method(g_engine, g_canvasCtxClass, "beginPath", canvasCtxMethod, (void*)(intptr_t)CV_BEGIN_PATH);
-                antb_class_add_method(g_engine, g_canvasCtxClass, "closePath", canvasCtxMethod, (void*)(intptr_t)CV_CLOSE_PATH);
-                antb_class_add_method(g_engine, g_canvasCtxClass, "moveTo", canvasCtxMethod, (void*)(intptr_t)CV_MOVE_TO);
-                antb_class_add_method(g_engine, g_canvasCtxClass, "lineTo", canvasCtxMethod, (void*)(intptr_t)CV_LINE_TO);
-                antb_class_add_method(g_engine, g_canvasCtxClass, "quadraticCurveTo", canvasCtxMethod, (void*)(intptr_t)CV_QUADRATIC);
-                antb_class_add_method(g_engine, g_canvasCtxClass, "bezierCurveTo", canvasCtxMethod, (void*)(intptr_t)CV_BEZIER);
-                antb_class_add_method(g_engine, g_canvasCtxClass, "arc", canvasCtxMethod, (void*)(intptr_t)CV_ARC);
-                antb_class_add_method(g_engine, g_canvasCtxClass, "arcTo", canvasCtxMethod, (void*)(intptr_t)CV_ARC_TO);
-                antb_class_add_method(g_engine, g_canvasCtxClass, "rect", canvasCtxMethod, (void*)(intptr_t)CV_RECT);
-                antb_class_add_method(g_engine, g_canvasCtxClass, "fill", canvasCtxMethod, (void*)(intptr_t)CV_FILL);
-                antb_class_add_method(g_engine, g_canvasCtxClass, "stroke", canvasCtxMethod, (void*)(intptr_t)CV_STROKE);
-                antb_class_add_method(g_engine, g_canvasCtxClass, "clip", canvasCtxMethod, (void*)(intptr_t)CV_CLIP);
-                antb_class_add_method(g_engine, g_canvasCtxClass, "drawImage", canvasCtxMethod, (void*)(intptr_t)CV_DRAW_IMAGE);
-                antb_class_add_method(g_engine, g_canvasCtxClass, "createLinearGradient", canvasCtxMethod, (void*)(intptr_t)CV_CREATE_LINEAR);
-                antb_class_add_method(g_engine, g_canvasCtxClass, "createRadialGradient", canvasCtxMethod, (void*)(intptr_t)CV_CREATE_RADIAL);
-                antb_class_add_method(g_engine, g_canvasCtxClass, "createPattern", canvasCtxMethod, (void*)(intptr_t)CV_CREATE_PATTERN);
-                antb_class_add_method(g_engine, g_canvasCtxClass, "measureText", canvasCtxMethod, (void*)(intptr_t)CV_MEASURE_TEXT);
-                antb_class_add_method(g_engine, g_canvasCtxClass, "fillText", canvasCtxMethod, (void*)(intptr_t)CV_FILL_TEXT);
-                antb_class_add_method(g_engine, g_canvasCtxClass, "strokeText", canvasCtxMethod, (void*)(intptr_t)CV_STROKE_TEXT);
-                antb_class_add_method(g_engine, g_canvasCtxClass, "setTransform", canvasCtxMethod, (void*)(intptr_t)CV_SET_TRANSFORM);
-                antb_class_add_method(g_engine, g_canvasCtxClass, "transform", canvasCtxMethod, (void*)(intptr_t)CV_SET_TRANSFORM);
-                antb_class_add_method(g_engine, g_canvasCtxClass, "setLineDash", canvasCtxMethod, (void*)(intptr_t)CV_SET_LINE_DASH);
-                antb_class_add_method(g_engine, g_canvasCtxClass, "getLineDash", canvasCtxMethod, (void*)(intptr_t)CV_GET_LINE_DASH);
-                antb_class_add_method(g_engine, g_canvasCtxClass, "getImageData", canvasCtxMethod, (void*)(intptr_t)CV_GET_IMAGE_DATA);
-                antb_class_add_method(g_engine, g_canvasCtxClass, "putImageData", canvasCtxMethod, (void*)(intptr_t)CV_PUT_IMAGE_DATA);
-                antb_class_add_method(g_engine, g_canvasCtxClass, "isPointInPath", canvasCtxMethod, (void*)(intptr_t)CV_IS_POINT_IN_PATH);
-            }
-        }
+        ensureCanvasContextClass(g_engine);
 
 
         /* window.addEventListener is what jQuery's ready setup calls first;
@@ -6606,6 +6510,10 @@ static void bindFrameRealm(AntbEngine* engine, DocumentRuntime* runtime)
 
     antb_value_release(global);
 
+    /* Interface constructors of this engine on the frame realm's global (the
+     * prototypes themselves are engine-scoped, like every bridge class). */
+    antb_expose_classes(engine);
+
     loadPrelude();
     loadPolyfills();
 }
@@ -6771,8 +6679,15 @@ void bindDocument(void* document)
     }
 
     {
-        AntbValue* global   = antb_global(g_engine);
-        AntbValue* docObj   = documentObjectFor(g_engine, g_document);
+        AntbValue* global;
+        AntbValue* docObj;
+
+        /* The interface classes must exist before the document object can be
+         * wrapped (the document is an HTMLDocument instance like any node). */
+        ensureInterfaceClasses(g_engine);
+
+        global = antb_global(g_engine);
+        docObj = documentObjectFor(g_engine, g_document);
 
         if (!global || !docObj) {
             antb_value_release(global);
@@ -6780,68 +6695,6 @@ void bindDocument(void* document)
             return;
         }
 
-
-        if (!g_nodeClass) {
-            g_nodeClass = antb_class_create(g_engine, "Node");
-            if (g_nodeClass) {
-                antb_class_add_method(g_engine, g_nodeClass, "getAttribute", nodeGetAttribute, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "addEventListener", nodeAddEventListener, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "removeEventListener", nodeRemoveEventListener, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "dispatchEvent", nodeDispatchEvent, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "appendChild", nodeAppendChild, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "removeChild", nodeRemoveChild, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "insertBefore", nodeInsertBefore, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "setAttribute", nodeSetAttribute, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "getElementsByTagName", nodeGetElementsByTagName, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "cloneNode", nodeCloneNode, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "replaceChild", nodeReplaceChild, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "hasAttribute", nodeHasAttribute, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "hasChildNodes", nodeHasChildNodes, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "contains", nodeContains, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "compareDocumentPosition", nodeCompareDocumentPosition, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "getElementsByClassName", nodeGetElementsByClassName, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "querySelectorAll", nodeQuerySelectorAll, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "querySelector", nodeQuerySelector, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "focus", nodeFocus, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "blur", nodeBlur, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "click", nodeClick, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "removeAttribute", nodeRemoveAttribute, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "remove", nodeRemove, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "getBoundingClientRect", nodeGetBoundingClientRect, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "getRootNode", nodeGetRootNode, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "getAttributeNames", nodeGetAttributeNames, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "toggleAttribute", nodeToggleAttribute, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "insertAdjacentHTML", nodeInsertAdjacentHTML, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "insertAdjacentElement", nodeInsertAdjacentElement, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "insertAdjacentText", nodeInsertAdjacentText, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "replaceChildren", nodeReplaceChildren, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "scrollIntoView", nodeScrollIntoView, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "submit", nodeFormSubmit, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "reset", nodeFormReset, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "checkValidity", nodeFormCheckValidity, NULL);
-                /* Canvas: no per-tag classes exist, so the two element-side
-                 * canvas APIs live here and check the tag themselves. */
-                antb_class_add_method(g_engine, g_nodeClass, "getContext", nodeGetContext, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "toDataURL", nodeToDataURL, NULL);
-                /* Media element methods, same scheme (tag checked inside). */
-                antb_class_add_method(g_engine, g_nodeClass, "play", nodeMediaPlay, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "pause", nodeMediaPause, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "load", nodeMediaLoad, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "canPlayType", nodeMediaCanPlayType, NULL);
-                antb_class_add_method(g_engine, g_nodeClass, "addTextTrack", nodeMediaAddTextTrack, NULL);
-
-                /* Catch-all property: the class dispatching getter only serves
-                 * names present in this table and returns undefined for
-                 * everything else, so without this entry every node property
-                 * (tagName/innerHTML/nodeType/...) read as undefined - Vue's
-                 * mount() got an undefined container.innerHTML and gave up
-                 * with "Component is missing template or render function".
-                 * nodeGetter dispatches on the name itself. */
-                antb_class_set_property(g_engine, g_nodeClass, "", nodeGetter, NULL);
-            }
-        }
-
-        installTextTrackClasses(g_engine);
         installGlobalApi(g_engine, global);
 
         /* A new main frame document is a new session history entry. */
@@ -6855,6 +6708,10 @@ void bindDocument(void* document)
 
         antb_value_release(global);
     }
+
+    /* Interface constructors before prelude: its stub list only fills names
+     * that are still undefined. */
+    antb_expose_classes(g_engine);
 
     /* Bootstrap shims for this document, from prelude.js next to the binary
      * (or at AGB_PRELUDE). */
@@ -6892,6 +6749,55 @@ void bindDocument(void* document)
 }
 
 } /* namespace AntRuntime */
+
+/* CanvasRenderingContext2D: one interface class, created with the rest so
+ * its constructor exists before prelude and getContext() can wrap into it. */
+static void ensureCanvasContextClass(AntbEngine* engine)
+{
+    if (!engine || g_canvasCtxClass)
+        return;
+
+    g_canvasCtxClass = antb_class_create_iface(engine, "CanvasRenderingContext2D", NULL);
+    if (!g_canvasCtxClass)
+        return;
+    antb_class_expose(engine, g_canvasCtxClass);
+
+    antb_class_add_method(engine, g_canvasCtxClass, "save", canvasCtxMethod, (void*)(intptr_t)CV_SAVE);
+    antb_class_add_method(engine, g_canvasCtxClass, "restore", canvasCtxMethod, (void*)(intptr_t)CV_RESTORE);
+    antb_class_add_method(engine, g_canvasCtxClass, "scale", canvasCtxMethod, (void*)(intptr_t)CV_SCALE);
+    antb_class_add_method(engine, g_canvasCtxClass, "rotate", canvasCtxMethod, (void*)(intptr_t)CV_ROTATE);
+    antb_class_add_method(engine, g_canvasCtxClass, "translate", canvasCtxMethod, (void*)(intptr_t)CV_TRANSLATE);
+    antb_class_add_method(engine, g_canvasCtxClass, "clearRect", canvasCtxMethod, (void*)(intptr_t)CV_CLEAR_RECT);
+    antb_class_add_method(engine, g_canvasCtxClass, "fillRect", canvasCtxMethod, (void*)(intptr_t)CV_FILL_RECT);
+    antb_class_add_method(engine, g_canvasCtxClass, "strokeRect", canvasCtxMethod, (void*)(intptr_t)CV_STROKE_RECT);
+    antb_class_add_method(engine, g_canvasCtxClass, "beginPath", canvasCtxMethod, (void*)(intptr_t)CV_BEGIN_PATH);
+    antb_class_add_method(engine, g_canvasCtxClass, "closePath", canvasCtxMethod, (void*)(intptr_t)CV_CLOSE_PATH);
+    antb_class_add_method(engine, g_canvasCtxClass, "moveTo", canvasCtxMethod, (void*)(intptr_t)CV_MOVE_TO);
+    antb_class_add_method(engine, g_canvasCtxClass, "lineTo", canvasCtxMethod, (void*)(intptr_t)CV_LINE_TO);
+    antb_class_add_method(engine, g_canvasCtxClass, "quadraticCurveTo", canvasCtxMethod, (void*)(intptr_t)CV_QUADRATIC);
+    antb_class_add_method(engine, g_canvasCtxClass, "bezierCurveTo", canvasCtxMethod, (void*)(intptr_t)CV_BEZIER);
+    antb_class_add_method(engine, g_canvasCtxClass, "arc", canvasCtxMethod, (void*)(intptr_t)CV_ARC);
+    antb_class_add_method(engine, g_canvasCtxClass, "arcTo", canvasCtxMethod, (void*)(intptr_t)CV_ARC_TO);
+    antb_class_add_method(engine, g_canvasCtxClass, "rect", canvasCtxMethod, (void*)(intptr_t)CV_RECT);
+    antb_class_add_method(engine, g_canvasCtxClass, "fill", canvasCtxMethod, (void*)(intptr_t)CV_FILL);
+    antb_class_add_method(engine, g_canvasCtxClass, "stroke", canvasCtxMethod, (void*)(intptr_t)CV_STROKE);
+    antb_class_add_method(engine, g_canvasCtxClass, "clip", canvasCtxMethod, (void*)(intptr_t)CV_CLIP);
+    antb_class_add_method(engine, g_canvasCtxClass, "drawImage", canvasCtxMethod, (void*)(intptr_t)CV_DRAW_IMAGE);
+    antb_class_add_method(engine, g_canvasCtxClass, "createLinearGradient", canvasCtxMethod, (void*)(intptr_t)CV_CREATE_LINEAR);
+    antb_class_add_method(engine, g_canvasCtxClass, "createRadialGradient", canvasCtxMethod, (void*)(intptr_t)CV_CREATE_RADIAL);
+    antb_class_add_method(engine, g_canvasCtxClass, "createPattern", canvasCtxMethod, (void*)(intptr_t)CV_CREATE_PATTERN);
+    antb_class_add_method(engine, g_canvasCtxClass, "measureText", canvasCtxMethod, (void*)(intptr_t)CV_MEASURE_TEXT);
+    antb_class_add_method(engine, g_canvasCtxClass, "fillText", canvasCtxMethod, (void*)(intptr_t)CV_FILL_TEXT);
+    antb_class_add_method(engine, g_canvasCtxClass, "strokeText", canvasCtxMethod, (void*)(intptr_t)CV_STROKE_TEXT);
+    antb_class_add_method(engine, g_canvasCtxClass, "setTransform", canvasCtxMethod, (void*)(intptr_t)CV_SET_TRANSFORM);
+    antb_class_add_method(engine, g_canvasCtxClass, "transform", canvasCtxMethod, (void*)(intptr_t)CV_SET_TRANSFORM);
+    antb_class_add_method(engine, g_canvasCtxClass, "setLineDash", canvasCtxMethod, (void*)(intptr_t)CV_SET_LINE_DASH);
+    antb_class_add_method(engine, g_canvasCtxClass, "getLineDash", canvasCtxMethod, (void*)(intptr_t)CV_GET_LINE_DASH);
+    antb_class_add_method(engine, g_canvasCtxClass, "getImageData", canvasCtxMethod, (void*)(intptr_t)CV_GET_IMAGE_DATA);
+    antb_class_add_method(engine, g_canvasCtxClass, "putImageData", canvasCtxMethod, (void*)(intptr_t)CV_PUT_IMAGE_DATA);
+    antb_class_add_method(engine, g_canvasCtxClass, "isPointInPath", canvasCtxMethod, (void*)(intptr_t)CV_IS_POINT_IN_PATH);
+}
+
 
 /* ------------------------------------------------------------------------- */
 /* DOM element binding (task 3)                                              */
@@ -6958,24 +6864,45 @@ static void releaseAllRealmListeners(RuntimeState* state)
  * document object: a reload binds a provisional and then a committed document
  * in the same realm, and the handler from the page's first inline script must
  * still be visible when the load event is dispatched for the other one. */
-static std::vector<Listener>*& listeners()
+static std::vector<Listener>*& listenersForRealm(AntbRealm* realm)
 {
     static std::vector<Listener>* noRealm = NULL;
     RuntimeState* state = g_currentState;
-    AntbRealm* realm;
 
-    if (!state || state == &g_emptyState)
-        return noRealm;
-
-    realm = currentRealm();
-
-    if (!realm)
+    if (!state || state == &g_emptyState || !realm)
         return noRealm;
 
     if (!state->realmListeners)
         state->realmListeners = new std::map<AntbRealm*, std::vector<Listener>*>();
 
     return (*state->realmListeners)[realm];
+}
+
+static std::vector<Listener>*& listeners()
+{
+    return listenersForRealm(currentRealm());
+}
+
+/* The realm the *receiver* of the call belongs to.
+ *
+ * A bridged class method runs in the realm that created the class (the class
+ * prototypes are engine-scoped, created in the main realm), so currentRealm()
+ * inside a child frame's callback names the main realm. The host mirror is
+ * switched to the callee's document for the duration of the callback
+ * (contextActivate), but listeners belong to the node's own document/realm:
+ * registering them on the callee realm made a frame's DOMContentLoaded
+ * listener land in the parent's list and never fire. */
+static AntbRealm* receiverRealm(WebCore::Node* n)
+{
+    AntbRealm* realm;
+
+    if (n && n->document() && g_engine) {
+        realm = realmOfDocument(g_engine, n->document());
+        if (realm)
+            return realm;
+    }
+
+    return currentRealm();
 }
 
 #define g_listeners listeners()
@@ -6986,11 +6913,18 @@ static std::vector<Listener>*& listeners()
  * ran their callback and failed silently. */
 static AntbValue* findNodeEventHandler(WebCore::Node* n, const char* type)
 {
-    if (!n || !type || !g_listeners)
+    std::vector<Listener>* list;
+
+    if (!n || !type || !g_engine)
         return 0;
 
-    for (size_t i = 0; i < g_listeners->size(); ++i) {
-        Listener& l = (*g_listeners)[i];
+    list = listenersForRealm(receiverRealm(n));
+
+    if (!list)
+        return 0;
+
+    for (size_t i = 0; i < list->size(); ++i) {
+        Listener& l = (*list)[i];
 
         if (l.handler && l.node == n && l.type == type && l.fn)
             return l.fn;
@@ -7001,20 +6935,31 @@ static AntbValue* findNodeEventHandler(WebCore::Node* n, const char* type)
 
 static int setNodeEventHandler(WebCore::Node* n, const char* type, const AntbValue* value)
 {
-    if (!n || !type)
+    std::vector<Listener>* list;
+
+    if (!n || !type || !g_engine)
         return 0;
 
-    if (!g_listeners)
-        g_listeners = new std::vector<Listener>();
+    list = listenersForRealm(receiverRealm(n));
+
+    if (!list) {
+        AntbRealm* realm = receiverRealm(n);
+
+        if (!realm)
+            return 0;
+
+        list = new std::vector<Listener>();
+        listenersForRealm(realm) = list;
+    }
 
     /* One handler per (node, type): assigning replaces the previous one. */
-    for (size_t i = 0; i < g_listeners->size(); ) {
-        Listener& l = (*g_listeners)[i];
+    for (size_t i = 0; i < list->size(); ) {
+        Listener& l = (*list)[i];
 
         if (l.handler && l.node == n && l.type == type) {
             if (l.fn)
                 antb_value_release(l.fn);
-            g_listeners->erase(g_listeners->begin() + i);
+            list->erase(list->begin() + i);
         } else {
             ++i;
         }
@@ -7026,13 +6971,13 @@ static int setNodeEventHandler(WebCore::Node* n, const char* type, const AntbVal
         l.node = n;
         l.type = type;
         l.fn = antb_retain(value);
-        l.realm = currentRealm();
+        l.realm = receiverRealm(n);
         l.once = false;
         l.handler = true;
-        g_listeners->push_back(l);
+        list->push_back(l);
 
         if (getenv("AGB_EVT_DEBUG"))
-            agbLog(AGB_LOG_EVT, "on%s handler node=%p listeners=%d", type, (void*)n, (int)g_listeners->size());
+            agbLog(AGB_LOG_EVT, "on%s handler node=%p listeners=%d", type, (void*)n, (int)list->size());
     }
 
     return 1;
@@ -7642,7 +7587,7 @@ static void cssomEnsureClasses()
     if (g_styleSheetListClass)
         return;
 
-    g_styleSheetListClass = antb_class_create(g_engine, "StyleSheetList");
+    g_styleSheetListClass = antb_class_create_iface(g_engine, "StyleSheetList", NULL);
     if (g_styleSheetListClass) {
         antb_class_set_property(g_engine, g_styleSheetListClass, "",
                                 cssomGetter, (void*)(intptr_t)CSSOM_LIST);
@@ -7650,7 +7595,7 @@ static void cssomEnsureClasses()
                               cssomMethod, (void*)(intptr_t)CSSOM_OP_ITEM);
     }
 
-    g_styleSheetClass = antb_class_create(g_engine, "CSSStyleSheet");
+    g_styleSheetClass = antb_class_create_iface(g_engine, "CSSStyleSheet", NULL);
     if (g_styleSheetClass) {
         antb_class_set_property(g_engine, g_styleSheetClass, "",
                                 cssomGetter, (void*)(intptr_t)CSSOM_SHEET);
@@ -7664,7 +7609,7 @@ static void cssomEnsureClasses()
                               cssomMethod, (void*)(intptr_t)CSSOM_OP_REMOVE_RULE);
     }
 
-    g_cssRuleClass = antb_class_create(g_engine, "CSSRule");
+    g_cssRuleClass = antb_class_create_iface(g_engine, "CSSRule", NULL);
     if (g_cssRuleClass) {
         antb_class_set_property(g_engine, g_cssRuleClass, "",
                                 cssomGetter, (void*)(intptr_t)CSSOM_RULE);
@@ -7674,7 +7619,7 @@ static void cssomEnsureClasses()
                               cssomMethod, (void*)(intptr_t)CSSOM_OP_DELETE_RULE);
     }
 
-    g_cssRuleListClass = antb_class_create(g_engine, "CSSRuleList");
+    g_cssRuleListClass = antb_class_create_iface(g_engine, "CSSRuleList", NULL);
     if (g_cssRuleListClass) {
         antb_class_set_property(g_engine, g_cssRuleListClass, "",
                                 cssomGetter, (void*)(intptr_t)CSSOM_RULELIST);
@@ -7682,7 +7627,7 @@ static void cssomEnsureClasses()
                               cssomMethod, (void*)(intptr_t)CSSOM_OP_ITEM);
     }
 
-    g_mediaListClass = antb_class_create(g_engine, "MediaList");
+    g_mediaListClass = antb_class_create_iface(g_engine, "MediaList", NULL);
     if (g_mediaListClass) {
         antb_class_set_property(g_engine, g_mediaListClass, "",
                                 cssomGetter, (void*)(intptr_t)CSSOM_MEDIA);
@@ -7690,7 +7635,7 @@ static void cssomEnsureClasses()
                               cssomMethod, (void*)(intptr_t)CSSOM_OP_ITEM);
     }
 
-    g_cssDeclarationClass = antb_class_create(g_engine, "CSSStyleDeclaration");
+    g_cssDeclarationClass = antb_class_create_iface(g_engine, "CSSStyleDeclaration", NULL);
     if (g_cssDeclarationClass) {
         antb_class_set_property(g_engine, g_cssDeclarationClass, "",
                                 cssomGetter, (void*)(intptr_t)CSSOM_DECL);
@@ -8845,55 +8790,6 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
         }
     }
 
-    /* node.constructor: React's input value tracker runs
-     * Object.getOwnPropertyDescriptor(node.constructor.prototype, 'value')
-     * before it installs itself; an undefined constructor throws inside the
-     * tracker and takes the whole render down. Answer with the DOM interface
-     * for the tag (the constructors exist on the global from the engine's
-     * interface objects, and a plain prototype is all the tracker needs). */
-    if (!strcmp(name, "constructor")) {
-        const char* ctorName = "HTMLElement";
-
-        if (n->isDocumentNode()) {
-            ctorName = "HTMLDocument";
-        } else if (n->isElementNode()) {
-            WebCore::Element* el = static_cast<WebCore::Element*>(n);
-
-            if (el->hasTagName(WebCore::HTMLNames::inputTag))         ctorName = "HTMLInputElement";
-            else if (el->hasTagName(WebCore::HTMLNames::textareaTag))  ctorName = "HTMLTextAreaElement";
-            else if (el->hasTagName(WebCore::HTMLNames::selectTag))    ctorName = "HTMLSelectElement";
-            else if (el->hasTagName(WebCore::HTMLNames::formTag))      ctorName = "HTMLFormElement";
-            else if (el->hasTagName(WebCore::HTMLNames::buttonTag))    ctorName = "HTMLButtonElement";
-            else if (el->hasTagName(WebCore::HTMLNames::canvasTag))    ctorName = "HTMLCanvasElement";
-            else if (el->hasTagName(WebCore::HTMLNames::imgTag))       ctorName = "HTMLImageElement";
-            else if (el->hasTagName(WebCore::HTMLNames::aTag))         ctorName = "HTMLAnchorElement";
-        }
-
-        {
-            AntbValue* global = antb_global(engine);
-
-            if (global) {
-                AntbValue* ctor = antb_get_prop(engine, global, ctorName);
-
-                if (!ctor && strcmp(ctorName, "HTMLElement"))
-                    ctor = antb_get_prop(engine, global, "HTMLElement");
-
-                if (!ctor)
-                    ctor = antb_get_prop(engine, global, "Node");
-
-                antb_value_release(global);
-
-                if (ctor) {
-                    antb_value_assign(out, ctor);
-                    antb_value_release(ctor);
-                    return 1;
-                }
-            }
-        }
-
-        return 0;
-    }
-
     /* --- element tree navigation ----------------------------------------- *
      * WebCore 2008 only has parentNode/childNodes/nextSibling; every modern
      * framework walks the element-only variants, and reading them as
@@ -9056,37 +8952,9 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
         }
     }
 
-    /* Object.prototype helpers: the catch-all getter answers every name, so the
-     * wrappers never reach their prototype chain and `node.hasOwnProperty(...)`
-     * came back undefined (React's value tracker calls it on the node). Hand
-     * back the real functions; `this` is still the wrapper at call time. */
-    if (!strcmp(name, "hasOwnProperty") || !strcmp(name, "isPrototypeOf")
-            || !strcmp(name, "propertyIsEnumerable")) {
-        AntbValue* global = antb_global(engine);
-        AntbValue* fn = NULL;
-
-        if (global) {
-            AntbValue* objectCtor = antb_get_prop(engine, global, "Object");
-
-            if (objectCtor) {
-                AntbValue* proto = antb_get_prop(engine, objectCtor, "prototype");
-
-                if (proto) {
-                    fn = antb_get_prop(engine, proto, name);
-                    antb_value_release(proto);
-                }
-                antb_value_release(objectCtor);
-            }
-            antb_value_release(global);
-        }
-
-        if (fn) {
-            antb_value_assign(out, fn);
-            antb_value_release(fn);
-            return 1;
-        }
-        return 0;
-    }
+    /* Object.prototype helpers (hasOwnProperty/isPrototypeOf/...) are inherited
+     * from Object.prototype now that every interface prototype chains to it;
+     * the catch-all must fall through instead of shadowing them. */
 
     if (!strcmp(name, "textContent")) {
         WebCore::String s = n->textContent();
@@ -9917,17 +9785,26 @@ int nodeAddEventListener(AntbEngine* engine, AntbValue* self, AntbValue** args, 
         return 0;
     }
 
-    if (!g_listeners)
-        g_listeners = new std::vector<Listener>();
-
     {
+        AntbRealm* realm = receiverRealm(n);
+        std::vector<Listener>* list = listenersForRealm(realm);
         Listener l;
+
+        if (!list) {
+            if (!realm) {
+                antb_free(type);
+                return 0;
+            }
+            list = new std::vector<Listener>();
+            listenersForRealm(realm) = list;
+        }
+
         l.node = n;
         l.type = type;
         /* Only functions are callable later: pages happily pass null or objects
          * as the listener, and dispatching those crashed the process. */
         l.fn = antb_is_function(args[1]) ? antb_retain(args[1]) : NULL;
-        l.realm = currentRealm();
+        l.realm = realm;
         l.handler = false;
 
         /* options.once: remove the listener after its first dispatch. The third
@@ -9942,9 +9819,9 @@ int nodeAddEventListener(AntbEngine* engine, AntbValue* self, AntbValue** args, 
             }
         }
         if (l.fn) {
-            g_listeners->push_back(l);
+            list->push_back(l);
             if (getenv("AGB_EVT_DEBUG"))
-                agbLog(AGB_LOG_EVT, "add %s node=%p listeners=%d", type, (void*)n, (int)g_listeners->size());
+                agbLog(AGB_LOG_EVT, "add %s node=%p listeners=%d realm=%p", type, (void*)n, (int)list->size(), (void*)realm);
         }
     }
 
@@ -9969,16 +9846,20 @@ int nodeRemoveEventListener(AntbEngine* engine, AntbValue* self, AntbValue** arg
         return 0;
     }
 
-    if (g_listeners) {
-        for (size_t i = 0; i < g_listeners->size(); ) {
-            Listener& l = (*g_listeners)[i];
+    {
+        std::vector<Listener>* list = listenersForRealm(receiverRealm(n));
 
-            if (l.node == n && l.type == type && l.fn && antb_value_same(l.fn, args[1])) {
-                antb_value_release(l.fn);
-                g_listeners->erase(g_listeners->begin() + i);
-                continue;
+        if (list) {
+            for (size_t i = 0; i < list->size(); ) {
+                Listener& l = (*list)[i];
+
+                if (l.node == n && l.type == type && l.fn && antb_value_same(l.fn, args[1])) {
+                    antb_value_release(l.fn);
+                    list->erase(list->begin() + i);
+                    continue;
+                }
+                ++i;
             }
-            ++i;
         }
     }
 
@@ -10026,12 +9907,16 @@ int nodeDispatchEvent(AntbEngine* engine, AntbValue* self, AntbValue** args, int
     if (getenv("AGB_EVT_DEBUG"))
         agbLog(AGB_LOG_EVT, "JS dispatchEvent(%s) on node=%p", type, (void*)n);
 
-    if (g_listeners) {
-        for (size_t i = 0; i < g_listeners->size(); ++i) {
-            Listener& l = (*g_listeners)[i];
+    {
+        std::vector<Listener>* list = listenersForRealm(receiverRealm(n));
 
-            if (l.node == n && l.type == type && l.fn)
-                snapshot.push_back(antb_retain(l.fn));
+        if (list) {
+            for (size_t i = 0; i < list->size(); ++i) {
+                Listener& l = (*list)[i];
+
+                if (l.node == n && l.type == type && l.fn)
+                    snapshot.push_back(antb_retain(l.fn));
+            }
         }
     }
 
@@ -10045,8 +9930,9 @@ int nodeDispatchEvent(AntbEngine* engine, AntbValue* self, AntbValue** args, int
 
     /* once: drop the listeners this dispatch just called. Identity is
      * checked on the JS value, because the snapshot holds retained wrappers. */
-    for (size_t i = 0; g_listeners && i < g_listeners->size(); ) {
-        Listener& l = (*g_listeners)[i];
+    for (size_t i = 0; listenersForRealm(receiverRealm(n)) && i < listenersForRealm(receiverRealm(n))->size(); ) {
+        std::vector<Listener>* list = listenersForRealm(receiverRealm(n));
+        Listener& l = (*list)[i];
         bool called = false;
 
         if (l.once && l.node == n && l.type == type && l.fn) {
@@ -10057,7 +9943,7 @@ int nodeDispatchEvent(AntbEngine* engine, AntbValue* self, AntbValue** args, int
 
         if (called) {
             antb_value_release(l.fn);
-            g_listeners->erase(g_listeners->begin() + i);
+            list->erase(list->begin() + i);
         } else {
             ++i;
         }
@@ -12473,7 +12359,11 @@ AntbValue* wrapCanvasCtx(AntbEngine* engine, WebCore::CanvasRenderingContext2D* 
 {
     AntbValue* v;
 
-    if (!engine || !ctx || !g_canvasCtxClass)
+    if (!engine || !ctx)
+        return NULL;
+
+    ensureCanvasContextClass(engine);
+    if (!g_canvasCtxClass)
         return NULL;
 
     v = antb_wrap_native_as(engine, g_canvasCtxClass, ctx, AGB_TAG_CANVAS2D);
@@ -12811,9 +12701,9 @@ void installTextTrackClasses(AntbEngine* engine)
     if (!engine || g_textTrackClass)
         return;
 
-    g_textTrackClass = antb_class_create(engine, "TextTrack");
-    g_textTrackListClass = antb_class_create(engine, "TextTrackList");
-    g_textTrackCueClass = antb_class_create(engine, "TextTrackCue");
+    g_textTrackClass = antb_class_create_iface(engine, "TextTrack", NULL);
+    g_textTrackListClass = antb_class_create_iface(engine, "TextTrackList", NULL);
+    g_textTrackCueClass = antb_class_create_iface(engine, "TextTrackCue", NULL);
 
     if (g_textTrackClass)
         antb_class_set_property(engine, g_textTrackClass, "", textTrackGetter, NULL);
@@ -13266,8 +13156,14 @@ int textTrackCueGetter(AntbEngine* engine, AntbValue* self, const char* name,
 AntbValue* wrapNode(AntbEngine* engine, WebCore::Node* node)
 {
     AntbValue* v;
+    AntbClass* klass;
 
-    if (!engine || !node || !g_nodeClass)
+    if (!engine || !node)
+        return NULL;
+
+    ensureInterfaceClasses(engine);
+    klass = classForNode(node);
+    if (!klass)
         return NULL;
 
     /* The wrapper cache is keyed by the raw node pointer, so a node that gets
@@ -13290,12 +13186,12 @@ AntbValue* wrapNode(AntbEngine* engine, WebCore::Node* node)
         }
     }
 
-    v = antb_wrap_native_as_owner(engine, g_nodeClass, node, AGB_TAG_NODE, g_document);
+    /* The interface class carries the prototype chain, the constructor and
+     * @@toStringTag; the property table (nodeGetter/nodeSetter) is installed
+     * once by the class, not per wrapper. */
+    v = antb_wrap_native_as_owner(engine, klass, node, AGB_TAG_NODE, g_document);
     if (!v)
         return NULL;
-
-    /* per-instance property table: textContent/nodeName/nodeType */
-    antb_define_property_rw(engine, v, "textContent", nodeGetter, nodeSetter, NULL);
 
     return v;
 }
@@ -14131,7 +14027,7 @@ static void ensureSelectionClasses()
     if (!g_engine || g_selectionClass)
         return;
 
-    g_selectionClass = antb_class_create(g_engine, "Selection");
+    g_selectionClass = antb_class_create_iface(g_engine, "Selection", NULL);
     if (g_selectionClass) {
         antb_class_set_property(g_engine, g_selectionClass, "", selectionGetter, NULL);
         antb_class_add_method(g_engine, g_selectionClass, "toString", selectionMethod, (void*)(intptr_t)SEL_OP_TOSTRING);
@@ -14151,7 +14047,7 @@ static void ensureSelectionClasses()
         antb_class_add_method(g_engine, g_selectionClass, "setPosition", selectionMethod, (void*)(intptr_t)SEL_OP_SET_POSITION);
     }
 
-    g_rangeClass = antb_class_create(g_engine, "Range");
+    g_rangeClass = antb_class_create_iface(g_engine, "Range", NULL);
     if (g_rangeClass) {
         antb_class_set_property(g_engine, g_rangeClass, "", rangeGetter, NULL);
         antb_class_add_method(g_engine, g_rangeClass, "setStart", rangeMethod, (void*)(intptr_t)RNG_OP_SET_START);
@@ -14175,6 +14071,547 @@ static void ensureSelectionClasses()
     }
 }
 
+
+/* ------------------------------------------------------------------------- */
+/* DOM interfaces: one bridge class per interface                             */
+/* ------------------------------------------------------------------------- */
+/* Historically every node was wrapped as a single "Node" class whose prototype
+ * object had neither a parent nor a constructor. That made instanceof only
+ * aware of the wrapping class, Object.getPrototypeOf(el) return a hidden
+ * object instead of HTMLElement.prototype, el.constructor empty and
+ * Object.prototype.toString.call(el) "[object Object]".
+ *
+ * The facade (nodeGetter/nodeSetter, titleGetter/titleSetter and the CSSOM
+ * getters) is still the custom layer. These classes only carry what the IDL
+ * supplies: the prototype chain, the constructor objects (with their parent
+ * as [[Prototype]]), @@toStringTag and the static constants. Attribute
+ * accessors stay in the facade until the generated bindings replace them.
+ *
+ * The data below is the source of truth for the class set. "parent" is
+ * resolved by name; the order must create parents before children. */
+struct DomIfaceDef {
+    const char* name;
+    const char* parent;   /* NULL: the prototype inherits from Object.prototype */
+};
+
+static const DomIfaceDef kDomIfaces[] = {
+    { "Window",                 NULL },
+    { "DocumentFragment",       "Node" },
+    { "CharacterData",          "Node" },
+    { "Text",                   "CharacterData" },
+    { "Comment",                "CharacterData" },
+    { "Document",               "Node" },
+    { "HTMLDocument",           "Document" },
+    { "Element",                "Node" },
+    { "SVGElement",             "Element" },
+    { "SVGSVGElement",          "SVGElement" },
+    { "HTMLElement",            "Element" },
+    { "HTMLUnknownElement",     "HTMLElement" },
+    { "HTMLAnchorElement",      "HTMLElement" },
+    { "HTMLAppletElement",      "HTMLElement" },
+    { "HTMLAreaElement",        "HTMLElement" },
+    { "HTMLBRElement",          "HTMLElement" },
+    { "HTMLBaseElement",        "HTMLElement" },
+    { "HTMLBaseFontElement",    "HTMLElement" },
+    { "HTMLBodyElement",        "HTMLElement" },
+    { "HTMLButtonElement",      "HTMLElement" },
+    { "HTMLCanvasElement",      "HTMLElement" },
+    { "HTMLDListElement",       "HTMLElement" },
+    { "HTMLDataElement",        "HTMLElement" },
+    { "HTMLDataListElement",    "HTMLElement" },
+    { "HTMLDetailsElement",     "HTMLElement" },
+    { "HTMLDialogElement",      "HTMLElement" },
+    { "HTMLDirectoryElement",   "HTMLElement" },
+    { "HTMLDivElement",         "HTMLElement" },
+    { "HTMLEmbedElement",       "HTMLElement" },
+    { "HTMLFieldSetElement",    "HTMLElement" },
+    { "HTMLFontElement",        "HTMLElement" },
+    { "HTMLFormElement",        "HTMLElement" },
+    { "HTMLFrameElement",       "HTMLElement" },
+    { "HTMLFrameSetElement",    "HTMLElement" },
+    { "HTMLHRElement",          "HTMLElement" },
+    { "HTMLHeadElement",        "HTMLElement" },
+    { "HTMLHeadingElement",     "HTMLElement" },
+    { "HTMLHtmlElement",        "HTMLElement" },
+    { "HTMLIFrameElement",      "HTMLElement" },
+    { "HTMLImageElement",       "HTMLElement" },
+    { "HTMLInputElement",       "HTMLElement" },
+    { "HTMLIsIndexElement",     "HTMLElement" },
+    { "HTMLLIElement",          "HTMLElement" },
+    { "HTMLLabelElement",       "HTMLElement" },
+    { "HTMLLegendElement",      "HTMLElement" },
+    { "HTMLLinkElement",        "HTMLElement" },
+    { "HTMLMapElement",         "HTMLElement" },
+    { "HTMLMarqueeElement",     "HTMLElement" },
+    { "HTMLMediaElement",       "HTMLElement" },
+    { "HTMLAudioElement",       "HTMLMediaElement" },
+    { "HTMLVideoElement",       "HTMLMediaElement" },
+    { "HTMLMenuElement",        "HTMLElement" },
+    { "HTMLMetaElement",        "HTMLElement" },
+    { "HTMLMeterElement",       "HTMLElement" },
+    { "HTMLModElement",         "HTMLElement" },
+    { "HTMLOListElement",       "HTMLElement" },
+    { "HTMLObjectElement",      "HTMLElement" },
+    { "HTMLOptGroupElement",    "HTMLElement" },
+    { "HTMLOptionElement",      "HTMLElement" },
+    { "HTMLOutputElement",      "HTMLElement" },
+    { "HTMLParagraphElement",   "HTMLElement" },
+    { "HTMLParamElement",       "HTMLElement" },
+    { "HTMLPictureElement",     "HTMLElement" },
+    { "HTMLPreElement",         "HTMLElement" },
+    { "HTMLProgressElement",    "HTMLElement" },
+    { "HTMLQuoteElement",       "HTMLElement" },
+    { "HTMLScriptElement",      "HTMLElement" },
+    { "HTMLSelectElement",      "HTMLElement" },
+    { "HTMLSlotElement",        "HTMLElement" },
+    { "HTMLSourceElement",      "HTMLElement" },
+    { "HTMLSpanElement",        "HTMLElement" },
+    { "HTMLStyleElement",       "HTMLElement" },
+    { "HTMLTableCaptionElement", "HTMLElement" },
+    { "HTMLTableCellElement",   "HTMLElement" },
+    { "HTMLTableColElement",    "HTMLElement" },
+    { "HTMLTableElement",       "HTMLElement" },
+    { "HTMLTableRowElement",    "HTMLElement" },
+    { "HTMLTableSectionElement", "HTMLElement" },
+    { "HTMLTemplateElement",    "HTMLElement" },
+    { "HTMLTextAreaElement",    "HTMLElement" },
+    { "HTMLTimeElement",        "HTMLElement" },
+    { "HTMLTitleElement",       "HTMLElement" },
+    { "HTMLTrackElement",       "HTMLElement" },
+    { "HTMLUListElement",       "HTMLElement" }
+};
+
+/* HTML tag -> interface. The names are lower case; WebCore reports HTML tag
+ * names upper case, so classForNode() lower-cases before the lookup. A tag that
+ * is not listed and has no dash is an HTMLUnknownElement (custom elements with
+ * a dash are plain HTMLElement, as in the modern DOM). */
+struct DomTagDef {
+    const char* tag;
+    const char* iface;
+};
+
+static const DomTagDef kDomTags[] = {
+    { "a",          "HTMLAnchorElement" },
+    { "applet",     "HTMLAppletElement" },
+    { "area",       "HTMLAreaElement" },
+    { "audio",      "HTMLAudioElement" },
+    { "base",       "HTMLBaseElement" },
+    { "basefont",   "HTMLBaseFontElement" },
+    { "blockquote", "HTMLQuoteElement" },
+    { "body",       "HTMLBodyElement" },
+    { "br",         "HTMLBRElement" },
+    { "button",     "HTMLButtonElement" },
+    { "canvas",     "HTMLCanvasElement" },
+    { "caption",    "HTMLTableCaptionElement" },
+    { "col",        "HTMLTableColElement" },
+    { "colgroup",   "HTMLTableColElement" },
+    { "data",       "HTMLDataElement" },
+    { "datalist",   "HTMLDataListElement" },
+    { "del",        "HTMLModElement" },
+    { "details",    "HTMLDetailsElement" },
+    { "dialog",     "HTMLDialogElement" },
+    { "dir",        "HTMLDirectoryElement" },
+    { "div",        "HTMLDivElement" },
+    { "dl",         "HTMLDListElement" },
+    { "embed",      "HTMLEmbedElement" },
+    { "fieldset",   "HTMLFieldSetElement" },
+    { "font",       "HTMLFontElement" },
+    { "form",       "HTMLFormElement" },
+    { "frame",      "HTMLFrameElement" },
+    { "frameset",   "HTMLFrameSetElement" },
+    { "h1",         "HTMLHeadingElement" },
+    { "h2",         "HTMLHeadingElement" },
+    { "h3",         "HTMLHeadingElement" },
+    { "h4",         "HTMLHeadingElement" },
+    { "h5",         "HTMLHeadingElement" },
+    { "h6",         "HTMLHeadingElement" },
+    { "head",       "HTMLHeadElement" },
+    { "hr",         "HTMLHRElement" },
+    { "html",       "HTMLHtmlElement" },
+    { "iframe",     "HTMLIFrameElement" },
+    { "img",        "HTMLImageElement" },
+    { "input",      "HTMLInputElement" },
+    { "ins",        "HTMLModElement" },
+    { "isindex",    "HTMLIsIndexElement" },
+    { "label",      "HTMLLabelElement" },
+    { "legend",     "HTMLLegendElement" },
+    { "li",         "HTMLLIElement" },
+    { "link",       "HTMLLinkElement" },
+    { "map",        "HTMLMapElement" },
+    { "marquee",    "HTMLMarqueeElement" },
+    { "menu",       "HTMLMenuElement" },
+    { "meta",       "HTMLMetaElement" },
+    { "meter",      "HTMLMeterElement" },
+    { "object",     "HTMLObjectElement" },
+    { "ol",         "HTMLOListElement" },
+    { "optgroup",   "HTMLOptGroupElement" },
+    { "option",     "HTMLOptionElement" },
+    { "output",     "HTMLOutputElement" },
+    { "p",          "HTMLParagraphElement" },
+    { "param",      "HTMLParamElement" },
+    { "picture",    "HTMLPictureElement" },
+    { "pre",        "HTMLPreElement" },
+    { "progress",   "HTMLProgressElement" },
+    { "q",          "HTMLQuoteElement" },
+    { "script",     "HTMLScriptElement" },
+    { "select",     "HTMLSelectElement" },
+    { "slot",       "HTMLSlotElement" },
+    { "source",     "HTMLSourceElement" },
+    { "span",       "HTMLSpanElement" },
+    { "style",      "HTMLStyleElement" },
+    { "table",      "HTMLTableElement" },
+    { "tbody",      "HTMLTableSectionElement" },
+    { "td",         "HTMLTableCellElement" },
+    { "template",   "HTMLTemplateElement" },
+    { "textarea",   "HTMLTextAreaElement" },
+    { "tfoot",      "HTMLTableSectionElement" },
+    { "th",         "HTMLTableCellElement" },
+    { "thead",      "HTMLTableSectionElement" },
+    { "time",       "HTMLTimeElement" },
+    { "title",      "HTMLTitleElement" },
+    { "tr",         "HTMLTableRowElement" },
+    { "track",      "HTMLTrackElement" },
+    { "ul",         "HTMLUListElement" },
+    { "video",      "HTMLVideoElement" }
+};
+
+/* Method ownership follows the IDL (and Chrome): Node has the tree operations,
+ * Element the attribute/selector ones, HTMLElement focus/click, and the form/
+ * canvas/media classes their own. The implementations are the same callbacks
+ * the facade used to register on the single Node class; they are tag-checked
+ * internally where needed. */
+struct DomMethodDef {
+    const char* iface;
+    const char* name;
+    AntbNativeFn fn;
+    void* user;
+};
+
+static const DomMethodDef kDomMethods[] = {
+    /* EventTarget: own on Node so the host listener table wins over the
+     * engine's EventTarget.prototype implementation. */
+    { "Node", "addEventListener",    nodeAddEventListener,    NULL },
+    { "Node", "removeEventListener", nodeRemoveEventListener, NULL },
+    { "Node", "dispatchEvent",       nodeDispatchEvent,       NULL },
+
+    { "Node", "appendChild",             nodeAppendChild, NULL },
+    { "Node", "removeChild",             nodeRemoveChild, NULL },
+    { "Node", "insertBefore",            nodeInsertBefore, NULL },
+    { "Node", "replaceChild",            nodeReplaceChild, NULL },
+    { "Node", "cloneNode",               nodeCloneNode, NULL },
+    { "Node", "hasChildNodes",           nodeHasChildNodes, NULL },
+    { "Node", "contains",                nodeContains, NULL },
+    { "Node", "compareDocumentPosition", nodeCompareDocumentPosition, NULL },
+    { "Node", "getRootNode",             nodeGetRootNode, NULL },
+
+    { "Element", "getAttribute",           nodeGetAttribute, NULL },
+    { "Element", "setAttribute",           nodeSetAttribute, NULL },
+    { "Element", "hasAttribute",           nodeHasAttribute, NULL },
+    { "Element", "removeAttribute",        nodeRemoveAttribute, NULL },
+    { "Element", "getAttributeNames",      nodeGetAttributeNames, NULL },
+    { "Element", "toggleAttribute",        nodeToggleAttribute, NULL },
+    { "Element", "getElementsByTagName",   nodeGetElementsByTagName, NULL },
+    { "Element", "getElementsByClassName", nodeGetElementsByClassName, NULL },
+    { "Element", "querySelector",          nodeQuerySelector, NULL },
+    { "Element", "querySelectorAll",       nodeQuerySelectorAll, NULL },
+    { "Element", "insertAdjacentHTML",     nodeInsertAdjacentHTML, NULL },
+    { "Element", "insertAdjacentElement",  nodeInsertAdjacentElement, NULL },
+    { "Element", "insertAdjacentText",     nodeInsertAdjacentText, NULL },
+    { "Element", "scrollIntoView",         nodeScrollIntoView, NULL },
+    { "Element", "getBoundingClientRect",  nodeGetBoundingClientRect, NULL },
+    { "Element", "remove",                 nodeRemove, NULL },
+
+    { "HTMLElement", "focus", nodeFocus, NULL },
+    { "HTMLElement", "blur",  nodeBlur, NULL },
+    { "HTMLElement", "click", nodeClick, NULL },
+
+    { "Document", "getElementById",         docGetElementById, NULL },
+    { "Document", "createElement",          docCreateElement, NULL },
+    { "Document", "createElementNS",        docCreateElementNS, NULL },
+    { "Document", "createTextNode",         docCreateTextNode, NULL },
+    { "Document", "createComment",          docCreateComment, NULL },
+    { "Document", "createDocumentFragment", docCreateDocumentFragment, NULL },
+    { "Document", "getSelection",           docGetSelection, NULL },
+    { "Document", "createRange",            docCreateRange, NULL },
+    { "Document", "execCommand",            docExecCommand, NULL },
+    { "Document", "queryCommandSupported",  docQueryCommandSupported, NULL },
+    { "Document", "queryCommandEnabled",    docQueryCommandEnabled, NULL },
+    { "Document", "queryCommandState",      docQueryCommandState, NULL },
+    { "Document", "createHTMLDocument",     docCreateHTMLDocument, NULL },
+    { "Document", "write",                  docWrite, NULL },
+    { "Document", "writeln",                docWriteln, NULL },
+    { "Document", "getElementsByTagName",   nodeGetElementsByTagName, NULL },
+    { "Document", "getElementsByClassName", nodeGetElementsByClassName, NULL },
+    { "Document", "querySelector",          nodeQuerySelector, NULL },
+    { "Document", "querySelectorAll",       nodeQuerySelectorAll, NULL },
+    { "Document", "importNode",             nodeDocumentImportNode, NULL },
+    { "Document", "adoptNode",              nodeDocumentAdoptNode, NULL },
+    { "Document", "elementFromPoint",       nodeDocumentElementFromPoint, NULL },
+    { "Document", "hasFocus",               nodeDocumentHasFocus, NULL },
+    { "Document", "replaceChildren",        nodeReplaceChildren, NULL },
+
+    { "DocumentFragment", "replaceChildren", nodeReplaceChildren, NULL },
+
+    { "HTMLFormElement", "submit",        nodeFormSubmit, NULL },
+    { "HTMLFormElement", "reset",         nodeFormReset, NULL },
+    { "HTMLFormElement", "checkValidity", nodeFormCheckValidity, NULL },
+
+    { "HTMLCanvasElement", "getContext", nodeGetContext, NULL },
+    { "HTMLCanvasElement", "toDataURL",  nodeToDataURL, NULL },
+
+    { "HTMLMediaElement", "play",         nodeMediaPlay, NULL },
+    { "HTMLMediaElement", "pause",        nodeMediaPause, NULL },
+    { "HTMLMediaElement", "load",         nodeMediaLoad, NULL },
+    { "HTMLMediaElement", "canPlayType",  nodeMediaCanPlayType, NULL },
+    { "HTMLMediaElement", "addTextTrack", nodeMediaAddTextTrack, NULL }
+};
+
+static AntbClass* g_documentIface       = NULL;
+static AntbClass* g_htmlDocumentIface   = NULL;
+static AntbClass* g_elementIface        = NULL;
+static AntbClass* g_htmLElementIface    = NULL;
+static AntbClass* g_svgElementIface     = NULL;
+static AntbClass* g_svgSvgIface         = NULL;
+static AntbClass* g_documentFragmentIface = NULL;
+static AntbClass* g_characterDataIface  = NULL;
+static AntbClass* g_textIface           = NULL;
+static AntbClass* g_commentIface        = NULL;
+static AntbClass* g_unknownElementIface = NULL;
+static std::map<std::string, AntbClass*>* g_tagClasses = NULL;
+
+/* Called by teardownRealm(): the classes belong to the engine that is going
+ * away, so every pointer here must be dropped with it (a stale class would be
+ * a use-after-free on the next document - the selection/media installers used
+ * to keep their classes in statics and never reset them). */
+void resetInterfaceClasses()
+{
+    g_documentIface = NULL;
+    g_htmlDocumentIface = NULL;
+    g_elementIface = NULL;
+    g_htmLElementIface = NULL;
+    g_svgElementIface = NULL;
+    g_svgSvgIface = NULL;
+    g_documentFragmentIface = NULL;
+    g_characterDataIface = NULL;
+    g_textIface = NULL;
+    g_commentIface = NULL;
+    g_unknownElementIface = NULL;
+
+    delete g_tagClasses;
+    g_tagClasses = NULL;
+
+    g_textTrackClass = NULL;
+    g_textTrackListClass = NULL;
+    g_textTrackCueClass = NULL;
+    g_selectionClass = NULL;
+    g_rangeClass = NULL;
+}
+
+void ensureInterfaceClasses(AntbEngine* engine)
+{
+    std::map<std::string, AntbClass*> byName;
+    AntbValue* global;
+    AntbValue* builtinCtor = NULL;
+    AntbValue* builtinProto = NULL;
+    AntbClass* eventTarget = NULL;
+    AntbClass* nodeClass;
+    size_t i;
+
+    if (!engine || !g_currentState)
+        return;
+
+    /* One set per engine; teardownRealm() drops g_nodeClass with the engine. */
+    if (g_nodeClass)
+        return;
+
+    if (getenv("AGB_EVT_DEBUG"))
+        agbLog(AGB_LOG_EVT, "ensureInterfaceClasses engine=%p state=%p",
+               (void*)engine, (void*)g_currentState);
+
+    global = antb_global(engine);
+    if (global) {
+        builtinCtor = antb_get_prop(engine, global, "EventTarget");
+        if (builtinCtor)
+            builtinProto = antb_get_prop(engine, builtinCtor, "prototype");
+    }
+
+    /* The engine already ships EventTarget (and its prototype methods). Chain
+     * to that one instead of creating a second, unrelated interface, or
+     * `el instanceof EventTarget` would test the wrong prototype. */
+    if (!builtinProto)
+        eventTarget = antb_class_create_iface(engine, "EventTarget", NULL);
+
+    nodeClass = antb_class_create_iface(engine, "Node", eventTarget);
+
+    if (builtinProto && nodeClass)
+        antb_class_set_parent_value(engine, nodeClass, builtinProto, builtinCtor);
+
+    if (!nodeClass) {
+        if (builtinProto) antb_value_release(builtinProto);
+        if (builtinCtor) antb_value_release(builtinCtor);
+        if (global) antb_value_release(global);
+        return;
+    }
+
+    g_nodeClass = nodeClass;
+    byName["Node"] = nodeClass;
+    if (eventTarget)
+        byName["EventTarget"] = eventTarget;
+
+    for (i = 0; i < sizeof(kDomIfaces) / sizeof(kDomIfaces[0]); ++i) {
+        const DomIfaceDef& def = kDomIfaces[i];
+        AntbClass* parent = NULL;
+        AntbClass* klass;
+
+        if (def.parent) {
+            std::map<std::string, AntbClass*>::iterator it = byName.find(def.parent);
+            if (it != byName.end())
+                parent = it->second;
+        }
+
+        klass = antb_class_create_iface(engine, def.name, parent);
+        if (klass)
+            byName[def.name] = klass;
+    }
+
+    g_documentIface         = byName["Document"];
+    g_htmlDocumentIface     = byName["HTMLDocument"];
+    g_elementIface          = byName["Element"];
+    g_htmLElementIface      = byName["HTMLElement"];
+    g_svgElementIface       = byName["SVGElement"];
+    g_svgSvgIface           = byName["SVGSVGElement"];
+    g_documentFragmentIface = byName["DocumentFragment"];
+    g_characterDataIface    = byName["CharacterData"];
+    g_textIface             = byName["Text"];
+    g_commentIface          = byName["Comment"];
+    g_unknownElementIface   = byName["HTMLUnknownElement"];
+    g_windowClass           = byName["Window"];
+
+    /* Implemented classes that are not element interfaces get the same shape,
+     * so `x instanceof CSSStyleDeclaration` / `Range` / `TextTrack` work. */
+    cssomEnsureClasses();
+    ensureSelectionClasses();
+    installTextTrackClasses(engine);
+    ensureCanvasContextClass(engine);
+
+    g_tagClasses = new std::map<std::string, AntbClass*>();
+    for (i = 0; i < sizeof(kDomTags) / sizeof(kDomTags[0]); ++i) {
+        const DomTagDef& def = kDomTags[i];
+        std::map<std::string, AntbClass*>::iterator it = byName.find(def.iface);
+
+        if (it != byName.end())
+            (*g_tagClasses)[def.tag] = it->second;
+    }
+
+    /* Methods: the ownership table above, resolved through the class names. */
+    for (i = 0; i < sizeof(kDomMethods) / sizeof(kDomMethods[0]); ++i) {
+        const DomMethodDef& def = kDomMethods[i];
+        std::map<std::string, AntbClass*>::iterator it = byName.find(def.iface);
+
+        if (it != byName.end())
+            antb_class_add_method(engine, it->second, def.name, def.fn, def.user);
+    }
+
+    /* The whole facade is per class now: one dispatching getter/setter pair
+     * that receives every property the class does not declare. */
+    antb_class_set_property_rw(engine, g_nodeClass, "", nodeGetter, nodeSetter, NULL);
+    if (g_documentIface)
+        antb_class_set_property_rw(engine, g_documentIface, "", titleGetter, titleSetter, NULL);
+    if (g_htmlDocumentIface)
+        antb_class_set_property_rw(engine, g_htmlDocumentIface, "", titleGetter, titleSetter, NULL);
+
+    /* DOM constants, inherited by every child interface object. */
+    if (g_nodeClass) {
+        static const double kNodeTypes[] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 };
+        static const char* const kNodeTypeNames[] = {
+            "ELEMENT_NODE", "ATTRIBUTE_NODE", "TEXT_NODE", "CDATA_SECTION_NODE",
+            "ENTITY_REFERENCE_NODE", "ENTITY_NODE", "PROCESSING_INSTRUCTION_NODE",
+            "COMMENT_NODE", "DOCUMENT_NODE", "DOCUMENT_TYPE_NODE",
+            "DOCUMENT_FRAGMENT_NODE", "NOTATION_NODE"
+        };
+        size_t c;
+
+        for (c = 0; c < sizeof(kNodeTypes) / sizeof(kNodeTypes[0]); ++c)
+            antb_class_add_constant(engine, g_nodeClass, kNodeTypeNames[c], kNodeTypes[c]);
+    }
+
+    if (builtinProto) antb_value_release(builtinProto);
+    if (builtinCtor) antb_value_release(builtinCtor);
+    if (global) antb_value_release(global);
+}
+
+static AntbClass* elementClassForTag(WebCore::Element* element)
+{
+    WebCore::String tagName;
+    std::string key;
+    std::map<std::string, AntbClass*>::iterator it;
+
+    if (!element)
+        return g_elementIface;
+
+    tagName = element->tagName();
+    {
+        const char* text = tagName.utf8().data();
+
+        key.assign(text ? text : "");
+    }
+
+    for (size_t i = 0; i < key.size(); ++i) {
+        char c = key[i];
+        if (c >= 'A' && c <= 'Z')
+            key[i] = (char)(c + ('a' - 'A'));
+    }
+
+    if (g_tagClasses) {
+        it = g_tagClasses->find(key);
+        if (it != g_tagClasses->end())
+            return it->second;
+    }
+
+    /* <my-widget>: a custom element is a plain HTMLElement; an unknown legacy
+     * tag is an HTMLUnknownElement (Chrome draws the same line). */
+    if (key.find('-') != std::string::npos)
+        return g_htmLElementIface;
+    return g_unknownElementIface ? g_unknownElementIface : g_htmLElementIface;
+}
+
+AntbClass* classForNode(WebCore::Node* node)
+{
+    if (!node)
+        return NULL;
+
+    if (node->isDocumentNode()) {
+        WebCore::Document* document = static_cast<WebCore::Document*>(node);
+        return document->isHTMLDocument() ? g_htmlDocumentIface : g_documentIface;
+    }
+
+    if (node->isTextNode())
+        return g_textIface;
+
+    if (node->isCommentNode())
+        return g_commentIface;
+
+    if (node->isCharacterDataNode())
+        return g_characterDataIface;
+
+    if (node->nodeType() == 11)
+        return g_documentFragmentIface;
+
+    if (node->isElementNode()) {
+        WebCore::Element* element = static_cast<WebCore::Element*>(node);
+
+        if (element->isSVGElement()) {
+            if (element->hasTagName(WebCore::SVGNames::svgTag))
+                return g_svgSvgIface ? g_svgSvgIface : g_svgElementIface;
+            return g_svgElementIface;
+        }
+        if (element->isHTMLElement())
+            return elementClassForTag(element);
+        return g_elementIface;
+    }
+
+    return g_nodeClass;
+}
 
 int docGetElementById(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
                       AntbValue* out, void*)
@@ -14756,10 +15193,12 @@ static void runListenersFor(WebCore::Node* node, const std::string& type, AntbVa
                             std::string* stringReturn = NULL)
 {
     AntbValue* value = NULL;
-    if (!g_listeners)
+    std::vector<Listener>* list = listenersForRealm(receiverRealm(node));
+
+    if (!list)
         return;
-    for (size_t i = 0; i < g_listeners->size(); ++i) {
-        Listener& l = (*g_listeners)[i];
+    for (size_t i = 0; i < list->size(); ++i) {
+        Listener& l = (*list)[i];
         AntbRealm* previousRealm = NULL;
         bool switched = false;
 
@@ -14820,10 +15259,20 @@ void dispatchEvent(void* nodePtr, void* eventPtr)
 {
     WebCore::Node*  node  = (WebCore::Node*)nodePtr;
     WebCore::Event* event = (WebCore::Event*)eventPtr;
-    if (!g_engine || !node || !event || !g_listeners)
+    if (!g_engine || !node || !event)
         return;
+
     {
+        AntbRealm* realm = receiverRealm(node);
+        std::vector<Listener>* list = listenersForRealm(realm);
         std::string type = event->type().domString().utf8().data();
+
+        if (getenv("AGB_EVT_DEBUG") && type == "DOMContentLoaded")
+            agbLog(AGB_LOG_EVT, "dispatchEvent DCL node=%p realm=%p listeners=%d",
+                   (void*)node, (void*)realm, list ? (int)list->size() : -1);
+
+        if (!list)
+            return;
 
         /* Two WebCore events are the "text is about to be inserted" moment,
          * which modern pages know as `beforeinput`:
@@ -14875,8 +15324,8 @@ void dispatchEvent(void* nodePtr, void* eventPtr)
                 visited.push_back(current);
                 if (getenv("AGB_EVT_TRACE")) {
                     int matched = 0;
-                    for (size_t li = 0; g_listeners && li < g_listeners->size(); ++li)
-                        if ((*g_listeners)[li].node == current && (*g_listeners)[li].type == type)
+                    for (size_t li = 0; li < list->size(); ++li)
+                        if ((*list)[li].node == current && (*list)[li].type == type)
                             ++matched;
                     fprintf(stderr, "[evt-trace] %s node=%p listeners=%d\n",
                             type.c_str(), (void*)current, matched);
@@ -14907,9 +15356,9 @@ void dispatchEvent(void* nodePtr, void* eventPtr)
          * against (nodeDispatchEvent, the JS dispatch path, does), so drop the
          * once-listeners of every node this dispatch visited. Without this the
          * option only worked for events a page dispatched itself. */
-        if (g_listeners) {
-            for (size_t i = 0; i < g_listeners->size(); ) {
-                Listener& l = (*g_listeners)[i];
+        {
+            for (size_t i = 0; i < list->size(); ) {
+                Listener& l = (*list)[i];
                 bool drop = false;
 
                 if (l.once && l.type == type) {
@@ -14919,7 +15368,7 @@ void dispatchEvent(void* nodePtr, void* eventPtr)
                 if (drop) {
                     if (l.fn)
                         antb_value_release(l.fn);
-                    g_listeners->erase(g_listeners->begin() + i);
+                    list->erase(list->begin() + i);
                 } else {
                     ++i;
                 }

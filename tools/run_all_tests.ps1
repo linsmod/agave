@@ -42,7 +42,7 @@
 #   pwsh -File tools/run_all_tests.ps1 -Skip run_layout_tests,run_media_tests
 #   pwsh -File tools/run_all_tests.ps1 -IncludeNetwork -IncludeReal
 #
-# Expected duration: docs/dev-tests.md §1 (19 suites ≈ 4.2 minutes with the default
+# Expected duration: docs/dev-tests.md §1 (20 suites ≈ 4.3 minutes with the default
 # parallelism; ≈6.5 minutes with -Sequential, on a 16-core machine).
 
 param(
@@ -70,6 +70,7 @@ $suites = @(
     'run_hidden_view_tests',
     'run_realm_tests',
     'run_script_mode_tests',
+    'run_binding_semantics_tests',
     'run_tab_lifecycle_tests',
     'run_hang_recovery_tests',
     'run_inspector_tests',

@@ -89,6 +89,7 @@ git -C H:\ant-v16 rev-parse HEAD
   表会在约 6 次文档刷新后耗尽，之后注册**静默失败**（R77）。
 - wrapper 表（native 指针 ↔ JS 对象）是**进程级**的，随 engine 创建/销毁：`antb_wrap_native_owner` /
   `antb_release_owner` / `antb_engine_destroy`。
+- **class 表是 per-engine 的**：`AntbClass` 挂在 engine 自己的链表上，每类带动态属性表（旧的进程级 128 槽 +32 属性/类会在一两个 tab 用完，之后 `antb_class_create` 静默返回 NULL）。`antb_class_create_iface()` 建"接口"：原型链（根接 `Object.prototype`，父接口可换成本 engine 的 `EventTarget` 原型）、构造器对象（`prototype` 的 `w/e/c=false`、`[[Prototype]]` 接父接口、`new` 抛 `Illegal constructor`）、`@@toStringTag`；`antb_class_set_property_rw()` 是类级 getter+setter 表（空名 = catch-all），`antb_class_add_constant()` 给 `Node.ELEMENT_NODE` 这类静态常量，`antb_expose_classes()` 在每个 realm 的 global 上装构造器（非枚举，已存在则跳过，所以 `EventTarget` 保留引擎内核那个）。⚠ 构造器的 cfunc 元数据必须是**进程级按接口名唯一**的地址：`ant_cfunc_meta_intern()` 按 meta 地址缓存且永不删除，用 per-class 内联 meta 会在 class 释放、地址被下一次 `calloc` 复用时命中悬垂条目（R177 的随机 AV）。
 - 每个 view 一个 `RuntimeState`，每个文档一个新 engine（`beginNewRealm`/`stopRealm`），
   回调进来前靠 `antb_set_context_activate` 切状态（细节见
   [design-per-view-js-context.md](design-per-view-js-context.md)）。
