@@ -14,6 +14,8 @@
 #define AGB_TAG_LOCATION 0x4C4F4331u   /* 'LOC1'  Document* (Location)       */
 #define AGB_TAG_HISTORY  0x48495331u   /* 'HIS1'  FrameHistory* (History)    */
 #define AGB_TAG_COLLECTION 0x434F4C31u /* 'COL1'  AgbCollection* (NodeList/HTMLCollection wrapper) */
+#define AGB_TAG_NAMEDMAP  0x4E4D4131u  /* 'NMA1'  NamedAttrMap* (element.attributes wrapper)    */
 #define AGB_TAG_WRAPREALM 0x57525031u  /* 'WRP1'  AntbRealm* the wrapper was created in        */
 
 #endif /* RealmTags_h */
+

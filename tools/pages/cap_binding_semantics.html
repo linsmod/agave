@@ -400,6 +400,35 @@
     })());
     ok('document/window interfaces', document instanceof HTMLDocument &&
        document instanceof Document && window instanceof Window);
+    /* G1-2: el.attributes is a live NamedNodeMap of Attr nodes. */
+    ok('attributes is a NamedNodeMap', (function () {
+      var el = document.createElement('div');
+      el.setAttribute('id', 'x');
+      el.setAttribute('data-k', 'v');
+      var a = el.attributes;
+      var first = a.item(0);
+      return a instanceof NamedNodeMap &&
+             Object.prototype.toString.call(a) === '[object NamedNodeMap]' &&
+             a === el.attributes && a.length === 2 &&
+             Object.keys(a).join(',') === '0,1' &&
+             first && first instanceof Attr && first.nodeType === 2 &&
+             first.name === 'id' && first.value === 'x' &&
+             first.ownerElement === el &&
+             a.getNamedItem('data-k').value === 'v' &&
+             a.getNamedItem('nope') === null && a[1].name === 'data-k';
+    })());
+    ok('NamedNodeMap is live and writable', (function () {
+      var el = document.createElement('div');
+      el.setAttribute('id', 'x');
+      var a = el.attributes;
+      a.getNamedItem('id').value = 'y';
+      var afterWrite = el.getAttribute('id');
+      el.setAttribute('extra', '1');
+      var grown = a.length;
+      a.removeNamedItem('extra');
+      return afterWrite === 'y' && grown === 2 && a.length === 1 &&
+             el.hasAttribute('extra') === false && a[0].name === 'id';
+    })());
     /* G1-3: ParentNode/ChildNode are C++ extra methods on the mixin's interfaces
      * (Chrome's ownership), not JS polyfills on Node.prototype. */
     ok('ParentNode/ChildNode ownership', (function () {

@@ -209,6 +209,8 @@ struct RuntimeState {
     AntbClass*         textIface;
     AntbClass*         commentIface;
     AntbClass*         unknownElementIface;
+    AntbClass*         namedNodeMapIface;
+    AntbClass*         attrIface;
     std::map<std::string, AntbClass*>* tagClasses;   /* tag -> element interface */
     /* Engine-scoped aux interfaces (not part of the DOM tree; shared by every
      * realm of this view). They were statics too, so the same cross-engine
@@ -317,6 +319,8 @@ struct RealmInterfaces {
     AntbClass* textIface;
     AntbClass* commentIface;
     AntbClass* unknownElementIface;
+    AntbClass* namedNodeMapIface;
+    AntbClass* attrIface;
     AntbClass* windowClass;
     AntbClass* nodeListClass;
     AntbClass* htmlCollectionClass;
@@ -325,7 +329,8 @@ struct RealmInterfaces {
         : tagClasses(NULL), nodeClass(NULL), documentIface(NULL), htmlDocumentIface(NULL),
           elementIface(NULL), htmLElementIface(NULL), svgElementIface(NULL), svgSvgIface(NULL),
           documentFragmentIface(NULL), characterDataIface(NULL), textIface(NULL),
-          commentIface(NULL), unknownElementIface(NULL), windowClass(NULL),
+          commentIface(NULL), unknownElementIface(NULL), namedNodeMapIface(NULL),
+          attrIface(NULL), windowClass(NULL),
           nodeListClass(NULL), htmlCollectionClass(NULL) {}
 };
 
@@ -608,6 +613,8 @@ static void activateState(RuntimeState* state)
 #define g_svgSvgIface           (g_currentState->svgSvgIface)
 #define g_documentFragmentIface (g_currentState->documentFragmentIface)
 #define g_characterDataIface    (g_currentState->characterDataIface)
+#define g_namedNodeMapIface     (g_currentState->namedNodeMapIface)
+#define g_attrIface             (g_currentState->attrIface)
 #define g_textIface             (g_currentState->textIface)
 #define g_commentIface          (g_currentState->commentIface)
 #define g_unknownElementIface   (g_currentState->unknownElementIface)
@@ -1140,7 +1147,6 @@ int nodeGetter(AntbEngine*, AntbValue*, const char*, AntbValue*, void*);
 enum { CSSOM_LIST, CSSOM_SHEET, CSSOM_RULE, CSSOM_RULELIST, CSSOM_MEDIA, CSSOM_DECL };
 AntbValue* cssomWrap(AntbEngine*, void*, int kind);
 static void cssomReleaseRefs(DocumentRuntime* document);   /* defined below */
-int attrsGetter(AntbEngine*, AntbValue*, const char*, AntbValue*, void*);
 int nodeGetElementsByTagName(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeCloneNode(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int docCreateDocumentFragment(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
@@ -1155,6 +1161,13 @@ int nodePrependChildren(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, v
 int nodeBefore(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeAfter(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeReplaceWith(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int namedMapItemFn(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int namedMapGetNamedItemFn(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int namedMapSetNamedItem(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int namedMapRemoveNamedItem(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int namedMapGetNamedItemNS(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int namedMapSetNamedItemNS(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int namedMapRemoveNamedItemNS(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeGetBoundingClientRect(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeGetRootNode(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeGetAttributeNames(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
@@ -8320,21 +8333,6 @@ static int styleSetter(AntbEngine* engine, AntbValue* self, const char* name, co
 
 /* Any attribute name yields an object: jQuery reads .expando off
  * div.attributes[name] and would otherwise throw on undefined. */
-int attrsGetter(AntbEngine* engine, AntbValue*, const char* name, AntbValue* out, void*)
-{
-    AntbValue* stub;
-
-    (void)name;
-
-    stub = antb_make_object(engine);
-    if (!stub)
-        return 0;
-
-    antb_value_assign(out, stub);
-    antb_value_release(stub);
-    return 1;
-}
-
 /* Per-node expando object (el._vnode, el._assign, input._wrapperState, jQuery
  * data...). It is owned here instead of on the wrapper because every property
  * read on a wrapper goes through nodeGetter: a `__agbExpando` field stored on
@@ -9118,6 +9116,72 @@ static WebCore::Node* collectionItemAt(AgbCollection* c, unsigned index)
     }
 }
 
+/* element.attributes: a live NamedAttrMap wrapper (NamedNodeMap). Attributes are
+ * real Attr nodes, so item()/getNamedItem() return wrappers like Chrome; the
+ * indexes are own keys through antb_object_set_indexed_keys (the count comes
+ * from `length`, answered below). */
+static WebCore::NamedAttrMap* namedMapOf(AntbValue* self)
+{
+    return self ? static_cast<WebCore::NamedAttrMap*>(antb_get_native(self, AGB_TAG_NAMEDMAP)) : NULL;
+}
+
+static AntbValue* wrapNamedNodeMap(AntbEngine* engine, WebCore::NamedAttrMap* map)
+{
+    AntbValue* v;
+
+    if (!engine || !map || !g_namedNodeMapIface)
+        return NULL;
+
+    v = antb_wrap_native_as_owner(engine, g_namedNodeMapIface, map, AGB_TAG_NAMEDMAP, g_document);
+    if (!v)
+        return NULL;
+
+    antb_object_set_indexed_keys(engine, v);
+    return v;
+}
+
+static int namedMapGetter(AntbEngine* engine, AntbValue* self, const char* name,
+                          AntbValue* out, void*)
+{
+    WebCore::NamedAttrMap* map = namedMapOf(self);
+    unsigned index = 0;
+
+
+    if (!map || !name)
+        return 0;
+
+    if (!strcmp(name, "length")) {
+        AntbValue* v = antb_make_number(engine, (double)map->length());
+
+        if (!v)
+            return 0;
+        antb_value_assign(out, v);
+        antb_value_release(v);
+        return 1;
+    }
+
+    if (cssomNumericName(name, &index)) {
+        /* The RefPtr matters: map->item() returns a PassRefPtr, and a lazily
+         * created Attr is owned only by it until the wrapper takes it - reading
+         * .get() from the temporary left a dangling pointer (crash in wrapNode). */
+        RefPtr<WebCore::Node> attr = map->item(index);
+
+        if (!attr)
+            return 0;
+        {
+            AntbValue* v = wrapNode(engine, attr.get());
+
+            if (!v)
+                return 0;
+            antb_value_assign(out, v);
+            antb_value_release(v);
+        }
+        return 1;
+    }
+
+    return 0;
+}
+
 static AntbValue* collectionWrapItem(AntbEngine* engine, AgbCollection* c, unsigned index)
 {
     WebCore::Node* node;
@@ -9360,12 +9424,202 @@ int collectionGetter(AntbEngine* engine, AntbValue* self, const char* name, Antb
     return 0;
 }
 
+/* NamedNodeMap methods (element.attributes). The name -> implementation table is
+ * global per method name, so `item` is shared with NodeList/HTMLCollection and
+ * dispatches on the receiver tag. */
+/* getNamedItem returns a PassRefPtr; the caller keeps it in `hold` so the node
+ * (created lazily on first access) stays alive while the wrapper is built. */
+static void namedMapLookup(WebCore::NamedAttrMap* map, AntbValue* arg,
+                           RefPtr<WebCore::Node>& hold)
+{
+    char* name;
+
+    if (!map || !arg)
+        return;
+
+    name = antb_to_utf8(arg);
+    if (name) {
+        hold = map->getNamedItem(WebCore::String::fromUTF8(name));
+        antb_free(name);
+    }
+}
+
+static void assignNodeOrNull(AntbEngine* engine, AntbValue* out, WebCore::Node* node)
+{
+    if (node) {
+        AntbValue* v = wrapNode(engine, node);
+
+        if (v) {
+            antb_value_assign(out, v);
+            antb_value_release(v);
+        }
+        return;
+    }
+
+    {
+        AntbValue* nullValue = antb_make_null(engine);
+
+        if (nullValue) {
+            antb_value_assign(out, nullValue);
+            antb_value_release(nullValue);
+        }
+    }
+}
+
+int namedMapItemFn(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                   AntbValue* out, void*)
+{
+    WebCore::NamedAttrMap* map = namedMapOf(self);
+    double index;
+
+    (void)out;
+
+    if (!map || argc < 1 || !args[0])
+        return 1;
+
+    index = antb_to_number(args[0]);
+    if (index < 0)
+        index = 0;
+
+    {
+        RefPtr<WebCore::Node> node = map->item((unsigned)index);
+
+        assignNodeOrNull(engine, out, node.get());
+    }
+    return 1;
+}
+
+int namedMapGetNamedItemFn(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                           AntbValue* out, void*)
+{
+    WebCore::NamedAttrMap* map = namedMapOf(self);
+
+    if (!map || argc < 1 || !args[0])
+        return 1;
+
+    {
+        RefPtr<WebCore::Node> node;
+
+        namedMapLookup(map, args[0], node);
+        assignNodeOrNull(engine, out, node.get());
+    }
+    return 1;
+}
+
+int namedMapSetNamedItem(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                         AntbValue* out, void*)
+{
+    WebCore::NamedAttrMap* map = namedMapOf(self);
+    WebCore::Node* node = (argc > 0 && args[0]) ? nodeOf(args[0]) : NULL;
+    WebCore::ExceptionCode ec = 0;
+
+    (void)engine;
+
+    if (!map || !node)
+        return 1;
+    map->setNamedItem(node, ec);
+    antb_value_assign(out, args[0]);
+    return 1;
+}
+
+int namedMapRemoveNamedItem(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                            AntbValue* out, void*)
+{
+    WebCore::NamedAttrMap* map = namedMapOf(self);
+    WebCore::ExceptionCode ec = 0;
+    char* name;
+
+    if (!map || argc < 1 || !args[0])
+        return 1;
+    name = antb_to_utf8(args[0]);
+    if (!name)
+        return 1;
+
+    {
+        RefPtr<WebCore::Node> removed = map->removeNamedItem(WebCore::String::fromUTF8(name), ec);
+
+        antb_free(name);
+        assignNodeOrNull(engine, out, removed.get());
+    }
+    return 1;
+}
+
+int namedMapGetNamedItemNS(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                           AntbValue* out, void*)
+{
+    WebCore::NamedAttrMap* map = namedMapOf(self);
+    char* ns;
+    char* local;
+
+    if (!map || argc < 2 || !args[0] || !args[1])
+        return 1;
+
+    ns = antb_to_utf8(args[0]);
+    local = antb_to_utf8(args[1]);
+
+    {
+        RefPtr<WebCore::Node> node;
+
+        if (ns && local)
+            node = map->getNamedItemNS(WebCore::String::fromUTF8(ns),
+                                       WebCore::String::fromUTF8(local));
+        if (ns)
+            antb_free(ns);
+        if (local)
+            antb_free(local);
+        if (!node)
+            return 1;
+        assignNodeOrNull(engine, out, node.get());
+    }
+    return 1;
+}
+
+int namedMapSetNamedItemNS(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                           AntbValue* out, void*)
+{
+    return namedMapSetNamedItem(engine, self, args, argc, out, NULL);
+}
+
+int namedMapRemoveNamedItemNS(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                              AntbValue* out, void*)
+{
+    WebCore::NamedAttrMap* map = namedMapOf(self);
+    WebCore::ExceptionCode ec = 0;
+    char* ns;
+    char* local;
+
+    if (!map || argc < 2 || !args[0] || !args[1])
+        return 1;
+
+    ns = antb_to_utf8(args[0]);
+    local = antb_to_utf8(args[1]);
+
+    {
+        RefPtr<WebCore::Node> removed;
+
+        if (ns && local)
+            removed = map->removeNamedItemNS(WebCore::String::fromUTF8(ns),
+                                             WebCore::String::fromUTF8(local), ec);
+        if (ns)
+            antb_free(ns);
+        if (local)
+            antb_free(local);
+        if (!removed)
+            return 1;
+        assignNodeOrNull(engine, out, removed.get());
+    }
+    return 1;
+}
+
 int collectionItem(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
                    AntbValue* out, void*)
 {
     AgbCollection* c = (AgbCollection*)antb_get_native(self, AGB_TAG_COLLECTION);
     double index;
     AntbValue* v;
+
+    if (antb_get_native(self, AGB_TAG_NAMEDMAP))
+        return namedMapItemFn(engine, self, args, argc, out, NULL);
 
     if (!c || argc < 1 || !args[0])
         return 1;
@@ -9781,6 +10035,31 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
         } else {
             return assignNull(engine, out);
         }
+    } else if (n->isAttributeNode() && (!strcmp(name, "name") || !strcmp(name, "value")
+                                        || !strcmp(name, "specified") || !strcmp(name, "ownerElement"))) {
+        /* Returned immediately: later independent blocks in this function also
+         * claim some of these names (name/value) and would discard the answer. */
+        WebCore::Attr* attr = static_cast<WebCore::Attr*>(n);
+
+        if (!strcmp(name, "ownerElement")) {
+            WebCore::Element* owner = attr->ownerElement();
+
+            if (!owner)
+                return assignNull(engine, out);
+            v = wrapNode(engine, owner);
+        } else if (!strcmp(name, "specified")) {
+            v = antb_make_boolean(engine, attr->specified() ? 1 : 0);
+        } else {
+            WebCore::String text = !strcmp(name, "name") ? attr->name() : attr->value();
+
+            v = antb_make_string(engine, text.utf8().data());
+        }
+
+        if (!v)
+            return 0;
+        antb_value_assign(out, v);
+        antb_value_release(v);
+        return 1;
     } else if (!strcmp(name, "data") && n->isCharacterDataNode()) {
         /* CharacterData.data: text/comment content (the generated table declares
          * it, so without this the accessor answered undefined). */
@@ -10114,23 +10393,23 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
             v = antb_make_string(engine, html.utf8().data());
         }
     } else if (!strcmp(name, "attributes")) {
-        /* Attribute nodes are not exposed yet; an empty bag keeps code that only
-         * probes it (jQuery's support tests) from throwing. */
-        AntbValue* existing = antb_get_prop(engine, self, "__agbAttrs");
-        if (existing && !antb_is_number(existing)) {
-            antb_value_assign(out, existing);
-            antb_value_release(existing);
-            return 1;
-        }
-        antb_value_release(existing);
+        /* element.attributes is a live NamedNodeMap of Attr nodes (G1-2); the
+         * wrapper is cached by the bridge, so el.attributes === el.attributes. */
+        if (!n->isElementNode())
+            return assignNull(engine, out);
         {
-            AntbValue* attrs = antb_make_object(engine);
-            if (!attrs)
-                return 0;
-            antb_define_property_rw(engine, attrs, "x", attrsGetter, NULL, NULL);
-            antb_set_prop(engine, self, "__agbAttrs", attrs);
-            antb_value_assign(out, attrs);
-            antb_value_release(attrs);
+            WebCore::NamedAttrMap* map = static_cast<WebCore::Element*>(n)->attributes();
+
+            if (!map)
+                return assignNull(engine, out);
+            {
+                AntbValue* attrs = wrapNamedNodeMap(engine, map);
+
+                if (!attrs)
+                    return 0;
+                antb_value_assign(out, attrs);
+                antb_value_release(attrs);
+            }
         }
         return 1;
     } else if (!strcmp(name, "viewBox")) {
@@ -10726,6 +11005,17 @@ int nodeSetter(AntbEngine* engine, AntbValue* self, const char* name, const Antb
                 input->setIndeterminate(value ? antb_to_boolean(value) != 0 : false);
             return 1;
         }
+    }
+
+    if (n->isAttributeNode() && !strcmp(name, "value")) {
+        char* text = antb_to_utf8(value);
+        WebCore::ExceptionCode ec = 0;
+
+        if (!text)
+            return 0;
+        static_cast<WebCore::Attr*>(n)->setValue(WebCore::String::fromUTF8(text), ec);
+        antb_free(text);
+        return 1;
     }
 
     if (!strcmp(name, "data") && n->isCharacterDataNode()) {
@@ -15383,6 +15673,8 @@ static const DomIfaceDef kDomIfaces[] = {
     { "Comment",                "CharacterData" },
     { "Document",               "Node" },
     { "HTMLDocument",           "Document" },
+    { "NamedNodeMap",           NULL },
+    { "Attr",                   "Node" },
     { "Element",                "Node" },
     { "SVGElement",             "Element" },
     { "SVGSVGElement",          "SVGElement" },
@@ -15617,6 +15909,12 @@ static const DomMethodImpl kDomMethodImpls[] = {
     { "focus"                     , nodeFocus },
     { "getAttribute"              , nodeGetAttribute },
     { "getAttributeNames"         , nodeGetAttributeNames },
+    { "getNamedItem"              , namedMapGetNamedItemFn },
+    { "getNamedItemNS"            , namedMapGetNamedItemNS },
+    { "setNamedItem"              , namedMapSetNamedItem },
+    { "setNamedItemNS"            , namedMapSetNamedItemNS },
+    { "removeNamedItem"           , namedMapRemoveNamedItem },
+    { "removeNamedItemNS"         , namedMapRemoveNamedItemNS },
     { "getBoundingClientRect"     , nodeGetBoundingClientRect },
     { "getContext"                , nodeGetContext },
     { "getElementById"            , docGetElementById },
@@ -15751,6 +16049,8 @@ void resetInterfaceClasses(RuntimeState* state)
     state->svgSvgIface = NULL;
     state->documentFragmentIface = NULL;
     state->characterDataIface = NULL;
+    state->namedNodeMapIface = NULL;
+    state->attrIface = NULL;
     state->textIface = NULL;
     state->commentIface = NULL;
     state->unknownElementIface = NULL;
@@ -15834,7 +16134,9 @@ static int attrHostGet(AntbEngine* engine, AntbValue* self, const char* name,
     /* NodeList/HTMLCollection declare `length` in their IDL too, and their
      * receiver is a collection wrapper, not a node: the collection dispatch must
      * answer (it also handles the numeric indices). */
-    if (antb_get_native(self, AGB_TAG_COLLECTION))
+    if (antb_get_native(self, AGB_TAG_NAMEDMAP))
+        result = namedMapGetter(engine, self, name, out, NULL);
+    else if (antb_get_native(self, AGB_TAG_COLLECTION))
         result = collectionGetter(engine, self, name, out, NULL);
     else
         result = isDocumentWrapper(self) ? titleGetter(engine, self, name, out, NULL)
@@ -16055,6 +16357,8 @@ static void applyRealmInterfacesFor(RuntimeState* state, AntbRealm* realm)
     state->svgSvgIface           = set ? set->svgSvgIface : NULL;
     state->documentFragmentIface = set ? set->documentFragmentIface : NULL;
     state->characterDataIface    = set ? set->characterDataIface : NULL;
+    state->namedNodeMapIface     = set ? set->namedNodeMapIface : NULL;
+    state->attrIface             = set ? set->attrIface : NULL;
     state->textIface             = set ? set->textIface : NULL;
     state->commentIface          = set ? set->commentIface : NULL;
     state->unknownElementIface   = set ? set->unknownElementIface : NULL;
@@ -16243,6 +16547,8 @@ void ensureInterfaceClasses(AntbEngine* engine)
         g_svgSvgIface           = byName["SVGSVGElement"];
         g_documentFragmentIface = byName["DocumentFragment"];
         g_characterDataIface    = byName["CharacterData"];
+        g_namedNodeMapIface     = byName["NamedNodeMap"];
+        g_attrIface             = byName["Attr"];
         g_textIface             = byName["Text"];
         g_commentIface          = byName["Comment"];
         g_unknownElementIface   = byName["HTMLUnknownElement"];
@@ -16313,6 +16619,13 @@ void ensureInterfaceClasses(AntbEngine* engine)
         /* The whole facade is per class now: one dispatching getter/setter pair
          * that receives every property the class does not declare. */
         antb_class_set_property_rw(engine, g_nodeClass, "", nodeGetter, nodeSetter, NULL);
+        /* The generated table installs element.attributes' members as prototype
+         * accessors; the catch-all also answers the numeric indexes and gives the
+         * indexed-own-keys hook a length to ask (agb_class_catch_all). */
+        if (g_namedNodeMapIface)
+            antb_class_set_property_rw(engine, g_namedNodeMapIface, "", namedMapGetter, NULL, NULL);
+        if (g_attrIface)
+            antb_class_set_property_rw(engine, g_attrIface, "", nodeGetter, nodeSetter, NULL);
         /* Collections answer length/numeric indices through the same catch-all
          * mechanism; item()/namedItem()/forEach/iterators stay on the prototype. */
         if (g_nodeListClass)
@@ -16367,6 +16680,8 @@ void ensureInterfaceClasses(AntbEngine* engine)
         set->svgSvgIface = g_svgSvgIface;
         set->documentFragmentIface = g_documentFragmentIface;
         set->characterDataIface = g_characterDataIface;
+    set->namedNodeMapIface  = g_namedNodeMapIface;
+    set->attrIface          = g_attrIface;
         set->textIface = g_textIface;
         set->commentIface = g_commentIface;
         set->unknownElementIface = g_unknownElementIface;
@@ -16439,6 +16754,9 @@ AntbClass* classForNode(WebCore::Node* node)
         WebCore::Document* document = static_cast<WebCore::Document*>(node);
         return document->isHTMLDocument() ? g_htmlDocumentIface : g_documentIface;
     }
+
+    if (node->isAttributeNode())
+        return g_attrIface;
 
     if (node->isTextNode())
         return g_textIface;
