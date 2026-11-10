@@ -19,7 +19,7 @@ agave 是**从零移植的浏览器**：WebKit 2008 的 WebCore（解析/布局/
 | **项目里有哪些测试、改动后跑哪些** | [docs/dev-tests.md](docs/dev-tests.md)（21 个 `run_*.ps1` 套件 + 对拍工具 + fixture 约定） |
 | JS/DOM/CSS **能力缺口**（不支持清单 + 一条命令复测） | [docs/arch-capability-gaps.md](docs/arch-capability-gaps.md) |
 | `video`/`audio` 媒体元素（尺寸、播放状态机、元数据、抽帧） | [docs/arch-media.md](docs/arch-media.md) |
-| ant/桥接哪份是真的、函数/机制锚点 | [docs/ref-ant-engine.md](docs/ref-ant-engine.md)、[docs/ref-code-index.md](docs/ref-code-index.md) |
+| ant/桥接哪份是真的、函数/机制锚点、**签入的生成文件** | [docs/ref-ant-engine.md](docs/ref-ant-engine.md)、[docs/ref-code-index.md](docs/ref-code-index.md)（`src/webcore/buildKJS/` 下是 **CSS grammar / UA 样式表的签入生成文件**，构建直接编译，**不是 KJS/JS 引擎**；改 `.y`/`.css` 必须同步改生成物） |
 | RVVM 渲染后端（B3）的跨仓库接口 | [docs/ref-virtpass-browser.md](docs/ref-virtpass-browser.md) |
 | 提交/回归页/文档/代码风格约定 | [docs/dev-conventions.md](docs/dev-conventions.md) |
 | 历史缺陷：现象 → 根因 → 修法 → 验证（R 系列） | [docs/hist-lessons.md](docs/hist-lessons.md) |
@@ -30,6 +30,10 @@ agave 是**从零移植的浏览器**：WebKit 2008 的 WebCore（解析/布局/
 - **两个 checkout**：agave 本仓库 + ant（默认 `H:\ant-v16`，分支 `agave-bridge`）；ant 源码不在本仓库。
 - **默认构建不要求 ant 源码**：CMake 只消费 `3rdparty/ant` 的发布副本
   （`include/AntBridge.h`、`lib/antjsb.dll.a`、`bin/antjsb.dll`）。
+- **CSS 生成文件是签入的**：`src/webcore/buildKJS/` 下的 `CSSGrammar.cpp`、
+  `UserAgentStyleSheets.{h,cpp}` 由构建直接编译；CMake / `tools/build_project.ps1`
+  不跑 bison，也不跑 `tools/gen-ua-stylesheets.py`。改 `.y`/`.css` 必须同步改生成物，
+  流程见 [docs/ref-code-index.md](docs/ref-code-index.md) 的“生成文件与 `buildKJS/` 目录”。
 - **改桥 / ant 内核**：`pwsh -File tools/build_antjsb.ps1`（Meson target `antjsb`），
   前置是 ant checkout + Meson/Ninja/MSYS2/Python3；LTO 保持 `b_lto=false`。
 - **改了 ant 要在 ant 仓库提交**：ant 是独立仓库（`H:\ant-v16`，分支 `agave-bridge`），
