@@ -65,5 +65,8 @@
 
 - 常见错误：①只改 `.y` / `.css` 就以为生效（实际被编译的是生成文件）；②把 `buildKJS/` 当"KJS 引擎"删掉或绕开；
   ③把 `buildQJS/` 当现状去改。三种都会得到"改完没反应"或改错副本。
+- **生成不是构建的一部分**：`src/src.cmake` 直接 `GLOB` `src/webcore/buildKJS/*.cpp`（buildQJS 另有一份），
+  CMake、`tools/build_project.ps1` 都不会调用 bison / `gen-ua-stylesheets.py`。因此改语法/UA 表都是**手动**：
+  改完生成文件后再增量构建、让编译器打包进 `libagave`。
 - 改这两处的验证：`tools/gen-ua-stylesheets.py` 后重跑 `run_layout_tests.ps1` + 受影响的探针；
   语法改动用最小页面探针断言（R173：`--VC-BG-0` 的 `var()` 解析；R174：UA `form` 边距）。
