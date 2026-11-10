@@ -9,7 +9,7 @@ build-zig/
 build-zig-native/
 build-zig-curl/
 build-zig-noant/
-build-*.log
+*.log
 bt.log
 
 # antjsb.dll is the prebuilt fallback used by a plain clone; the PDB stays
@@ -39,3 +39,4 @@ agb_crash.txt
 
 # developer local, dont git.
 issues
+build.log
