@@ -51,21 +51,20 @@ static const AntbMethodDef kElementDefMethods[] = {
     { "setAttributeNodeNS", 1, ANTB_METHOD_CUSTOM, "Attr" },
     { "hasAttribute", 1, 0, "boolean" },
     { "hasAttributeNS", 2, 0, "boolean" },
-    { "focus", 0, 0, "void" },
-    { "blur", 0, 0, "void" },
     { "scrollIntoView", -1, 0, "void" },
     { "insertAdjacentElement", 2, 0, "Node" },
-    { "contains", 1, 0, "boolean" },
     { "scrollIntoViewIfNeeded", -1, 0, "void" },
     { "scrollByLines", 1, 0, "void" },
     { "scrollByPages", 1, 0, "void" },
+    /* from Node (Chrome owner) */
+    { "hasAttributes", 0, 0, "boolean" },
 };
 
 const AntbInterfaceDef kElementDef = {
     "Element",
     "EventTargetNode",
     kElementDefAttributes, 18,
-    kElementDefMethods, 23,
+    kElementDefMethods, 21,
     0, 0
 };
 

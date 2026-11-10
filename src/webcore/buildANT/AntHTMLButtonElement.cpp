@@ -13,15 +13,11 @@ static const AntbAttributeDef kHTMLButtonElementDefAttributes[] = {
     { "value", ANTB_ATTR_WRITABLE, "DOMString" },
 };
 
-static const AntbMethodDef kHTMLButtonElementDefMethods[] = {
-    { "click", 0, 0, "void" },
-};
-
 const AntbInterfaceDef kHTMLButtonElementDef = {
     "HTMLButtonElement",
     "HTMLElement",
     kHTMLButtonElementDefAttributes, 5,
-    kHTMLButtonElementDefMethods, 1,
+    0, 0,
     0, 0
 };
 

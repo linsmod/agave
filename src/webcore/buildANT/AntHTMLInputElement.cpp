@@ -26,17 +26,14 @@ static const AntbAttributeDef kHTMLInputElementDefAttributes[] = {
 };
 
 static const AntbMethodDef kHTMLInputElementDefMethods[] = {
-    { "blur", 0, 0, "void" },
-    { "focus", 0, 0, "void" },
     { "select", 0, 0, "void" },
-    { "click", 0, 0, "void" },
 };
 
 const AntbInterfaceDef kHTMLInputElementDef = {
     "HTMLInputElement",
     "HTMLElement",
     kHTMLInputElementDefAttributes, 17,
-    kHTMLInputElementDefMethods, 4,
+    kHTMLInputElementDefMethods, 1,
     0, 0
 };
 

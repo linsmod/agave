@@ -27,8 +27,6 @@ static const AntbAttributeDef kHTMLAnchorElementDefAttributes[] = {
 };
 
 static const AntbMethodDef kHTMLAnchorElementDefMethods[] = {
-    { "blur", 0, 0, "void" },
-    { "focus", 0, 0, "void" },
     { "toString", 0, 0, "DOMString" },
 };
 
@@ -36,7 +34,7 @@ const AntbInterfaceDef kHTMLAnchorElementDef = {
     "HTMLAnchorElement",
     "HTMLElement",
     kHTMLAnchorElementDefAttributes, 18,
-    kHTMLAnchorElementDefMethods, 3,
+    kHTMLAnchorElementDefMethods, 1,
     0, 0
 };
 

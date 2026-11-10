@@ -21,8 +21,6 @@ static const AntbAttributeDef kHTMLSelectElementDefAttributes[] = {
 static const AntbMethodDef kHTMLSelectElementDefMethods[] = {
     { "add", 2, 0, "void" },
     { "remove", 0, ANTB_METHOD_CUSTOM, "void" },
-    { "blur", 0, 0, "void" },
-    { "focus", 0, 0, "void" },
     { "item", 1, 0, "Node" },
     { "namedItem", 1, 0, "Node" },
 };
@@ -31,7 +29,7 @@ const AntbInterfaceDef kHTMLSelectElementDef = {
     "HTMLSelectElement",
     "HTMLElement",
     kHTMLSelectElementDefAttributes, 10,
-    kHTMLSelectElementDefMethods, 6,
+    kHTMLSelectElementDefMethods, 4,
     0, 0
 };
 

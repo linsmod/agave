@@ -30,12 +30,13 @@ static const AntbMethodDef kNodeDefMethods[] = {
     { "cloneNode", 1, 0, "Node" },
     { "normalize", 0, 0, "void" },
     { "isSupported", 2, 0, "boolean" },
-    { "hasAttributes", 0, 0, "boolean" },
     { "isSameNode", 1, 0, "boolean" },
     { "isEqualNode", 1, 0, "boolean" },
     { "lookupPrefix", 1, 0, "DOMString" },
     { "isDefaultNamespace", 1, 0, "boolean" },
     { "lookupNamespaceURI", 1, 0, "DOMString" },
+    /* from Element (Chrome owner) */
+    { "contains", 1, 0, "boolean" },
 };
 
 static const AntbConstantDef kNodeDefConstants[] = {

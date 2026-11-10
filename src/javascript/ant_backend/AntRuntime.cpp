@@ -14990,89 +14990,141 @@ struct DomMethodDef {
     void* user;
 };
 
-static const DomMethodDef kDomMethods[] = {
-    /* EventTarget: own on Node so the host listener table wins over the
-     * engine's EventTarget.prototype implementation. */
-    { "Node", "addEventListener",    nodeAddEventListener,    NULL },
-    { "Node", "removeEventListener", nodeRemoveEventListener, NULL },
-    { "Node", "dispatchEvent",       nodeDispatchEvent,       NULL },
+/* Method implementations by name.
+ *
+ * The generated tables decide *which* interface owns a method (and, where the
+ * 2008 IDL disagrees with Chrome, the prototype it is registered on - see
+ * @kMethodOwnershipMoves in CodeGeneratorAnt.pm). This table decides *how* it is
+ * implemented: one dispatcher per name, because every dispatcher checks the
+ * receiver itself (a document load is not the media one) and both answer the
+ * same name.
+ *
+ * An IDL method with no row here is not registered at all - AGB_BINDING_CHECK=1
+ * lists them, which is the honest "IDL knows it, the engine does not" inventory.
+ */
+struct DomMethodImpl {
+    const char*  name;
+    AntbNativeFn fn;
+};
 
-    { "Node", "appendChild",             nodeAppendChild, NULL },
-    { "Node", "removeChild",             nodeRemoveChild, NULL },
-    { "Node", "insertBefore",            nodeInsertBefore, NULL },
-    { "Node", "replaceChild",            nodeReplaceChild, NULL },
-    { "Node", "cloneNode",               nodeCloneNode, NULL },
-    { "Node", "hasChildNodes",           nodeHasChildNodes, NULL },
-    { "Node", "contains",                nodeContains, NULL },
-    { "Node", "compareDocumentPosition", nodeCompareDocumentPosition, NULL },
-    { "Node", "getRootNode",             nodeGetRootNode, NULL },
+static const DomMethodImpl kDomMethodImpls[] = {
+    { "addEventListener"          , nodeAddEventListener },
+    { "addTextTrack"              , nodeMediaAddTextTrack },
+    { "adoptNode"                 , nodeDocumentAdoptNode },
+    { "appendChild"               , nodeAppendChild },
+    { "blur"                      , nodeBlur },
+    { "canPlayType"               , nodeMediaCanPlayType },
+    { "checkValidity"             , nodeFormCheckValidity },
+    { "click"                     , nodeClick },
+    { "cloneNode"                 , nodeCloneNode },
+    { "compareDocumentPosition"   , nodeCompareDocumentPosition },
+    { "contains"                  , nodeContains },
+    { "createComment"             , docCreateComment },
+    { "createDocumentFragment"    , docCreateDocumentFragment },
+    { "createElement"             , docCreateElement },
+    { "createElementNS"           , docCreateElementNS },
+    { "createHTMLDocument"        , docCreateHTMLDocument },
+    { "createRange"               , docCreateRange },
+    { "createTextNode"            , docCreateTextNode },
+    { "dispatchEvent"             , nodeDispatchEvent },
+    { "elementFromPoint"          , nodeDocumentElementFromPoint },
+    { "execCommand"               , docExecCommand },
+    { "focus"                     , nodeFocus },
+    { "getAttribute"              , nodeGetAttribute },
+    { "getAttributeNames"         , nodeGetAttributeNames },
+    { "getBoundingClientRect"     , nodeGetBoundingClientRect },
+    { "getContext"                , nodeGetContext },
+    { "getElementById"            , docGetElementById },
+    { "getElementsByClassName"    , nodeGetElementsByClassName },
+    { "getElementsByTagName"      , nodeGetElementsByTagName },
+    { "getRootNode"               , nodeGetRootNode },
+    { "getSelection"              , docGetSelection },
+    { "hasAttribute"              , nodeHasAttribute },
+    { "hasChildNodes"             , nodeHasChildNodes },
+    { "hasFocus"                  , nodeDocumentHasFocus },
+    { "importNode"                , nodeDocumentImportNode },
+    { "insertAdjacentElement"     , nodeInsertAdjacentElement },
+    { "insertAdjacentHTML"        , nodeInsertAdjacentHTML },
+    { "insertAdjacentText"        , nodeInsertAdjacentText },
+    { "insertBefore"              , nodeInsertBefore },
+    { "item"                      , collectionItem },
+    { "load"                      , nodeMediaLoad },
+    { "namedItem"                 , collectionNamedItemMethod },
+    { "pause"                     , nodeMediaPause },
+    { "play"                      , nodeMediaPlay },
+    { "queryCommandEnabled"       , docQueryCommandEnabled },
+    { "queryCommandState"         , docQueryCommandState },
+    { "queryCommandSupported"     , docQueryCommandSupported },
+    { "querySelector"             , nodeQuerySelector },
+    { "querySelectorAll"          , nodeQuerySelectorAll },
+    { "remove"                    , nodeRemove },
+    { "removeAttribute"           , nodeRemoveAttribute },
+    { "removeChild"               , nodeRemoveChild },
+    { "removeEventListener"       , nodeRemoveEventListener },
+    { "replaceChild"              , nodeReplaceChild },
+    { "replaceChildren"           , nodeReplaceChildren },
+    { "reset"                     , nodeFormReset },
+    { "scrollIntoView"            , nodeScrollIntoView },
+    { "setAttribute"              , nodeSetAttribute },
+    { "submit"                    , nodeFormSubmit },
+    { "toDataURL"                 , nodeToDataURL },
+    { "toggleAttribute"           , nodeToggleAttribute },
+    { "write"                     , docWrite },
+    { "writeln"                   , docWriteln },
+};
 
-    { "Element", "getAttribute",           nodeGetAttribute, NULL },
-    { "Element", "setAttribute",           nodeSetAttribute, NULL },
-    { "Element", "hasAttribute",           nodeHasAttribute, NULL },
-    { "Element", "removeAttribute",        nodeRemoveAttribute, NULL },
-    { "Element", "getAttributeNames",      nodeGetAttributeNames, NULL },
-    { "Element", "toggleAttribute",        nodeToggleAttribute, NULL },
-    { "Element", "getElementsByTagName",   nodeGetElementsByTagName, NULL },
-    { "Element", "getElementsByClassName", nodeGetElementsByClassName, NULL },
-    { "Element", "querySelector",          nodeQuerySelector, NULL },
-    { "Element", "querySelectorAll",       nodeQuerySelectorAll, NULL },
-    { "Element", "insertAdjacentHTML",     nodeInsertAdjacentHTML, NULL },
-    { "Element", "insertAdjacentElement",  nodeInsertAdjacentElement, NULL },
-    { "Element", "insertAdjacentText",     nodeInsertAdjacentText, NULL },
-    { "Element", "scrollIntoView",         nodeScrollIntoView, NULL },
-    { "Element", "getBoundingClientRect",  nodeGetBoundingClientRect, NULL },
-    { "Element", "remove",                 nodeRemove, NULL },
+static AntbNativeFn findMethodImpl(const char* name)
+{
+    size_t i;
 
-    { "HTMLElement", "focus", nodeFocus, NULL },
-    { "HTMLElement", "blur",  nodeBlur, NULL },
-    { "HTMLElement", "click", nodeClick, NULL },
+    for (i = 0; i < sizeof(kDomMethodImpls) / sizeof(kDomMethodImpls[0]); ++i) {
+        if (!strcmp(kDomMethodImpls[i].name, name))
+            return kDomMethodImpls[i].fn;
+    }
+    return 0;
+}
 
-    { "Document", "getElementById",         docGetElementById, NULL },
-    { "Document", "createElement",          docCreateElement, NULL },
-    { "Document", "createElementNS",        docCreateElementNS, NULL },
-    { "Document", "createTextNode",         docCreateTextNode, NULL },
-    { "Document", "createComment",          docCreateComment, NULL },
-    { "Document", "createDocumentFragment", docCreateDocumentFragment, NULL },
-    { "Document", "getSelection",           docGetSelection, NULL },
-    { "Document", "createRange",            docCreateRange, NULL },
-    { "Document", "execCommand",            docExecCommand, NULL },
-    { "Document", "queryCommandSupported",  docQueryCommandSupported, NULL },
-    { "Document", "queryCommandEnabled",    docQueryCommandEnabled, NULL },
-    { "Document", "queryCommandState",      docQueryCommandState, NULL },
-    { "Document", "createHTMLDocument",     docCreateHTMLDocument, NULL },
-    { "Document", "write",                  docWrite, NULL },
-    { "Document", "writeln",                docWriteln, NULL },
-    { "Document", "getElementsByTagName",   nodeGetElementsByTagName, NULL },
-    { "Document", "getElementsByClassName", nodeGetElementsByClassName, NULL },
-    { "Document", "querySelector",          nodeQuerySelector, NULL },
-    { "Document", "querySelectorAll",       nodeQuerySelectorAll, NULL },
-    { "Document", "importNode",             nodeDocumentImportNode, NULL },
-    { "Document", "adoptNode",              nodeDocumentAdoptNode, NULL },
-    { "Document", "elementFromPoint",       nodeDocumentElementFromPoint, NULL },
-    { "Document", "hasFocus",               nodeDocumentHasFocus, NULL },
-    { "Document", "replaceChildren",        nodeReplaceChildren, NULL },
+/* Methods the 2008 IDL never declared (querySelector, insertAdjacentHTML,
+ * getRootNode, ...): the permanent custom layer. Registered on the interface
+ * Chrome puts them on; the implementation comes from kDomMethodImpls, so a name
+ * has exactly one C++ function. */
+struct DomMethodExtra {
+    const char* iface;
+    const char* name;
+};
 
-    { "DocumentFragment", "replaceChildren", nodeReplaceChildren, NULL },
-
-    { "HTMLFormElement", "submit",        nodeFormSubmit, NULL },
-    { "HTMLFormElement", "reset",         nodeFormReset, NULL },
-    { "HTMLFormElement", "checkValidity", nodeFormCheckValidity, NULL },
-
-    { "HTMLCanvasElement", "getContext", nodeGetContext, NULL },
-    { "HTMLCanvasElement", "toDataURL",  nodeToDataURL, NULL },
-
-    { "HTMLMediaElement", "play",         nodeMediaPlay, NULL },
-    { "HTMLMediaElement", "pause",        nodeMediaPause, NULL },
-    { "HTMLMediaElement", "load",         nodeMediaLoad, NULL },
-    { "HTMLMediaElement", "canPlayType",  nodeMediaCanPlayType, NULL },
-    { "HTMLMediaElement", "addTextTrack", nodeMediaAddTextTrack, NULL },
-
-    /* Collections (B2-2). forEach/iterators are JS-side (prelude), they only
-     * need this[i]/length which the class getter answers. */
-    { "NodeList", "item",       collectionItem, NULL },
-    { "HTMLCollection", "item", collectionItem, NULL },
-    { "HTMLCollection", "namedItem", collectionNamedItemMethod, NULL }
+static const DomMethodExtra kExtraMethods[] = {
+    { "Document", "createHTMLDocument" },
+    { "Document", "getElementsByClassName" },
+    { "Document", "getSelection" },
+    { "Document", "hasFocus" },
+    { "Document", "querySelector" },
+    { "Document", "querySelectorAll" },
+    { "Document", "replaceChildren" },
+    { "Document", "write" },
+    { "Document", "writeln" },
+    { "DocumentFragment", "replaceChildren" },
+    { "Element", "getAttributeNames" },
+    { "Element", "getBoundingClientRect" },
+    { "Element", "getElementsByClassName" },
+    { "Element", "insertAdjacentHTML" },
+    { "Element", "insertAdjacentText" },
+    { "Element", "querySelector" },
+    { "Element", "querySelectorAll" },
+    { "Element", "toggleAttribute" },
+    { "HTMLCanvasElement", "toDataURL" },
+    { "HTMLFormElement", "checkValidity" },
+    { "HTMLMediaElement", "addTextTrack" },
+    { "HTMLMediaElement", "canPlayType" },
+    { "HTMLMediaElement", "pause" },
+    { "HTMLMediaElement", "play" },
+    { "Node", "addEventListener" },
+    { "Node", "compareDocumentPosition" },
+    { "Node", "dispatchEvent" },
+    { "Node", "getRootNode" },
+    { "Node", "removeEventListener" },
+    { "Element", "remove" },
+    { "HTMLMediaElement", "load" },
 };
 
 /* The interface class mirrors (g_documentIface & co, g_tagClasses, the
@@ -15273,6 +15325,15 @@ static const DomAttrDef kExtraAttributes[] = {
     { "HTMLMediaElement", "currentSrc",       0 },
     { "HTMLMediaElement", "videoWidth",       0 },
     { "HTMLMediaElement", "videoHeight",      0 },
+    /* Names that also happen to exist on another interface (the extras list is
+     * keyed by interface, not by name): input.multiple, textarea.maxLength,
+     * script.async, media.src/readyState. Without these rows the name-match
+     * against the generated tables silently drops them. */
+    { "HTMLInputElement", "multiple",   1 },
+    { "HTMLTextAreaElement", "maxLength", 1 },
+    { "HTMLScriptElement", "async",     1 },
+    { "HTMLMediaElement", "src",        1 },
+    { "HTMLMediaElement", "readyState", 0 },
 };
 
 /* Event handler properties (`el.onclick`): nodeSetter stores them as
@@ -15431,6 +15492,7 @@ static bool perRealmIfacesEnabled()
 static void reportGeneratedBindingTables(const std::map<std::string, AntbClass*>& byName)
 {
     unsigned i, missingOwners = 0, attributes = 0, methods = 0, constants = 0;
+    std::string unimplemented;
 
     for (i = 0; i < AntBindings::interfaceCount(); ++i) {
         const AntbInterfaceDef* def = AntBindings::interfaceAt(i);
@@ -15447,10 +15509,22 @@ static void reportGeneratedBindingTables(const std::map<std::string, AntbClass*>
         methods += def->methodCount;
         constants += def->constantCount;
 
+        for (unsigned m = 0; m < def->methodCount; ++m) {
+            if (!findMethodImpl(def->methods[m].name)) {
+                if (!unimplemented.empty())
+                    unimplemented += ",";
+                unimplemented += def->methods[m].name;
+            }
+        }
+
         agbLog(AGB_LOG_EVT, "[bind] %s: idl %u attrs / %u methods / %u consts (parent %s)",
                def->name, def->attributeCount, def->methodCount, def->constantCount,
                def->parent ? def->parent : "-");
     }
+
+    if (!unimplemented.empty())
+        agbLog(AGB_LOG_EVT, "[bind] idl methods with no implementation (not registered): %s",
+               unimplemented.c_str());
 
     agbLog(AGB_LOG_EVT,
            "[bind] generated tables: %u interfaces, %u attrs, %u methods, %u consts, %u missing owner(s)",
@@ -15597,13 +15671,40 @@ void ensureInterfaceClasses(AntbEngine* engine)
                 (*g_tagClasses)[def.tag] = it->second;
         }
 
-        /* Methods: the ownership table above, resolved through the class names. */
-        for (i = 0; i < sizeof(kDomMethods) / sizeof(kDomMethods[0]); ++i) {
-            const DomMethodDef& def = kDomMethods[i];
-            std::map<std::string, AntbClass*>::iterator it = byName.find(def.iface);
+        /* Methods: the generated tables own the membership, kDomMethodImpls the
+         * implementation. An IDL method without an implementation is skipped
+         * (AGB_BINDING_CHECK=1 counts them). */
+        for (unsigned d = 0; d < AntBindings::interfaceCount(); ++d) {
+            const AntbInterfaceDef* def = AntBindings::interfaceAt(d);
+            std::map<std::string, AntbClass*>::iterator it;
 
-            if (it != byName.end())
-                antb_class_add_method(engine, it->second, def.name, def.fn, def.user);
+            if (!def || !def->name)
+                continue;
+
+            it = byName.find(def->name);
+            if (it == byName.end())
+                continue;
+
+            for (i = 0; i < def->methodCount; ++i) {
+                AntbNativeFn impl = findMethodImpl(def->methods[i].name);
+
+                if (!impl)
+                    continue;
+                if (getenv("AGB_BINDING_TRACE"))
+                    agbLog(AGB_LOG_EVT, "[bind] method %s.%s", def->name, def->methods[i].name);
+                antb_class_add_method(engine, it->second, def->methods[i].name, impl, NULL);
+            }
+        }
+
+        /* Methods the IDL never declared (the permanent custom layer). */
+        for (i = 0; i < sizeof(kExtraMethods) / sizeof(kExtraMethods[0]); ++i) {
+            const DomMethodExtra& def = kExtraMethods[i];
+            std::map<std::string, AntbClass*>::iterator it = byName.find(def.iface);
+            AntbNativeFn impl = findMethodImpl(def.name);
+
+            if (it == byName.end() || !impl)
+                continue;
+            antb_class_add_method(engine, it->second, def.name, impl, NULL);
         }
 
         /* The whole facade is per class now: one dispatching getter/setter pair

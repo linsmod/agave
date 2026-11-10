@@ -125,7 +125,7 @@ pwsh -File tools\gen_bindings.ps1 -Generator QJS -Idl Node.idl -OutDir $env:TEMP
                    'html/HTMLScriptElement.idl','html/HTMLSelectElement.idl','html/HTMLTextAreaElement.idl') {
     pwsh -File tools\gen_bindings.ps1 -Generator ANT -Idl $idl -OutDir src\webcore\buildANT
   }
-  # 清单 + "0 missing owner(s)"（表找不到自己的接口类 = 静默不安装）；AGB_BINDING_TRACE=1 逐条打印
+  # 清单 + "0 missing owner(s)"（表找不到自己的接口类 = 静默不安装）+ **IDL 有但没实现的方法清单**（42 个）；AGB_BINDING_TRACE=1 逐条打印
   $env:AGB_BINDING_CHECK='1'; build-zig-native\agave_shell.exe --probe tools/pages/cap_dom.html --eval "probeExit('ok')" --wait 800 --settle 400
   ```
 

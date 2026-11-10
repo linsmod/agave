@@ -292,6 +292,21 @@
     ok('modern extras on Element.prototype',
        !!(ownDesc('Element', 'classList') || {}).get && !!(ownDesc('Element', 'dataset') || {}).get &&
        !!(ownDesc('Element', 'firstElementChild') || {}).get);
+    /* Names that also exist on another interface's IDL (HTMLMediaElement has no
+     * 2008 IDL at all, input.multiple/textarea.maxLength/script.async collide by
+     * name with other tables): the extras list is keyed by interface, so these
+     * must be registered for their own receiver, not dropped as "already known". */
+    ok('media element operations', (function () {
+      var v = document.createElement('video');
+      return typeof v.load === 'function' && typeof v.play === 'function' &&
+             typeof v.pause === 'function' && ('src' in v) && ('readyState' in v);
+    })());
+    ok('name-collision attributes', (function () {
+      var i = document.createElement('input'), t = document.createElement('textarea'),
+          s = document.createElement('script');
+      return ('multiple' in i) && ('maxLength' in t) && ('async' in s);
+    })());
+    ok('Element.prototype.remove', typeof document.createElement('div').remove === 'function');
     ok('id accessor on Element.prototype', (function () {
       var d = Object.getOwnPropertyDescriptor(Element.prototype, 'id');
       return !!d && typeof d.get === 'function' && typeof d.set === 'function' &&

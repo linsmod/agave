@@ -31,11 +31,20 @@ static const AntbAttributeDef kHTMLElementDefAttributes[] = {
     { "tabIndex", ANTB_ATTR_WRITABLE, "long" },
 };
 
+static const AntbMethodDef kHTMLElementDefMethods[] = {
+    /* from Element (Chrome owner) */
+    { "focus", 0, 0, "void" },
+    /* from Element (Chrome owner) */
+    { "blur", 0, 0, "void" },
+    /* from HTMLButtonElement (Chrome owner) */
+    { "click", 0, 0, "void" },
+};
+
 const AntbInterfaceDef kHTMLElementDef = {
     "HTMLElement",
     "Element",
     kHTMLElementDefAttributes, 15,
-    0, 0,
+    kHTMLElementDefMethods, 3,
     0, 0
 };
 

@@ -104,8 +104,8 @@ $tableText = ((Get-Content $stdout2 -Raw) -as [string]) + ((Get-Content $stderr2
 # so an IDL change or a generator regression shows up as a count change here.
 $expected = @(
     @{ Name = 'Node';         Attrs = 13; Methods = 14; Constants = 12 },
-    @{ Name = 'Element';      Attrs = 18; Methods = 23; Constants = 0 },
-    @{ Name = 'HTMLElement';  Attrs = 15; Methods = 0;  Constants = 0 },
+    @{ Name = 'Element';      Attrs = 18; Methods = 21; Constants = 0 },
+    @{ Name = 'HTMLElement';  Attrs = 15; Methods = 3;  Constants = 0 },
     @{ Name = 'Document';     Attrs = 29; Methods = 29; Constants = 0 },
     @{ Name = 'HTMLCollection'; Attrs = 1; Methods = 3; Constants = 0 },
     @{ Name = 'NodeList';     Attrs = 1;  Methods = 1;  Constants = 0 }
@@ -166,5 +166,6 @@ if ($failures -gt 0) {
 
 Write-Host "`nALL BINDING SEMANTICS CHECKS PASSED"
 exit 0
+
 
 

@@ -75,6 +75,28 @@ my @kOwnershipMoves = (
     [ 'HTMLTextAreaElement', 'tabIndex',  'HTMLElement', 'ANTB_ATTR_WRITABLE', 'long' ],
 );
 
+# Methods whose owning interface the 2008 IDL gets wrong (same rule as
+# attributes; Chrome's method owners probed the same way). focus/blur/click are
+# repeated per element interface in this IDL, Chrome has them on HTMLElement;
+# contains is a Node operation, hasAttributes an Element one.
+#   [ from_iface, name, to_iface, argCount, returnType ]
+my @kMethodOwnershipMoves = (
+    [ 'Element', 'focus',  'HTMLElement', 0, 'void' ],
+    [ 'Element', 'blur',   'HTMLElement', 0, 'void' ],
+    [ 'Element', 'contains', 'Node',      1, 'boolean' ],
+    [ 'HTMLAnchorElement',   'focus', 'HTMLElement', 0, 'void' ],
+    [ 'HTMLAnchorElement',   'blur',  'HTMLElement', 0, 'void' ],
+    [ 'HTMLButtonElement',   'click', 'HTMLElement', 0, 'void' ],
+    [ 'HTMLInputElement',    'focus', 'HTMLElement', 0, 'void' ],
+    [ 'HTMLInputElement',    'blur',  'HTMLElement', 0, 'void' ],
+    [ 'HTMLInputElement',    'click', 'HTMLElement', 0, 'void' ],
+    [ 'HTMLSelectElement',   'focus', 'HTMLElement', 0, 'void' ],
+    [ 'HTMLSelectElement',   'blur',  'HTMLElement', 0, 'void' ],
+    [ 'HTMLTextAreaElement', 'focus', 'HTMLElement', 0, 'void' ],
+    [ 'HTMLTextAreaElement', 'blur',  'HTMLElement', 0, 'void' ],
+    [ 'Node', 'hasAttributes', 'Element', 0, 'boolean' ],
+);
+
 sub movedOutOf
 {
     my $iface = shift;
@@ -92,6 +114,27 @@ sub movedInto
     my @in;
 
     foreach my $move (@kOwnershipMoves) {
+        push(@in, $move) if $move->[2] eq $iface;
+    }
+    return \@in;
+}
+sub methodMovedOutOf
+{
+    my $iface = shift;
+    my %out;
+
+    foreach my $move (@kMethodOwnershipMoves) {
+        $out{$move->[1]} = 1 if $move->[0] eq $iface;
+    }
+    return \%out;
+}
+
+sub methodMovedInto
+{
+    my $iface = shift;
+    my @in;
+
+    foreach my $move (@kMethodOwnershipMoves) {
         push(@in, $move) if $move->[2] eq $iface;
     }
     return \@in;
@@ -214,9 +257,14 @@ sub GenerateInterface
 
     # ---------------------------------------------------------------- methods
     my @methodLines = ();
+    my $methodCount = 0;
+    my $methodMovedOut = methodMovedOutOf($name);
     foreach my $function (@{$dataNode->functions}) {
         my $signature = $function->signature;
         my $methodName = $signature->name;
+
+        # Chrome owns this operation on another prototype (see @kMethodOwnershipMoves).
+        next if $methodMovedOut->{$methodName};
 
         my @flags = ();
         push(@flags, "ANTB_METHOD_CUSTOM") if $signature->extendedAttributes->{"Custom"};
@@ -235,6 +283,17 @@ sub GenerateInterface
 
         push(@methodLines, "    { " . CString($methodName) . ", " . $argCount . ", "
                                 . $flagText . ", " . CString($signature->type) . " },");
+        $methodCount++;
+    }
+
+    my %methodAlready = map { my $n = $_; $n =~ s/^.*"(\w+)".*$/$1/; ($n => 1) } @methodLines;
+    foreach my $move (@{methodMovedInto($name)}) {
+        next if $methodAlready{$move->[1]};
+        $methodAlready{$move->[1]} = 1;
+        push(@methodLines, "    /* from " . $move->[0] . " (Chrome owner) */");
+        push(@methodLines, "    { " . CString($move->[1]) . ", " . $move->[3]
+                                . ", 0, " . CString($move->[4]) . " },");
+        $methodCount++;
     }
 
     # ---------------------------------------------------------------- constants
@@ -276,14 +335,14 @@ EOF
     }
 
     my $attrArray = $attrCount ? "${symbol}Attributes" : "0";
-    my $methodArray = @methodLines ? "${symbol}Methods" : "0";
+    my $methodArray = $methodCount ? "${symbol}Methods" : "0";
     my $constantArray = @constantLines ? "${symbol}Constants" : "0";
 
     $body .= "const AntbInterfaceDef $symbol = {\n";
     $body .= "    " . CString($name) . ",\n";
     $body .= "    " . (@parents ? CString($parent) : "0") . ",\n";
     $body .= "    $attrArray, " . $attrCount . ",\n";
-    $body .= "    $methodArray, " . scalar(@methodLines) . ",\n";
+    $body .= "    $methodArray, " . $methodCount . ",\n";
     $body .= "    $constantArray, " . scalar(@constantLines) . "\n";
     $body .= "};\n\n";
 
@@ -299,6 +358,8 @@ EOF
 }
 
 1;
+
+
 
 
 

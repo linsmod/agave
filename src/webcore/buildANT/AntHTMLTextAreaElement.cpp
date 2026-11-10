@@ -20,8 +20,6 @@ static const AntbAttributeDef kHTMLTextAreaElementDefAttributes[] = {
 };
 
 static const AntbMethodDef kHTMLTextAreaElementDefMethods[] = {
-    { "blur", 0, 0, "void" },
-    { "focus", 0, 0, "void" },
     { "select", 0, 0, "void" },
     { "setSelectionRange", 2, 0, "void" },
 };
@@ -30,7 +28,7 @@ const AntbInterfaceDef kHTMLTextAreaElementDef = {
     "HTMLTextAreaElement",
     "HTMLElement",
     kHTMLTextAreaElementDefAttributes, 11,
-    kHTMLTextAreaElementDefMethods, 4,
+    kHTMLTextAreaElementDefMethods, 2,
     0, 0
 };
 
