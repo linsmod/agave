@@ -22,6 +22,69 @@ package CodeGeneratorAnt;
 
 my $outputDir = "";
 
+# Members whose owning interface the 2008 IDL gets "wrong" for a modern DOM.
+#
+# The member exists and behaves the same, but Chrome exposes it on another
+# prototype, which is observable: Object.getOwnPropertyDescriptor(I.prototype,
+# n), `n in obj` on the interface itself, for-in and instanceof-adjacent
+# feature detection all see the difference. Probed on 2026-11-10 with
+#   python tools/chrome_probe.py --url file:///.../cap_dom.html --js-file <probe>
+#   (owners scanned across every DOM prototype, not just the inheritance chain,
+#    because a move can go *up* the chain as well as down).
+#
+# Rule: the generated table follows Chrome, not this IDL. Each row is
+#   [ from_iface, name, to_iface, flags, valueType ]
+# and the flags/type are the IDL's own (they are not in dispute).
+my @kOwnershipMoves = (
+    # Chrome: DOM standard puts these on Element (they arrived with the
+    # Element namespace/prefix/localName attributes and Element.attributes).
+    [ 'Node', 'attributes',   'Element', 0,                   'NamedNodeMap' ],
+    [ 'Node', 'namespaceURI', 'Element', 0,                   'DOMString' ],
+    [ 'Node', 'prefix',       'Element', 'ANTB_ATTR_WRITABLE', 'DOMString' ],
+    [ 'Node', 'localName',    'Element', 0,                   'DOMString' ],
+
+    # Chrome: box metrics and style live on HTMLElement.prototype (Element is
+    # the generic one; client*/scroll* do stay on Element, which the same probe
+    # confirmed).
+    [ 'Element', 'style',        'HTMLElement', 0, 'CSSStyleDeclaration' ],
+    [ 'Element', 'offsetLeft',   'HTMLElement', 0, 'long' ],
+    [ 'Element', 'offsetTop',    'HTMLElement', 0, 'long' ],
+    [ 'Element', 'offsetWidth',  'HTMLElement', 0, 'long' ],
+    [ 'Element', 'offsetHeight', 'HTMLElement', 0, 'long' ],
+    [ 'Element', 'offsetParent', 'HTMLElement', 0, 'Element' ],
+
+    # Chrome: id/className/innerHTML/outerHTML/children are Element attributes
+    # (children comes from the ParentNode mixin, implemented by Element,
+    # Document and DocumentFragment; Element is where a div finds it).
+    [ 'HTMLElement', 'id',        'Element', 'ANTB_ATTR_WRITABLE', 'DOMString' ],
+    [ 'HTMLElement', 'className', 'Element', 'ANTB_ATTR_WRITABLE', 'DOMString' ],
+    [ 'HTMLElement', 'innerHTML', 'Element', 'ANTB_ATTR_WRITABLE', 'DOMString' ],
+    [ 'HTMLElement', 'outerHTML', 'Element', 'ANTB_ATTR_WRITABLE', 'DOMString' ],
+    [ 'HTMLElement', 'children',  'Element', 0,                    'HTMLCollection' ],
+);
+
+sub movedOutOf
+{
+    my $iface = shift;
+    my %out;
+
+    foreach my $move (@kOwnershipMoves) {
+        $out{$move->[1]} = 1 if $move->[0] eq $iface;
+    }
+    return \%out;
+}
+
+sub movedInto
+{
+    my $iface = shift;
+    my @in;
+
+    foreach my $move (@kOwnershipMoves) {
+        push(@in, $move) if $move->[2] eq $iface;
+    }
+    return \@in;
+}
+
 # Default constructor (called by CodeGenerator.pm).
 sub new
 {
@@ -96,9 +159,15 @@ sub GenerateInterface
 
     # ---------------------------------------------------------------- attributes
     my @attrLines = ();
+    my $attrCount = 0;   # real entries only: @attrLines also carries comments
+    my $movedOut = movedOutOf($name);
     foreach my $attribute (@{$dataNode->attributes}) {
         my $signature = $attribute->signature;
         my $attrName = $signature->name;
+
+        # A member this IDL declares but Chrome owns on another prototype: emit
+        # it in the owner's table instead (see @kOwnershipMoves).
+        next if $movedOut->{$attrName};
 
         my @flags = ();
         push(@flags, "ANTB_ATTR_WRITABLE") if $attribute->type !~ /^readonly/;
@@ -112,6 +181,16 @@ sub GenerateInterface
         my $flagText = @flags ? join(" | ", @flags) : "0";
         push(@attrLines, "    { " . CString($attrName) . ", " . $flagText . ", "
                              . CString($signature->type) . " },");
+        $attrCount++;
+    }
+
+    my $movedIn = movedInto($name);
+    foreach my $move (@{$movedIn}) {
+        my $flagText = $move->[3] ? $move->[3] : "0";
+        push(@attrLines, "    /* from " . $move->[0] . " (Chrome owner) */");
+        push(@attrLines, "    { " . CString($move->[1]) . ", " . $flagText . ", "
+                             . CString($move->[4]) . " },");
+        $attrCount++;
     }
 
     # ---------------------------------------------------------------- methods
@@ -177,14 +256,14 @@ EOF
         $body .= "};\n\n";
     }
 
-    my $attrArray = @attrLines ? "${symbol}Attributes" : "0";
+    my $attrArray = $attrCount ? "${symbol}Attributes" : "0";
     my $methodArray = @methodLines ? "${symbol}Methods" : "0";
     my $constantArray = @constantLines ? "${symbol}Constants" : "0";
 
     $body .= "const AntbInterfaceDef $symbol = {\n";
     $body .= "    " . CString($name) . ",\n";
     $body .= "    " . (@parents ? CString($parent) : "0") . ",\n";
-    $body .= "    $attrArray, " . scalar(@attrLines) . ",\n";
+    $body .= "    $attrArray, " . $attrCount . ",\n";
     $body .= "    $methodArray, " . scalar(@methodLines) . ",\n";
     $body .= "    $constantArray, " . scalar(@constantLines) . "\n";
     $body .= "};\n\n";
@@ -201,3 +280,4 @@ EOF
 }
 
 1;
+

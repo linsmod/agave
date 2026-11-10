@@ -115,9 +115,12 @@ pwsh -File tools\gen_bindings.ps1 -Generator QJS -Idl Node.idl -OutDir $env:TEMP
   registry，`src/src.cmake` 的 `OPT_JS_ANT` 分支 `GLOB CONFIGURE_DEPENDS` 编译它们：
 
   ```powershell
-  pwsh -File tools\gen_bindings.ps1 -Generator ANT -Idl dom/Node.idl    -OutDir src\webcore\buildANT
-  pwsh -File tools\gen_bindings.ps1 -Generator ANT -Idl dom/Element.idl -OutDir src\webcore\buildANT
-  # IDL 表 vs 门面表 的对账（2 个接口、writability 漂移必须是 0）
+  # 已迁移的 6 个接口（属性声明来自生成表；归属按 Chrome，见 CodeGeneratorAnt.pm 的 @kOwnershipMoves）
+  foreach ($idl in 'dom/Node.idl','dom/Element.idl','html/HTMLElement.idl','dom/Document.idl',
+                   'html/HTMLCollection.idl','dom/NodeList.idl') {
+    pwsh -File tools\gen_bindings.ps1 -Generator ANT -Idl $idl -OutDir src\webcore\buildANT
+  }
+  # 清单 + "0 missing owner(s)"（表找不到自己的接口类 = 静默不安装）；AGB_BINDING_TRACE=1 逐条打印
   $env:AGB_BINDING_CHECK='1'; build-zig-native\agave_shell.exe --probe tools/pages/cap_dom.html --eval "probeExit('ok')" --wait 800 --settle 400
   ```
 

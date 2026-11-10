@@ -98,11 +98,17 @@ Remove-Item Env:AGB_BINDING_CHECK
 
 $tableText = ((Get-Content $stdout2 -Raw) -as [string]) + ((Get-Content $stderr2 -Raw) -as [string])
 
-# Interface name -> matched [bind] summary line, e.g.
-#   [bind] Node: idl 17 attrs / 14 methods / 12 consts; facade 12 registered, ...
+# Interface name -> expected [bind] summary line, e.g.
+#   [bind] Node: idl 13 attrs / 14 methods / 12 consts (parent -)
+# Counts are the generated tables' own (the IDL's members, ownership included),
+# so an IDL change or a generator regression shows up as a count change here.
 $expected = @(
-    @{ Name = 'Node';    Attrs = 17; Methods = 14; Constants = 12 },
-    @{ Name = 'Element'; Attrs = 15; Methods = 23; Constants = 0 }
+    @{ Name = 'Node';         Attrs = 13; Methods = 14; Constants = 12 },
+    @{ Name = 'Element';      Attrs = 18; Methods = 23; Constants = 0 },
+    @{ Name = 'HTMLElement';  Attrs = 13; Methods = 0;  Constants = 0 },
+    @{ Name = 'Document';     Attrs = 29; Methods = 29; Constants = 0 },
+    @{ Name = 'HTMLCollection'; Attrs = 1; Methods = 3; Constants = 0 },
+    @{ Name = 'NodeList';     Attrs = 1;  Methods = 1;  Constants = 0 }
 )
 
 if ($p2.ExitCode -ne 0) {
@@ -111,8 +117,7 @@ if ($p2.ExitCode -ne 0) {
 } else {
     $tableFailures = 0
     foreach ($want in $expected) {
-        $pattern = '\[bind\] ' + $want.Name + ': idl (\d+) attrs / (\d+) methods / (\d+) consts; ' +
-                   'facade (\d+) registered, (\d+) idl-only, (\d+) facade-only, (\d+) flag-mismatch'
+        $pattern = '\[bind\] ' + $want.Name + ': idl (\d+) attrs / (\d+) methods / (\d+) consts'
         $m = [regex]::Match($tableText, $pattern)
         if (-not $m.Success) {
             Write-Host ("FAIL  generated tables: no summary for {0} (is buildANT/Ant{0}.cpp compiled in?)" -f $want.Name)
@@ -122,20 +127,19 @@ if ($p2.ExitCode -ne 0) {
         if ([int]$m.Groups[1].Value -ne $want.Attrs -or
             [int]$m.Groups[2].Value -ne $want.Methods -or
             [int]$m.Groups[3].Value -ne $want.Constants) {
-            Write-Host ("FAIL  generated tables: {0} idl {1}/{2}/{3}, want {4}/{5}/{6} (IDL changed? re-generate)" -f
+            Write-Host ("FAIL  generated tables: {0} idl {1}/{2}/{3}, want {4}/{5}/{6} (IDL or ownership table changed? re-generate)" -f
                 $want.Name, $m.Groups[1].Value, $m.Groups[2].Value, $m.Groups[3].Value,
                 $want.Attrs, $want.Methods, $want.Constants)
             $tableFailures++
         }
-        if ([int]$m.Groups[7].Value -ne 0) {
-            Write-Host ("FAIL  generated tables: {0} has {1} writability mismatch(es) against the facade" -f
-                $want.Name, $m.Groups[7].Value)
-            $tableFailures++
-        }
+    }
+    if ($tableText -notmatch '\[bind\] generated tables: \d+ interfaces, \d+ attrs, \d+ methods, \d+ consts, 0 missing owner\(s\)') {
+        Write-Host "FAIL  generated tables: an interface table has no owning class (nothing would be installed)"
+        $tableFailures++
     }
     $failures += $tableFailures
     if ($tableFailures -eq 0) {
-        Write-Host ("PASS  generated tables ({0} interfaces, 0 writability mismatch)" -f $expected.Count)
+        Write-Host ("PASS  generated tables ({0} interfaces, 0 missing owners)" -f $expected.Count)
     }
 }
 

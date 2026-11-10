@@ -262,7 +262,36 @@
       ok('new NodeList throws', threw);
     })();
 
-    /* ---- B2-3: attribute accessors on the interface prototypes ------------ */
+    /* ---- A2 (A1 tables): ownership follows Chrome, not the 2008 IDL ---------
+     * The generated tables (buildANT/Ant<Interface>.cpp) move the members whose
+     * IDL owner Chrome disagrees with: Node.attributes -> Element,
+     * Element.style/offset* -> HTMLElement, HTMLElement.id/className/
+     * innerHTML/outerHTML/children -> Element. Values probed with
+     * tools/chrome_probe.py on 2026-11-10; a generator change that drops the
+     * override fails right here. */
+    function ownDesc(iface, name) {
+      var ctor = window[iface];
+      return ctor && ctor.prototype ? Object.getOwnPropertyDescriptor(ctor.prototype, name) : undefined;
+    }
+    ok('id owned by Element.prototype', !!(ownDesc('Element', 'id') || {}).get &&
+       ownDesc('HTMLElement', 'id') === undefined);
+    ok('innerHTML owned by Element.prototype', !!(ownDesc('Element', 'innerHTML') || {}).get &&
+       ownDesc('HTMLElement', 'innerHTML') === undefined);
+    ok('children owned by Element.prototype', !!(ownDesc('Element', 'children') || {}).get &&
+       ownDesc('HTMLElement', 'children') === undefined);
+    ok('attributes owned by Element.prototype', !!(ownDesc('Element', 'attributes') || {}).get &&
+       ownDesc('Node', 'attributes') === undefined);
+    ok('localName owned by Element.prototype', !!(ownDesc('Element', 'localName') || {}).get &&
+       ownDesc('Node', 'localName') === undefined);
+    ok('style owned by HTMLElement.prototype', !!(ownDesc('HTMLElement', 'style') || {}).get &&
+       ownDesc('Element', 'style') === undefined);
+    ok('offsetWidth owned by HTMLElement.prototype', !!(ownDesc('HTMLElement', 'offsetWidth') || {}).get &&
+       ownDesc('Element', 'offsetWidth') === undefined);
+    ok('clientWidth stays on Element.prototype', !!(ownDesc('Element', 'clientWidth') || {}).get);
+    ok('modern extras on Node.prototype', !!(ownDesc('Node', 'isConnected') || {}).get);
+    ok('modern extras on Element.prototype',
+       !!(ownDesc('Element', 'classList') || {}).get && !!(ownDesc('Element', 'dataset') || {}).get &&
+       !!(ownDesc('Element', 'firstElementChild') || {}).get);
     ok('id accessor on Element.prototype', (function () {
       var d = Object.getOwnPropertyDescriptor(Element.prototype, 'id');
       return !!d && typeof d.get === 'function' && typeof d.set === 'function' &&

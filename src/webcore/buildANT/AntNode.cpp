@@ -15,11 +15,7 @@ static const AntbAttributeDef kNodeDefAttributes[] = {
     { "lastChild", 0, "Node" },
     { "previousSibling", 0, "Node" },
     { "nextSibling", 0, "Node" },
-    { "attributes", 0, "NamedNodeMap" },
     { "ownerDocument", 0, "Document" },
-    { "namespaceURI", 0, "DOMString" },
-    { "prefix", ANTB_ATTR_WRITABLE, "DOMString" },
-    { "localName", 0, "DOMString" },
     { "baseURI", 0, "DOMString" },
     { "textContent", ANTB_ATTR_WRITABLE, "DOMString" },
     { "parentElement", 0, "Node" },
@@ -60,7 +56,7 @@ static const AntbConstantDef kNodeDefConstants[] = {
 const AntbInterfaceDef kNodeDef = {
     "Node",
     0,
-    kNodeDefAttributes, 17,
+    kNodeDefAttributes, 13,
     kNodeDefMethods, 14,
     kNodeDefConstants, 12
 };

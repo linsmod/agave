@@ -7,12 +7,6 @@ namespace Generated {
 
 static const AntbAttributeDef kElementDefAttributes[] = {
     { "tagName", 0, "DOMString" },
-    { "style", 0, "CSSStyleDeclaration" },
-    { "offsetLeft", 0, "long" },
-    { "offsetTop", 0, "long" },
-    { "offsetWidth", 0, "long" },
-    { "offsetHeight", 0, "long" },
-    { "offsetParent", 0, "Element" },
     { "clientLeft", 0, "long" },
     { "clientTop", 0, "long" },
     { "clientWidth", 0, "long" },
@@ -21,6 +15,24 @@ static const AntbAttributeDef kElementDefAttributes[] = {
     { "scrollTop", ANTB_ATTR_WRITABLE, "long" },
     { "scrollWidth", 0, "long" },
     { "scrollHeight", 0, "long" },
+    /* from Node (Chrome owner) */
+    { "attributes", 0, "NamedNodeMap" },
+    /* from Node (Chrome owner) */
+    { "namespaceURI", 0, "DOMString" },
+    /* from Node (Chrome owner) */
+    { "prefix", ANTB_ATTR_WRITABLE, "DOMString" },
+    /* from Node (Chrome owner) */
+    { "localName", 0, "DOMString" },
+    /* from HTMLElement (Chrome owner) */
+    { "id", ANTB_ATTR_WRITABLE, "DOMString" },
+    /* from HTMLElement (Chrome owner) */
+    { "className", ANTB_ATTR_WRITABLE, "DOMString" },
+    /* from HTMLElement (Chrome owner) */
+    { "innerHTML", ANTB_ATTR_WRITABLE, "DOMString" },
+    /* from HTMLElement (Chrome owner) */
+    { "outerHTML", ANTB_ATTR_WRITABLE, "DOMString" },
+    /* from HTMLElement (Chrome owner) */
+    { "children", 0, "HTMLCollection" },
 };
 
 static const AntbMethodDef kElementDefMethods[] = {
@@ -52,7 +64,7 @@ static const AntbMethodDef kElementDefMethods[] = {
 const AntbInterfaceDef kElementDef = {
     "Element",
     "EventTargetNode",
-    kElementDefAttributes, 15,
+    kElementDefAttributes, 18,
     kElementDefMethods, 23,
     0, 0
 };
