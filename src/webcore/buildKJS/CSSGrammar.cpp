@@ -184,7 +184,12 @@ int getPropertyID(const char* tagStr, int len)
             { "box-sizing", "-webkit-box-sizing" },
             { "-ms-overflow-style", "scrollbar-width" },
             { "transform", "-webkit-transform" },
-            { "transform-origin", "-webkit-transform-origin" }
+            { "transform-origin", "-webkit-transform-origin" },
+            /* Only the prefixed spelling is in the generated property table. A
+             * page writing `user-select: none` (the modern spelling, and what
+             * every site uses) lost the declaration, so text meant to be
+             * unselectable stayed selectable. */
+            { "user-select", "-webkit-user-select" }
         };
 
         for (size_t i = 0; i < sizeof(aliases) / sizeof(aliases[0]); ++i) {

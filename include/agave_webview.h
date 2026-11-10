@@ -197,6 +197,13 @@ typedef enum {
  * on_command_dropped. */
 AGW_API int agave_webview_eval(AgaveWebView* view, const char* script);
 
+/* Runs an editing command on the focused frame (thread safe, queued): the same
+ * names Editor::execCommand knows - "Copy", "Cut", "Paste", "SelectAll",
+ * "Delete", "Undo", "Redo", the Move* family. Used by the host's context menu;
+ * a command the current selection cannot use (e.g. Copy with nothing selected)
+ * does nothing. */
+AGW_API int agave_webview_editor_command(AgaveWebView* view, const char* command);
+
 /* Zoom: 100 is normal. */
 AGW_API void agave_webview_set_zoom(AgaveWebView* view, int percent);
 AGW_API int  agave_webview_zoom(AgaveWebView* view);
@@ -218,6 +225,19 @@ AGW_API int agave_webview_paint_to(AgaveWebView* view, void* hdc, int width, int
 
 /* Focus handling, mostly for hosts with several controls. */
 AGW_API void agave_webview_set_focus(AgaveWebView* view);
+
+/* Modifier bits for input simulation (see
+ * agave_webview_set_probe_modifiers). Values match PlatformKeyboardEvent. */
+#define AGW_MOD_ALT   0x1
+#define AGW_MOD_CTRL  0x2
+#define AGW_MOD_SHIFT 0x4
+
+/* Test/probe hook: reports these modifiers as held for every mouse and key
+ * event the control turns into an engine event, on top of the real keyboard
+ * state. A headless run has no keyboard to press, and posting a WM_KEYDOWN
+ * cannot change GetKeyState(), so this is how Ctrl+A/C or Shift+click are
+ * exercised without touching the user's keyboard. Pass 0 to clear. */
+AGW_API void agave_webview_set_probe_modifiers(unsigned modifiers);
 
 /* Host -> page: calls window.onAgaveMessage(text) in the page (if defined). */
 AGW_API void agave_webview_post_message(AgaveWebView* view, const char* message);

@@ -53,6 +53,7 @@ agave 是**从零移植的浏览器**：**WebKit 2008 的 WebCore**（HTML/CSS �
 | 页面生命周期钩子（willClose/commit/DCL/load） | `src/webview/FrameLoaderClientMC.cpp` | 时序问题的第一现场；`[evt]` 钩子也在这里 |
 | 默认日志收口（`[evt]`/`[nav]`/`[ui]`/`[shell]`/`[probe]`/`[flag]`） | `src/webview/AgbLog.h` + 各调用点 | 只加日志，不动热路径；回归 `tools/run_nav_tests.ps1` |
 | 快捷键 / 标签页 / 地址栏 / 探针 | `examples/browser_shell/main.c` | `normalizeUrl()` 是 URL 唯一入口 |
+| 文本选区 / 双击选词 / Ctrl+A/C/V | `EventHandler::handleMousePressEvent` / `handleMouseDraggedEvent` / `handleDefaultEditingShortcut()`（`src/webcore/page/EventHandler.cpp`）；JS 侧 `window.getSelection`/`Range`/`execCommand` 在 `AntRuntime.cpp` 的 Selection/Range 段 | 词边界在 `src/webcore/platform/unicode/TextBoundariesUnicode.cpp`；回归 `tools/run_selection_tests.ps1`（R175） |
 | 控件窗口 / 剪贴板 / IME / 帧泵定时器 | `src/webview_control/AgaveWebView.c` | 跨线程规则见 [dev-debugging.md](dev-debugging.md) |
 | JS 语义 / VM / 编译 / ESM / worker / wasm | `H:\ant-v16\src\{silver,esm,modules}` | 见 [ref-ant-engine.md](ref-ant-engine.md) |
 

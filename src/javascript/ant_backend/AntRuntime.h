@@ -142,6 +142,12 @@ void dispatchFrameDocumentEvent(void* document, const char* type);
  * listener table and are only reached from here. */
 void dispatchResizeEvent(void* document);
 
+/* Fires a document-level event (selectionchange) at the listeners the page
+ * registered on the document. Document is not an EventTargetNode in this tree,
+ * so doc.addEventListener handlers live in this runtime's table. Called from
+ * Frame::respondToChangedSelection. */
+void dispatchDocumentEvent(void* document, const char* type);
+
 /* The document is about to be replaced: fires the outgoing page's teardown
  * events (pagehide, visibilitychange to hidden, unload) at its own listeners
  * and stops its realm. Call it while the old document is still the current

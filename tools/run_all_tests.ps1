@@ -23,6 +23,9 @@
 #                             measures command latency, so it wants the machine
 #   run_image_tests           asserts paint/rAF time limits (90/70 ms); parallel
 #                             load makes those numbers meaningless
+#   run_selection_tests       writes the system clipboard (copy cases); the
+#                             process-backend suite copies too, so they must not
+#                             overlap
 #   run_media_real_tests      ffmpeg decode + audio device, single-instance
 #
 # Every suite prints its own PASS/FAIL line; this script's exit code is the
@@ -39,8 +42,8 @@
 #   pwsh -File tools/run_all_tests.ps1 -Skip run_layout_tests,run_media_tests
 #   pwsh -File tools/run_all_tests.ps1 -IncludeNetwork -IncludeReal
 #
-# Expected duration: docs/dev-tests.md §1 (18 suites ≈ 4 minutes with the default
-# parallelism; ≈6 minutes with -Sequential, on a 16-core machine).
+# Expected duration: docs/dev-tests.md §1 (19 suites ≈ 4.2 minutes with the default
+# parallelism; ≈6.5 minutes with -Sequential, on a 16-core machine).
 
 param(
     [string]$Only = '',
@@ -78,6 +81,7 @@ $suites = @(
     'run_worker_tests',
     'run_image_tests',
     'run_layout_tests',
+    'run_selection_tests',
     'run_media_tests'
 )
 
@@ -89,7 +93,8 @@ if ($IncludeReal)    { $suites += 'run_media_real_tests' }
 $serialOrder = @(
     'run_hang_recovery_tests',
     'run_process_backend_tests',
-    'run_image_tests'
+    'run_image_tests',
+    'run_selection_tests'
 )
 if ($IncludeReal) { $serialOrder += 'run_media_real_tests' }
 

@@ -174,9 +174,6 @@ Vector<String> supportedKeySizes() { notImplemented(); return Vector<String>(); 
 Color focusRingColor() { notImplemented(); return 0xFF0000FF; }
 void setFocusRingColorChangeFunction(void (*)()) { notImplemented(); }
 
-int findNextWordFromIndex(UChar const*, int, int, bool) { notImplemented(); return 0; }
-void findWordBoundary(UChar const* str, int len, int position, int* start, int* end) { notImplemented(); *start = position; *end = position; }
-
 void CachedPage::close() { notImplemented(); }
 float userIdleTime() { notImplemented(); return 0.0; }
 bool DocumentLoader::getResponseModifiedHeader(WebCore::String&) const {notImplemented(); return false; }

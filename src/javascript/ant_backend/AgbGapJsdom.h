@@ -15,11 +15,11 @@
  * AGB_GAP_LOG=0 silences the channel (it is on by default, like [cache]).
  *
  * Not every gap can be reported this way. The ones that live on the global
- * object itself (window.getSelection, IntersectionObserver, ResizeObserver,
- * PerformanceObserver, customElements, devicePixelRatio, history.length) are
+ * object itself (IntersectionObserver, ResizeObserver, PerformanceObserver,
+ * customElements, devicePixelRatio, history.length) are
  * read through ant's identifier lookup, which does not run an exotic getter on
  * the global object (see R31); reporting them would mean defining real
- * properties, and a page that feature-detects `typeof window.getSelection`
+ * properties, and a page that feature-detects `typeof window.IntersectionObserver`
  * would then take the wrong branch. They stay in docs/arch-capability-gaps.md.
  *
  * Adding an entry: append to agbJsdomGaps[], and call agbJsdomGapReport() from
@@ -70,9 +70,7 @@ static const AgbJsdomGap agbJsdomGaps[] = {
     /* --- frame ------------------------------------------------------------ */
 
     /* --- document --------------------------------------------------------- */
-    { "createRange",          "doc", "undefined; no Range API" },
     { "createTreeWalker",     "doc", "undefined; recursive querySelectorAll works" },
-    { "execCommand",          "doc", "undefined; no editing commands" },
 
     /* --- history ---------------------------------------------------------- *
      * history.state/length are real now (R36): the state objects live in the

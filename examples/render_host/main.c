@@ -526,14 +526,20 @@ static int executeCommand(const AgwIpcCommand* cmd)
         macross_view_set_visible(g_view, g_visible);
         return 1;
     case AGW_VIEW_CMD_FOCUS:
-        macross_view_set_focus(g_view);
+        if (cmd->a)
+            macross_view_set_focus(g_view);
+        else
+            macross_view_kill_focus(g_view);
         return 1;
     case AGW_VIEW_CMD_MOUSE: {
         MC_MOUSE_EVENT event;
 
         memset(&event, 0, sizeof(event));
         event.type = (MC_MOUSE_EVENT_TYPE)cmd->a;
-        event.button = (MC_MOUSE_BUTTON)cmd->b;
+        /* Low byte = button, high byte = keyboard modifiers (packed by the
+         * control; see AgaveWebView.c AGW_CMD_MOUSE). */
+        event.button = (MC_MOUSE_BUTTON)(cmd->b & 0xff);
+        event.modifier = (unsigned int)((cmd->b >> 8) & 7);
         event.point.x = cmd->c;
         event.point.y = cmd->d;
         macross_mouse_event(g_view, &event);
@@ -576,6 +582,10 @@ static int executeCommand(const AgwIpcCommand* cmd)
     case AGW_VIEW_CMD_SEARCH:
         if (text[0])
             macross_view_search_text(g_view, text, cmd->a ? 1 : 0, cmd->b ? 1 : 0, 1);
+        return 1;
+    case AGW_VIEW_CMD_EDITOR:
+        if (text[0])
+            macross_view_exec_editor_command(g_view, text);
         return 1;
     case AGW_VIEW_CMD_ZOOM:
         macross_view_set_scale_factor(g_view, cmd->a > 0 ? cmd->a : 100);

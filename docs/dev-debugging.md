@@ -264,6 +264,7 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
 | 日志 | `AGB_NAV_LOG=0` | **关掉默认开启的导航动作日志**（`[nav]`：open/request/submit/redirect/popup/download） |
 | 日志 | `AGB_UI_LOG=0` | **关掉默认开启的用户输入日志**（`[ui]`，仅 GUI 模式） |
 | 日志 | `AGB_UI_DEBUG=1` | 连 `mouse move` 也打（默认只打 down/up/wheel/key/char/focus/resize） |
+| 选区 | `AGB_SEL_DEBUG=1` | 打选区链路：`[sel] press ... clicks=/maySelect=/target=`、`[sel] drag rejected`、`[sel] extent ... type=range/caret len=`（拖拽扩展选区）、`[sel] canStart ... userSelect=`（`user-select:none` 判定）、`[selctl] set sel ...`（每次 `SelectionController::setSelection`）、`[paste] plainText size=/canPaste edit= textLen=`（剪贴板读与粘贴判定）。`tools/run_selection_tests.ps1` 有失败用例时先开它 |
 | 探针宿主 | `AGB_WAIT_MS` / `AGB_MAX_FRAMES` / `AGB_IDLE_FRAMES` / `AGB_FRAME_LOG` | `agave_view_host` 的等待与帧循环（出图用） |
 | JS 错误 | `AGB_ERR_SNIPPET=1` | 引擎抛内部错误时打 `[snippet]` 源码片段（ant 侧） |
 | JS 调用 | `AGB_JS_DEBUG=1` / `AGB_JS_TRACE=1` / `AGB_CALL_DEBUG=1` | JS 求值 / 每次 JS→C 调用（`[call] name nargs`）/ 桥调用细节 |
@@ -590,7 +591,7 @@ ant 自身 CLI / 基础设施的开关（`ANT_MANIFEST_URL`、`ANT_SANDBOX_*`、
   ```
   `name=<接收者>.<属性>`（元素给 `tag#id`），`area` 分组，`effect` 是页面实际得到的值 + 替代写法。
   名单在 `src/javascript/ant_backend/AgbGapJsdom.h`（= `docs/arch-capability-gaps.md` §1 的机器可读版），
-  `AGB_GAP_LOG=0` 关掉。全局对象上的缺口（`window.getSelection`、`IntersectionObserver` 等）打不出来，
+  `AGB_GAP_LOG=0` 关掉。全局对象上的缺口（`IntersectionObserver`、`ResizeObserver` 等）打不出来，
   原因见该头文件注释（ant 的标识符查找不走全局对象的 exotic getter）。
 - **iframe 里到底是什么样**：`__agbActivateSlot(i)` 切换共享 window 绑定的 frame 文档
   （返回上一个槽位），读 `document.*` 之后切回去；`__agbFrameSlot()` 返回当前槽位。

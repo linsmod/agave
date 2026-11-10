@@ -1,5 +1,7 @@
 
 #include "config.h"
+#include <stdio.h>
+#include <stdlib.h>
 #include "Pasteboard.h"
 #include "DocumentFragment.h"
 #include "Editor.h"
@@ -68,23 +70,31 @@ PassRefPtr<DocumentFragment> Pasteboard::documentFragment(Frame* frame, PassRefP
 
     if (size && cb_clipboard_get_data) {
         char *buffer = new char[size+1];
-        memset(buffer, 0, sizeof(size+1));
+        memset(buffer, 0, size+1);
         size_t get_size = cb_clipboard_get_data(buffer, size);
-        String html = String::fromUTF8(buffer, get_size);
-        if (! html.isEmpty()) {
-            RefPtr<DocumentFragment> fragment = createFragmentFromMarkup(frame->document(), html, "");
-            if (fragment)
-                return fragment.release();
+
+        if (get_size) {
+            String html = String::fromUTF8(buffer, get_size);
+
+            if (! html.isEmpty()) {
+                RefPtr<DocumentFragment> fragment = createFragmentFromMarkup(frame->document(), html, "");
+                if (fragment) {
+                    delete [] buffer;
+                    return fragment.release();
+                }
+            }
+
+            if (allowPlainText) {
+                chosePlainText = true;
+                RefPtr<DocumentFragment> fragment = createFragmentFromText(context.get(), html);
+                if (fragment) {
+                    delete [] buffer;
+                    return fragment.release();
+                }
+            }
         }
-        
-        if (!allowPlainText)
-            return 0;
-        
-        chosePlainText = true;
-        RefPtr<DocumentFragment> fragment = createFragmentFromText(context.get(), html);
-        if (fragment)
-            return fragment.release();
-        delete[] buffer;
+
+        delete [] buffer;
     }
     return 0;
 }
@@ -94,6 +104,16 @@ String Pasteboard::plainText(Frame*)
     size_t size = 0;
 	if (cb_clipboard_data_len)
 		size = cb_clipboard_data_len();
+
+    {
+        static int selDebug = -1;
+
+        if (selDebug < 0)
+            selDebug = getenv("AGB_SEL_DEBUG") ? 1 : 0;
+
+        if (selDebug)
+            fprintf(stderr, "[paste] plainText size=%lu\n", (unsigned long)size);
+    }
 
     if (size && cb_clipboard_get_data) {
         char *buffer = new char[size+1];

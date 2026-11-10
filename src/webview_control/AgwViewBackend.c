@@ -65,14 +65,20 @@ static int localSubmit(void* view, const AgwViewCommand* cmd)
         macross_view_set_visible(mcv, cmd->a ? 1 : 0);
         return 1;
     case AGW_VIEW_CMD_FOCUS:
-        macross_view_set_focus(mcv);
+        if (cmd->a)
+            macross_view_set_focus(mcv);
+        else
+            macross_view_kill_focus(mcv);
         return 1;
     case AGW_VIEW_CMD_MOUSE: {
         MC_MOUSE_EVENT event;
 
         memset(&event, 0, sizeof(event));
         event.type = (MC_MOUSE_EVENT_TYPE)cmd->a;
-        event.button = (MC_MOUSE_BUTTON)cmd->b;
+        /* Low byte = button, high byte = keyboard modifiers (the control packs
+         * them there; see the AGW_CMD_MOUSE post in AgaveWebView.c). */
+        event.button = (MC_MOUSE_BUTTON)(cmd->b & 0xff);
+        event.modifier = (unsigned int)((cmd->b >> 8) & 7);
         event.point.x = cmd->c;
         event.point.y = cmd->d;
         macross_mouse_event(mcv, &event);
@@ -120,6 +126,12 @@ static int localSubmit(void* view, const AgwViewCommand* cmd)
         /* FALSE = nothing ran (no live document yet / document torn down). The
          * control turns that into an explicit "command dropped" report. */
         return (text && macross_view_eval_script(mcv, text)) ? 1 : 0;
+    case AGW_VIEW_CMD_EDITOR:
+        /* Context menu / host shortcuts. A command the current selection does
+         * not support is a no-op, not a dropped command. */
+        if (text && text[0])
+            macross_view_exec_editor_command(mcv, text);
+        return 1;
     case AGW_VIEW_CMD_ZOOM:
         macross_view_set_scale_factor(mcv, cmd->a > 0 ? cmd->a : 100);
         return 1;

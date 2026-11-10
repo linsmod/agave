@@ -192,6 +192,18 @@ bool Editor::canCopy() const
 bool Editor::canPaste() const
 {
     String text = Pasteboard::generalPasteboard()->plainText();
+
+    {
+        static int selDebug = -1;
+
+        if (selDebug < 0)
+            selDebug = getenv("AGB_SEL_DEBUG") ? 1 : 0;
+
+        if (selDebug)
+            fprintf(stderr, "[paste] canPaste edit=%d textLen=%d\n",
+                    canEdit() ? 1 : 0, (int)text.length());
+    }
+
     return canEdit() && (!text.isEmpty());
 }
 
@@ -1340,9 +1352,36 @@ static CommandMap* createCommandMap()
 
     const unsigned numCommands = sizeof(commands) / sizeof(commands[0]);
     for (unsigned i = 0; i < numCommands; i++)
-        commandMap->set(AtomicString(commands[i].name).impl(), &commands[i].command);
+        commandMap->set(AtomicString(String(commands[i].name).lower()).impl(), &commands[i].command);
 
     return commandMap;
+}
+
+/* The one command table: execCommand(), queryCommandSupported() and
+ * queryCommandEnabled() all answer from it.
+ *
+ * Keys and lookups are lowercased: document.execCommand('copy') (Chrome's
+ * spelling, and the one every site uses) has to find the "Copy" entry - a
+ * case-sensitive table made execCommand('copy') return false and
+ * queryCommandSupported('copy') report the command as unsupported. */
+static CommandMap* commandMap()
+{
+    static CommandMap* map = 0;
+
+    if (!map)
+        map = createCommandMap();
+    return map;
+}
+
+static const Command* commandFor(const AtomicString& command)
+{
+    String lowered;
+
+    if (command.isEmpty())
+        return 0;
+
+    lowered = static_cast<const String&>(command).lower();
+    return commandMap()->get(AtomicString(lowered).impl());
 }
 
 // =============================================================================
@@ -1373,11 +1412,7 @@ bool Editor::execCommand(const AtomicString& command, Event* triggeringEvent)
     if (!m_frame->document())
         return false;
 
-    static CommandMap* commandMap;
-    if (!commandMap)
-        commandMap = createCommandMap();
-    
-    const Command* c = commandMap->get(command.impl());
+    const Command* c = commandFor(command);
     if (!c)
         return false;
     
@@ -1389,6 +1424,28 @@ bool Editor::execCommand(const AtomicString& command, Event* triggeringEvent)
     }
     
     return handled;
+}
+
+/* document.queryCommandSupported / queryCommandEnabled. The command map is the
+ * single source of truth, so the JS API can never claim support for a command
+ * execCommand() would refuse. */
+bool Editor::commandIsSupported(const AtomicString& command) const
+{
+    if (!m_frame->document())
+        return false;
+
+    return commandFor(command) != 0;
+}
+
+bool Editor::commandIsEnabled(const AtomicString& command) const
+{
+    const Command* c;
+
+    if (!m_frame->document())
+        return false;
+
+    c = commandFor(command);
+    return c && c->enabled(m_frame, 0);
 }
 
 bool Editor::insertText(const String& text, Event* triggeringEvent)

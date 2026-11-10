@@ -1,6 +1,6 @@
 # agave 现状：能力、已知限制与验证入口
 
-> 状态：**当前态，最后核对 2026-11-07**。本文只回答"现在能做什么、哪些是已知限制"。
+> 状态：**当前态，最后核对 2026-11-10**。本文只回答"现在能做什么、哪些是已知限制"。
 > 架构与所有权见 [arch-overview.md](arch-overview.md)；待办与验收标准见 [plan-roadmap.md](plan-roadmap.md)；
 > 历史根因与设计取舍见 [hist-lessons.md](hist-lessons.md)；API 级缺口见
 > [arch-capability-gaps.md](arch-capability-gaps.md)；函数级锚点见 [ref-code-index.md](ref-code-index.md)。
@@ -17,6 +17,7 @@
 | Worker / wasm | 真 Worker（独立线程 + isolate）、wasm 解释执行（导入/内存/表/全局/SIMD） | R19/R22 |
 | 下载 | 进程级 `DownloadManager`、`.part` 后 rename、三层状态 API、`agave://downloads` 面板 | [arch-downloads.md](arch-downloads.md) |
 | 宿主 / UI | 标签页、地址栏、查找、书签、popup、下载面板、无头探针与无头截图、Unicode/IME、灰度文字抗锯齿（R167，`AGB_FONT_AA=0` 回退 1-bit mono）、默认字体 Noto Sans SC（R168，`fonts/` 随构建拷贝并进程内注册） | `examples/browser_shell`、[dev-debugging.md](dev-debugging.md) |
+| 文本选区与剪贴板 | 鼠标拖选（含拖出窗口）、双击选词、三击选段、Shift+点击/Shift+方向键扩展；Ctrl+A/C/X/V、Ctrl+Insert、Shift+Insert；`window.getSelection()` / `document.getSelection()` / `document.createRange()` / `Range` 一族 / `document.execCommand` / `queryCommandSupported/Enabled`；document 的 `selectionchange`；`user-select`（无前缀与 `-webkit-`，嵌套 `text` 覆盖 `none`）；右键菜单 Copy / Select all；选区配色与 Chrome 一致（active `#3367D1` + 白字，失焦灰） | R175；`tools/run_selection_tests.ps1`（31 例，local + process） |
 
 **已经被检查过、别再当缺陷重开**：ant 的 Worker 是真的（R22）、wasm 是真的（R19）、
 渐变/`var()`/flex 大多可用（R11/R39）、滚动与 hover 重绘正确（R13/R14/R40）、
@@ -78,6 +79,11 @@ ant 的反直觉行为（字面量属性名、`typeof`、`delete` 等）见 [ref
   `html{font-size:…}` 时没有影响；没写的站点，`rem`/`medium` 相关的尺寸整体比 Chrome 小约 12.5%
   （R165 顺带发现）。`@media` 前导里的 `rem` 不跟这个值走：它按 CSS 初始 16px 折叠（R166，与 Chrome 的
   断点一致）。改默认值会动到所有字体度量与既有 layout 回归，单独排期。
+- **选区的已知差异**（与 Chrome 比，R175）：
+  拖拽**跨过** `user-select:none` 的文字时选区仍把那段包进来（Chrome 会跳过；起选在 `none` 上则正确拒绝）；
+  中文双击按 UAX#29 单字成段（Chrome 用 ICU 词典选 2~3 字词）；`Selection` 只有单 range（2008 不支持不连续选区）；
+  `Range.getBoundingClientRect()` 的行盒 top/height 与 Chrome 一致，宽度随字体度量差几个百分点；
+  窗口失焦（`WM_KILLFOCUS`）会让选区转灰，但**tab 切换**走的不是这条路径（未见 inactive 配色）。
 - **下载面板仍是普通 realm**（没有独立生命周期），面板每次打开重新读快照；后续见 [plan-roadmap.md](plan-roadmap.md)。
 
 ## 3. 怎么验证
@@ -89,3 +95,4 @@ agave_shell.exe --probe <url> --eval "probeExit(...)" --wait 3000 --settle 1000 
 退出码是权威判据（`0` OK / `1` usage / `2..4` 超时或无 exit / `5` 加载错误 / `6` 空文档）。
 stderr 默认有 `[evt]`/`[nav]`/`[ui]` 生命周期与导航日志，开关和环境变量全表见
 [dev-debugging.md](dev-debugging.md)。回归脚本、`[gap-jsdom]`、A/B 对比法也在那一篇。
+

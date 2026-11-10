@@ -41,6 +41,11 @@ public:
     virtual Color platformInactiveSelectionBackgroundColor() const;
     virtual Color platformActiveSelectionForegroundColor() const;
     virtual Color platformInactiveSelectionForegroundColor() const;
+    /* The <select> drop-down's row highlight. It used to share the page
+     * selection colour; the page selection now follows Chrome, the menu keeps
+     * its own (see the definition). */
+    virtual Color activeListBoxSelectionBackgroundColor() const;
+    virtual Color activeListBoxSelectionForegroundColor() const;
 
     // System fonts.
     virtual void systemFont(int propId, FontDescription&) const;

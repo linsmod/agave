@@ -738,6 +738,25 @@ MACROSS_API MC_BOOL macross_view_set_text_multiplier(MaCrossView* view, int fact
 MACROSS_API MC_BOOL macross_view_eval_script(MaCrossView* view, const char* urf8_script);
 
 /**
+ * \fn MC_BOOL macross_view_exec_editor_command(MaCrossView* view, const char* utf8_command)
+ * \brief Runs an editing command on the view's focused frame.
+ *
+ * The commands are the ones the editing machinery already implements
+ * (Editor::execCommand): "Copy", "Cut", "Paste", "SelectAll", "Delete",
+ * "Undo", "Redo", the caret-movement family (MoveLeft, MoveWordBackward,
+ * MoveRightAndModifySelection, ...). A command that does not apply to the
+ * current selection (Copy with nothing selected, Paste outside an editable
+ * field) is a no-op, not an error.
+ *
+ * \param view  		Pointer to an existing webview object.
+ * \param utf8_command	Command name, ASCII, e.g. "Copy".
+ *
+ * \return TRUE when the command was recognised and ran, FALSE when it was
+ *         unknown or the view has no live document/frame.
+ */
+MACROSS_API MC_BOOL macross_view_exec_editor_command(MaCrossView* view, const char* utf8_command);
+
+/**
  * \fn unsigned macross_view_document_epoch(MaCrossView* view)
  * \brief Counts the documents this view has committed (main frame).
  *

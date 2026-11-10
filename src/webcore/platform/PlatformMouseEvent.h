@@ -72,6 +72,9 @@ namespace WebCore {
         MouseButton button() const { return m_button; }
         MouseEventType eventType() const { return m_eventType; }
         int clickCount() const { return m_clickCount; }
+        /* Set by the platform layer when it can tell double/triple clicks
+         * apart (the Win32 host derives it from time + distance). */
+        void setClickCount(int count) { m_clickCount = count; }
         bool shiftKey() const { return m_shiftKey; }
         bool ctrlKey() const { return m_ctrlKey; }
         bool altKey() const { return m_altKey; }

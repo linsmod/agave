@@ -19,6 +19,29 @@
       return String(e);
     } catch (_) { return 'unknown error'; }
   };
+  /* An uncaught exception must never close the browser. ant exits the process
+   * for an error thrown from a setImmediate()/queueMicrotask() callback unless
+   * the host marked uncaught errors non-fatal; that flag is logged as set and
+   * still not honoured on those paths, so one broken async callback in a page
+   * took the whole process down (deepseek's React scheduler threw from a
+   * setImmediate and the probe exited with code 1). A process-level
+   * uncaughtException listener is ant's other supported route: it reports the
+   * error and keeps going. The page sees the same console.error line it would
+   * in Chrome (an uncaught error, not a crash). */
+  (function () {
+    var proc = g.process;
+    if (!proc || typeof proc.on !== 'function' || typeof proc.emit !== 'function')
+      return;
+    try {
+      proc.on('uncaughtException', function (err, origin) {
+        try {
+          var msg = (typeof g.__agbDescribe === 'function' ? g.__agbDescribe(err) : String(err));
+          if (g.console && g.console.error)
+            g.console.error('uncaught' + (origin ? ' (' + origin + ')' : '') + ': ' + msg);
+        } catch (_) {}
+      });
+    } catch (_) {}
+  }());
   /* TimeRanges for media.buffered / played / seekable. The engine hands over
    * one range [0, end]; players call `ranges.end(ranges.length - 1)` (and some
    * `range.end(0)` behind a length check), so both methods have to exist or

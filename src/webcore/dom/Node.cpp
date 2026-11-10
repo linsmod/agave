@@ -1125,6 +1125,19 @@ bool Node::canStartSelection() const
 {
     if (isContentEditable())
         return true;
+
+    /* user-select: none means the text cannot be selected at all, not merely
+     * "does not paint the highlight". Without this check a drag over such text
+     * still built an (invisible) selection and Ctrl+C copied it.
+     *
+     * A node whose style says text/auto decides for itself and stops the walk:
+     * `user-select` is inherited, so a `user-select: text` span inside a
+     * `user-select: none` container is selectable (Chrome does the same). Only
+     * nodes with no renderer (display:none, still being built) defer to their
+     * parent. */
+    if (renderer())
+        return renderer()->style()->userSelect() != SELECT_NONE;
+
     return parent() ? parent()->canStartSelection() : true;
 }
 

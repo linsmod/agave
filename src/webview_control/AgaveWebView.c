@@ -101,7 +101,7 @@ enum {
     AGW_CMD_RELOAD, AGW_CMD_STOP, AGW_CMD_EVAL, AGW_CMD_ZOOM,
     AGW_CMD_RESIZE, AGW_CMD_UA, AGW_CMD_DL_DIR, AGW_CMD_MOUSE, AGW_CMD_KEY,
     AGW_CMD_CHAR, AGW_CMD_FOCUS, AGW_CMD_SEARCH, AGW_CMD_CONTEXT,
-    AGW_CMD_DL_CANCEL, AGW_CMD_VISIBLE
+    AGW_CMD_DL_CANCEL, AGW_CMD_VISIBLE, AGW_CMD_EDITOR
 };
 
 /* Commands that mean "the user wants the page to change": while one of them
@@ -170,6 +170,7 @@ static const char* agwCommandKindName(int type)
     case AGW_CMD_SEARCH:    return "search";
     case AGW_CMD_CONTEXT:   return "context-menu";
     case AGW_CMD_VISIBLE:   return "visible";
+    case AGW_CMD_EDITOR:    return "editor";
     default:                return "command";
     }
 }
@@ -1988,8 +1989,12 @@ static void agwDrainCommands(void)
             break;
 
         case AGW_CMD_KEY:
+            /* x = virtual key, y = modifier bits, a = key event type. This
+             * used to submit command.b (always 0) as the modifiers, so every
+             * key reached the engine with ctrlKey/shiftKey false - Ctrl+A/C
+             * and Shift+arrows could never work from the real keyboard. */
             agwSubmitSimple(item, AGW_VIEW_CMD_KEY,
-                            command.a, command.b, command.x, 0);
+                            command.a, command.y, command.x, 0);
             break;
 
         case AGW_CMD_CHAR:
@@ -1997,7 +2002,9 @@ static void agwDrainCommands(void)
             break;
 
         case AGW_CMD_FOCUS:
-            agwSubmitSimple(item, AGW_VIEW_CMD_FOCUS, 1, 0, 0, 0);
+            /* a = 1 when the control got focus, 0 when it lost it (the engine
+             * uses it for the frame's active state, i.e. selection colours). */
+            agwSubmitSimple(item, AGW_VIEW_CMD_FOCUS, command.x ? 1 : 0, 0, 0, 0);
             break;
 
         case AGW_CMD_SEARCH:
@@ -2009,6 +2016,13 @@ static void agwDrainCommands(void)
         case AGW_CMD_CONTEXT:
             agwSubmitSimple(item, AGW_VIEW_CMD_CONTEXT_MENU,
                             command.a, 0, command.x, command.y);
+            break;
+
+        case AGW_CMD_EDITOR:
+            /* Command name ("Copy", "SelectAll", ...) travels as the text
+             * payload; no scalars. */
+            if (payload[0])
+                agwSubmitText(item, AGW_VIEW_CMD_EDITOR, payload, 0, 0, 0, 0);
             break;
 
         default:
@@ -2577,10 +2591,18 @@ static int agwUiLogVerbose(void)
 
 /* Modifier bits the engine expects (see PlatformKeyboardEvent): alt=1,
  * ctrl=2, shift=4. Passing 0 for every key made event.shiftKey/ctrlKey false
- * in the page and broke Shift+arrow selection and Ctrl+shortcuts. */
+ * in the page and broke Shift+arrow selection and Ctrl+shortcuts.
+ *
+ * Probe/test hosts can inject the held modifiers through
+ * agave_webview_set_probe_modifiers(): the real key state is read from the
+ * keyboard for a normal GUI run, while a headless probe has no hardware state
+ * to read at all. The injected bits are ORed in, so a test that only simulates
+ * Ctrl does not have to care about the real Shift key. */
+static volatile LONG g_probeModifiers;   /* AGW_MOD_* bits, 0 in normal runs */
+
 static unsigned agwKeyboardModifiers(void)
 {
-    unsigned modifiers = 0;
+    unsigned modifiers = (unsigned)InterlockedCompareExchange(&g_probeModifiers, 0, 0) & 7u;
 
     if (GetKeyState(VK_MENU) & 0x8000)
         modifiers |= 1;
@@ -2786,11 +2808,17 @@ static LRESULT CALLBACK agwProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
     case WM_SETFOCUS:
         agbLog(AGB_LOG_UI, "focus");
         if (item)
-            agwPost(AGW_CMD_FOCUS, item, NULL, 0, 0, 0, 0);
+            agwPost(AGW_CMD_FOCUS, item, NULL, 1, 0, 0, 0);
         return 0;
 
     case WM_KILLFOCUS:
+        /* Tell the engine the view lost focus, not just the host: the frame's
+         * active state decides the selection colours (blue when active, grey
+         * when not, exactly like Chrome). It used to be a log line only, so a
+         * background window kept painting an active blue selection. */
         agbLog(AGB_LOG_UI, "blur");
+        if (item)
+            agwPost(AGW_CMD_FOCUS, item, NULL, 0, 0, 0, 0);
         return 0;
 
     case WM_MOUSEMOVE:
@@ -2819,9 +2847,31 @@ static LRESULT CALLBACK agwProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
             button = MOUSE_BTN_MIDDLE;
         else if (message == WM_RBUTTONDOWN || message == WM_RBUTTONUP)
             button = MOUSE_BTN_RIGHT;
+        else {
+            /* WM_MOUSEMOVE carries the held button in wParam, not in the
+             * message id. Reporting NONE for every move made the engine's
+             * handleMouseDraggedEvent() bail out ("button() != LeftButton"),
+             * so dragging never built a text selection - the page only ever
+             * saw a hover. */
+            if (wParam & MK_LBUTTON)
+                button = MOUSE_BTN_LEFT;
+            else if (wParam & MK_RBUTTON)
+                button = MOUSE_BTN_RIGHT;
+            else if (wParam & MK_MBUTTON)
+                button = MOUSE_BTN_MIDDLE;
+        }
 
-        if (message == WM_LBUTTONDOWN)
+        if (message == WM_LBUTTONDOWN) {
             SetFocus(hwnd);
+            /* Keep receiving moves while the button is held even when the
+             * pointer leaves the control (Chrome continues the selection over
+             * the window edge). Without capture the selection stops at the
+             * client area. */
+            SetCapture(hwnd);
+        } else if (type == EVT_MOUSE_UP) {
+            if (GetCapture() == hwnd)
+                ReleaseCapture();
+        }
 
         if (type != EVT_MOUSE_MOVE || agwUiLogVerbose())
             agbLog(AGB_LOG_UI, "mouse %s %s at %d,%d",
@@ -2829,7 +2879,12 @@ static LRESULT CALLBACK agwProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
                    type == EVT_MOUSE_UP ? "up" : "move",
                    agwButtonName(button), x, y);
 
-        agwPost(AGW_CMD_MOUSE, item, NULL, x, y, type, button);
+        /* The button field also carries the keyboard modifiers in its high
+         * byte: AGW_VIEW_CMD_MOUSE has no fifth scalar, and Shift+click /
+         * Ctrl+click need the modifiers to reach PlatformMouseEvent. The
+         * receiving side (AgwViewBackend.c / render_host) splits it again. */
+        agwPost(AGW_CMD_MOUSE, item, NULL, x, y, type,
+                button | ((int)agwKeyboardModifiers() << 8));
 
         /* The engine only builds a context menu through its own event entry. */
         if (message == WM_RBUTTONUP)
@@ -3190,9 +3245,15 @@ static unsigned int agwOnClipboardGetData(void* buffer, unsigned int len)
     if (handle) {
         text = (wchar_t*)GlobalLock(handle);
         if (text) {
-            int size = WideCharToMultiByte(CP_UTF8, 0, text, -1, (char*)buffer, (int)len, NULL, NULL);
+            /* Convert the text itself, not text+NUL: the caller's buffer is
+             * exactly `len` bytes (GetDataLen told it so), and asking
+             * WideCharToMultiByte for the NUL too made it fail with
+             * ERROR_INSUFFICIENT_BUFFER and return 0 - the clipboard read
+             * always came back empty, which is why paste did nothing. */
+            int chars = lstrlenW(text);
+            int size = WideCharToMultiByte(CP_UTF8, 0, text, chars, (char*)buffer, (int)len, NULL, NULL);
 
-            bytes = size > 0 ? (unsigned int)(size - 1) : 0;
+            bytes = size > 0 ? (unsigned int)size : 0;
             GlobalUnlock(handle);
         }
     }
@@ -3484,6 +3545,16 @@ int agave_webview_eval(AgaveWebView* item, const char* script)
     return agwPost(AGW_CMD_EVAL, item, script, 0, 0, 0, 0);
 }
 
+int agave_webview_editor_command(AgaveWebView* item, const char* command)
+{
+    if (!item || !command || !command[0])
+        return AGW_CMD_ERR_BAD_ARGS;
+
+    /* Same queued path as the keyboard shortcuts feed inside the engine; used
+     * by the host's context menu (Copy / Select All / Cut / Paste). */
+    return agwPost(AGW_CMD_EDITOR, item, command, 0, 0, 0, 0);
+}
+
 void agave_webview_set_zoom(AgaveWebView* item, int percent)
 {
     if (!item)
@@ -3538,6 +3609,13 @@ void agave_webview_set_focus(AgaveWebView* item)
 {
     if (item && item->hwnd)
         SetFocus(item->hwnd);
+}
+
+void agave_webview_set_probe_modifiers(unsigned modifiers)
+{
+    /* Process-wide: the state is read where the WndProc turns an input message
+     * into an engine command, which is not tied to one view. */
+    InterlockedExchange(&g_probeModifiers, (LONG)(modifiers & 7u));
 }
 
 /* Host -> page. The text is passed as a JS string literal; quotes, backslashes

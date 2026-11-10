@@ -110,6 +110,9 @@ public:
 	void setScaleFactor(int scale);
 	//javascript
 	bool executeScript(const char* script);
+	/* Runs an Editor::execCommand command ("Copy", "SelectAll", ...) on the
+	 * focused frame. The context menu and the host's shortcut path share it. */
+	bool execEditorCommand(const char* command);
 	// document epoch: bumped on every main-frame document commit (see Page)
 	unsigned documentEpoch(void) const;
 	//font antialias

@@ -17,8 +17,8 @@
 ### 全部跑一遍
 
 ```powershell
-pwsh -File tools/run_all_tests.ps1                          # 18 个离线套件，默认并发 4，退出码 0 = 全绿
-pwsh -File tools/run_all_tests.ps1 -Sequential              # 旧的一件一件跑（≈360 s）
+pwsh -File tools/run_all_tests.ps1                          # 19 个离线套件，默认并发 4，退出码 0 = 全绿
+pwsh -File tools/run_all_tests.ps1 -Sequential              # 旧的一件一件跑（≈390 s）
 pwsh -File tools/run_all_tests.ps1 -Parallel 8              # 并发度（1..16）
 pwsh -File tools/run_all_tests.ps1 -Only process            # 名字含 process 的
 pwsh -File tools/run_all_tests.ps1 -Skip run_layout_tests,run_media_tests
@@ -28,9 +28,10 @@ pwsh -File tools/run_all_tests.ps1 -KeepLogs                # 保留每个套件
 
 默认**并发执行**（`-Parallel 4`）：每个套件是独立的 `pwsh` 进程，`AGB_USERDATA` 指向
 `%TEMP%\agb-suites-<id>\profile-<suite>`，互不共享 cookie/cache；结果逐套件打印 `PASS/FAIL + 墙钟`。
-三个套件有硬冲突或怕负载，放在并发阶段之后**逐个串行**：`run_hang_recovery_tests`（断言没有
+四个套件有硬冲突或怕负载，放在并发阶段之后**逐个串行**：`run_hang_recovery_tests`（断言没有
 `agb_crash.txt`/`agb_watchdog.txt` 出现）、`run_process_backend_tests`（故意崩 renderer 做崩溃报告、
-还量命令延迟）、`run_image_tests`（paint/rAF 时间上限）；`-IncludeReal` 时 `run_media_real_tests`
+还量命令延迟）、`run_image_tests`（paint/rAF 时间上限）、`run_selection_tests`（**系统剪贴板**：
+和 process 套件的复制用例不能同时跑）；`-IncludeReal` 时 `run_media_real_tests`
 （ffmpeg/音频设备）也进这一队。失败时默认保留该套件的日志（路径会打印），`-KeepLogs` 连成功的也留。
 
 默认排除"要外部条件"的三个：`run_site_smoke`（真站点，网络）、`run_media_real_tests`（ffmpeg +
@@ -50,7 +51,8 @@ pwsh -File tools/run_all_tests.ps1 -KeepLogs                # 保留每个套件
 | `run_inspector_tests` | 9 s | `run_tab_lifecycle_tests` | 7 s |
 | `run_worker_tests` | 6 s | `run_media_tests` | 6 s |
 | `run_sticky_tests` | 4 s | `run_encoding_tests` | 9 s |
-| **合计 18 套件（串行）** | **~360 s** | **默认并发整批** | **~245 s** |
+| `run_selection_tests` | 28 s | | |
+| **合计 19 套件（串行）** | **~390 s** | **默认并发整批** | **~250 s** |
 
 规则（软基线，靠人/Agent 判断，不做程序化对比）：上表是**串行**墙钟；并发跑时每个套件会被别的
 套件拖慢（`run_layout_tests` 55 s、`run_typing_tests` 17 s 是并行下的常见值），要拿它和基线比就加
@@ -76,6 +78,7 @@ pwsh -File tools/run_all_tests.ps1 -KeepLogs                # 保留每个套件
 | `run_encoding_tests.ps1` | 文档编码优先级（R164）：BOM > HTTP `Content-Type` charset > `<meta charset>`/`@charset` > 默认；`document.characterSet` 报真实规范名 | 自起 `tools/encoding_server.py`（8993，`-Port` 可换） | `ALL ENCODING CHECKS PASSED (5 cases)`，约 9 s |
 | `run_worker_tests.ps1` | Worker 九项：http worker、`importScripts`、blob、terminate、subclass、error 事件、structured clone | 自起服务（8971，可 `-Port`/`-KeepServer`） | `ALL WORKER CHECKS PASSED`；setup 失败 exit 2 |
 | `run_typing_tests.ps1` | 键盘/IME：走真实 `WM_KEYDOWN/WM_CHAR/WM_KEYUP` 与 `WM_IME_CHAR`（`--keys`/`--ime`）；末尾两条量**光标几何**（`AGB_CARET_DEBUG=1` 红色光标 + `tools/caret_check.py`，输入框光标=文字高度而不是盒子高度） | 无 | `ALL TYPING CHECKS PASSED (n cases)` |
+| `run_selection_tests.ps1` | 文本选区与快捷键（R175）：真实拖选/反向拖选/跨段落、双击选词 + `dblclick`、三击选段、`--shift-click`、`user-select:none`/嵌套 `text`、Ctrl+A/C/V/X、Shift+方向键、Ctrl+Shift+方向键、`--editor` Copy/SelectAll、`window.getSelection`/`Range`/`execCommand` 与 Chrome 对拍字段、选区高亮像素；`-Process` 再加 6 个 process 后端用例 | 无（**会覆盖系统剪贴板**） | `ALL SELECTION CHECKS PASSED (n cases)`；local 约 28 s，`-Process` 再加约 15 s |
 | `run_jit_loop_tests.ps1` | 长 JIT 循环 + "引擎线程仍在跑 EVAL 时销毁视图"（R61 的 0xC0000005） | 无 | `ALL JIT LOOP CHECKS PASSED` |
 | `run_hang_recovery_tests.ps1` | 卡死页恢复：`--interrupt-after` 中断、排队导航中断卡死脚本、空闲页不误中断、慢页连续 reload 不被杀 | 自起服务（8982/8984） | `ALL HANG RECOVERY CHECKS PASSED` |
 | `run_script_mode_tests.ps1` | classic script 语义（顶层 `var`/`function` 进 `window`，R66）+ 热点循环性能 + `document.readyState`/`currentScript` | 无（Chrome 数值为注释里的基准） | `ALL SCRIPT MODE CHECKS PASSED` |

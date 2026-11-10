@@ -58,6 +58,12 @@
 #include "Settings.h"
 #include "TextEvent.h"
 
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "CString.h"
+
 #if ENABLE(SVG)
 #include "SVGCursorElement.h"
 #include "SVGDocument.h"
@@ -69,6 +75,42 @@ namespace WebCore {
 
 using namespace EventNames;
 using namespace HTMLNames;
+
+/* AGB_SEL_DEBUG=1 traces the mouse path that builds a text selection: what the
+ * press saw (button, click count, whether a selection may start), whether each
+ * move reached the drag handler, and what the extent resolved to. Silent
+ * unless the variable is set (docs/dev-debugging.md). */
+static bool selDebugEnabled()
+{
+    static int enabled = -1;
+
+    if (enabled < 0)
+        enabled = getenv("AGB_SEL_DEBUG") ? 1 : 0;
+    return enabled != 0;
+}
+
+static const char* selDebugNodeName(Node* node)
+{
+    /* The name has to outlive the string: nodeName() returns a temporary and
+     * its utf8() buffer dies at the end of the full expression (printing the
+     * raw data() gave garbage like "SPANt"). */
+    static char buffer[64];
+
+    if (!node)
+        return "(none)";
+
+    {
+        CString name = node->nodeName().utf8();
+        size_t length = name.length();
+
+        if (length >= sizeof(buffer))
+            length = sizeof(buffer) - 1;
+        memcpy(buffer, name.data(), length);
+        buffer[length] = 0;
+    }
+
+    return buffer;
+}
 
 // The link drag hysteresis is much larger than the others because there
 // needs to be enough space to cancel the link press without starting a link drag,
@@ -174,6 +216,12 @@ bool EventHandler::handleMousePressEventDoubleClick(const MouseEventWithHitTestR
     else
         selectClosestWordFromMouseEvent(event);
 
+    if (selDebugEnabled())
+        fprintf(stderr, "[sel] dblclick wasRange=%d type=%s len=%d\n",
+                m_frame->selectionController()->isRange() ? 1 : 0,
+                m_frame->selectionController()->isRange() ? "range" : "caret",
+                (int)m_frame->selectionController()->toString().length());
+
     return true;
 }
 
@@ -253,6 +301,16 @@ bool EventHandler::handleMousePressEventSingleClick(const MouseEventWithHitTestR
     if (m_frame->shouldChangeSelection(newSelection))
         m_frame->selectionController()->setSelection(newSelection);
 
+    if (selDebugEnabled())
+        fprintf(stderr, "[sel] single click type=%s len=%d granularity=%d anchor=%s@%d extent=%s@%d\n",
+                m_frame->selectionController()->isRange() ? "range" : "caret",
+                (int)m_frame->selectionController()->toString().length(),
+                (int)m_frame->selectionGranularity(),
+                selDebugNodeName(m_frame->selectionController()->start().node()),
+                m_frame->selectionController()->start().offset(),
+                selDebugNodeName(m_frame->selectionController()->end().node()),
+                m_frame->selectionController()->end().offset());
+
     return true;
 }
 
@@ -263,6 +321,13 @@ bool EventHandler::handleMousePressEvent(const MouseEventWithHitTestResults& eve
     // If we got the event back, that must mean it wasn't prevented,
     // so it's allowed to start a drag or selection.
     m_mouseDownMayStartSelect = canMouseDownStartSelect(event.targetNode());
+
+    if (selDebugEnabled())
+        fprintf(stderr, "[sel] press btn=%d clicks=%d maySelect=%d target=%s pos=%d,%d\n",
+                (int)event.event().button(), event.event().clickCount(),
+                m_mouseDownMayStartSelect ? 1 : 0,
+                selDebugNodeName(event.targetNode()),
+                event.event().pos().x(), event.event().pos().y());
     
     // Careful that the drag starting logic stays in sync with eventMayStartDrag()
     m_mouseDownMayStartDrag = singleClick;
@@ -322,8 +387,13 @@ bool EventHandler::handleMouseDraggedEvent(const MouseEventWithHitTestResults& e
         return false;
 
     Node* targetNode = event.targetNode();
-    if (event.event().button() != LeftButton || !targetNode || !targetNode->renderer())
+    if (event.event().button() != LeftButton || !targetNode || !targetNode->renderer()) {
+        if (selDebugEnabled())
+            fprintf(stderr, "[sel] drag rejected btn=%d target=%s renderer=%d\n",
+                    (int)event.event().button(), selDebugNodeName(targetNode),
+                    (targetNode && targetNode->renderer()) ? 1 : 0);
         return false;
+    }
 
     m_mouseDownMayStartDrag = false;
 
@@ -399,8 +469,12 @@ void EventHandler::updateSelectionForMouseDrag(Node* targetNode, const IntPoint&
     VisiblePosition targetPosition(targetRenderer->positionForPoint(localPoint));
 
     // Don't modify the selection if we're not on a node.
-    if (targetPosition.isNull())
+    if (targetPosition.isNull()) {
+        if (selDebugEnabled())
+            fprintf(stderr, "[sel] drag: null target position at %d,%d\n",
+                    localPoint.x(), localPoint.y());
         return;
+    }
 
     // Restart the selection if this is the first mouse move. This work is usually
     // done in handleMousePressEvent, but not if the mouse press was on an existing selection.
@@ -428,6 +502,13 @@ void EventHandler::updateSelectionForMouseDrag(Node* targetNode, const IntPoint&
     if (m_frame->shouldChangeSelection(newSelection)) {
         m_frame->selectionController()->setLastChangeWasHorizontalExtension(false);
         m_frame->selectionController()->setSelection(newSelection);
+        if (selDebugEnabled())
+            fprintf(stderr, "[sel] extent %s@%d began=%d type=%s len=%d\n",
+                    selDebugNodeName(targetPosition.deepEquivalent().node()),
+                    targetPosition.deepEquivalent().offset(),
+                    m_beganSelectingText ? 1 : 0,
+                    m_frame->selectionController()->isRange() ? "range" : "caret",
+                    (int)m_frame->selectionController()->toString().length());
     }
 }
     
@@ -474,6 +555,8 @@ bool EventHandler::handleMouseReleaseEvent(const MouseEventWithHitTestResults& e
             VisiblePosition pos = node->renderer()->positionForPoint(event.localPoint());
             newSelection = Selection(pos);
         }
+        if (selDebugEnabled())
+            fprintf(stderr, "[sel] release clears selection (single click in selection)\n");
         if (m_frame->shouldChangeSelection(newSelection))
             m_frame->selectionController()->setSelection(newSelection);
 
@@ -1363,7 +1446,12 @@ bool EventHandler::canMouseDownStartSelect(Node* node)
 {
     if (!node || !node->renderer())
         return true;
-    
+
+    if (selDebugEnabled())
+        fprintf(stderr, "[sel] canStart node=%s parent=%s userSelect=%d can=%d\n",
+                selDebugNodeName(node), selDebugNodeName(node->parentNode()),
+                (int)node->renderer()->style()->userSelect(), node->canStartSelection() ? 1 : 0);
+
     // Some controls and images can't start a select on a mouse down.
     if (!node->canStartSelection())
         return false;
@@ -1518,6 +1606,17 @@ void EventHandler::defaultKeyboardEventHandler(KeyboardEvent* event)
             defaultTabEventHandler(event, event->keyEvent() && event->keyEvent()->shiftKey());
             return;
         }
+
+        /* Browser shortcuts first. Editor::handleKeypress() below only reaches
+         * the platform client for a content-editable selection, so Ctrl+C on a
+         * page selection and Ctrl+A anywhere did nothing at all. Chrome runs
+         * these as the key's default action, which is exactly where this
+         * function is called (after the page had its chance to preventDefault). */
+        if (handleDefaultEditingShortcut(event)) {
+            event->setDefaultHandled();
+            return;
+        }
+
         m_frame->editor()->handleKeypress(event);
         return;
     }
@@ -1526,6 +1625,100 @@ void EventHandler::defaultKeyboardEventHandler(KeyboardEvent* event)
         if (event->keyIdentifier() == "Tab")
             defaultTabEventHandler(event, event->keyEvent() && event->keyEvent()->shiftKey());
     }
+}
+
+/* Ctrl+A/C/X/V, Ctrl+Z/Y, Ctrl+Insert / Shift+Insert and the Shift+arrow
+ * selection keys, with Chrome's meaning. Returns true when the key was a
+ * browser shortcut: the caller then marks the default action handled. A
+ * shortcut that is merely disabled (copy with no selection, paste outside an
+ * editable field) is still consumed - doing nothing is the answer, not "let it
+ * fall through to some other handler". */
+bool EventHandler::handleDefaultEditingShortcut(KeyboardEvent* event)
+{
+    const PlatformKeyboardEvent* key = event->keyEvent();
+
+    if (!key || key->altKey() || key->metaKey())
+        return false;
+
+    int vk = key->WindowsKeyCode();
+    bool ctrl = key->ctrlKey();
+    bool shift = key->shiftKey();
+
+    if (ctrl) {
+        const char* command = 0;
+
+        switch (vk) {
+        case 'A': command = "SelectAll"; break;
+        case 'C': command = "Copy"; break;
+        case 'X': command = "Cut"; break;
+        case 'V': command = "Paste"; break;
+        case 'Z': command = shift ? "Redo" : "Undo"; break;
+        case 'Y': command = "Redo"; break;
+        case 0x2D: /* VK_INSERT */
+            command = "Copy";
+            break;
+        default:
+            break;
+        }
+
+        if (command) {
+            m_frame->editor()->execCommand(command, event);
+            return true;
+        }
+    }
+
+    if (!ctrl && shift && vk == 0x2D /* VK_INSERT */) {
+        m_frame->editor()->execCommand("Paste", event);
+        return true;
+    }
+
+    /* Shift + arrows extend the page selection, like Chrome's caret at the
+     * click position moving. A focused text field keeps its own (editable)
+     * mapping in EditorClientMC, so this only applies to page selections. */
+    if (shift && !ctrl && !m_frame->selectionController()->isContentEditable()) {
+        SelectionController* selection = m_frame->selectionController();
+
+        switch (vk) {
+        case 0x25: /* VK_LEFT */
+            return selection->modify(SelectionController::EXTEND, SelectionController::LEFT, CharacterGranularity, true);
+        case 0x27: /* VK_RIGHT */
+            return selection->modify(SelectionController::EXTEND, SelectionController::RIGHT, CharacterGranularity, true);
+        case 0x26: /* VK_UP */
+            return selection->modify(SelectionController::EXTEND, SelectionController::BACKWARD, LineGranularity, true);
+        case 0x28: /* VK_DOWN */
+            return selection->modify(SelectionController::EXTEND, SelectionController::FORWARD, LineGranularity, true);
+        case 0x24: /* VK_HOME */
+            return selection->modify(SelectionController::EXTEND, SelectionController::BACKWARD, LineBoundary, true);
+        case 0x23: /* VK_END */
+            return selection->modify(SelectionController::EXTEND, SelectionController::FORWARD, LineBoundary, true);
+        default:
+            break;
+        }
+    }
+
+    /* Ctrl+Shift+arrows extend by word/paragraph/document, matching Chrome. */
+    if (shift && ctrl && !m_frame->selectionController()->isContentEditable()) {
+        SelectionController* selection = m_frame->selectionController();
+
+        switch (vk) {
+        case 0x25: /* VK_LEFT */
+            return selection->modify(SelectionController::EXTEND, SelectionController::LEFT, WordGranularity, true);
+        case 0x27: /* VK_RIGHT */
+            return selection->modify(SelectionController::EXTEND, SelectionController::RIGHT, WordGranularity, true);
+        case 0x26: /* VK_UP */
+            return selection->modify(SelectionController::EXTEND, SelectionController::BACKWARD, ParagraphGranularity, true);
+        case 0x28: /* VK_DOWN */
+            return selection->modify(SelectionController::EXTEND, SelectionController::FORWARD, ParagraphGranularity, true);
+        case 0x24: /* VK_HOME */
+            return selection->modify(SelectionController::EXTEND, SelectionController::BACKWARD, DocumentBoundary, true);
+        case 0x23: /* VK_END */
+            return selection->modify(SelectionController::EXTEND, SelectionController::FORWARD, DocumentBoundary, true);
+        default:
+            break;
+        }
+    }
+
+    return false;
 }
 
 bool EventHandler::dragHysteresisExceeded(const FloatPoint& floatDragViewportLocation) const

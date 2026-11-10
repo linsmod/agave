@@ -2043,6 +2043,12 @@ void Frame::respondToChangedSelection(const Selection& oldSelection, bool closeT
     }
 
     editor()->respondToChangedSelection(oldSelection);
+
+    /* document's `selectionchange` (sites enable/disable their Copy button and
+     * update counters from it). Document is not an EventTargetNode here, so the
+     * bridge dispatches it at the listeners it keeps for the document. */
+    if (AntRuntime::isRunning() && document())
+        AntRuntime::dispatchDocumentEvent(document(), "selectionchange");
 }
 
 VisiblePosition Frame::visiblePositionForPoint(const IntPoint& framePoint)

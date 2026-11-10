@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>selection capability</title>
+<style>
+  html, body { margin: 0; padding: 0; }
+  body { font-family: "Noto Sans SC", sans-serif; font-size: 16px; line-height: 24px; }
+  #p1 { position: absolute; left: 10px; top: 10px; width: 460px; }
+  #p2 { position: absolute; left: 10px; top: 60px; width: 460px; }
+  #p3 { position: absolute; left: 10px; top: 120px; width: 460px; }
+  #no { position: absolute; left: 10px; top: 180px; width: 460px; -webkit-user-select: none; user-select: none; }
+  #no #yes { -webkit-user-select: text; user-select: text; }
+  #field { position: absolute; left: 10px; top: 270px; width: 300px; }
+</style>
+</head>
+<body>
+<p id="p1">The quick brown fox jumps over the lazy dog.</p>
+<p id="p2">Second paragraph with some more words to drag across.</p>
+<p id="p3">Third paragraph, 中文混排 abc 123 end.</p>
+<p id="no">This paragraph must not be selectable by the user.<br><span id="yes">but this span is.</span></p>
+<input id="field" value="editable text field">
+<script>
+window.__selEvents = 0;
+window.__dblEvents = 0;
+document.addEventListener('selectionchange', function () { window.__selEvents++; });
+document.addEventListener('dblclick', function () { window.__dblEvents++; });
+</script>
+</body>
+</html>

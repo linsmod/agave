@@ -103,14 +103,20 @@ bool RenderThemePS::isControlStyled(const RenderStyle* style, const BorderData& 
     return RenderTheme::isControlStyled(style, border, background, backgroundColor);
 }
 
+/* Selection colours measured from headless Chrome (focused window): the active
+ * highlight is rgb(51,103,209) with white text, the inactive one is
+ * rgb(200,200,200) with black text. The old values were a semi-transparent
+ * blue / grey blended with white AND kept a white foreground, i.e. white text
+ * on a pale background: a selection you could barely read. Opaque colours make
+ * RenderTheme::activeSelectionBackgroundColor()'s blendWithWhite() a no-op. */
 Color RenderThemePS::platformActiveSelectionBackgroundColor() const
 {
-    return Color(0x62, 0x8C, 0xB2, 0xA0);
+    return Color(0x33, 0x67, 0xD1);
 }
 
 Color RenderThemePS::platformInactiveSelectionBackgroundColor() const
 {
-    return Color(0xB0, 0xB0, 0xB0, 0xA0);
+    return Color(0xC8, 0xC8, 0xC8);
 }
 
 Color RenderThemePS::platformActiveSelectionForegroundColor() const
@@ -119,6 +125,20 @@ Color RenderThemePS::platformActiveSelectionForegroundColor() const
 }
 
 Color RenderThemePS::platformInactiveSelectionForegroundColor() const
+{
+    return Color(0x00, 0x00, 0x00);
+}
+
+/* The highlighted row of an open <select> menu. RenderTheme's default derives
+ * it from the page selection colour, which now is Chrome's blue; the menu is
+ * drawn by the engine over a white popup and keeps the colour the drop-down
+ * pixel test pins (rgb(157,183,207) with white text). */
+Color RenderThemePS::activeListBoxSelectionBackgroundColor() const
+{
+    return Color(0x9D, 0xB7, 0xCF);
+}
+
+Color RenderThemePS::activeListBoxSelectionForegroundColor() const
 {
     return Color(0xFF, 0xFF, 0xFF);
 }

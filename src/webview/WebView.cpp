@@ -30,6 +30,7 @@
 #include "ImageDecodeService.h"
 #include "ImageDecodeStats.h"
 #include "Settings.h"
+#include "SystemTime.h"
 #include "ContextMenu.h"
 #include "SchemeExtension.h"
 #include "SubstituteData.h"
@@ -73,6 +74,7 @@ public:
 		: m_view(v), m_buffer(buf), m_width(w), m_height(h), m_mode(0), m_txtanti(false)
 		, m_canvas(0), m_context(0), m_drawRect(0, 0, 0, 0), m_minLayoutSize(0, 0), m_oldLayoutSize(0, 0)
 		, m_activePopup(0), m_swallowNextText(false)
+		, m_clickCount(0), m_lastClickTime(0), m_lastClickPos(0, 0), m_pressedButton(MOUSE_BTN_NONE)
 	{
 		m_canvas = ps_canvas_create_with_data(buf, pixelFormat(), w, h, p);
 		m_context = ps_context_create(m_canvas, 0);
@@ -119,6 +121,17 @@ public:
      * Win32 delivers the character in a separate WM_CHAR, long after the page
      * said no. Set by keyDown(), consumed by textInput(). */
     bool m_swallowNextText;
+    /* Click counting for double/triple click. Windows sends a plain
+     * WM_LBUTTONDOWN for the second click too unless the window class has
+     * CS_DBLCLKS, and the control's command queue carries no click count, so
+     * the engine derives it from time + position (500 ms / 4 px, the usual
+     * Windows thresholds). EventHandler then sees clickCount 2/3 and runs
+     * select-word / select-paragraph, and EventTargetNode turns detail==2
+     * into a dblclick event. */
+    int      m_clickCount;
+    double   m_lastClickTime;
+    IntPoint m_lastClickPos;
+    _mc_mouse_btn m_pressedButton;
 };
 
 static Frame *incrementFrame(Frame *curr, bool forward, bool wrapFlag)
@@ -421,6 +434,12 @@ bool WebView::mouseUp(_mc_mouse_btn btn, unsigned m, int x, int y)
 
 	IntPoint p(x, y);
 	PlatformMouseEvent mouseEvent(MouseEventReleased, _get_mouse_button(btn), p, m);
+	/* The matching press carried the click count; Win32 gives the release no
+	 * such information. Without it the click/dblclick events after a double
+	 * click would claim detail==1 and a page's ondblclick never ran. */
+	if (btn == d->m_pressedButton && d->m_clickCount > 0)
+		mouseEvent.setClickCount(d->m_clickCount);
+	d->m_pressedButton = MOUSE_BTN_NONE;
     return d->m_frame->eventHandler()->handleMouseReleaseEvent(mouseEvent);
 }
 
@@ -433,6 +452,25 @@ bool WebView::mouseDown(_mc_mouse_btn btn, unsigned m, int x, int y)
 
 	IntPoint p(x, y);
 	PlatformMouseEvent mouseEvent(MouseEventPressed, _get_mouse_button(btn), p, m);
+
+	/* Click counting (see WebViewPrivate::m_clickCount). The fourth click in a
+	 * row starts over at 1, like Windows: 1 caret, 2 word, 3 paragraph. */
+	if (btn == MOUSE_BTN_LEFT) {
+		double now = currentTime();
+		bool sameSpot = (p.x() - d->m_lastClickPos.x() <= 4 && d->m_lastClickPos.x() - p.x() <= 4
+		                 && p.y() - d->m_lastClickPos.y() <= 4 && d->m_lastClickPos.y() - p.y() <= 4);
+
+		if (d->m_clickCount > 0 && sameSpot && now - d->m_lastClickTime <= 0.5)
+			d->m_clickCount = (d->m_clickCount % 3) + 1;
+		else
+			d->m_clickCount = 1;
+
+		d->m_lastClickTime = now;
+		d->m_lastClickPos = p;
+		mouseEvent.setClickCount(d->m_clickCount);
+	}
+
+	d->m_pressedButton = btn;
     return d->m_frame->eventHandler()->handleMousePressEvent(mouseEvent);
 }
 
@@ -963,6 +1001,27 @@ bool WebView::executeScript(const char* script)
      * needs that to report a dropped command instead of a silent no-op. */
     KJSProxy* proxy = d->m_frame->scriptProxy();
     return proxy ? proxy->lastEvaluateRan() : false;
+}
+
+bool WebView::execEditorCommand(const char* command)
+{
+    Page* page;
+    Frame* frame;
+
+    if (!command || !command[0] || !d->m_frame)
+        return false;
+
+    page = d->m_frame->page();
+    if (!page || !page->mainFrame() || !page->mainFrame()->document())
+        return false;
+
+    frame = page->focusController()->focusedOrMainFrame();
+    if (!frame || !frame->document())
+        return false;
+
+    /* Same entries the keyboard shortcuts use; a command that is disabled for
+     * the current selection is simply not executed. Command names are ASCII. */
+    return frame->editor()->execCommand(WebCore::AtomicString(command));
 }
 
 unsigned WebView::documentEpoch(void) const

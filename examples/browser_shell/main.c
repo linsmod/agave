@@ -1604,13 +1604,16 @@ static void onContextMenu(AgaveWebView* view, int x, int y,
     Tab* tab = (Tab*)user;
     HWND viewHwnd = view ? (HWND)agave_webview_hwnd(view) : NULL;
     int choice;
-
-    (void)text;
+    int hasSelection;
 
     if (!tab) {
         agbLog(AGB_LOG_SHELL, "context menu without a tab, ignored");
         return;
     }
+
+    /* Chrome shows Copy enabled only when something is selected; the engine
+     * hands us the selection text with the event. */
+    hasSelection = (text && text[0]) ? 1 : 0;
 
     /* x,y are client coordinates of the control, not of the shell window: with
      * g_hwnd the menu was offset by the toolbar height, and on a multi-monitor
@@ -1633,6 +1636,11 @@ static void onContextMenu(AgaveWebView* view, int x, int y,
 
     if (imageUrl && imageUrl[0])
         AppendMenuA(menu, MF_STRING, 7, "Save image (not implemented)");
+
+    AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuA(menu, MF_STRING | (hasSelection ? 0 : MF_GRAYED), 12, "Copy");
+    AppendMenuA(menu, MF_STRING, 13, "Select all");
+    AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
 
     AppendMenuA(menu, MF_STRING, 8, "Bookmark this page");
     /* No view-source support yet: a document->string API does not exist, and the
@@ -1700,6 +1708,17 @@ static void onContextMenu(AgaveWebView* view, int x, int y,
     case 9: agbLog(AGB_LOG_SHELL, "view source: not implemented"); break;
     case 10: injectVConsole(view); break;
     case 11: injectInspector(view); break;
+    case 12:
+        /* Copy goes through the engine (Editor::copy), not through the text we
+         * already have: the page's own `copy` listener runs, and the pasteboard
+         * gets the same selection the keyboard path would write. */
+        agbLog(AGB_LOG_SHELL, "context menu copy selection=%lu",
+               (unsigned long)(text ? strlen(text) : 0));
+        agave_webview_editor_command(view, "Copy");
+        break;
+    case 13:
+        agave_webview_editor_command(view, "SelectAll");
+        break;
     default: break;
     }
 }
@@ -3043,6 +3062,18 @@ static int  g_probeKeysDone;      /* the --keys list was typed out             *
 static int  g_probeClickList[PROBE_MAX_CLICKS][2]; /* --click: viewport points  */
 static int  g_probeClickCount;
 static int  g_probeClickIndex;    /* next --click to deliver                   */
+/* --drag x1,y1,x2,y2: press at the first point, move, release - the real
+ * WM_MOUSEMOVE/WM_LBUTTONDOWN/WM_LBUTTONUP path, which is how text selection
+ * and drag gestures are produced. */
+static int  g_probeDragList[PROBE_MAX_CLICKS][4];
+static int  g_probeDragCount;
+static int  g_probeDragIndex;
+/* --shift-click x,y: one click with Shift held (extend the selection from the
+ * caret). Delivered with SendMessage so the probe modifier can be set and
+ * cleared around the single event, unlike --mod which holds for a whole run. */
+static int  g_probeShiftList[PROBE_MAX_CLICKS][2];
+static int  g_probeShiftCount;
+static int  g_probeShiftIndex;
 /* --right-click x,y: the same mouse path with the right button, so the
  * context-menu chain (renderer -> event -> control -> host) can be checked
  * headlessly. */
@@ -3050,6 +3081,15 @@ static int  g_probeRightList[PROBE_MAX_CLICKS][2];
 static int  g_probeRightCount;
 static int  g_probeRightIndex;
 static char g_probePreScript[2048]; /* --pre-eval: runs once before --keys     */
+static char g_probeEditor[64];      /* --editor: Editor::execCommand name      */
+static int  g_probeEditorDone;      /* the editor command was issued           */
+/* --mod ctrl|shift|alt: holds a modifier down while --click/--drag/--keys run.
+ * The control reads modifiers with GetKeyState() in a GUI run, so a posted
+ * WM_KEYDOWN cannot fake them; in probe mode the control also consults the
+ * simulated state set by agave_webview_set_probe_modifiers(). */
+static char g_probeMod[16];
+static unsigned g_probeModMask;     /* parsed from --mod, 0 = none        */
+static int  g_probeModHeld;
 static char g_probeIme[512];        /* --ime: posted as WM_IME_CHAR           */
 static int  g_probePreDone;       /* --pre-eval was executed                   */
 static char g_probeInject[512];   /* --inject: script asset to run before eval */
@@ -3065,6 +3105,58 @@ static int  g_probeZoomDone;
 static const char* probeScriptText(void)
 {
     return g_probeScriptFile ? g_probeScriptFile : g_probeScript;
+}
+
+/* --mod: tell the control which modifiers are "held", so every mouse and key
+ * event it turns into an engine command carries them. A headless run has no
+ * keyboard to press and a posted WM_KEYDOWN cannot change GetKeyState(), so
+ * this is the probe's equivalent of holding Ctrl/Shift/Alt. Accepts one name
+ * or a '+'-separated combination ("ctrl", "ctrl+shift"). */
+static unsigned probeModifierMask(void)
+{
+    unsigned mask = 0;
+    const char* p = g_probeMod;
+
+    while (*p) {
+        if (!strncmp(p, "ctrl", 4)) {
+            mask |= AGW_MOD_CTRL;
+            p += 4;
+        } else if (!strncmp(p, "shift", 5)) {
+            mask |= AGW_MOD_SHIFT;
+            p += 5;
+        } else if (!strncmp(p, "alt", 3)) {
+            mask |= AGW_MOD_ALT;
+            p += 3;
+        } else {
+            return 0;
+        }
+
+        if (*p == '+')
+            ++p;
+    }
+
+    return mask;
+}
+
+static void probeModifierDown(void)
+{
+    if (!g_probeMod[0] || g_probeModHeld)
+        return;
+
+    if (!g_probeModMask)
+        return;
+
+    g_probeModHeld = 1;
+    agave_webview_set_probe_modifiers(g_probeModMask);
+}
+
+static void probeModifierUp(void)
+{
+    if (!g_probeModHeld)
+        return;
+
+    g_probeModHeld = 0;
+    agave_webview_set_probe_modifiers(0);
 }
 
 /* Offscreen capture. A hidden window gets no WM_PAINT, so PrintWindow has
@@ -4100,6 +4192,7 @@ static int probeRun(const char* url)
                     int cy = g_probeClickList[g_probeClickIndex][1];
 
                     ++g_probeClickIndex;
+                    probeModifierDown();
                     if (target) {
                         LPARAM at = MAKELPARAM(cx, cy);
 
@@ -4112,12 +4205,84 @@ static int probeRun(const char* url)
                     continue;
                 }
 
+                /* --drag x1,y1,x2,y2: press, move in steps, release. The
+                 * intermediate moves matter: the engine only extends the
+                 * selection on a mouse move, and a mouse-up handler without a
+                 * preceding move leaves a caret (no range). */
+                if (g_probeDragIndex < g_probeDragCount) {
+                    HWND target = (HWND)agave_webview_hwnd(g_probeView);
+                    int x1 = g_probeDragList[g_probeDragIndex][0];
+                    int y1 = g_probeDragList[g_probeDragIndex][1];
+                    int x2 = g_probeDragList[g_probeDragIndex][2];
+                    int y2 = g_probeDragList[g_probeDragIndex][3];
+                    int step;
+
+                    ++g_probeDragIndex;
+                    probeModifierDown();
+                    if (target) {
+                        agbLog(AGB_LOG_PROBE, "drag %d,%d -> %d,%d", x1, y1, x2, y2);
+                        PostMessageA(target, WM_MOUSEMOVE, 0, MAKELPARAM(x1, y1));
+                        PostMessageA(target, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(x1, y1));
+                        /* Eight moves: enough for the engine to cross a few
+                         * nodes/glyphs, few enough that the command queue does
+                         * not spend a whole frame draining them. */
+                        for (step = 1; step <= 8; ++step) {
+                            int mx = x1 + (x2 - x1) * step / 8;
+                            int my = y1 + (y2 - y1) * step / 8;
+
+                            PostMessageA(target, WM_MOUSEMOVE, MK_LBUTTON, MAKELPARAM(mx, my));
+                        }
+                        PostMessageA(target, WM_LBUTTONUP, 0, MAKELPARAM(x2, y2));
+                    }
+                    SetTimer(g_probeWnd, PROBE_TIMER_EVAL, 400, NULL);
+                    continue;
+                }
+
+                /* --shift-click x,y: extend the current selection to that point,
+                 * like a real Shift+click. SendMessage runs the control's window
+                 * procedure synchronously, which lets the simulated Shift be set
+                 * for exactly this click and cleared again afterwards. */
+                if (g_probeShiftIndex < g_probeShiftCount) {
+                    HWND target = (HWND)agave_webview_hwnd(g_probeView);
+                    int sx = g_probeShiftList[g_probeShiftIndex][0];
+                    int sy = g_probeShiftList[g_probeShiftIndex][1];
+
+                    ++g_probeShiftIndex;
+                    if (target) {
+                        LPARAM at = MAKELPARAM(sx, sy);
+
+                        agbLog(AGB_LOG_PROBE, "shift click %d,%d", sx, sy);
+                        agave_webview_set_probe_modifiers(AGW_MOD_SHIFT);
+                        SendMessageA(target, WM_MOUSEMOVE, 0, at);
+                        SendMessageA(target, WM_LBUTTONDOWN, MK_LBUTTON, at);
+                        SendMessageA(target, WM_LBUTTONUP, 0, at);
+                        agave_webview_set_probe_modifiers(0);
+                    }
+                    SetTimer(g_probeWnd, PROBE_TIMER_EVAL, 400, NULL);
+                    continue;
+                }
+
+                /* --editor <name>: issue an Editor::execCommand command through
+                 * the control API the shell's context menu uses (Copy, SelectAll,
+                 * Cut, Paste, ...). Runs after the drag/click that builds the
+                 * selection, before the right click so a following
+                 * --right-click sees the selection this command created. */
+                if (g_probeEditor[0] && !g_probeEditorDone) {
+                    g_probeEditorDone = 1;
+                    agbLog(AGB_LOG_PROBE, "editor command %s", g_probeEditor);
+                    if (g_probeView)
+                        agave_webview_editor_command(g_probeView, g_probeEditor);
+                    SetTimer(g_probeWnd, PROBE_TIMER_EVAL, 500, NULL);
+                    continue;
+                }
+
                 if (g_probeRightIndex < g_probeRightCount) {
                     HWND target = (HWND)agave_webview_hwnd(g_probeView);
                     int rx = g_probeRightList[g_probeRightIndex][0];
                     int ry = g_probeRightList[g_probeRightIndex][1];
 
                     ++g_probeRightIndex;
+                    probeModifierDown();
                     if (target) {
                         LPARAM at = MAKELPARAM(rx, ry);
 
@@ -4138,6 +4303,7 @@ static int probeRun(const char* url)
                         probeParseKeys();
                         probeParseIme();
                     }
+                    probeModifierDown();
                     /* --pre-eval: focus the field / dismiss a dialog before the
                      * first key. Without it a headless run can only type into
                      * whatever the page focused by itself. */
@@ -4253,6 +4419,7 @@ static int probeRun(const char* url)
                     }
                 }
 
+                probeModifierUp();
                 probePrint("[probe]", "running eval");
                 /* Sanity first: a failed navigation still reports progress
                  * finished=1, and the eval would then run against an empty
@@ -4389,7 +4556,13 @@ static int probeRun(const char* url)
             }
         }
 
-        TranslateMessage(&msg);
+        /* A simulated Ctrl cannot change what TranslateMessage produces: it
+         * would turn the posted keydown into the plain letter, so Ctrl+V
+         * pasted and then left a "v" behind. A real Ctrl+letter produces a
+         * control character, which WebView drops (no editing command ever
+         * wants it), so skip the translation entirely while Ctrl is held. */
+        if (!(g_probeModHeld && (g_probeModMask & AGW_MOD_CTRL)))
+            TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
 
@@ -4433,6 +4606,9 @@ static int probeRun(const char* url)
         printf("[%9.1fms] [probe] main url=%s\n", agbLogElapsedMs(), u && u[0] ? u : "(none)");
         fflush(stdout);
     }
+
+    /* Never leave a synthetic modifier pressed, whatever path ended the run. */
+    probeModifierUp();
 
     agave_webview_destroy(g_probeView);
 
@@ -4516,8 +4692,17 @@ static void probeUsage(void)
             "  --click <x,y>  click at a CSS pixel of the viewport before --eval,\n"
             "            through the real WM_MOUSEMOVE/WM_LBUTTONDOWN/WM_LBUTTONUP\n"
             "            path (what opens a <select> menu, focuses a field, ...)\n"
+            "  --drag <x1,y1,x2,y2>  press, move, release before --eval, through\n"
+            "            the same real mouse path (text selection, drag gestures)\n"
+            "  --shift-click <x,y>  one click with Shift held (extend the selection)\n"
             "  --pre-eval <js>  short snippet run once before --keys (focus a\n"
             "            field: \"document.querySelector('input').focus()\")\n"
+            "  --editor <name>  run an Editor command through the control API the\n"
+            "            context menu uses (Copy, SelectAll, Cut, Paste, ...)\n"
+            "  --mod ctrl|shift|alt  hold the modifier for every --click/--drag/\n"
+            "            --keys (also ctrl+shift style combinations); a headless run\n"
+            "            has no keyboard, so this is how Ctrl+A/C and Shift+arrows\n"
+            "            are exercised\n"
             "  --ime <text>  deliver text the way an IME does: WM_IME_CHAR per\n"
             "            UTF-16 code unit (surrogate pairs included), no keydown\n"
             "  --resize <WxH>  resize the control (and its hidden parent) once\n"
@@ -4720,9 +4905,52 @@ static void parseShellArgv(void)
                 g_argError = 1;
                 return;
             }
+        } else if (!strcmp(argv[i], "--shift-click") && i + 1 < argc) {
+            int sx = 0, sy = 0;
+
+            if (sscanf(argv[++i], "%d,%d", &sx, &sy) == 2 && sx >= 0 && sy >= 0
+                    && g_probeShiftCount < PROBE_MAX_CLICKS) {
+                g_probeShiftList[g_probeShiftCount][0] = sx;
+                g_probeShiftList[g_probeShiftCount][1] = sy;
+                ++g_probeShiftCount;
+            } else {
+                fprintf(stderr, "[shell] --shift-click wants x,y (e.g. 200,60), got %s\n", argv[i]);
+                g_argError = 1;
+                return;
+            }
+        } else if (!strcmp(argv[i], "--drag") && i + 1 < argc) {
+            int x1 = 0, y1 = 0, x2 = 0, y2 = 0;
+
+            if (sscanf(argv[++i], "%d,%d,%d,%d", &x1, &y1, &x2, &y2) == 4
+                    && x1 >= 0 && y1 >= 0 && x2 >= 0 && y2 >= 0
+                    && g_probeDragCount < PROBE_MAX_CLICKS) {
+                g_probeDragList[g_probeDragCount][0] = x1;
+                g_probeDragList[g_probeDragCount][1] = y1;
+                g_probeDragList[g_probeDragCount][2] = x2;
+                g_probeDragList[g_probeDragCount][3] = y2;
+                ++g_probeDragCount;
+            } else {
+                fprintf(stderr, "[shell] --drag wants x1,y1,x2,y2 (e.g. 20,60,300,60), got %s\n",
+                        argv[i]);
+                g_argError = 1;
+                return;
+            }
         } else if (!strcmp(argv[i], "--pre-eval") && i + 1 < argc) {
             strncpy(g_probePreScript, argv[++i], sizeof(g_probePreScript) - 1);
             g_probePreScript[sizeof(g_probePreScript) - 1] = 0;
+        } else if (!strcmp(argv[i], "--editor") && i + 1 < argc) {
+            strncpy(g_probeEditor, argv[++i], sizeof(g_probeEditor) - 1);
+            g_probeEditor[sizeof(g_probeEditor) - 1] = 0;
+        } else if (!strcmp(argv[i], "--mod") && i + 1 < argc) {
+            strncpy(g_probeMod, argv[++i], sizeof(g_probeMod) - 1);
+            g_probeMod[sizeof(g_probeMod) - 1] = 0;
+            g_probeModMask = probeModifierMask();
+            if (!g_probeModMask) {
+                fprintf(stderr, "[shell] --mod wants ctrl/shift/alt or a combination "
+                                "like ctrl+shift, got %s\n", g_probeMod);
+                g_argError = 1;
+                return;
+            }
         } else if (!strcmp(argv[i], "--ime") && i + 1 < argc) {
             strncpy(g_probeIme, argv[++i], sizeof(g_probeIme) - 1);
             g_probeIme[sizeof(g_probeIme) - 1] = 0;

@@ -154,6 +154,10 @@ public:
     bool clientIsEditable() const;
     
     bool execCommand(const AtomicString&, Event* triggeringEvent = 0);
+    /* document.queryCommandSupported / queryCommandEnabled: both answer from
+     * the same command table execCommand() uses. */
+    bool commandIsSupported(const AtomicString&) const;
+    bool commandIsEnabled(const AtomicString&) const;
     
     bool insertText(const String&, Event* triggeringEvent);
     bool insertTextWithoutSendingTextEvent(const String&, bool selectInsertedText, Event* triggeringEvent = 0);

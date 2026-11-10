@@ -38,7 +38,8 @@ typedef enum {
     AGW_VIEW_CMD_ZOOM,          /* a = percent */
     AGW_VIEW_CMD_SEARCH,        /* text = needle, a = forward, b = caseSensitive */
     AGW_VIEW_CMD_CONTEXT_MENU,  /* a = modifier, c = x, d = y */
-    AGW_VIEW_CMD_SERVICE_REPLY  /* a = id, b = status, text = payload (B4) */
+    AGW_VIEW_CMD_SERVICE_REPLY, /* a = id, b = status, text = payload (B4) */
+    AGW_VIEW_CMD_EDITOR         /* text = Editor::execCommand name, e.g. "Copy" */
 } AgwViewCommandKind;
 
 typedef struct {

@@ -330,6 +330,12 @@ input, input[type="password"], input[type="search"], isindex {
     border: 2px inset;
     -webkit-rtl-ordering: logical;
     -webkit-user-select: text;
+    /* Form fields are editable content: -webkit-user-modify is what
+     * Node::isContentEditable() reads, and Element::canEdit()/canPaste() build
+     * on it. Without it a focused <input> had a caret and accepted typing, but
+     * every editing command (paste, undo, ...) considered the selection
+     * non-editable and refused. */
+    -webkit-user-modify: read-write;
     cursor: auto;
 }
 
@@ -360,6 +366,7 @@ textarea {
     border: 1px solid;
     -webkit-rtl-ordering: logical;
     -webkit-user-select: text;
+    -webkit-user-modify: read-write;
     -webkit-box-orient: vertical;
     resize: auto;
     cursor: auto;

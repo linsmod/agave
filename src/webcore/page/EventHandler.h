@@ -126,6 +126,7 @@ public:
     bool keyEvent(const PlatformKeyboardEvent&);
     bool handleCharacterEvent(const PlatformKeyboardEvent&);
     void defaultKeyboardEventHandler(KeyboardEvent*);
+    bool handleDefaultEditingShortcut(KeyboardEvent*);
 
     /* Dispatches textInput (the pre-insertion event the bridge exposes as
      * `beforeinput`). `inserted` reports whether the text really went into

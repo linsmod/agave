@@ -63,6 +63,10 @@ namespace WebCore { bool prefersDarkColorScheme(); }
 #include "KeyboardEvent.h"
 #include "Frame.h"
 #include "FrameView.h"
+#include "DOMSelection.h"
+#include "Range.h"
+#include "Editor.h"
+#include "AtomicString.h"
 #include "FrameTree.h"
 #include "CharacterData.h"
 #include "NamedAttrMap.h"
@@ -264,6 +268,13 @@ struct DocumentRuntime {
     unsigned long      generation;
     std::vector<CssomRef>* cssomRefs;
     std::set<void*>*   cssomSeen;
+    /* DOM Selection API: one live DOMSelection per document (a view over the
+     * frame's selection) and the Range objects handed to JS. Ranges are ref'd
+     * when wrapped and released with the document (see selectionReleaseRefs);
+     * the JS side has no finalizers, so this is the same lifetime scheme the
+     * CSSOM wrappers use. */
+    WebCore::DOMSelection* selection;
+    std::vector<WebCore::Range*>* rangeRefs;
 };
 
 /* Every realm (one document) gets a fresh id. Resources that can outlive
@@ -290,7 +301,7 @@ static RuntimeState* g_currentState = &g_emptyState;
  * document is bound (startup, teardown) reads the empty document's fields
  * instead of dereferencing a null pointer. */
 static DocumentRuntime  g_emptyDocument = {
-    &g_emptyState, NULL, NULL, NULL, NULL, false, false, -1, 0, NULL, NULL
+    &g_emptyState, NULL, NULL, NULL, NULL, false, false, -1, 0, NULL, NULL, NULL, NULL
 };
 static DocumentRuntime* g_currentDocument = &g_emptyDocument;
 
@@ -660,6 +671,7 @@ static std::vector<DocumentRuntime*>& documentsFor(RuntimeState* state)
 
 struct Listener;   /* the listener table is per realm (defined below) */
 static void cssomReleaseRefs(DocumentRuntime* document);
+static void selectionReleaseRefs(DocumentRuntime* document);
 static void releaseAllRealmListeners(RuntimeState* state);
 static void releaseRealmListeners(RuntimeState* state, AntbRealm* realm);
 
@@ -776,6 +788,10 @@ static void releaseDocumentRuntime(DocumentRuntime* document, bool releaseValues
             document->docObj = NULL;
         }
         cssomReleaseRefs(document);
+        /* Selection/Range are WebCore objects, not VM values, but they hold
+         * refs on nodes/this document; drop them with the document so a
+         * detached page cannot be kept alive by a JS Range left behind. */
+        selectionReleaseRefs(document);
     }
 
     if (documents) {
@@ -1008,6 +1024,17 @@ int nodeDocumentHasFocus(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, 
 template <typename Collection> AntbValue* wrapNodeList(AntbEngine*, Collection*);
 int nodeGetContext(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeToDataURL(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+
+/* DOM Selection / Range (window.getSelection, document.createRange,
+ * document.execCommand). Implementation next to documentOf() further down. */
+int docGetSelection(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int docCreateRange(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int docExecCommand(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int docQueryCommandSupported(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int docQueryCommandEnabled(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int docQueryCommandState(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+AntbValue* wrapRange(AntbEngine*, WebCore::Range*);
+void selectionReleaseRefs(DocumentRuntime* document);
 
 /* Media elements: one native callback per method, all on the shared Node
  * class (there are no per-tag JS classes), each checking the tag first - the
@@ -5493,6 +5520,15 @@ AntbValue* documentObjectFor(AntbEngine* engine, WebCore::Document* document)
     antb_define_method(engine, docObj, "createTextNode", docCreateTextNode, NULL);
     antb_define_method(engine, docObj, "createComment", docCreateComment, NULL);
     antb_define_method(engine, docObj, "createDocumentFragment", docCreateDocumentFragment, NULL);
+    /* DOM Selection API (what "select all / copy" buttons and text-selection
+     * UIs call). Without these getSelection/createRange/execCommand were
+     * undefined and every site took its "unsupported" branch. */
+    antb_define_method(engine, docObj, "getSelection", docGetSelection, NULL);
+    antb_define_method(engine, docObj, "createRange", docCreateRange, NULL);
+    antb_define_method(engine, docObj, "execCommand", docExecCommand, NULL);
+    antb_define_method(engine, docObj, "queryCommandSupported", docQueryCommandSupported, NULL);
+    antb_define_method(engine, docObj, "queryCommandEnabled", docQueryCommandEnabled, NULL);
+    antb_define_method(engine, docObj, "queryCommandState", docQueryCommandState, NULL);
     /* document.implementation: jQuery and others feature-test
      * document.implementation.createHTMLDocument(). */
     {
@@ -5928,6 +5964,9 @@ static void installGlobalApi(AntbEngine* engine, AntbValue* global)
         antb_define_method(g_engine, window, "addEventListener", nodeAddEventListener, NULL);
         antb_define_method(g_engine, window, "removeEventListener", nodeRemoveEventListener, NULL);
         antb_define_method(g_engine, window, "dispatchEvent", nodeDispatchEvent, NULL);
+        /* window.getSelection() and document.getSelection() are the same live
+         * view over the frame's selection (the wrapper is cached per object). */
+        antb_define_method(g_engine, window, "getSelection", docGetSelection, NULL);
 
         antb_define_method(g_engine, global, "__agbHttpGet", globalHttpGet, NULL);
         antb_define_method(g_engine, global, "__agbHttpRequest", globalHttpRequest, NULL);
@@ -8521,19 +8560,19 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
         WebCore::Node* parent = n->parent();
 
         if (!parent || !parent->isElementNode())
-            return 1;   /* null for a top level element */
+            return assignNull(engine, out);   /* null for a top level element */
         v = wrapNode(engine, parent);
     } else if (!strcmp(name, "firstElementChild") || !strcmp(name, "lastElementChild")) {
         WebCore::Element* child = childElement(n, name[0] == 'f' ? 0 : -1);
 
         if (!child)
-            return 1;
+            return assignNull(engine, out);
         v = wrapNode(engine, child);
     } else if (!strcmp(name, "nextElementSibling") || !strcmp(name, "previousElementSibling")) {
         WebCore::Element* sibling = siblingElement(n, name[0] == 'n' ? 1 : -1);
 
         if (!sibling)
-            return 1;
+            return assignNull(engine, out);
         v = wrapNode(engine, sibling);
     } else if (!strcmp(name, "isConnected")) {
         v = antb_make_number(engine, nodeIsConnected(n) ? 1 : 0);
@@ -8551,7 +8590,7 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
 
             v = antb_make_string(engine, data.utf8().data());
         } else {
-            return 1;
+            return assignNull(engine, out);
         }
     } else if (!strcmp(name, "innerText") || !strcmp(name, "outerText")) {
         if (!n->isElementNode())
@@ -8568,7 +8607,7 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
             WebCore::Element* parent = static_cast<WebCore::Element*>(n)->offsetParent();
 
             if (!parent)
-                return 1;
+                return assignNull(engine, out);
             v = wrapNode(engine, parent);
         }
     } else if (n->isElementNode()
@@ -8631,7 +8670,7 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
         WebCore::Document* child = static_cast<WebCore::HTMLFrameOwnerElement*>(n)->contentDocument();
 
         if (!child)
-            return 1;   /* null until the frame document exists */
+            return assignNull(engine, out);   /* null until the frame document exists */
         if (!strcmp(name, "contentWindow") && perFrameRealmEnabled()) {
             /* A frame with its own realm: its `window` IS that realm's global
              * object, so contentWindow has to hand out that object (otherwise
@@ -8712,25 +8751,25 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
         if (n->parentNode()) {
             v = wrapNode(engine, n->parentNode());
         } else {
-            return 1;   /* null */
+            return assignNull(engine, out);   /* null */
         }
     } else if (!strcmp(name, "firstChild")) {
         if (n->firstChild()) {
             v = wrapNode(engine, n->firstChild());
         } else {
-            return 1;
+            return assignNull(engine, out);
         }
     } else if (!strcmp(name, "lastChild")) {
         if (n->lastChild()) {
             v = wrapNode(engine, n->lastChild());
         } else {
-            return 1;
+            return assignNull(engine, out);
         }
     } else if (!strcmp(name, "previousSibling")) {
         if (n->previousSibling()) {
             v = wrapNode(engine, n->previousSibling());
         } else {
-            return 1;
+            return assignNull(engine, out);
         }
     } else if (!strcmp(name, "ownerDocument")) {
 
@@ -8744,13 +8783,13 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
         if (n->ownerDocument()) {
             v = wrapNode(engine, n->ownerDocument());
         } else {
-            return 1;
+            return assignNull(engine, out);
         }
     } else if (!strcmp(name, "nodeValue")) {
         if (n->isTextNode() || n->isCommentNode())
             v = antb_make_string(engine, n->nodeValue().utf8().data());
         else
-            return 1;
+            return assignNull(engine, out);
     } else if (!strcmp(name, "hasChildNodes")) {
         /* Real DOM exposes this as a method; nodeHasChildNodes() serves it. */
         return 1;
@@ -8758,7 +8797,7 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
         if (n->nextSibling()) {
             v = wrapNode(engine, n->nextSibling());
         } else {
-            return 1;
+            return assignNull(engine, out);
         }
     } else if (!strcmp(name, "childNodes")) {
         {
@@ -12922,6 +12961,871 @@ WebCore::Document* documentOf(AntbValue* self)
     return g_document;
 }
 
+/* ------------------------------------------------------------------------- */
+/* DOM Selection / Range                                                     */
+/* ------------------------------------------------------------------------- */
+/* window.getSelection / document.getSelection / document.createRange /
+ * document.execCommand.
+ *
+ * WebCore 2008 already implements the selection engine (SelectionController,
+ * DOMSelection) and DOM Range; only the JS surface was missing. Without it
+ * `window.getSelection` was undefined and every modern "copy" button - and
+ * every editor/UI that reads or sets the selection - took its "unsupported"
+ * branch (AgbGapJsdom recorded exactly that).
+ *
+ *   Selection - a live view over the frame's selection (like CSSStyleSheet):
+ *               reading it after the caret moved returns the new state.
+ *   Range     - a real WebCore::Range, ref'd and released with the document.
+ *               The ant GC has no finalizers, so the document owns the refs
+ *               (selectionReleaseRefs at document teardown). */
+
+#define AGB_TAG_SELECTION 0x53454C31u  /* 'SEL1' */
+#define AGB_TAG_RANGE     0x524E4731u  /* 'RNG1' */
+
+static AntbClass* g_selectionClass;
+static AntbClass* g_rangeClass;
+
+enum {
+    SEL_OP_TOSTRING, SEL_OP_GET_RANGE_AT, SEL_OP_ADD_RANGE, SEL_OP_REMOVE_ALL,
+    SEL_OP_COLLAPSE, SEL_OP_COLLAPSE_TO_START, SEL_OP_COLLAPSE_TO_END,
+    SEL_OP_EXTEND, SEL_OP_SELECT_ALL_CHILDREN, SEL_OP_DELETE_FROM_DOCUMENT,
+    SEL_OP_CONTAINS_NODE, SEL_OP_MODIFY, SEL_OP_SET_BASE_AND_EXTENT,
+    SEL_OP_SET_POSITION
+};
+
+enum {
+    RNG_OP_SET_START, RNG_OP_SET_END, RNG_OP_SET_START_BEFORE, RNG_OP_SET_START_AFTER,
+    RNG_OP_SET_END_BEFORE, RNG_OP_SET_END_AFTER, RNG_OP_SELECT_NODE,
+    RNG_OP_SELECT_NODE_CONTENTS, RNG_OP_COLLAPSE, RNG_OP_CLONE, RNG_OP_DETACH,
+    RNG_OP_TOSTRING, RNG_OP_COMPARE_BOUNDARY_POINTS, RNG_OP_GET_BOUNDING_CLIENT_RECT,
+    RNG_OP_GET_CLIENT_RECTS, RNG_OP_CREATE_CONTEXTUAL_FRAGMENT, RNG_OP_INSERT_NODE,
+    RNG_OP_SURROUND_CONTENTS
+};
+
+static WebCore::DOMSelection* selectionNative(AntbValue* self)
+{
+    return self ? (WebCore::DOMSelection*)antb_get_native(self, AGB_TAG_SELECTION) : NULL;
+}
+
+static void ensureSelectionClasses();
+
+static WebCore::Range* rangeNative(AntbValue* self)
+{
+    return self ? (WebCore::Range*)antb_get_native(self, AGB_TAG_RANGE) : NULL;
+}
+
+static void selectionAssignBool(AntbEngine* engine, AntbValue* out, bool value)
+{
+    AntbValue* v = antb_make_boolean(engine, value ? 1 : 0);
+
+    if (!v)
+        return;
+    antb_value_assign(out, v);
+    antb_value_release(v);
+}
+
+static void selectionAssignNumber(AntbEngine* engine, AntbValue* out, double value)
+{
+    AntbValue* v = antb_make_number(engine, value);
+
+    if (!v)
+        return;
+    antb_value_assign(out, v);
+    antb_value_release(v);
+}
+
+static void selectionAssignString(AntbEngine* engine, AntbValue* out, const WebCore::String& text)
+{
+    AntbValue* v = antb_make_string(engine, text.utf8().data());
+
+    if (!v)
+        return;
+    antb_value_assign(out, v);
+    antb_value_release(v);
+}
+
+/* A DOMRect-like plain object (left/top/right/bottom/width/height/x/y), the
+ * same shape element.getBoundingClientRect() already produces. */
+static AntbValue* selectionMakeRect(AntbEngine* engine, const WebCore::IntRect& rect)
+{
+    static const char* names[] = { "left", "top", "right", "bottom", "width", "height", "x", "y" };
+    double values[8];
+    AntbValue* obj;
+    int i;
+
+    values[0] = rect.x();
+    values[1] = rect.y();
+    values[2] = rect.x() + rect.width();
+    values[3] = rect.y() + rect.height();
+    values[4] = rect.width();
+    values[5] = rect.height();
+    values[6] = rect.x();
+    values[7] = rect.y();
+
+    obj = antb_make_object(engine);
+    if (!obj)
+        return NULL;
+
+    for (i = 0; i < 8; ++i) {
+        AntbValue* v = antb_make_number(engine, values[i]);
+
+        if (v) {
+            antb_set_prop(engine, obj, names[i], v);
+            antb_value_release(v);
+        }
+    }
+
+    return obj;
+}
+
+static void selectionTrackRange(WebCore::Range* range)
+{
+    DocumentRuntime* runtime;
+
+    if (!range || !range->ownerDocument())
+        return;
+
+    runtime = documentRuntimeOf(g_currentState, range->ownerDocument());
+    if (!runtime)
+        return;
+
+    if (!runtime->rangeRefs)
+        runtime->rangeRefs = new std::vector<WebCore::Range*>();
+
+    range->ref();
+    runtime->rangeRefs->push_back(range);
+}
+
+/* Drops the selection/Range objects of a document that is going away. Called
+ * from releaseDocumentRuntime (same place the CSSOM refs are dropped). */
+void selectionReleaseRefs(DocumentRuntime* document)
+{
+    if (!document)
+        return;
+
+    if (document->selection) {
+        /* detach from the Frame first: the controller may already be gone. */
+        document->selection->disconnectFrame();
+        document->selection->deref();
+        document->selection = NULL;
+    }
+
+    if (document->rangeRefs) {
+        size_t i;
+
+        for (i = 0; i < document->rangeRefs->size(); ++i)
+            (*document->rangeRefs)[i]->deref();
+
+        delete document->rangeRefs;
+        document->rangeRefs = NULL;
+    }
+}
+
+static WebCore::DOMSelection* domSelectionForDocument(WebCore::Document* document)
+{
+    DocumentRuntime* runtime;
+    WebCore::Frame* frame;
+
+    if (!document || !g_currentState)
+        return NULL;
+
+    frame = document->frame();
+    if (!frame)
+        return NULL;
+
+    runtime = documentRuntimeOf(g_currentState, document);
+    if (!runtime)
+        return NULL;
+
+    if (!runtime->selection) {
+        runtime->selection = new WebCore::DOMSelection(frame);
+        runtime->selection->ref();
+    }
+
+    return runtime->selection;
+}
+
+static AntbValue* wrapSelection(AntbEngine* engine, WebCore::DOMSelection* selection)
+{
+    WebCore::Document* document;
+
+    if (!selection || !selection->frame())
+        return antb_make_null(engine);
+
+    document = selection->frame()->document();
+    if (!document)
+        return antb_make_null(engine);
+
+    ensureSelectionClasses();
+    return antb_wrap_native_as_owner(engine, g_selectionClass, selection,
+                                     AGB_TAG_SELECTION, document);
+}
+
+AntbValue* wrapRange(AntbEngine* engine, WebCore::Range* range)
+{
+    if (!range)
+        return antb_make_null(engine);
+
+    ensureSelectionClasses();
+
+    selectionTrackRange(range);
+
+    return antb_wrap_native_as_owner(engine, g_rangeClass, range, AGB_TAG_RANGE,
+                                     range->ownerDocument());
+}
+
+/* --- document.getSelection / createRange / execCommand ------------------- */
+
+int docGetSelection(AntbEngine* engine, AntbValue* self, AntbValue**, int,
+                    AntbValue* out, void*)
+{
+    WebCore::Document* document = documentOf(self);
+    WebCore::DOMSelection* selection = domSelectionForDocument(document);
+    AntbValue* v = wrapSelection(engine, selection);
+
+    if (!v)
+        return 0;
+
+    antb_value_assign(out, v);
+    antb_value_release(v);
+    return 1;
+}
+
+int docCreateRange(AntbEngine* engine, AntbValue* self, AntbValue**, int,
+                   AntbValue* out, void*)
+{
+    WebCore::Document* document = documentOf(self);
+    AntbValue* v;
+
+    if (!document)
+        return 0;
+
+    v = wrapRange(engine, document->createRange().get());
+    if (!v)
+        return 0;
+
+    antb_value_assign(out, v);
+    antb_value_release(v);
+    return 1;
+}
+
+int docExecCommand(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                   AntbValue* out, void*)
+{
+    WebCore::Document* document = documentOf(self);
+    char* name = (argc > 0 && args[0]) ? antb_to_utf8(args[0]) : NULL;
+    bool done = false;
+
+    if (document && document->frame() && name && name[0])
+        done = document->frame()->editor()->execCommand(WebCore::AtomicString(name));
+
+    antb_free(name);
+    selectionAssignBool(engine, out, done);
+    return 1;
+}
+
+int docQueryCommandSupported(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                             AntbValue* out, void*)
+{
+    WebCore::Document* document = documentOf(self);
+    char* name = (argc > 0 && args[0]) ? antb_to_utf8(args[0]) : NULL;
+    bool supported = false;
+
+    if (document && document->frame() && name && name[0])
+        supported = document->frame()->editor()->commandIsSupported(WebCore::AtomicString(name));
+
+    antb_free(name);
+    selectionAssignBool(engine, out, supported);
+    return 1;
+}
+
+int docQueryCommandEnabled(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                           AntbValue* out, void*)
+{
+    WebCore::Document* document = documentOf(self);
+    char* name = (argc > 0 && args[0]) ? antb_to_utf8(args[0]) : NULL;
+    bool enabled = false;
+
+    if (document && document->frame() && name && name[0])
+        enabled = document->frame()->editor()->commandIsEnabled(WebCore::AtomicString(name));
+
+    antb_free(name);
+    selectionAssignBool(engine, out, enabled);
+    return 1;
+}
+
+/* queryCommandState(): Chrome reports "is this style currently applied".
+ * Editing styles are not implemented here, so the answer is always false -
+ * which is also what Chrome returns for a page without the style. */
+int docQueryCommandState(AntbEngine* engine, AntbValue*, AntbValue**, int,
+                         AntbValue* out, void*)
+{
+    selectionAssignBool(engine, out, false);
+    return 1;
+}
+
+/* --- Selection methods --------------------------------------------------- */
+
+static int selectionGetter(AntbEngine* engine, AntbValue* self, const char* name,
+                           AntbValue* out, void*)
+{
+    WebCore::DOMSelection* selection = selectionNative(self);
+
+    if (!selection || !name) {
+        static int selDebug = -1;
+
+        if (selDebug < 0)
+            selDebug = getenv("AGB_SEL_DEBUG") ? 1 : 0;
+        if (selDebug)
+            fprintf(stderr, "[seljs] selection getter %s on a receiver without native=%p (self=%p)\n",
+                    name ? name : "(null)", (void*)selection, (void*)self);
+        return 0;
+    }
+
+    if (!strcmp(name, "type"))
+        { selectionAssignString(engine, out, selection->type()); return 1; }
+    if (!strcmp(name, "rangeCount"))
+        { selectionAssignNumber(engine, out, selection->rangeCount()); return 1; }
+    if (!strcmp(name, "isCollapsed"))
+        { selectionAssignBool(engine, out, selection->isCollapsed()); return 1; }
+
+    if (!strcmp(name, "anchorNode") || !strcmp(name, "baseNode")) {
+        WebCore::Node* node = selection->baseNode();
+
+        if (!node) {
+            static int selDebug = -1;
+
+            if (selDebug < 0)
+                selDebug = getenv("AGB_SEL_DEBUG") ? 1 : 0;
+            if (selDebug)
+                fprintf(stderr, "[seljs] %s: no node (rangeCount=%d state=%s)\n",
+                        name, selection->rangeCount(),
+                        selection->type().utf8().data());
+            return assignNull(engine, out);
+        }
+        {
+            AntbValue* v = wrapNode(engine, node);
+
+            if (v) {
+                antb_value_assign(out, v);
+                antb_value_release(v);
+            }
+        }
+        return 1;
+    }
+    if (!strcmp(name, "focusNode") || !strcmp(name, "extentNode")) {
+        WebCore::Node* node = selection->extentNode();
+
+        if (!node) {
+            static int selDebug = -1;
+
+            if (selDebug < 0)
+                selDebug = getenv("AGB_SEL_DEBUG") ? 1 : 0;
+            if (selDebug)
+                fprintf(stderr, "[seljs] %s: no node (rangeCount=%d state=%s)\n",
+                        name, selection->rangeCount(),
+                        selection->type().utf8().data());
+            return assignNull(engine, out);
+        }
+        {
+            AntbValue* v = wrapNode(engine, node);
+
+            if (v) {
+                antb_value_assign(out, v);
+                antb_value_release(v);
+            }
+        }
+        return 1;
+    }
+    if (!strcmp(name, "anchorOffset") || !strcmp(name, "baseOffset"))
+        { selectionAssignNumber(engine, out, selection->baseOffset()); return 1; }
+    if (!strcmp(name, "focusOffset") || !strcmp(name, "extentOffset"))
+        { selectionAssignNumber(engine, out, selection->extentOffset()); return 1; }
+
+    return 0;
+}
+
+static int selectionMethod(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                           AntbValue* out, void* user)
+{
+    WebCore::DOMSelection* selection = selectionNative(self);
+    long op = (long)(intptr_t)user;
+    WebCore::ExceptionCode ec = 0;
+
+    if (!selection)
+        return 0;
+
+    switch (op) {
+    case SEL_OP_TOSTRING:
+        selectionAssignString(engine, out, selection->toString());
+        return 1;
+
+    case SEL_OP_GET_RANGE_AT: {
+        int index = (argc > 0 && args[0]) ? (int)antb_to_number(args[0]) : 0;
+        PassRefPtr<WebCore::Range> range = selection->getRangeAt(index, ec);
+        AntbValue* v;
+
+        if (!range || ec)
+            return assignNull(engine, out);
+
+        v = wrapRange(engine, range.get());
+        if (!v)
+            return 0;
+        antb_value_assign(out, v);
+        antb_value_release(v);
+        return 1;
+    }
+
+    case SEL_OP_ADD_RANGE:
+        if (argc > 0 && args[0])
+            selection->addRange(rangeNative(args[0]));
+        return 1;
+
+    case SEL_OP_REMOVE_ALL:
+        selection->removeAllRanges();
+        return 1;
+
+    case SEL_OP_COLLAPSE: {
+        WebCore::Node* node = (argc > 0) ? nodeOf(args[0]) : 0;
+        int offset = (argc > 1 && args[1]) ? (int)antb_to_number(args[1]) : 0;
+
+        if (node)
+            selection->collapse(node, offset, ec);
+        return 1;
+    }
+
+    case SEL_OP_COLLAPSE_TO_START:
+        selection->collapseToStart();
+        return 1;
+
+    case SEL_OP_COLLAPSE_TO_END:
+        selection->collapseToEnd();
+        return 1;
+
+    case SEL_OP_EXTEND: {
+        WebCore::Node* node = (argc > 0) ? nodeOf(args[0]) : 0;
+        int offset = (argc > 1 && args[1]) ? (int)antb_to_number(args[1]) : 0;
+
+        if (node)
+            selection->setBaseAndExtent(selection->baseNode(), selection->baseOffset(),
+                                        node, offset, ec);
+        return 1;
+    }
+
+    case SEL_OP_SELECT_ALL_CHILDREN: {
+        WebCore::Node* node = (argc > 0) ? nodeOf(args[0]) : 0;
+
+        if (!node || !node->document())
+            return 1;
+        {
+            RefPtr<WebCore::Range> range = node->document()->createRange();
+
+            range->selectNodeContents(node, ec);
+            if (!ec) {
+                selection->removeAllRanges();
+                selection->addRange(range.get());
+            }
+        }
+        return 1;
+    }
+
+    case SEL_OP_DELETE_FROM_DOCUMENT: {
+        RefPtr<WebCore::Range> range = selection->getRangeAt(0, ec);
+
+        if (range && !ec) {
+            WebCore::Node* start = range->startContainer(ec);
+            int offset = range->startOffset(ec);
+
+            ec = 0;
+            range->deleteContents(ec);
+            if (start)
+                selection->collapse(start, offset, ec);
+        }
+        return 1;
+    }
+
+    case SEL_OP_CONTAINS_NODE: {
+        WebCore::Node* node = (argc > 0) ? nodeOf(args[0]) : 0;
+        bool allowPartial = (argc > 1 && args[1]) ? (antb_to_boolean(args[1]) != 0) : false;
+        RefPtr<WebCore::Range> range = selection->getRangeAt(0, ec);
+        bool contains = false;
+
+        if (node && range && !ec) {
+            if (allowPartial) {
+                contains = range->intersectsNode(node, ec);
+            } else {
+                RefPtr<WebCore::Range> nodeRange = node->document()->createRange();
+
+                nodeRange->selectNode(node, ec);
+
+                if (!ec)
+                    contains = range->compareBoundaryPoints(WebCore::Range::START_TO_START,
+                                                            nodeRange.get(), ec) <= 0
+                        && range->compareBoundaryPoints(WebCore::Range::END_TO_END,
+                                                        nodeRange.get(), ec) >= 0;
+            }
+        }
+        selectionAssignBool(engine, out, contains);
+        return 1;
+    }
+
+    case SEL_OP_MODIFY: {
+        char* alter = (argc > 0 && args[0]) ? antb_to_utf8(args[0]) : NULL;
+        char* direction = (argc > 1 && args[1]) ? antb_to_utf8(args[1]) : NULL;
+        char* granularity = (argc > 2 && args[2]) ? antb_to_utf8(args[2]) : NULL;
+
+        if (alter && direction && granularity)
+            selection->modify(WebCore::String::fromUTF8(alter),
+                              WebCore::String::fromUTF8(direction),
+                              WebCore::String::fromUTF8(granularity));
+
+        antb_free(alter);
+        antb_free(direction);
+        antb_free(granularity);
+        return 1;
+    }
+
+    case SEL_OP_SET_BASE_AND_EXTENT: {
+        WebCore::Node* base = (argc > 0) ? nodeOf(args[0]) : 0;
+        int baseOffset = (argc > 1 && args[1]) ? (int)antb_to_number(args[1]) : 0;
+        WebCore::Node* extent = (argc > 2) ? nodeOf(args[2]) : 0;
+        int extentOffset = (argc > 3 && args[3]) ? (int)antb_to_number(args[3]) : 0;
+
+        if (base && extent)
+            selection->setBaseAndExtent(base, baseOffset, extent, extentOffset, ec);
+        return 1;
+    }
+
+    case SEL_OP_SET_POSITION: {
+        WebCore::Node* node = (argc > 0) ? nodeOf(args[0]) : 0;
+        int offset = (argc > 1 && args[1]) ? (int)antb_to_number(args[1]) : 0;
+
+        if (node)
+            selection->setPosition(node, offset, ec);
+        return 1;
+    }
+
+    default:
+        return 0;
+    }
+}
+
+/* --- Range methods ------------------------------------------------------- */
+
+static int rangeGetter(AntbEngine* engine, AntbValue* self, const char* name,
+                       AntbValue* out, void*)
+{
+    WebCore::Range* range = rangeNative(self);
+    WebCore::ExceptionCode ec = 0;
+
+    if (!range || !name)
+        return 0;
+
+    if (!strcmp(name, "startContainer")) {
+        WebCore::Node* node = range->startContainer(ec);
+
+        if (!node)
+            return assignNull(engine, out);
+        {
+            AntbValue* v = wrapNode(engine, node);
+
+            if (v) {
+                antb_value_assign(out, v);
+                antb_value_release(v);
+            }
+        }
+        return 1;
+    }
+    if (!strcmp(name, "endContainer")) {
+        WebCore::Node* node = range->endContainer(ec);
+
+        if (!node)
+            return assignNull(engine, out);
+        {
+            AntbValue* v = wrapNode(engine, node);
+
+            if (v) {
+                antb_value_assign(out, v);
+                antb_value_release(v);
+            }
+        }
+        return 1;
+    }
+    if (!strcmp(name, "commonAncestorContainer")) {
+        WebCore::Node* node = range->commonAncestorContainer(ec);
+
+        if (!node)
+            return assignNull(engine, out);
+        {
+            AntbValue* v = wrapNode(engine, node);
+
+            if (v) {
+                antb_value_assign(out, v);
+                antb_value_release(v);
+            }
+        }
+        return 1;
+    }
+    if (!strcmp(name, "startOffset"))
+        { selectionAssignNumber(engine, out, range->startOffset(ec)); return 1; }
+    if (!strcmp(name, "endOffset"))
+        { selectionAssignNumber(engine, out, range->endOffset(ec)); return 1; }
+    if (!strcmp(name, "collapsed"))
+        { selectionAssignBool(engine, out, range->collapsed(ec)); return 1; }
+    if (!strcmp(name, "detached"))
+        { selectionAssignBool(engine, out, range->isDetached()); return 1; }
+
+    return 0;
+}
+
+static int rangeMethod(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                       AntbValue* out, void* user)
+{
+    WebCore::Range* range = rangeNative(self);
+    long op = (long)(intptr_t)user;
+    WebCore::ExceptionCode ec = 0;
+
+    if (!range)
+        return 0;
+
+    switch (op) {
+    case RNG_OP_SET_START:
+    case RNG_OP_SET_END: {
+        WebCore::Node* node = (argc > 0) ? nodeOf(args[0]) : 0;
+        int offset = (argc > 1 && args[1]) ? (int)antb_to_number(args[1]) : 0;
+
+        if (!node)
+            return 1;
+        if (op == RNG_OP_SET_START)
+            range->setStart(node, offset, ec);
+        else
+            range->setEnd(node, offset, ec);
+        return 1;
+    }
+
+    case RNG_OP_SET_START_BEFORE:
+    case RNG_OP_SET_START_AFTER:
+    case RNG_OP_SET_END_BEFORE:
+    case RNG_OP_SET_END_AFTER: {
+        WebCore::Node* node = (argc > 0) ? nodeOf(args[0]) : 0;
+
+        if (!node)
+            return 1;
+        if (op == RNG_OP_SET_START_BEFORE)
+            range->setStartBefore(node, ec);
+        else if (op == RNG_OP_SET_START_AFTER)
+            range->setStartAfter(node, ec);
+        else if (op == RNG_OP_SET_END_BEFORE)
+            range->setEndBefore(node, ec);
+        else
+            range->setEndAfter(node, ec);
+        return 1;
+    }
+
+    case RNG_OP_SELECT_NODE:
+    case RNG_OP_SELECT_NODE_CONTENTS: {
+        WebCore::Node* node = (argc > 0) ? nodeOf(args[0]) : 0;
+
+        if (!node)
+            return 1;
+        if (op == RNG_OP_SELECT_NODE)
+            range->selectNode(node, ec);
+        else
+            range->selectNodeContents(node, ec);
+        return 1;
+    }
+
+    case RNG_OP_COLLAPSE: {
+        bool toStart = (argc > 0 && args[0]) ? (antb_to_boolean(args[0]) != 0) : false;
+
+        range->collapse(toStart, ec);
+        return 1;
+    }
+
+    case RNG_OP_CLONE: {
+        PassRefPtr<WebCore::Range> clone = range->cloneRange(ec);
+        AntbValue* v;
+
+        if (!clone || ec)
+            return assignNull(engine, out);
+        v = wrapRange(engine, clone.get());
+        if (!v)
+            return 0;
+        antb_value_assign(out, v);
+        antb_value_release(v);
+        return 1;
+    }
+
+    case RNG_OP_DETACH:
+        range->detach(ec);
+        return 1;
+
+    case RNG_OP_TOSTRING:
+        selectionAssignString(engine, out, range->toString(ec));
+        return 1;
+
+    case RNG_OP_COMPARE_BOUNDARY_POINTS: {
+        int how = (argc > 0 && args[0]) ? (int)antb_to_number(args[0]) : 0;
+        WebCore::Range* source = (argc > 1) ? rangeNative(args[1]) : 0;
+
+        if (!source || how < 0 || how > 3)
+            { selectionAssignNumber(engine, out, 0); return 1; }
+        selectionAssignNumber(engine, out,
+                              range->compareBoundaryPoints((WebCore::Range::CompareHow)how, source, ec));
+        return 1;
+    }
+
+    case RNG_OP_GET_BOUNDING_CLIENT_RECT: {
+        /* Chrome reports the line-box rect of a text range (a 16px font on a
+         * 24px line gives height 24 and the line's top), not the glyph box;
+         * Range::boundingBox() is the latter. Use the selection-height rects so
+         * a popover anchored to a selection lands where Chrome puts it. */
+        WTF::Vector<WebCore::IntRect> rects;
+        WebCore::IntRect rect;
+        WebCore::Document* document = range->ownerDocument();
+
+        range->addLineBoxRects(rects, true);
+        for (size_t i = 0; i < rects.size(); ++i)
+            rect.unite(rects[i]);
+
+        /* ...and in viewport coordinates (see node.getBoundingClientRect). */
+        if (document && document->view())
+            rect.move(-document->view()->contentsX(), -document->view()->contentsY());
+        {
+            AntbValue* v = selectionMakeRect(engine, rect);
+
+            if (v) {
+                antb_value_assign(out, v);
+                antb_value_release(v);
+            }
+        }
+        return 1;
+    }
+
+    case RNG_OP_GET_CLIENT_RECTS: {
+        WebCore::Document* document = range->ownerDocument();
+        WTF::Vector<WebCore::IntRect> rects;
+        AntbValue* array;
+        size_t i;
+
+        range->addLineBoxRects(rects, false);
+
+        array = antb_make_array(engine);
+        if (!array)
+            return 0;
+
+        for (i = 0; i < rects.size(); ++i) {
+            WebCore::IntRect rect = rects[i];
+
+            if (document && document->view())
+                rect.move(-document->view()->contentsX(), -document->view()->contentsY());
+            {
+                AntbValue* item = selectionMakeRect(engine, rect);
+
+                if (item) {
+                    antb_array_push(engine, array, item);
+                    antb_value_release(item);
+                }
+            }
+        }
+
+        antb_value_assign(out, array);
+        antb_value_release(array);
+        return 1;
+    }
+
+    case RNG_OP_CREATE_CONTEXTUAL_FRAGMENT: {
+        char* html = (argc > 0 && args[0]) ? antb_to_utf8(args[0]) : NULL;
+        PassRefPtr<WebCore::DocumentFragment> fragment;
+
+        if (html)
+            fragment = range->createContextualFragment(WebCore::String::fromUTF8(html), ec);
+
+        antb_free(html);
+
+        if (!fragment || ec)
+            return assignNull(engine, out);
+        {
+            AntbValue* v = wrapNode(engine, fragment.get());
+
+            if (!v)
+                return 0;
+            antb_value_assign(out, v);
+            antb_value_release(v);
+        }
+        return 1;
+    }
+
+    case RNG_OP_INSERT_NODE: {
+        WebCore::Node* node = (argc > 0) ? nodeOf(args[0]) : 0;
+
+        if (node)
+            range->insertNode(node, ec);
+        return 1;
+    }
+
+    case RNG_OP_SURROUND_CONTENTS: {
+        WebCore::Node* node = (argc > 0) ? nodeOf(args[0]) : 0;
+
+        if (node)
+            range->surroundContents(node, ec);
+        return 1;
+    }
+
+    default:
+        return 0;
+    }
+}
+
+static void ensureSelectionClasses()
+{
+    if (!g_engine || g_selectionClass)
+        return;
+
+    g_selectionClass = antb_class_create(g_engine, "Selection");
+    if (g_selectionClass) {
+        antb_class_set_property(g_engine, g_selectionClass, "", selectionGetter, NULL);
+        antb_class_add_method(g_engine, g_selectionClass, "toString", selectionMethod, (void*)(intptr_t)SEL_OP_TOSTRING);
+        antb_class_add_method(g_engine, g_selectionClass, "getRangeAt", selectionMethod, (void*)(intptr_t)SEL_OP_GET_RANGE_AT);
+        antb_class_add_method(g_engine, g_selectionClass, "addRange", selectionMethod, (void*)(intptr_t)SEL_OP_ADD_RANGE);
+        antb_class_add_method(g_engine, g_selectionClass, "removeAllRanges", selectionMethod, (void*)(intptr_t)SEL_OP_REMOVE_ALL);
+        antb_class_add_method(g_engine, g_selectionClass, "empty", selectionMethod, (void*)(intptr_t)SEL_OP_REMOVE_ALL);
+        antb_class_add_method(g_engine, g_selectionClass, "collapse", selectionMethod, (void*)(intptr_t)SEL_OP_COLLAPSE);
+        antb_class_add_method(g_engine, g_selectionClass, "collapseToStart", selectionMethod, (void*)(intptr_t)SEL_OP_COLLAPSE_TO_START);
+        antb_class_add_method(g_engine, g_selectionClass, "collapseToEnd", selectionMethod, (void*)(intptr_t)SEL_OP_COLLAPSE_TO_END);
+        antb_class_add_method(g_engine, g_selectionClass, "extend", selectionMethod, (void*)(intptr_t)SEL_OP_EXTEND);
+        antb_class_add_method(g_engine, g_selectionClass, "selectAllChildren", selectionMethod, (void*)(intptr_t)SEL_OP_SELECT_ALL_CHILDREN);
+        antb_class_add_method(g_engine, g_selectionClass, "deleteFromDocument", selectionMethod, (void*)(intptr_t)SEL_OP_DELETE_FROM_DOCUMENT);
+        antb_class_add_method(g_engine, g_selectionClass, "containsNode", selectionMethod, (void*)(intptr_t)SEL_OP_CONTAINS_NODE);
+        antb_class_add_method(g_engine, g_selectionClass, "modify", selectionMethod, (void*)(intptr_t)SEL_OP_MODIFY);
+        antb_class_add_method(g_engine, g_selectionClass, "setBaseAndExtent", selectionMethod, (void*)(intptr_t)SEL_OP_SET_BASE_AND_EXTENT);
+        antb_class_add_method(g_engine, g_selectionClass, "setPosition", selectionMethod, (void*)(intptr_t)SEL_OP_SET_POSITION);
+    }
+
+    g_rangeClass = antb_class_create(g_engine, "Range");
+    if (g_rangeClass) {
+        antb_class_set_property(g_engine, g_rangeClass, "", rangeGetter, NULL);
+        antb_class_add_method(g_engine, g_rangeClass, "setStart", rangeMethod, (void*)(intptr_t)RNG_OP_SET_START);
+        antb_class_add_method(g_engine, g_rangeClass, "setEnd", rangeMethod, (void*)(intptr_t)RNG_OP_SET_END);
+        antb_class_add_method(g_engine, g_rangeClass, "setStartBefore", rangeMethod, (void*)(intptr_t)RNG_OP_SET_START_BEFORE);
+        antb_class_add_method(g_engine, g_rangeClass, "setStartAfter", rangeMethod, (void*)(intptr_t)RNG_OP_SET_START_AFTER);
+        antb_class_add_method(g_engine, g_rangeClass, "setEndBefore", rangeMethod, (void*)(intptr_t)RNG_OP_SET_END_BEFORE);
+        antb_class_add_method(g_engine, g_rangeClass, "setEndAfter", rangeMethod, (void*)(intptr_t)RNG_OP_SET_END_AFTER);
+        antb_class_add_method(g_engine, g_rangeClass, "selectNode", rangeMethod, (void*)(intptr_t)RNG_OP_SELECT_NODE);
+        antb_class_add_method(g_engine, g_rangeClass, "selectNodeContents", rangeMethod, (void*)(intptr_t)RNG_OP_SELECT_NODE_CONTENTS);
+        antb_class_add_method(g_engine, g_rangeClass, "collapse", rangeMethod, (void*)(intptr_t)RNG_OP_COLLAPSE);
+        antb_class_add_method(g_engine, g_rangeClass, "cloneRange", rangeMethod, (void*)(intptr_t)RNG_OP_CLONE);
+        antb_class_add_method(g_engine, g_rangeClass, "detach", rangeMethod, (void*)(intptr_t)RNG_OP_DETACH);
+        antb_class_add_method(g_engine, g_rangeClass, "toString", rangeMethod, (void*)(intptr_t)RNG_OP_TOSTRING);
+        antb_class_add_method(g_engine, g_rangeClass, "compareBoundaryPoints", rangeMethod, (void*)(intptr_t)RNG_OP_COMPARE_BOUNDARY_POINTS);
+        antb_class_add_method(g_engine, g_rangeClass, "getBoundingClientRect", rangeMethod, (void*)(intptr_t)RNG_OP_GET_BOUNDING_CLIENT_RECT);
+        antb_class_add_method(g_engine, g_rangeClass, "getClientRects", rangeMethod, (void*)(intptr_t)RNG_OP_GET_CLIENT_RECTS);
+        antb_class_add_method(g_engine, g_rangeClass, "createContextualFragment", rangeMethod, (void*)(intptr_t)RNG_OP_CREATE_CONTEXTUAL_FRAGMENT);
+        antb_class_add_method(g_engine, g_rangeClass, "insertNode", rangeMethod, (void*)(intptr_t)RNG_OP_INSERT_NODE);
+        antb_class_add_method(g_engine, g_rangeClass, "surroundContents", rangeMethod, (void*)(intptr_t)RNG_OP_SURROUND_CONTENTS);
+    }
+}
+
 
 int docGetElementById(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
                       AntbValue* out, void*)
@@ -13741,6 +14645,61 @@ bool beforeUnloadGuard(std::string& text)
     return guard;
 }
 
+/* Fires a document-level event at the listeners registered on the document
+ * (document.addEventListener('selectionchange', ...)). WebCore's Document is
+ * not an EventTargetNode, so this bridge's listener table is the only route -
+ * the same one beforeunload already uses.
+ *
+ * Re-entrancy: a handler that moves the selection again would recurse forever;
+ * Chrome coalesces these into tasks. One event per outer change is enough for
+ * the UI patterns this exists for (enabling a Copy button, counters). */
+void dispatchDocumentEvent(void* document, const char* type)
+{
+    WebCore::Document* doc = (WebCore::Document*)document;
+    static bool inDispatch = false;
+    DocumentRuntime* runtime;
+    AntbValue* evt;
+    AntbValue* target;
+    bool stopped = false;
+    bool stoppedImmediate = false;
+    bool hasListener = false;
+
+    if (!doc || !type || !g_engine || inDispatch || !g_listeners)
+        return;
+
+    runtime = documentRuntimeOf(g_currentState, doc);
+    if (!runtime)
+        return;   /* document of a torn-down realm */
+
+    for (size_t i = 0; i < g_listeners->size(); ++i) {
+        Listener& l = (*g_listeners)[i];
+
+        if (l.node == doc && l.type == type && l.fn) {
+            hasListener = true;
+            break;
+        }
+    }
+
+    if (!hasListener)
+        return;
+
+    activateDocument(runtime);
+
+    evt = makeEventObject(type, doc, NULL);
+    if (!evt)
+        return;
+
+    target = wrapNode(g_engine, doc);
+    if (target) {
+        inDispatch = true;
+        runListenersFor(doc, type, evt, target, stopped, stoppedImmediate);
+        inDispatch = false;
+        antb_value_release(target);
+    }
+
+    antb_value_release(evt);
+}
+
 } /* namespace AntRuntime */
 
 namespace AntRuntime {
@@ -13793,6 +14752,8 @@ extern "C" int agb_dump_js_stack_for(void* context, const char* path)
 
     return antb_dump_js_stack_to_file(state->engine, path);
 }
+
+
 
 
 

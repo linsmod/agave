@@ -24,6 +24,7 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
   
 #include "config.h"
 #include "SelectionController.h"
@@ -126,6 +127,20 @@ void SelectionController::setSelection(const Selection& s, bool closeTyping, boo
         return;
     
     Selection oldSelection = m_sel;
+
+    {
+        static int selDebug = -1;
+
+        if (selDebug < 0)
+            selDebug = getenv("AGB_SEL_DEBUG") ? 1 : 0;
+
+        if (selDebug)
+            fprintf(stderr, "[selctl] set sel %s old=%s start=%s@%d end=%s@%d\n",
+                    s.isRange() ? "range" : (s.isCaret() ? "caret" : "none"),
+                    m_sel.isRange() ? "range" : (m_sel.isCaret() ? "caret" : "none"),
+                    s.start().node() ? s.start().node()->nodeName().utf8().data() : "(null)", s.start().offset(),
+                    s.end().node() ? s.end().node()->nodeName().utf8().data() : "(null)", s.end().offset());
+    }
 
     m_sel = s;
     

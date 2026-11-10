@@ -655,6 +655,17 @@ MC_BOOL macross_view_eval_script(MaCrossView* view, const char* script)
     return view->view->executeScript(script) ? TRUE : FALSE;
 }
 
+MC_BOOL macross_view_exec_editor_command(MaCrossView* view, const char* command)
+{
+    if (!view || !command || !command[0])
+        return FALSE;
+
+    /* The command names are ASCII keys of Editor's command map. A disabled
+     * command (Copy with an empty selection, Paste into a read-only page) is a
+     * no-op and still "recognised"; only an unknown name fails. */
+    return view->view->execEditorCommand(command) ? TRUE : FALSE;
+}
+
 unsigned macross_view_document_epoch(MaCrossView* view)
 {
     return view ? view->view->documentEpoch() : 0;

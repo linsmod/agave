@@ -219,8 +219,15 @@ static int locationGetter(AntbEngine* engine, AntbValue* self, const char* name,
             value = url.path();
         else if (!strcmp(name, "search"))
             value = url.query();
-        else if (!strcmp(name, "hash"))
+        else if (!strcmp(name, "hash")) {
+            /* location.hash includes the '#': KURL::ref() does not, and pages
+             * compare it literally (scroll-to-anchor code does
+             * location.hash.slice(1), which silently ate the first character
+             * of the fragment). Empty fragment stays "". */
             value = url.ref();
+            if (!value.isEmpty())
+                value = WebCore::String("#") + value;
+        }
         else
             return 0;
 
