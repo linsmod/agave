@@ -92,6 +92,11 @@ namespace WebCore { bool prefersDarkColorScheme(); }
 #include "PlatformKeyboardEvent.h"
 #include "TextEvent.h"
 #include "HTMLCanvasElement.h"
+#include "HTMLButtonElement.h"
+#include "HTMLAnchorElement.h"
+#include "HTMLFormElement.h"
+#include "HTMLTextAreaElement.h"
+#include "HTMLGenericFormElement.h"
 #include "CanvasRenderingContext2D.h"
 #include "CanvasStyle.h"
 #include "CanvasGradient.h"
@@ -9815,6 +9820,9 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
             } else if (element->hasTagName(WebCore::HTMLNames::optionTag)) {
                 WebCore::String s = static_cast<WebCore::HTMLOptionElement*>(element)->value();
                 v = antb_make_string(engine, s.utf8().data());
+            } else if (element->hasTagName(WebCore::HTMLNames::buttonTag)) {
+                WebCore::String s = static_cast<WebCore::HTMLButtonElement*>(element)->value();
+                v = antb_make_string(engine, s.utf8().data());
             } else {
                 return 0;
             }
@@ -9877,6 +9885,14 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
             } else {
                 return 0;
             }
+        } else if (element->hasTagName(WebCore::HTMLNames::formTag)
+                   && !strcmp(name, "length")) {
+            /* form.length: the number of listed controls (Chrome counts them). */
+            v = antb_make_number(engine, (double)static_cast<WebCore::HTMLFormElement*>(element)->length());
+        } else if (element->hasTagName(WebCore::HTMLNames::aTag)
+                   && !strcmp(name, "text")) {
+            WebCore::String s = static_cast<WebCore::HTMLAnchorElement*>(element)->text();
+            v = antb_make_string(engine, s.utf8().data());
         } else {
             return 0;
         }
@@ -10177,6 +10193,63 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
                 v = antb_make_number(engine, (double)canvas->width());
             else if (!strcmp(name, "height"))
                 v = antb_make_number(engine, (double)canvas->height());
+        } else if (!strcmp(name, "form")) {
+            /* The form owner: a DOM relationship, not an attribute. An element
+             * outside a form answers null (Chrome), not undefined. */
+            WebCore::HTMLFormElement* form = 0;
+
+            if (el->hasTagName(WebCore::HTMLNames::inputTag)
+                || el->hasTagName(WebCore::HTMLNames::selectTag)
+                || el->hasTagName(WebCore::HTMLNames::textareaTag)
+                || el->hasTagName(WebCore::HTMLNames::buttonTag)) {
+                form = static_cast<WebCore::HTMLGenericFormElement*>(el)->form();
+            } else if (el->hasTagName(WebCore::HTMLNames::optionTag)) {
+                WebCore::HTMLSelectElement* select =
+                    static_cast<WebCore::HTMLOptionElement*>(el)->getSelect();
+
+                if (select)
+                    form = select->form();
+            } else {
+                return 0;
+            }
+
+            /* WebCore 2008 only sets m_form from the parser (parserSetForm), so a
+             * control created by script and appended into a <form> has no form
+             * owner. Chrome resolves it from the ancestor chain, which is what
+             * pages rely on. */
+            if (!form) {
+                WebCore::Node* ancestor = el->hasTagName(WebCore::HTMLNames::optionTag)
+                    ? static_cast<WebCore::HTMLOptionElement*>(el)->getSelect()
+                    : el;
+
+                for (WebCore::Node* p = ancestor ? ancestor->parentNode() : 0; p; p = p->parentNode()) {
+                    if (p->hasTagName(WebCore::HTMLNames::formTag)) {
+                        form = static_cast<WebCore::HTMLFormElement*>(p);
+                        break;
+                    }
+                }
+            }
+
+            if (!form) {
+                v = antb_make_null(engine);
+            } else {
+                v = wrapNode(engine, form);
+            }
+        } else if (!strcmp(name, "checked")
+                   && el->hasTagName(WebCore::HTMLNames::inputTag)) {
+            v = antb_make_boolean(engine,
+                    static_cast<WebCore::HTMLInputElement*>(el)->checked() ? 1 : 0);
+        } else if (!strcmp(name, "indeterminate")
+                   && el->hasTagName(WebCore::HTMLNames::inputTag)) {
+            v = antb_make_boolean(engine,
+                    static_cast<WebCore::HTMLInputElement*>(el)->indeterminate() ? 1 : 0);
+        } else if ((!strcmp(name, "selectionStart") || !strcmp(name, "selectionEnd"))
+                   && el->hasTagName(WebCore::HTMLNames::textareaTag)) {
+            WebCore::HTMLTextAreaElement* area = static_cast<WebCore::HTMLTextAreaElement*>(el);
+
+            v = antb_make_number(engine, (double)(!strcmp(name, "selectionStart")
+                                                  ? area->selectionStart()
+                                                  : area->selectionEnd()));
         }
     }
 
@@ -10439,6 +10512,22 @@ int nodeSetter(AntbEngine* engine, AntbValue* self, const char* name, const Antb
         return 1;
     }
 
+    /* Input state that is not an attribute: `checked`/`indeterminate` are the
+     * form control's state, and the button's `value` is the value attribute. */
+    if (n->isElementNode() && (!strcmp(name, "checked") || !strcmp(name, "indeterminate"))) {
+        WebCore::Element* element = static_cast<WebCore::Element*>(n);
+
+        if (element->hasTagName(WebCore::HTMLNames::inputTag)) {
+            WebCore::HTMLInputElement* input = static_cast<WebCore::HTMLInputElement*>(element);
+
+            if (!strcmp(name, "checked"))
+                input->setChecked(value ? antb_to_boolean(value) != 0 : false);
+            else
+                input->setIndeterminate(value ? antb_to_boolean(value) != 0 : false);
+            return 1;
+        }
+    }
+
     if (!strcmp(name, "value") && n->isElementNode()) {
         char* text = antb_to_utf8(value);
         WebCore::Element* element = static_cast<WebCore::Element*>(n);
@@ -10448,6 +10537,8 @@ int nodeSetter(AntbEngine* engine, AntbValue* self, const char* name, const Antb
             static_cast<WebCore::HTMLInputElement*>(element)->setValue(WebCore::String::fromUTF8(text));
         else if (element->hasTagName(WebCore::HTMLNames::textareaTag))
             static_cast<WebCore::HTMLTextAreaElement*>(element)->setValue(WebCore::String::fromUTF8(text));
+        else if (element->hasTagName(WebCore::HTMLNames::buttonTag))
+            static_cast<WebCore::HTMLButtonElement*>(element)->setValue(WebCore::String::fromUTF8(text));
         antb_free(text);
         return 1;
     }

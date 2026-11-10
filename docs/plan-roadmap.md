@@ -278,6 +278,16 @@
   验收：`cap_binding_semantics.html` 的 "script-created iframe keeps the caller document"（169/169）。
 - 详细记录：`docs/hist-lessons.md` R183、`issues/wip/ant-dom-bindings.md` §28.6–§28.7。
 
+### P1-wrap `textContent` 写入破坏其它节点的 wrapper 身份（2026-11-10 发现，**待查**）
+
+- 现象：`var a=document.createElement('a'); a.textContent='hello';` 之后，之前拿到的另一个 wrapper 与其原生节点不再相等：
+  `inp.form === form` 从 true 变 false（`inp.form.tagName==='FORM'`、`inp.form===inp.parentNode` 仍成立 → 同一原生节点、
+  不同 JS wrapper）。二分确认 `a` 还是游离节点时也会发生，与 `appendChild`/属性写入无关。
+- 影响：`===` 身份比较（库的 memo/缓存、`el === parent.firstChild`）会偶发不成立；wrapper cache 的 identity 被破坏。
+- 起点：`Node::setTextContent()` 路径上是否触发了 `antb_release_owner`/`Document::updateDocumentsRendering` 时的 wrapper 失效，
+  以及 `wrapNode()` 的 `(ptr, tag, realm)` 缓存键是否被 realm/owner 变化打散。
+- 记录：`issues/wip/ant-dom-bindings.md` §28.8.1。
+
 ### P1-z 图片解码离开 paint（L0–L3，2026-11-08 起；L0–L3 已完成，剩余见下）
 
 - 现状：`RenderImage::paint → BitmapImage::draw → ImageSource::createFrameAtIndex →

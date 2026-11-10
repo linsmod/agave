@@ -334,6 +334,46 @@
       return c.width === 300 && c.height === 150;
     })());
     ok('isContentEditable is DOM state', document.createElement('div').isContentEditable === false);
+    /* A3: attributes whose value is DOM state, not the attribute. Built off-DOM so
+     * the matrix does not disturb the page (form ownership walks the ancestor
+     * chain, so it resolves without being in the document). */
+    ok('form owner from the ancestor chain', (function () {
+      var f = document.createElement('form'), i = document.createElement('input');
+      f.appendChild(i);
+      return !!i.form && i.form.tagName === 'FORM';
+    })());
+    ok('checked is control state', (function () {
+      var i = document.createElement('input');
+      i.checked = true;
+      return i.checked === true && i.hasAttribute('checked') === false;
+    })());
+    ok('checkbox indeterminate', (function () {
+      var c = document.createElement('input');
+      c.type = 'checkbox';
+      c.indeterminate = true;
+      return c.indeterminate === true;
+    })());
+    ok('textarea selection start/end', (function () {
+      var t = document.createElement('textarea');
+      t.value = 'abcdef';
+      return t.selectionStart === 0 && t.selectionEnd === 0;
+    })());
+    ok('form.length counts controls', (function () {
+      var f = document.createElement('form');
+      f.appendChild(document.createElement('input'));
+      f.appendChild(document.createElement('textarea'));
+      return f.length === 2;
+    })());
+    ok('button.value reflects the attribute', (function () {
+      var b = document.createElement('button');
+      b.value = 'B';
+      return b.value === 'B' && b.getAttribute('value') === 'B';
+    })());
+    ok('anchor.text is its text', (function () {
+      var a = document.createElement('a');
+      a.textContent = 'hi';
+      return a.text === 'hi';
+    })());
     ok('id accessor on Element.prototype', (function () {
       var d = Object.getOwnPropertyDescriptor(Element.prototype, 'id');
       return !!d && typeof d.get === 'function' && typeof d.set === 'function' &&
