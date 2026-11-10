@@ -253,20 +253,18 @@
 
 ## P1：机制收敛
 
-### P1-dom-attr-accessors popup 探针 eval 路由（2026-11-10 发现，**待查**）
+### P1-dom-attr-accessors popup 探针用例（2026-11-10 已修 R182——**根因不是 eval 路由**）
 
-- 现象：B2-3 把属性改成接口原型 accessor 后，`run_nav_tests` 的 `window.open`、
-  `run_window_tests` 的 local `target=_blank`/命名 target、`run_tab_lifecycle_tests` 的 popup 用例
-  失败：probe 的 sanity eval 落在 popup 的 about:blank 文档里（`document.URL` undefined、
-  `probeExit` 未定义），主 view 的 `--eval` 于是拿不到退出信号（exit 4）。
-- 判据：`AGB_NO_DOM_ATTRS=1`（跳过属性 accessor 安装）这三个套件全过；`AGB_PER_REALM_IFACES=0`
-  （退回共享接口类表）也全过——两条线索说明是 accessor/per-realm 类表改变每文档初始化时序后
-  暴露的探针 eval 路由问题。页面 DOM 行为在真站点上未复现，只影响探针路径。
-- 起点：`AgaveWebView.c` 的 `agwPost(AGW_CMD_EVAL, ...)`/`agwCommandIsDocumentScoped`（命令带
-  `docEpoch`，处理时是否按 `command.view` 而不是"当前活动 view"落地？），以及 `agwOpenWindowFor`
-  →`agwActivateView` 在 popup 创建/加载时的时序；`--eval-file` 的 sanity eval 和 round script 是
-  同一次定时器里连续 post 的两条命令，却落到了两个不同的 realm。
-- 详细记录：`issues/wip/ant-dom-bindings.md` §20.5。
+- 现象：`run_nav_tests` 的 `window.open`、`run_window_tests` 的 local `target=_blank`/命名 target、
+  `run_tab_lifecycle_tests` 的 popup 用例失败，probe sanity eval 拿不到 `probeExit`（exit 4）。
+- 真实根因：接口 class 镜像有一半是**进程级 static**（`g_documentIface`/`g_elementIface`/`g_tagClasses`/
+  selection/range/textTrack），第二个 engine（popup）建类时覆盖了它们，主 engine 之后包的每个节点都是
+  跨 VM 原型的空壳（`document.documentElement.tagName === undefined`）。当时"eval 落到 popup 文档"的
+  判断是错的：`document.URL`/`childNodes` 一直是主文档的，只有走 `classForNode()` 的节点坏了。
+- 修法：镜像全部搬进 `RuntimeState`（per engine）、`applyRealmInterfacesFor(state, realm)` 显式写 state、
+  `ensureInterfaceClasses` 用 `stateForEngine(engine)` 查表；顺带修掉 `AGB_PER_REALM_IFACES=0` 每次重建
+  类表的问题。详细记录：`docs/hist-lessons.md` R182、`issues/wip/ant-dom-bindings.md` §22。
+- 验收（已满足）：三个套件恢复全绿；全量 `run_all_tests.ps1` 20 套件 250.9 s 0 failed。
 
 ### P1-z 图片解码离开 paint（L0–L3，2026-11-08 起；L0–L3 已完成，剩余见下）
 
