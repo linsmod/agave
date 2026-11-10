@@ -266,7 +266,7 @@
   类表的问题。详细记录：`docs/hist-lessons.md` R182、`issues/wip/ant-dom-bindings.md` §22。
 - 验收（已满足）：三个套件恢复全绿；全量 `run_all_tests.ps1` 20 套件 250.9 s 0 failed。
 
-### G1 DOM 绑定收尾（**新目标**，2026-11-11 立项；#15 已完结）
+### G1 DOM 绑定收尾（**已完成 2026-11-11**；#15 的后续，四项全部落地）
 
 > #15《ant runtime 是手写 DOM 门面》于 2026-11-11 **完结**：语义层（原型链/构造器/`instanceof`/归属按 Chrome/
 > 属性值 173 全有值/事件层级+冒泡+`isTrusted`+`PointerEvent`/集合 live+索引 own key/`el.style` 真
@@ -277,11 +277,16 @@
   Heading/Quote/Pre/OList/UList/BR/HR、SVGElement/SVGSVGElement、Window；`AGB_BINDING_CHECK=1` = 41 interfaces /
   457 attrs / 134 methods / 0 missing owner。`HTMLDocument` 的表被移除——它的成员在 Chrome 里属于 Document）。
   统一走 `tools/gen_bindings.ps1 -Generator ANT` + Chrome 归属对拍。
-- G1-2 `el.attributes` 变真 `NamedNodeMap`（`length`/`item`/`getNamedItem`/索引 own key）。
-- G1-3 `ParentNode`/`ChildNode` 七个方法从 `polyfills.js` 落成 C++（删 JS 补丁，行数可见下降）。
-- G1-4 文档收口（`arch-capability-gaps`/`dev-tests`/本文件/`issues`）。
-- 验收：`run_binding_semantics_tests` 断言数 ≥186 只增不减且全绿；全量 `-Parallel 4` 全绿；
-  `AGB_BINDING_CHECK=1` 0 missing owner 且接口数 ≥40。
+- G1-2 `el.attributes` 变真 `NamedNodeMap`（**2026-11-11 完成**：`length`/`item`/`getNamedItem`/`setNamedItem`/`removeNamedItem`/
+  `*NS`/索引 own key/live，元素是**真 `Attr`**；顺带修掉 ant 的 exotic-index 崩溃与 `PassRefPtr` 悬垂指针）。
+- G1-3 `ParentNode`/`ChildNode` 七个方法从 `polyfills.js` 落成 C++（**2026-11-11 完成**：`polyfills.js` 869 → 815 行，
+  归属按 Chrome——`Element`/`Document`/`DocumentFragment` 有 `append`/`prepend`/`replaceChildren`，
+  `Element`/`CharacterData` 有 `before`/`after`/`remove`/`replaceWith`，`Node.prototype` 上一个都没有；
+  `matches`/`closest` 暂留 JS）。
+- G1-4 文档收口（**2026-11-11 完成**：`arch-capability-gaps` 增 `element.attributes`/`Attr` 行、`dev-tests` 断言数 194、
+  本文件与 `issues/INDEX.md` #17、`wip/dom-bindings-next.md` 同步）。
+- 验收（**全部达成 2026-11-11**）：`run_binding_semantics_tests` **194/194** 全绿；全量 `-Parallel 4`
+  20 套件 **34.5 s 0 failed**；`AGB_BINDING_CHECK=1` = **43 interfaces / 0 missing owner(s)**。
 - **不在 G1**：生成器产行为（A1 主体，2~3 周，另立项）；wrapper 身份 bug（用户指示跳过，见 `P1-wrap`）；
   261 个 IDL 全量迁移；live collection 的 WebCore 化。
 
