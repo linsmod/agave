@@ -67,7 +67,9 @@ probeExit([
   'childTimerWorks=' + (cw ? cw.__childTimerWorks : 'n/a'),
   'childTimerUrl=' + (cw ? cw.__childTimerUrl : 'n/a'),
   'childTimerMarker=' + (cw ? cw.__childTimerMarker : 'n/a'),
-  'childTimerDocSame=' + (cw ? cw.__childTimerDocSame : 'n/a')
+  'childTimerDocSame=' + (cw ? cw.__childTimerDocSame : 'n/a'),
+  'childCtorDiff=' + (cw ? (cw.HTMLElement !== HTMLElement) : 'n/a'),
+  'childProtoDiff=' + (cw ? (cw.HTMLElement.prototype !== HTMLElement.prototype) : 'n/a')
 ].join('|'));
 '@ | Set-Content -Path $checkJs -Encoding ascii
 
@@ -188,7 +190,9 @@ if ($perFrame.Code -ne 0) {
         @{ Name = 'child timer fires';        Want = 'childTimerWorks=1';        Ok = ($perFrameText -match 'childTimerWorks=1') },
         @{ Name = 'timer keeps child document'; Want = 'childTimerUrl=own';      Ok = ($perFrameText -match 'childTimerUrl=own') },
         @{ Name = 'timer sees child DOM';     Want = 'childTimerMarker=found';   Ok = ($perFrameText -match 'childTimerMarker=found') },
-        @{ Name = 'timer document identity';  Want = 'childTimerDocSame=same';   Ok = ($perFrameText -match 'childTimerDocSame=same') }
+        @{ Name = 'timer document identity';  Want = 'childTimerDocSame=same';   Ok = ($perFrameText -match 'childTimerDocSame=same') },
+        @{ Name = 'per-realm constructors (B2-4)'; Want = 'childCtorDiff=true'; Ok = ($perFrameText -match 'childCtorDiff=true') },
+        @{ Name = 'per-realm prototypes (B2-4)';   Want = 'childProtoDiff=true'; Ok = ($perFrameText -match 'childProtoDiff=true') }
     )
 
     foreach ($c in $checks) {

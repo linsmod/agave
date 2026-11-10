@@ -174,10 +174,17 @@ struct CssomRef {
 struct DocumentRuntime;
 struct Listener;
 
+struct RealmInterfaces;
+
 struct RuntimeState {
     AntbEngine*        engine;
     AntbRealm*         mainRealm;       /* realm of the top-level document */
     WebCore::Document* document;
+    /* Interface classes mirrored for the realm the engine is in right now
+     * (B2-4): every realm gets its own prototype chain and constructors, so a
+     * frame's `HTMLElement` is a different object from its parent's. */
+    struct RealmInterfaces* ifacesActive;
+    std::map<void*, struct RealmInterfaces*>* realmIfaces;   /* AntbRealm* -> set */
     AntbClass*         nodeClass;
     AntbClass*         canvasCtxClass;  /* CanvasRenderingContext2D (2d context) */
     AntbClass*         windowClass;     /* Window (per-frame window proxy) */
@@ -249,6 +256,45 @@ struct RuntimeState {
      * the caller's document back on the way out - see contextLeave(). */
     std::vector<DocumentRuntime*>* bindStack;
     int                nextFrameSlot;
+};
+
+/* ---- per-realm interface classes (B2-4) --------------------------------
+ * Every realm gets its own prototype chain and constructors, like a browser's
+ * bindings: `child.HTMLElement !== parent.HTMLElement`, and each wrapper's
+ * prototype belongs to the realm that created the wrapper. The engine-scoped
+ * aux classes (CSSOM/Selection/Range/TextTrack/Canvas) are still shared; they
+ * are not part of the DOM interface tree.
+ *
+ * Building a set costs one class tree per realm (a few hundred classes, methods
+ * and attribute accessors). It happens once per realm, on the first document
+ * bind (see ensureInterfaceClasses), and the set is dropped when the realm is
+ * torn down.
+ */
+struct RealmInterfaces {
+    std::map<std::string, AntbClass*> byName;
+    std::map<std::string, AntbClass*>* tagClasses;
+    AntbClass* nodeClass;
+    AntbClass* documentIface;
+    AntbClass* htmlDocumentIface;
+    AntbClass* elementIface;
+    AntbClass* htmLElementIface;
+    AntbClass* svgElementIface;
+    AntbClass* svgSvgIface;
+    AntbClass* documentFragmentIface;
+    AntbClass* characterDataIface;
+    AntbClass* textIface;
+    AntbClass* commentIface;
+    AntbClass* unknownElementIface;
+    AntbClass* windowClass;
+    AntbClass* nodeListClass;
+    AntbClass* htmlCollectionClass;
+
+    RealmInterfaces()
+        : tagClasses(NULL), nodeClass(NULL), documentIface(NULL), htmlDocumentIface(NULL),
+          elementIface(NULL), htmLElementIface(NULL), svgElementIface(NULL), svgSvgIface(NULL),
+          documentFragmentIface(NULL), characterDataIface(NULL), textIface(NULL),
+          commentIface(NULL), unknownElementIface(NULL), windowClass(NULL),
+          nodeListClass(NULL), htmlCollectionClass(NULL) {}
 };
 
 /* ------------------------------------------------------------------------- */
@@ -906,6 +952,10 @@ static DocumentRuntime* documentForFrameSlot(int slotNumber)
     return NULL;
 }
 
+/* Interface classes are per realm (B2-4); this mirrors one realm's set into the
+ * g_* class pointers so the C dispatchers see that realm's prototypes. */
+static void applyRealmInterfaces(AntbRealm* realm);
+
 /* Point the host-side "current document" mirrors at `realm`'s document. The
  * document record is the authority now: no boundRealm comparison, no
  * mainDocObj bookkeeping (R130's patch existed only because the realm ->
@@ -913,6 +963,8 @@ static DocumentRuntime* documentForFrameSlot(int slotNumber)
 static void applyRealmBinding(AntbRealm* realm)
 {
     DocumentRuntime* document = documentForCurrentRealm(realm);
+
+    applyRealmInterfaces(realm);
 
     if (!document)
         return;   /* realm exists but has no document bound yet */
@@ -5739,6 +5791,21 @@ static void teardownRealm(RuntimeState* state)
     g_mediaListClass = 0;
     g_cssDeclarationClass = 0;
     resetInterfaceClasses();
+    /* Per-realm interface sets (B2-4): the class objects die with the engine,
+     * so only the bookkeeping is dropped here. */
+    if (state->realmIfaces) {
+        std::map<void*, RealmInterfaces*>::iterator it = state->realmIfaces->begin();
+
+        for (; it != state->realmIfaces->end(); ++it) {
+            if (!it->second)
+                continue;
+            delete it->second->tagClasses;
+            delete it->second;
+        }
+        delete state->realmIfaces;
+        state->realmIfaces = NULL;
+    }
+    state->ifacesActive = NULL;
     clearExpandoObjects();
     state->realmBound = false;
 
@@ -6648,6 +6715,19 @@ void forgetFrameRealm(void* document)
              * collected. */
             if (runtime->realm && g_engine)
                 antb_release_realm(g_engine, runtime->realm);
+
+            /* The realm's interface set dies with it (the class objects
+             * themselves belong to the engine and are freed with it). */
+            if (runtime->realm && owner->realmIfaces) {
+                std::map<void*, RealmInterfaces*>::iterator sit =
+                    owner->realmIfaces->find((void*)runtime->realm);
+
+                if (sit != owner->realmIfaces->end()) {
+                    delete sit->second->tagClasses;
+                    delete sit->second;
+                    owner->realmIfaces->erase(sit);
+                }
+            }
 
             releaseRealmListeners(owner, runtime->realm);
 
@@ -14982,7 +15062,7 @@ void resetInterfaceClasses()
     g_commentIface = NULL;
     g_unknownElementIface = NULL;
 
-    delete g_tagClasses;
+    /* Owned by the per-realm interface sets (B2-4): clear the mirror only. */
     g_tagClasses = NULL;
 
     g_textTrackClass = NULL;
@@ -15043,14 +15123,18 @@ static int attrHostGet(AntbEngine* engine, AntbValue* self, const char* name,
     AntbRealm* previous = NULL;
     int result;
 
-    if (want && (previous = antb_realm_current(engine)) != want)
+    if (want && (previous = antb_realm_current(engine)) != want) {
         antb_realm_enter(engine, want);
+        applyRealmInterfaces(want);
+    }
 
     result = isDocumentWrapper(self) ? titleGetter(engine, self, name, out, NULL)
                                      : nodeGetter(engine, self, name, out, NULL);
 
-    if (want && previous != want)
+    if (want && previous != want) {
         antb_realm_enter(engine, previous);
+        applyRealmInterfaces(previous);
+    }
     return result;
 }
 
@@ -15061,14 +15145,18 @@ static int attrHostSet(AntbEngine* engine, AntbValue* self, const char* name,
     AntbRealm* previous = NULL;
     int result;
 
-    if (want && (previous = antb_realm_current(engine)) != want)
+    if (want && (previous = antb_realm_current(engine)) != want) {
         antb_realm_enter(engine, want);
+        applyRealmInterfaces(want);
+    }
 
     result = isDocumentWrapper(self) ? titleSetter(engine, self, name, value, NULL)
                                      : nodeSetter(engine, self, name, value, NULL);
 
-    if (want && previous != want)
+    if (want && previous != want) {
         antb_realm_enter(engine, previous);
+        applyRealmInterfaces(previous);
+    }
     return result;
 }
 
@@ -15345,158 +15433,256 @@ static void installAttributeAccessors(AntbEngine* engine,
     }
 }
 
+/* struct RealmInterfaces is defined right after RuntimeState. */
+
+static RealmInterfaces* realmInterfaceSet(AntbRealm* realm)
+{
+    std::map<void*, RealmInterfaces*>::iterator it;
+
+    if (!g_currentState || !g_currentState->realmIfaces || !realm)
+        return NULL;
+
+    it = g_currentState->realmIfaces->find((void*)realm);
+    return it == g_currentState->realmIfaces->end() ? NULL : it->second;
+}
+
+static void applyRealmInterfaces(AntbRealm* realm)
+{
+    RealmInterfaces* set = realmInterfaceSet(realm);
+
+    if (g_currentState)
+        g_currentState->ifacesActive = set;
+
+    g_nodeClass             = set ? set->nodeClass : NULL;
+    g_documentIface         = set ? set->documentIface : NULL;
+    g_htmlDocumentIface     = set ? set->htmlDocumentIface : NULL;
+    g_elementIface          = set ? set->elementIface : NULL;
+    g_htmLElementIface      = set ? set->htmLElementIface : NULL;
+    g_svgElementIface       = set ? set->svgElementIface : NULL;
+    g_svgSvgIface           = set ? set->svgSvgIface : NULL;
+    g_documentFragmentIface = set ? set->documentFragmentIface : NULL;
+    g_characterDataIface    = set ? set->characterDataIface : NULL;
+    g_textIface             = set ? set->textIface : NULL;
+    g_commentIface          = set ? set->commentIface : NULL;
+    g_unknownElementIface   = set ? set->unknownElementIface : NULL;
+    g_windowClass           = set ? set->windowClass : NULL;
+    g_nodeListClass         = set ? set->nodeListClass : NULL;
+    g_htmlCollectionClass   = set ? set->htmlCollectionClass : NULL;
+    g_tagClasses            = set ? set->tagClasses : NULL;
+}
+
+static int g_buildingInterfaces = 0;
+
+/* One interface set per realm is the browser-faithful default; the switch is
+ * the escape hatch while the per-realm cost is measured (and the A/B baseline
+ * for the popup-probe regression, see issues §20.5). */
+static bool perRealmIfacesEnabled()
+{
+    const char* value = getenv("AGB_PER_REALM_IFACES");
+
+    return !value || strcmp(value, "0") != 0;
+}
+
 void ensureInterfaceClasses(AntbEngine* engine)
 {
-    std::map<std::string, AntbClass*> byName;
-    AntbValue* global;
-    AntbValue* builtinCtor = NULL;
-    AntbValue* builtinProto = NULL;
-    AntbClass* eventTarget = NULL;
-    AntbClass* nodeClass;
-    size_t i;
+    AntbRealm* realm;
 
-    if (!engine || !g_currentState)
+    if (!engine || !g_currentState || g_buildingInterfaces)
         return;
 
-    /* One set per engine; teardownRealm() drops g_nodeClass with the engine. */
-    if (g_nodeClass)
+    if (!g_currentState->realmIfaces)
+        g_currentState->realmIfaces = new std::map<void*, RealmInterfaces*>();
+
+    realm = perRealmIfacesEnabled() ? currentRealm() : NULL;
+    if (realmInterfaceSet(realm)) {
+        if (g_currentState->ifacesActive != realmInterfaceSet(realm))
+            applyRealmInterfaces(realm);
         return;
-
-    if (getenv("AGB_EVT_DEBUG"))
-        agbLog(AGB_LOG_EVT, "ensureInterfaceClasses engine=%p state=%p",
-               (void*)engine, (void*)g_currentState);
-
-    global = antb_global(engine);
-    if (global) {
-        builtinCtor = antb_get_prop(engine, global, "EventTarget");
-        if (builtinCtor)
-            builtinProto = antb_get_prop(engine, builtinCtor, "prototype");
     }
 
-    /* The engine already ships EventTarget (and its prototype methods). Chain
-     * to that one instead of creating a second, unrelated interface, or
-     * `el instanceof EventTarget` would test the wrong prototype. */
-    if (!builtinProto)
-        eventTarget = antb_class_create_iface(engine, "EventTarget", NULL);
+    {
+        RealmInterfaces* set;
+        std::map<std::string, AntbClass*> byName;
+        AntbValue* global;
+        AntbValue* builtinCtor = NULL;
+        AntbValue* builtinProto = NULL;
+        AntbClass* eventTarget = NULL;
+        AntbClass* nodeClass;
+        size_t i;
 
-    nodeClass = antb_class_create_iface(engine, "Node", eventTarget);
+        g_buildingInterfaces = 1;
 
-    if (builtinProto && nodeClass)
-        antb_class_set_parent_value(engine, nodeClass, builtinProto, builtinCtor);
+        if (getenv("AGB_EVT_DEBUG"))
+            agbLog(AGB_LOG_EVT, "ensureInterfaceClasses engine=%p state=%p realm=%p",
+                   (void*)engine, (void*)g_currentState, (void*)realm);
 
-    if (!nodeClass) {
+        global = antb_global(engine);
+        if (global) {
+            builtinCtor = antb_get_prop(engine, global, "EventTarget");
+            if (builtinCtor)
+                builtinProto = antb_get_prop(engine, builtinCtor, "prototype");
+        }
+
+        /* The engine already ships EventTarget (and its prototype methods).
+         * Chain to that one instead of creating a second, unrelated interface,
+         * or `el instanceof EventTarget` would test the wrong prototype. */
+        if (!builtinProto)
+            eventTarget = antb_class_create_iface(engine, "EventTarget", NULL);
+
+        nodeClass = antb_class_create_iface(engine, "Node", eventTarget);
+
+        if (builtinProto && nodeClass)
+            antb_class_set_parent_value(engine, nodeClass, builtinProto, builtinCtor);
+
+        if (!nodeClass) {
+            if (builtinProto) antb_value_release(builtinProto);
+            if (builtinCtor) antb_value_release(builtinCtor);
+            if (global) antb_value_release(global);
+            g_buildingInterfaces = 0;
+            return;
+        }
+
+        g_nodeClass = nodeClass;
+        byName["Node"] = nodeClass;
+        if (eventTarget)
+            byName["EventTarget"] = eventTarget;
+
+        for (i = 0; i < sizeof(kDomIfaces) / sizeof(kDomIfaces[0]); ++i) {
+            const DomIfaceDef& def = kDomIfaces[i];
+            AntbClass* parent = NULL;
+            AntbClass* klass;
+
+            if (def.parent) {
+                std::map<std::string, AntbClass*>::iterator it = byName.find(def.parent);
+                if (it != byName.end())
+                    parent = it->second;
+            }
+
+            klass = antb_class_create_iface(engine, def.name, parent);
+            if (klass)
+                byName[def.name] = klass;
+        }
+
+        g_documentIface         = byName["Document"];
+        g_htmlDocumentIface     = byName["HTMLDocument"];
+        g_elementIface          = byName["Element"];
+        g_htmLElementIface      = byName["HTMLElement"];
+        g_svgElementIface       = byName["SVGElement"];
+        g_svgSvgIface           = byName["SVGSVGElement"];
+        g_documentFragmentIface = byName["DocumentFragment"];
+        g_characterDataIface    = byName["CharacterData"];
+        g_textIface             = byName["Text"];
+        g_commentIface          = byName["Comment"];
+        g_unknownElementIface   = byName["HTMLUnknownElement"];
+        g_windowClass           = byName["Window"];
+        g_nodeListClass         = byName["NodeList"];
+        g_htmlCollectionClass   = byName["HTMLCollection"];
+
+        /* Window inherits EventTarget in the DOM. prelude relinks each realm's
+         * global object to this prototype, which is what makes `window
+         * instanceof Window` / `window instanceof EventTarget` /
+         * `[object Window]` hold. */
+        if (g_windowClass && builtinProto)
+            antb_class_set_parent_value(engine, g_windowClass, builtinProto, builtinCtor);
+
+        /* Implemented classes that are not element interfaces get the same
+         * shape, so `x instanceof CSSStyleDeclaration` / `Range` / `TextTrack`
+         * work. These stay engine-scoped (first realm builds them). */
+        cssomEnsureClasses();
+        ensureSelectionClasses();
+        installTextTrackClasses(engine);
+        ensureCanvasContextClass(engine);
+
+        g_tagClasses = new std::map<std::string, AntbClass*>();
+        for (i = 0; i < sizeof(kDomTags) / sizeof(kDomTags[0]); ++i) {
+            const DomTagDef& def = kDomTags[i];
+            std::map<std::string, AntbClass*>::iterator it = byName.find(def.iface);
+
+            if (it != byName.end())
+                (*g_tagClasses)[def.tag] = it->second;
+        }
+
+        /* Methods: the ownership table above, resolved through the class names. */
+        for (i = 0; i < sizeof(kDomMethods) / sizeof(kDomMethods[0]); ++i) {
+            const DomMethodDef& def = kDomMethods[i];
+            std::map<std::string, AntbClass*>::iterator it = byName.find(def.iface);
+
+            if (it != byName.end())
+                antb_class_add_method(engine, it->second, def.name, def.fn, def.user);
+        }
+
+        /* The whole facade is per class now: one dispatching getter/setter pair
+         * that receives every property the class does not declare. */
+        antb_class_set_property_rw(engine, g_nodeClass, "", nodeGetter, nodeSetter, NULL);
+        /* Collections answer length/numeric indices through the same catch-all
+         * mechanism; item()/namedItem()/forEach/iterators stay on the prototype. */
+        if (g_nodeListClass)
+            antb_class_set_property_rw(engine, g_nodeListClass, "", collectionGetter,
+                                       (AntbSetterFn)NULL, NULL);
+        if (g_htmlCollectionClass)
+            antb_class_set_property_rw(engine, g_htmlCollectionClass, "", collectionGetter,
+                                       (AntbSetterFn)NULL, NULL);
+        if (g_documentIface)
+            antb_class_set_property_rw(engine, g_documentIface, "", titleGetter, titleSetter, NULL);
+        if (g_htmlDocumentIface)
+            antb_class_set_property_rw(engine, g_htmlDocumentIface, "", titleGetter, titleSetter, NULL);
+
+        /* Common attributes on the interface prototypes (B2-3). After the
+         * catch-alls: each definition registers a decline entry that makes the
+         * catch-all yield to the prototype accessor. */
+        installAttributeAccessors(engine, byName);
+
+        /* DOM constants, inherited by every child interface object. */
+        if (g_nodeClass) {
+            static const double kNodeTypes[] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 };
+            static const char* const kNodeTypeNames[] = {
+                "ELEMENT_NODE", "ATTRIBUTE_NODE", "TEXT_NODE", "CDATA_SECTION_NODE",
+                "ENTITY_REFERENCE_NODE", "ENTITY_NODE", "PROCESSING_INSTRUCTION_NODE",
+                "COMMENT_NODE", "DOCUMENT_NODE", "DOCUMENT_TYPE_NODE",
+                "DOCUMENT_FRAGMENT_NODE", "NOTATION_NODE"
+            };
+            size_t c;
+
+            for (c = 0; c < sizeof(kNodeTypes) / sizeof(kNodeTypes[0]); ++c)
+                antb_class_add_constant(engine, g_nodeClass, kNodeTypeNames[c], kNodeTypes[c]);
+        }
+
+        set = new RealmInterfaces();
+        set->byName = byName;
+        set->tagClasses = g_tagClasses;
+        set->nodeClass = g_nodeClass;
+        set->documentIface = g_documentIface;
+        set->htmlDocumentIface = g_htmlDocumentIface;
+        set->elementIface = g_elementIface;
+        set->htmLElementIface = g_htmLElementIface;
+        set->svgElementIface = g_svgElementIface;
+        set->svgSvgIface = g_svgSvgIface;
+        set->documentFragmentIface = g_documentFragmentIface;
+        set->characterDataIface = g_characterDataIface;
+        set->textIface = g_textIface;
+        set->commentIface = g_commentIface;
+        set->unknownElementIface = g_unknownElementIface;
+        set->windowClass = g_windowClass;
+        set->nodeListClass = g_nodeListClass;
+        set->htmlCollectionClass = g_htmlCollectionClass;
+
+        if (realm)
+            (*g_currentState->realmIfaces)[(void*)realm] = set;
+        g_currentState->ifacesActive = set;
+
+        /* Expose this realm's own constructors on its global. Expose skips
+         * names already present, so a later antb_expose_classes() (or another
+         * realm's set) can never override them. */
+        for (std::map<std::string, AntbClass*>::iterator it = byName.begin();
+             it != byName.end(); ++it)
+            antb_class_expose(engine, it->second);
+
         if (builtinProto) antb_value_release(builtinProto);
         if (builtinCtor) antb_value_release(builtinCtor);
         if (global) antb_value_release(global);
-        return;
+
+        g_buildingInterfaces = 0;
     }
-
-    g_nodeClass = nodeClass;
-    byName["Node"] = nodeClass;
-    if (eventTarget)
-        byName["EventTarget"] = eventTarget;
-
-    for (i = 0; i < sizeof(kDomIfaces) / sizeof(kDomIfaces[0]); ++i) {
-        const DomIfaceDef& def = kDomIfaces[i];
-        AntbClass* parent = NULL;
-        AntbClass* klass;
-
-        if (def.parent) {
-            std::map<std::string, AntbClass*>::iterator it = byName.find(def.parent);
-            if (it != byName.end())
-                parent = it->second;
-        }
-
-        klass = antb_class_create_iface(engine, def.name, parent);
-        if (klass)
-            byName[def.name] = klass;
-    }
-
-    g_documentIface         = byName["Document"];
-    g_htmlDocumentIface     = byName["HTMLDocument"];
-    g_elementIface          = byName["Element"];
-    g_htmLElementIface      = byName["HTMLElement"];
-    g_svgElementIface       = byName["SVGElement"];
-    g_svgSvgIface           = byName["SVGSVGElement"];
-    g_documentFragmentIface = byName["DocumentFragment"];
-    g_characterDataIface    = byName["CharacterData"];
-    g_textIface             = byName["Text"];
-    g_commentIface          = byName["Comment"];
-    g_unknownElementIface   = byName["HTMLUnknownElement"];
-    g_windowClass           = byName["Window"];
-    g_nodeListClass         = byName["NodeList"];
-    g_htmlCollectionClass   = byName["HTMLCollection"];
-
-    /* Window inherits EventTarget in the DOM. prelude relinks each realm's
-     * global object to this prototype, which is what makes `window instanceof
-     * Window` / `window instanceof EventTarget` / `[object Window]` hold. */
-    if (g_windowClass && builtinProto)
-        antb_class_set_parent_value(engine, g_windowClass, builtinProto, builtinCtor);
-
-    /* Implemented classes that are not element interfaces get the same shape,
-     * so `x instanceof CSSStyleDeclaration` / `Range` / `TextTrack` work. */
-    cssomEnsureClasses();
-    ensureSelectionClasses();
-    installTextTrackClasses(engine);
-    ensureCanvasContextClass(engine);
-
-    g_tagClasses = new std::map<std::string, AntbClass*>();
-    for (i = 0; i < sizeof(kDomTags) / sizeof(kDomTags[0]); ++i) {
-        const DomTagDef& def = kDomTags[i];
-        std::map<std::string, AntbClass*>::iterator it = byName.find(def.iface);
-
-        if (it != byName.end())
-            (*g_tagClasses)[def.tag] = it->second;
-    }
-
-    /* Methods: the ownership table above, resolved through the class names. */
-    for (i = 0; i < sizeof(kDomMethods) / sizeof(kDomMethods[0]); ++i) {
-        const DomMethodDef& def = kDomMethods[i];
-        std::map<std::string, AntbClass*>::iterator it = byName.find(def.iface);
-
-        if (it != byName.end())
-            antb_class_add_method(engine, it->second, def.name, def.fn, def.user);
-    }
-
-    /* The whole facade is per class now: one dispatching getter/setter pair
-     * that receives every property the class does not declare. */
-    antb_class_set_property_rw(engine, g_nodeClass, "", nodeGetter, nodeSetter, NULL);
-    /* Collections answer length/numeric indices through the same catch-all
-     * mechanism; item()/namedItem()/forEach/iterators stay on the prototype. */
-    if (g_nodeListClass)
-        antb_class_set_property_rw(engine, g_nodeListClass, "", collectionGetter,
-                                   (AntbSetterFn)NULL, NULL);
-    if (g_htmlCollectionClass)
-        antb_class_set_property_rw(engine, g_htmlCollectionClass, "", collectionGetter,
-                                   (AntbSetterFn)NULL, NULL);
-    if (g_documentIface)
-        antb_class_set_property_rw(engine, g_documentIface, "", titleGetter, titleSetter, NULL);
-    if (g_htmlDocumentIface)
-        antb_class_set_property_rw(engine, g_htmlDocumentIface, "", titleGetter, titleSetter, NULL);
-
-    /* Common attributes on the interface prototypes (B2-3). After the
-     * catch-alls: each definition registers a decline entry that makes the
-     * catch-all yield to the prototype accessor. */
-    installAttributeAccessors(engine, byName);
-
-    /* DOM constants, inherited by every child interface object. */
-    if (g_nodeClass) {
-        static const double kNodeTypes[] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 };
-        static const char* const kNodeTypeNames[] = {
-            "ELEMENT_NODE", "ATTRIBUTE_NODE", "TEXT_NODE", "CDATA_SECTION_NODE",
-            "ENTITY_REFERENCE_NODE", "ENTITY_NODE", "PROCESSING_INSTRUCTION_NODE",
-            "COMMENT_NODE", "DOCUMENT_NODE", "DOCUMENT_TYPE_NODE",
-            "DOCUMENT_FRAGMENT_NODE", "NOTATION_NODE"
-        };
-        size_t c;
-
-        for (c = 0; c < sizeof(kNodeTypes) / sizeof(kNodeTypes[0]); ++c)
-            antb_class_add_constant(engine, g_nodeClass, kNodeTypeNames[c], kNodeTypes[c]);
-    }
-
-    if (builtinProto) antb_value_release(builtinProto);
-    if (builtinCtor) antb_value_release(builtinCtor);
-    if (global) antb_value_release(global);
 }
 
 static AntbClass* elementClassForTag(WebCore::Element* element)

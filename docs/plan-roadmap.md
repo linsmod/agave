@@ -259,8 +259,9 @@
   `run_window_tests` 的 local `target=_blank`/命名 target、`run_tab_lifecycle_tests` 的 popup 用例
   失败：probe 的 sanity eval 落在 popup 的 about:blank 文档里（`document.URL` undefined、
   `probeExit` 未定义），主 view 的 `--eval` 于是拿不到退出信号（exit 4）。
-- 判据：`AGB_NO_DOM_ATTRS=1`（跳过属性 accessor 安装）这三个套件全过；页面 DOM 行为在真站点上
-  未复现，只影响探针路径。
+- 判据：`AGB_NO_DOM_ATTRS=1`（跳过属性 accessor 安装）这三个套件全过；`AGB_PER_REALM_IFACES=0`
+  （退回共享接口类表）也全过——两条线索说明是 accessor/per-realm 类表改变每文档初始化时序后
+  暴露的探针 eval 路由问题。页面 DOM 行为在真站点上未复现，只影响探针路径。
 - 起点：`AgaveWebView.c` 的 `agwPost(AGW_CMD_EVAL, ...)`/`agwCommandIsDocumentScoped`（命令带
   `docEpoch`，处理时是否按 `command.view` 而不是"当前活动 view"落地？），以及 `agwOpenWindowFor`
   →`agwActivateView` 在 popup 创建/加载时的时序；`--eval-file` 的 sanity eval 和 round script 是
