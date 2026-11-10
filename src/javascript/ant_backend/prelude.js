@@ -734,6 +734,58 @@
     g.__agbEventTrusted(ev);
     return ev;
   };
+  /* ---- collections (B2-2) ----------------------------------------------
+   * NodeList/HTMLCollection are bridge classes: length, item(), namedItem()
+   * and indexed access are answered in C (live kinds read the DOM), so the
+   * iteration protocol is the only JS-side part. Chrome gives NodeList
+   * forEach/keys/values/entries/@@iterator and HTMLCollection only
+   * @@iterator (no forEach). */
+  (function () {
+    function define(proto, name, value) {
+      try {
+        Object.defineProperty(proto, name, {
+          value: value, writable: true, configurable: true
+        });
+      } catch (e) {
+        try { proto[name] = value; } catch (e2) {}
+      }
+    }
+    function makeIterator(list, mode) {
+      var index = 0;
+      var iterator = {
+        next: function () {
+          if (index >= list.length)
+            return { value: undefined, done: true };
+          var i = index++;
+          if (mode === 1) return { value: i, done: false };
+          if (mode === 2) return { value: [i, list[i]], done: false };
+          return { value: list[i], done: false };
+        }
+      };
+      if (typeof Symbol === 'function' && Symbol.iterator)
+        iterator[Symbol.iterator] = function () { return iterator; };
+      return iterator;
+    }
+    function install(name, withForEach) {
+      var Ctor = g[name];
+      if (typeof Ctor !== 'function' || !Ctor.prototype)
+        return;
+      var proto = Ctor.prototype;
+      if (!proto.values) define(proto, 'values', function () { return makeIterator(this, 0); });
+      if (!proto.keys) define(proto, 'keys', function () { return makeIterator(this, 1); });
+      if (!proto.entries) define(proto, 'entries', function () { return makeIterator(this, 2); });
+      if (typeof Symbol === 'function' && Symbol.iterator && !proto[Symbol.iterator])
+        define(proto, Symbol.iterator, proto.values);
+      if (withForEach && !proto.forEach) define(proto, 'forEach', function (callback, thisArg) {
+        if (typeof callback !== 'function')
+          throw new TypeError('forEach: callback is not a function');
+        for (var i = 0; i < this.length; ++i)
+          callback.call(thisArg, this[i], i, this);
+      });
+    }
+    install('NodeList', true);
+    install('HTMLCollection', false);
+  })();
   g.__agbMakeClassList = function (el) {
     return {
       add: function (t) { __agbClassOp(el, 'add', t); },

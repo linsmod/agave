@@ -177,8 +177,92 @@
       ok('canvas ctx proto', protoIs(ctx, CanvasRenderingContext2D.prototype));
     })();
 
-    /* ---- known gaps (B1 keeps these; B2/A flip them) ---------------------- */
-    ok('nodeList is array (known gap)', Array.isArray(document.querySelectorAll('div')));
+    /* ---- B2: NodeList / HTMLCollection (Chrome values: issues §19）-------- */
+    (function () {
+      var host = document.createElement('div');
+      var p1 = document.createElement('p');
+      var p2 = document.createElement('p');
+      var span = document.createElement('span');
+      p1.id = 'p1'; p2.id = 'p2'; span.id = 's1';
+      p1.className = 'a b';
+      host.appendChild(p1);
+      host.appendChild(p2);
+      host.appendChild(span);
+      document.body.appendChild(host);
+
+      var qsa = host.querySelectorAll('p');
+      ok('querySelectorAll instanceof NodeList', qsa instanceof NodeList);
+      ok('querySelectorAll not an Array', !Array.isArray(qsa));
+      ok('NodeList toString', Object.prototype.toString.call(qsa) === '[object NodeList]');
+      ok('NodeList length/item/index', qsa.length === 2 && qsa.item(0) === qsa[0] &&
+         qsa.item(0) === p1);
+      ok('NodeList forEach', typeof qsa.forEach === 'function' && (function () {
+        var seen = [];
+        qsa.forEach(function (n, i, list) { seen.push(n === list[i]); });
+        return seen.length === 2 && seen[0] && seen[1];
+      })());
+      ok('NodeList iterable', (function () {
+        var names = [];
+        for (var n of qsa) names.push(n.id);
+        return names.join(',') === 'p1,p2';
+      })());
+      ok('NodeList static snapshot', (function () {
+        host.appendChild(document.createElement('p'));
+        return qsa.length === 2;
+      })());
+
+      var ch = host.children;
+      ok('children instanceof HTMLCollection', ch instanceof HTMLCollection);
+      ok('HTMLCollection toString', Object.prototype.toString.call(ch) === '[object HTMLCollection]');
+      ok('children identity', host.children === ch);
+      ok('children length/item/namedItem', ch.length === 4 && ch.item(0) === p1 &&
+         ch.namedItem('p2') === p2);
+      ok('HTMLCollection has no forEach', typeof ch.forEach === 'undefined');
+      ok('HTMLCollection iterable', (function () {
+        var n = 0;
+        for (var c of ch) n++;
+        return n === 4;
+      })());
+
+      var cn = host.childNodes;
+      ok('childNodes instanceof NodeList', cn instanceof NodeList);
+      ok('childNodes identity', host.childNodes === cn);
+      ok('childNodes live', (function () {
+        var before = cn.length;
+        host.appendChild(document.createTextNode('x'));
+        return cn.length === before + 1;
+      })());
+
+      var tags = document.getElementsByTagName('p');
+      ok('getElementsByTagName instanceof HTMLCollection', tags instanceof HTMLCollection);
+      ok('getElementsByTagName identity', document.getElementsByTagName('p') === tags);
+      ok('getElementsByTagName live', (function () {
+        var before = tags.length;
+        host.appendChild(document.createElement('p'));
+        return tags.length === before + 1;
+      })());
+
+      var byClass = host.getElementsByClassName('a');
+      ok('getElementsByClassName live+token', byClass.length === 1 &&
+         byClass[0] === p1 &&
+         (function () {
+           var ab = document.createElement('div');
+           ab.className = 'ab';
+           host.appendChild(ab);
+           return host.getElementsByClassName('a').length === 1;
+         })());
+
+      ok('document.forms instanceof HTMLCollection', document.forms instanceof HTMLCollection);
+      ok('document.forms identity', document.forms === document.forms);
+
+      var threw = false;
+      try { new NodeList(); } catch (e) {
+        threw = /Illegal constructor/.test(e.message);
+      }
+      ok('new NodeList throws', threw);
+    })();
+
+    /* ---- known gaps (B2 keeps these; A flips them) ------------------------ */
     ok('HTMLElement.prototype.style absent (known gap)',
        Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'style') === undefined);
     /* ---- B2: window identity ---------------------------------------------- */

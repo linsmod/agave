@@ -181,6 +181,8 @@ struct RuntimeState {
     AntbClass*         nodeClass;
     AntbClass*         canvasCtxClass;  /* CanvasRenderingContext2D (2d context) */
     AntbClass*         windowClass;     /* Window (per-frame window proxy) */
+    AntbClass*         nodeListClass;   /* NodeList (B2-2) */
+    AntbClass*         htmlCollectionClass; /* HTMLCollection (B2-2) */
     AntbClass*         styleSheetListClass;
     AntbClass*         styleSheetClass;
     AntbClass*         cssRuleClass;
@@ -252,6 +254,8 @@ struct RuntimeState {
 /* ------------------------------------------------------------------------- */
 /* DocumentRuntime: one bound document (== one realm)                        */
 /* ------------------------------------------------------------------------- */
+struct AgbCollection;
+
 /* Everything that used to live on RuntimeState but belongs to the document:
  * the DOM document, its JS object, its listeners, its CSSOM refs and its
  * realm. The realm handle is the identity used by the (engine, realm) ->
@@ -281,6 +285,11 @@ struct DocumentRuntime {
      * CSSOM wrappers use. */
     WebCore::DOMSelection* selection;
     std::vector<WebCore::Range*>* rangeRefs;
+    /* NodeList/HTMLCollection wrappers (B2-2): descriptors are owned by the
+     * document (no JS finalizers) and the map gives live collections their
+     * identity (`el.children === el.children`). */
+    std::vector<AgbCollection*>* collections;
+    std::map<std::string, AgbCollection*>* collectionCache;
     /* <script type="importmap"> parsed into a std::map<std::string,std::string>
      * (specifier -> absolute URL). Owned by the document: dropped in
      * releaseDocumentRuntime, so a navigation never resolves a specifier
@@ -515,6 +524,8 @@ static void activateState(RuntimeState* state)
 #define g_nodeClass     (g_currentState->nodeClass)
 #define g_canvasCtxClass (g_currentState->canvasCtxClass)
 #define g_windowClass   (g_currentState->windowClass)
+#define g_nodeListClass (g_currentState->nodeListClass)
+#define g_htmlCollectionClass (g_currentState->htmlCollectionClass)
 #define g_styleSheetListClass (g_currentState->styleSheetListClass)
 #define g_styleSheetClass     (g_currentState->styleSheetClass)
 #define g_cssRuleClass        (g_currentState->cssRuleClass)
@@ -583,6 +594,7 @@ static int slotForDocument(WebCore::Document* document)
 /* Realms are defined below; activateSlot() needs them first. */
 static bool perFrameRealmEnabled();
 static DocumentRuntime* documentRuntimeFor(RuntimeState* state, WebCore::Document* document);
+static void releaseCollections(DocumentRuntime*, bool releaseValues);
 
 static void activateSlot(int slot)
 {
@@ -799,6 +811,11 @@ static void releaseDocumentRuntime(DocumentRuntime* document, bool releaseValues
         selectionReleaseRefs(document);
     }
 
+    /* NodeList/HTMLCollection descriptors and the static snapshots they retain
+     * belong to this document too. On the engine-gone path the retained VM
+     * values cannot be touched anymore, only the descriptors are dropped. */
+    releaseCollections(document, releaseValues);
+
     /* The import map is host-side bookkeeping, not a VM value: it must go away
      * even on the engine-gone path (releaseValues == false). */
     if (document->importMap) {
@@ -994,6 +1011,21 @@ static void forgetRealmScripts()
 }
 
 int nodeGetAttribute(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);int nodeAddEventListener(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+/* DOM collections (B2-2): what a NodeList/HTMLCollection wrapper stands for.
+ * The enum lives up here because the document getter (which is much earlier in
+ * the file) builds the document.forms/images/... collections. */
+enum {
+    AgbCollectionChildNodes = 1,   /* NodeList: every child (live) */
+    AgbCollectionChildren,         /* HTMLCollection: element children (live) */
+    AgbCollectionTags,             /* HTMLCollection: getElementsByTagName (live) */
+    AgbCollectionClass,            /* HTMLCollection: getElementsByClassName (live) */
+    AgbCollectionDocumentList,     /* HTMLCollection: document.forms/images/... */
+    AgbCollectionFormElements,     /* HTMLCollection: form.elements */
+    AgbCollectionStatic            /* NodeList: querySelectorAll snapshot */
+};
+static AntbValue* wrapCollection(AntbEngine*, WebCore::Node* root, int kind, const std::string& name);
+static AntbValue* wrapStaticCollection(AntbEngine*, WebCore::Node* root,
+                                       const std::vector<WebCore::Node*>& nodes);
 int nodeRemoveEventListener(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 WebCore::Document* documentOf(AntbValue* self);
 int docGetElementById(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
@@ -1033,7 +1065,6 @@ int nodeDocumentImportNode(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*
 int nodeDocumentAdoptNode(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeDocumentElementFromPoint(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeDocumentHasFocus(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
-template <typename Collection> AntbValue* wrapNodeList(AntbEngine*, Collection*);
 
 /* The JS event facade (prelude.js) owns the event interface prototypes; these
  * helpers let the C dispatcher build events through it and update the
@@ -2360,25 +2391,15 @@ int titleGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue
     if (!strcmp(name, "forms") || !strcmp(name, "images") || !strcmp(name, "links")
             || !strcmp(name, "anchors") || !strcmp(name, "scripts") || !strcmp(name, "embeds")
             || !strcmp(name, "plugins") || !strcmp(name, "applets")) {
-        /* Real collections now: the empty array this used to return made
-         * every `document.forms.length` / `document.images[0]` wrong, and the
-         * page silently took the "no such element" branch. Snapshots, not
-         * live collections (see docs/arch-capability-gaps.md). */
-        const char* tagName = !strcmp(name, "forms")    ? "form"
-                            : !strcmp(name, "images")   ? "img"
-                            : !strcmp(name, "scripts")  ? "script"
-                            : !strcmp(name, "links")    ? "a"
-                            : !strcmp(name, "anchors")  ? "a"
-                            : !strcmp(name, "embeds")   ? "embed"
-                            : !strcmp(name, "applets")  ? "applet"
-                            : "object";
-        RefPtr<WebCore::NodeList> list = d->getElementsByTagName(tagName);
-        AntbValue* array = wrapNodeList(engine, list.get());
+        /* Live HTMLCollection over the document's own tree (B2-2); this used
+         * to be a snapshot array, so a form/script added later never showed up
+         * in document.forms / document.scripts. */
+        AntbValue* list = wrapCollection(engine, d, AgbCollectionDocumentList, std::string(name));
 
-        if (!array)
+        if (!list)
             return 0;
-        antb_value_assign(out, array);
-        antb_value_release(array);
+        antb_value_assign(out, list);
+        antb_value_release(list);
         return 1;
     }
 
@@ -5709,6 +5730,8 @@ static void teardownRealm(RuntimeState* state)
     g_nodeClass = 0;
     g_canvasCtxClass = 0;
     g_windowClass = 0;
+    g_nodeListClass = 0;
+    g_htmlCollectionClass = 0;
     g_styleSheetListClass = 0;
     g_styleSheetClass = 0;
     g_cssRuleClass = 0;
@@ -8595,35 +8618,485 @@ int nodeScrollIntoView(AntbEngine* engine, AntbValue* self, AntbValue** args, in
     return 1;
 }
 
-/* Wraps a WebCore NodeList/HTMLCollection as a JS array (a snapshot: these
- * are not live collections, see docs/arch-capability-gaps.md). */
-/* NodeList and HTMLCollection share length()/item(); one template covers both. */
-template <typename Collection>
-static AntbValue* wrapNodeList(AntbEngine* engine, Collection* list)
+/* --- DOM collections (B2-2) ----------------------------------------------
+ * NodeList/HTMLCollection are interface classes; a wrapper carries an
+ * AgbCollection descriptor that records what the collection is (direct
+ * children, tag/class/selector query, a document collection, ...). There is no
+ * JS finalizer, so descriptors are registered on the document record and
+ * dropped with it, like the CSSOM refs. Live kinds read the DOM on every
+ * access (WebCore's live lists are created on demand and cache themselves, so
+ * childNodes/children/getElementsBy* see mutations); the static kind keeps the
+ * querySelectorAll snapshot's wrapped (pinned) nodes, so it stays static the
+ * way a browser's NodeList is.
+ */
+struct AgbCollection {
+    WebCore::Document* document;
+    WebCore::Node*     root;
+    int                kind;
+    std::string        name;
+    std::vector<AntbValue*> items;   /* AgbCollectionStatic: retained wrappers */
+};
+
+static bool isElementClassToken(WebCore::Element* element, const std::string& wanted)
 {
-    AntbValue* array;
-    unsigned i;
-    unsigned count;
+    if (!element || wanted.empty())
+        return false;
 
-    array = antb_make_array(engine);
-    if (!array || !list)
-        return array;
+    std::string classes = element->getAttribute(WebCore::String("class")).domString().utf8().data();
+    size_t pos = 0;
 
-    count = list->length();
+    while (pos < classes.size()) {
+        size_t start;
+
+        while (pos < classes.size() && (classes[pos] == ' ' || classes[pos] == '\t'
+                || classes[pos] == '\n' || classes[pos] == '\r' || classes[pos] == '\f'))
+            ++pos;
+
+        start = pos;
+
+        while (pos < classes.size() && !(classes[pos] == ' ' || classes[pos] == '\t'
+                || classes[pos] == '\n' || classes[pos] == '\r' || classes[pos] == '\f'))
+            ++pos;
+
+        if (pos > start && (pos - start) == wanted.size()
+                && classes.compare(start, wanted.size(), wanted) == 0)
+            return true;
+    }
+
+    return false;
+}
+
+static PassRefPtr<WebCore::HTMLCollection> documentListCollection(AgbCollection* c)
+{
+    WebCore::Document* document = c ? c->document : NULL;
+
+    if (!document)
+        return NULL;
+    if (c->name == "forms")
+        return document->forms();
+    if (c->name == "images")
+        return document->images();
+    if (c->name == "links")
+        return document->links();
+    if (c->name == "anchors")
+        return document->anchors();
+    if (c->name == "scripts")
+        return document->scripts();
+    if (c->name == "embeds" || c->name == "plugins")
+        return document->embeds();
+    if (c->name == "applets")
+        return document->applets();
+    if (c->name == "objects")
+        return document->objects();
+    return NULL;
+}
+
+static bool collectionIsStatic(AgbCollection* c)
+{
+    return c && c->kind == AgbCollectionStatic;
+}
+
+static unsigned collectionCount(AgbCollection* c)
+{
+    if (!c)
+        return 0;
+
+    if (collectionIsStatic(c))
+        return (unsigned)c->items.size();
+
+    if (!c->root)
+        return 0;
+
+    if (c->kind == AgbCollectionChildNodes || c->kind == AgbCollectionChildren) {
+        unsigned count = 0;
+
+        for (WebCore::Node* child = c->root->firstChild(); child; child = child->nextSibling())
+            if (c->kind == AgbCollectionChildNodes || child->isElementNode())
+                ++count;
+        return count;
+    }
+
+    if (c->kind == AgbCollectionTags) {
+        RefPtr<WebCore::NodeList> list =
+            c->root->getElementsByTagName(WebCore::String::fromUTF8(c->name.c_str()));
+
+        return list ? list->length() : 0;
+    }
+
+    if (c->kind == AgbCollectionDocumentList) {
+        RefPtr<WebCore::HTMLCollection> list = documentListCollection(c);
+
+        return list ? list->length() : 0;
+    }
+
+    if (c->kind == AgbCollectionFormElements) {
+        RefPtr<WebCore::HTMLCollection> list;
+
+        if (c->root->isElementNode() &&
+            static_cast<WebCore::Element*>(c->root)->hasTagName(WebCore::HTMLNames::formTag))
+            list = static_cast<WebCore::HTMLFormElement*>(c->root)->elements();
+        return list ? list->length() : 0;
+    }
+
+    /* getElementsByClassName: the 2008 tree has no live class collection. */
+    {
+        unsigned count = 0;
+
+        for (WebCore::Node* n = c->root->firstChild(); n; n = n->traverseNextNode(c->root))
+            if (n->isElementNode()
+                    && isElementClassToken(static_cast<WebCore::Element*>(n), c->name))
+                ++count;
+        return count;
+    }
+}
+
+static WebCore::Node* collectionItemAt(AgbCollection* c, unsigned index)
+{
+    if (!c || !c->root || collectionIsStatic(c))
+        return NULL;
+
+    if (c->kind == AgbCollectionChildNodes || c->kind == AgbCollectionChildren) {
+        unsigned i = 0;
+
+        for (WebCore::Node* child = c->root->firstChild(); child; child = child->nextSibling()) {
+            if (c->kind == AgbCollectionChildren && !child->isElementNode())
+                continue;
+            if (i++ == index)
+                return child;
+        }
+        return NULL;
+    }
+
+    if (c->kind == AgbCollectionTags) {
+        RefPtr<WebCore::NodeList> list =
+            c->root->getElementsByTagName(WebCore::String::fromUTF8(c->name.c_str()));
+
+        return list ? list->item(index) : NULL;
+    }
+
+    if (c->kind == AgbCollectionDocumentList) {
+        RefPtr<WebCore::HTMLCollection> list = documentListCollection(c);
+
+        return list ? list->item(index) : NULL;
+    }
+
+    if (c->kind == AgbCollectionFormElements) {
+        RefPtr<WebCore::HTMLCollection> list;
+
+        if (c->root->isElementNode() &&
+            static_cast<WebCore::Element*>(c->root)->hasTagName(WebCore::HTMLNames::formTag))
+            list = static_cast<WebCore::HTMLFormElement*>(c->root)->elements();
+        return list ? list->item(index) : NULL;
+    }
+
+    {
+        unsigned i = 0;
+
+        for (WebCore::Node* n = c->root->firstChild(); n; n = n->traverseNextNode(c->root)) {
+            if (n->isElementNode()
+                    && isElementClassToken(static_cast<WebCore::Element*>(n), c->name)) {
+                if (i++ == index)
+                    return n;
+            }
+        }
+        return NULL;
+    }
+}
+
+static AntbValue* collectionWrapItem(AntbEngine* engine, AgbCollection* c, unsigned index)
+{
+    WebCore::Node* node;
+
+    if (!c)
+        return NULL;
+
+    if (collectionIsStatic(c)) {
+        if (index >= c->items.size() || !c->items[index])
+            return NULL;
+        return antb_retain(c->items[index]);
+    }
+
+    node = collectionItemAt(c, index);
+    return node ? wrapNode(engine, node) : NULL;
+}
+
+static bool nodeMatchesNamed(WebCore::Node* node, const WebCore::String& name)
+{
+    WebCore::Element* element;
+
+    if (!node || !node->isElementNode())
+        return false;
+    element = static_cast<WebCore::Element*>(node);
+    return element->getAttribute(WebCore::String("id")) == name
+        || element->getAttribute(WebCore::String("name")) == name;
+}
+
+static WebCore::Node* collectionNamed(AgbCollection* c, const WebCore::String& name)
+{
+    unsigned count, i;
+
+    if (!c || name.isEmpty())
+        return NULL;
+
+    count = collectionCount(c);
     for (i = 0; i < count; ++i) {
-        WebCore::Node* item = list->item(i);
-        AntbValue* wrapped;
+        WebCore::Node* node = collectionItemAt(c, i);
 
-        if (!item)
-            continue;
-        wrapped = wrapNode(engine, item);
+        if (nodeMatchesNamed(node, name))
+            return node;
+    }
+    return NULL;
+}
+
+static AgbCollection* collectionNew(WebCore::Node* root, int kind, const std::string& name)
+{
+    AgbCollection* c = new AgbCollection();
+
+    c->document = root ? root->document() : NULL;
+    c->root = root;
+    c->kind = kind;
+    c->name = name;
+
+    if (c->document) {
+        DocumentRuntime* runtime = documentRuntimeFor(g_currentState, c->document);
+
+        if (runtime) {
+            if (!runtime->collections)
+                runtime->collections = new std::vector<AgbCollection*>();
+            runtime->collections->push_back(c);
+        }
+    }
+    return c;
+}
+
+static std::string collectionKey(WebCore::Node* root, int kind, const std::string& name)
+{
+    char buffer[64];
+
+    sprintf(buffer, "%d:%p:", kind, (void*)root);
+    return std::string(buffer) + name;
+}
+
+/* Live collections keep their identity (`el.children === el.children`,
+ * `document.forms === document.forms`, as in Chrome). querySelectorAll builds
+ * a fresh NodeList on every call, like a browser. */
+static AgbCollection* collectionFor(WebCore::Node* root, int kind, const std::string& name)
+{
+    DocumentRuntime* runtime = (root && root->document())
+        ? documentRuntimeFor(g_currentState, root->document()) : NULL;
+    std::string key;
+
+    if (!runtime)
+        return collectionNew(root, kind, name);
+
+    key = collectionKey(root, kind, name);
+    if (runtime->collectionCache) {
+        std::map<std::string, AgbCollection*>::iterator it = runtime->collectionCache->find(key);
+
+        if (it != runtime->collectionCache->end())
+            return it->second;
+    }
+
+    {
+        AgbCollection* created = collectionNew(root, kind, name);
+
+        if (!runtime->collectionCache)
+            runtime->collectionCache = new std::map<std::string, AgbCollection*>();
+        (*runtime->collectionCache)[key] = created;
+        return created;
+    }
+}
+
+static AntbValue* collectionWrap(AntbEngine* engine, AgbCollection* c)
+{
+    AntbClass* klass;
+
+    if (!engine || !c)
+        return NULL;
+
+    klass = (c->kind == AgbCollectionChildNodes || collectionIsStatic(c))
+        ? g_nodeListClass : g_htmlCollectionClass;
+    if (!klass)
+        return NULL;
+
+    return antb_wrap_native_as_owner(engine, klass, c, AGB_TAG_COLLECTION, c->document);
+}
+
+static AntbValue* wrapCollection(AntbEngine* engine, WebCore::Node* root, int kind,
+                                 const std::string& name)
+{
+    if (!engine || !root)
+        return NULL;
+
+    ensureInterfaceClasses(engine);
+    return collectionWrap(engine, collectionFor(root, kind, name));
+}
+
+static AntbValue* wrapStaticCollection(AntbEngine* engine, WebCore::Node* root,
+                                       const std::vector<WebCore::Node*>& nodes)
+{
+    AgbCollection* c;
+    size_t i;
+
+    if (!engine || !root)
+        return NULL;
+
+    ensureInterfaceClasses(engine);
+    c = collectionNew(root, AgbCollectionStatic, std::string());
+
+    for (i = 0; i < nodes.size(); ++i) {
+        AntbValue* wrapped = wrapNode(engine, nodes[i]);
+
         if (wrapped) {
-            antb_array_push(engine, array, wrapped);
+            c->items.push_back(antb_retain(wrapped));
             antb_value_release(wrapped);
         }
     }
 
-    return array;
+    return collectionWrap(engine, c);
+}
+
+static void releaseCollection(AgbCollection* c, bool releaseValues)
+{
+    if (!c)
+        return;
+
+    if (releaseValues) {
+        for (size_t i = 0; i < c->items.size(); ++i)
+            if (c->items[i])
+                antb_value_release(c->items[i]);
+    }
+    c->items.clear();
+    delete c;
+}
+
+static void releaseCollections(DocumentRuntime* document, bool releaseValues)
+{
+    if (!document)
+        return;
+
+    if (document->collections) {
+        for (size_t i = 0; i < document->collections->size(); ++i)
+            releaseCollection((*document->collections)[i], releaseValues);
+        delete document->collections;
+        document->collections = NULL;
+    }
+
+    if (document->collectionCache) {
+        delete document->collectionCache;
+        document->collectionCache = NULL;
+    }
+}
+
+int collectionGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue* out, void*)
+{
+    AgbCollection* c = (AgbCollection*)antb_get_native(self, AGB_TAG_COLLECTION);
+    const char* p;
+
+    if (!c || !name)
+        return 0;
+
+    if (!strcmp(name, "length")) {
+        AntbValue* v = antb_make_number(engine, (double)collectionCount(c));
+
+        if (!v)
+            return 0;
+        antb_value_assign(out, v);
+        antb_value_release(v);
+        return 1;
+    }
+
+    /* Indexed access (`list[0]`). Non-numeric names fall through to the
+     * prototype (item/namedItem/forEach/iterators); an out-of-range index
+     * falls through too, which reads as undefined like in a browser. */
+    p = name;
+    if (*p >= '0' && *p <= '9') {
+        unsigned long index = 0;
+        AntbValue* v;
+
+        while (*p >= '0' && *p <= '9') {
+            index = index * 10 + (unsigned long)(*p - '0');
+            if (index > 0x7fffffffUL)
+                return 0;
+            ++p;
+        }
+        if (*p != '\0')
+            return 0;
+
+        v = collectionWrapItem(engine, c, (unsigned)index);
+        if (!v)
+            return 0;
+        antb_value_assign(out, v);
+        antb_value_release(v);
+        return 1;
+    }
+
+    return 0;
+}
+
+int collectionItem(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                   AntbValue* out, void*)
+{
+    AgbCollection* c = (AgbCollection*)antb_get_native(self, AGB_TAG_COLLECTION);
+    double index;
+    AntbValue* v;
+
+    if (!c || argc < 1 || !args[0])
+        return 1;
+
+    index = antb_to_number(args[0]);
+    if (index < 0)
+        index = 0;
+
+    v = collectionWrapItem(engine, c, (unsigned)index);
+    if (v) {
+        antb_value_assign(out, v);
+        antb_value_release(v);
+    } else {
+        AntbValue* nullValue = antb_make_null(engine);
+
+        if (nullValue) {
+            antb_value_assign(out, nullValue);
+            antb_value_release(nullValue);
+        }
+    }
+    return 1;
+}
+
+int collectionNamedItemMethod(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                              AntbValue* out, void*)
+{
+    AgbCollection* c = (AgbCollection*)antb_get_native(self, AGB_TAG_COLLECTION);
+    char* name;
+    AntbValue* v;
+
+    if (!c || argc < 1)
+        return 1;
+
+    name = antb_to_utf8(args[0]);
+    if (!name)
+        return 1;
+
+    {
+        WebCore::Node* found = collectionNamed(c, WebCore::String::fromUTF8(name));
+
+        v = found ? wrapNode(engine, found) : NULL;
+    }
+    antb_free(name);
+
+    if (!v) {
+        AntbValue* nullValue = antb_make_null(engine);
+
+        if (nullValue) {
+            antb_value_assign(out, nullValue);
+            antb_value_release(nullValue);
+        }
+        return 1;
+    }
+
+    antb_value_assign(out, v);
+    antb_value_release(v);
+    return 1;
 }
 
 /* form.submit() / form.reset(): the methods live on the node class and check
@@ -8963,9 +9436,8 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
         if (!strcmp(name, "action")) {
             v = antb_make_string(engine, form->action().utf8().data());
         } else {
-            RefPtr<WebCore::HTMLCollection> elements = form->elements();
-
-            v = wrapNodeList(engine, elements.get());
+            /* A live HTMLCollection (B2-2) over the form's controls. */
+            v = wrapCollection(engine, n, AgbCollectionFormElements, std::string());
         }
     } else if (n->isElementNode()
             && static_cast<WebCore::Element*>(n)->isFrameOwnerElement()
@@ -9075,38 +9547,18 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
             return assignNull(engine, out);
         }
     } else if (!strcmp(name, "childNodes")) {
-        {
-            AntbValue* arr = antb_make_array(engine);
-            WebCore::Node* c = n->firstChild();
-            for (; c; c = c->nextSibling()) {
-                AntbValue* w = wrapNode(engine, c);
-                if (w) {
-                    antb_array_push(engine, arr, w);
-                    antb_value_release(w);
-                }
-            }
-            antb_value_assign(out, arr);
-            antb_value_release(arr);
-        }
+        AntbValue* list = wrapCollection(engine, n, AgbCollectionChildNodes, std::string());
+        if (!list)
+            return 0;
+        antb_value_assign(out, list);
+        antb_value_release(list);
         return 1;
     } else if (!strcmp(name, "children")) {
-        /* Element-only children, as an array (some libraries only read length). */
-        AntbValue* arr = antb_make_array(engine);
-        if (!arr)
+        AntbValue* list = wrapCollection(engine, n, AgbCollectionChildren, std::string());
+        if (!list)
             return 0;
-        for (WebCore::Node* c = n->firstChild(); c; c = c->nextSibling()) {
-            if (!c->isElementNode())
-                continue;
-            {
-                AntbValue* w = wrapNode(engine, c);
-                if (w) {
-                    antb_array_push(engine, arr, w);
-                    antb_value_release(w);
-                }
-            }
-        }
-        antb_value_assign(out, arr);
-        antb_value_release(arr);
+        antb_value_assign(out, list);
+        antb_value_release(list);
         return 1;
     } else if (!strcmp(name, "childElementCount")) {
         unsigned count = 0;
@@ -10442,22 +10894,13 @@ int nodeContains(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc
     return 1;
 }
 
-static void pushWrappedNode(AntbEngine* engine, AntbValue* array, WebCore::Node* node)
-{
-    AntbValue* wrapped = wrapNode(engine, node);
-    if (wrapped) {
-        antb_array_push(engine, array, wrapped);
-        antb_value_release(wrapped);
-    }
-}
-
-/* Elements whose class attribute contains `name` (simple token match). */
+/* Elements whose class attribute has `name` as a token (live HTMLCollection). */
 int nodeGetElementsByClassName(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
                                AntbValue* out, void*)
 {
     WebCore::Node* root = nodeOf(self);
     char* name;
-    AntbValue* arr;
+    AntbValue* list;
 
     if (!root || argc < 1)
         return 1;
@@ -10466,41 +10909,71 @@ int nodeGetElementsByClassName(AntbEngine* engine, AntbValue* self, AntbValue** 
     if (!name)
         return 1;
 
-    arr = antb_make_array(engine);
-    if (!arr) {
-        antb_free(name);
-        return 1;
-    }
-
-    {
-        WebCore::String wanted = WebCore::String::fromUTF8(name);
-        for (WebCore::Node* n = root->firstChild(); n; n = n->traverseNextNode(root)) {
-            if (!n->isElementNode())
-                continue;
-            {
-                WebCore::String cls = static_cast<WebCore::Element*>(n)->getAttribute(WebCore::String("class"));
-                if (cls.contains(wanted, false))
-                    pushWrappedNode(engine, arr, n);
-            }
-        }
-    }
-
+    list = wrapCollection(engine, root, AgbCollectionClass, std::string(name));
     antb_free(name);
-    antb_value_assign(out, arr);
-    antb_value_release(arr);
+
+    if (!list)
+        return 1;
+
+    antb_value_assign(out, list);
+    antb_value_release(list);
     return 1;
 }
 
 /* Selector support: descendant selectors made of #id, .class and tag parts
  * ("#s-top-bar .s-top-tabs", "div.foo", "a"). Anything fancier yields an
  * empty list, which is what most callers already handle. */
+/* Collects the nodes matching a selector (the real selector engine,
+ * AgbSelector.h: selector lists, combinators, attribute selectors and the
+ * common pseudo-classes). Used by querySelector/querySelectorAll, which then
+ * wrap the result as a static NodeList. */
+static void selectorCollect(WebCore::Node* root, const char* selector,
+                            std::vector<WebCore::Node*>& matches)
+{
+    std::vector<AgbSelector::Selector> selectors;
+    bool fastPath;
+
+    if (!root || !selector || !AgbSelector::parse(selector, selectors))
+        return;
+
+    fastPath = selectors.size() == 1 && selectors[0].steps.size() == 1
+            && !selectors[0].steps[0].conds.empty()
+            && selectors[0].steps[0].conds[0].kind == AgbSelector::COND_TAG;
+
+    if (fastPath) {
+        /* `div`, `div.cls`, `div[data-x]`: let the engine find the
+         * candidates instead of walking every node in the tree. */
+        const WebCore::AtomicString& tag = selectors[0].steps[0].conds[0].name;
+        RefPtr<WebCore::NodeList> candidates = root->getElementsByTagName(tag);
+
+        if (candidates) {
+            unsigned count = candidates->length();
+
+            for (unsigned i = 0; i < count; ++i) {
+                WebCore::Node* n = candidates->item(i);
+
+                if (n && n->isElementNode()
+                        && AgbSelector::matchesAny(selectors, static_cast<WebCore::Element*>(n)))
+                    matches.push_back(n);
+            }
+        }
+        return;
+    }
+
+    for (WebCore::Node* n = root->firstChild(); n; n = n->traverseNextNode(root)) {
+        if (!n->isElementNode())
+            continue;
+        if (AgbSelector::matchesAny(selectors, static_cast<WebCore::Element*>(n)))
+            matches.push_back(n);
+    }
+}
+
 int nodeQuerySelectorAll(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
                          AntbValue* out, void*)
 {
     WebCore::Node* root = nodeOf(self);
     char* selector;
-    AntbValue* arr;
-    std::vector<AgbSelector::Selector> selectors;
+    std::vector<WebCore::Node*> matches;
 
     if (!root || argc < 1)
         return 1;
@@ -10509,83 +10982,61 @@ int nodeQuerySelectorAll(AntbEngine* engine, AntbValue* self, AntbValue** args, 
     if (!selector)
         return 1;
 
-    arr = antb_make_array(engine);
-    if (!arr) {
-        antb_free(selector);
-        return 1;
-    }
-
-    /* The real selector engine (AgbSelector.h): selector lists, combinators,
-     * attribute selectors and the common pseudo-classes. It used to be a
-     * space-splitter that only understood "#id", ".class" and a tag name, so
-     * `[data-x]`, `a[href]`, `ul > li` and `a, b` silently matched nothing. */
-    if (AgbSelector::parse(selector, selectors)) {
-        bool fastPath = selectors.size() == 1 && selectors[0].steps.size() == 1
-                     && !selectors[0].steps[0].conds.empty()
-                     && selectors[0].steps[0].conds[0].kind == AgbSelector::COND_TAG;
-
-        if (fastPath) {
-            /* `div`, `div.cls`, `div[data-x]`: let the engine find the
-             * candidates instead of walking every node in the tree. */
-            const WebCore::AtomicString& tag = selectors[0].steps[0].conds[0].name;
-            RefPtr<WebCore::NodeList> candidates = root->getElementsByTagName(tag);
-
-            if (candidates) {
-                unsigned count = candidates->length();
-
-                for (unsigned i = 0; i < count; ++i) {
-                    WebCore::Node* n = candidates->item(i);
-
-                    if (n && n->isElementNode()
-                            && AgbSelector::matchesAny(selectors, static_cast<WebCore::Element*>(n)))
-                        pushWrappedNode(engine, arr, n);
-                }
-            }
-        } else {
-            for (WebCore::Node* n = root->firstChild(); n; n = n->traverseNextNode(root)) {
-                if (!n->isElementNode())
-                    continue;
-                if (AgbSelector::matchesAny(selectors, static_cast<WebCore::Element*>(n)))
-                    pushWrappedNode(engine, arr, n);
-            }
-        }
-    }
-
+    selectorCollect(root, selector, matches);
     antb_free(selector);
-    antb_value_assign(out, arr);
-    antb_value_release(arr);
+
+    {
+        /* A static NodeList: later DOM changes must not show up here (the
+         * snapshot's nodes are pinned by wrapNode, like a browser's list). */
+        AntbValue* list = wrapStaticCollection(engine, root, matches);
+
+        if (!list)
+            return 1;
+        antb_value_assign(out, list);
+        antb_value_release(list);
+    }
     return 1;
 }
 
 int nodeQuerySelector(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
                       AntbValue* out, void*)
 {
-    AntbValue* holder;
+    WebCore::Node* root = nodeOf(self);
+    char* selector;
+    std::vector<WebCore::Node*> matches;
 
-    if (argc < 1)
+    if (!root || argc < 1)
         return 1;
 
-    holder = antb_make_array(engine);
-    if (!holder)
-        return 0;
+    selector = antb_to_utf8(args[0]);
+    if (!selector)
+        return 1;
 
-    if (nodeQuerySelectorAll(engine, self, args, argc, holder, NULL)) {
-        AntbValue* first = antb_array_get(holder, 0);
-        if (const char* qsFilter = getenv("AGB_QS_DEBUG")) {
-            /* Diagnostic: AGB_QS_DEBUG=<substring> logs every querySelector
-             * whose selector contains the substring, with the hit/miss. */
-            std::string sel = argc >= 1 ? antb_to_utf8(args[0]) : std::string();
-            if (*qsFilter && sel.find(qsFilter) != std::string::npos)
-                fprintf(stderr, "[qs] sel=%s found=%d\n", sel.c_str(), first ? 1 : 0);
-        }
+    selectorCollect(root, selector, matches);
+
+    if (const char* qsFilter = getenv("AGB_QS_DEBUG")) {
+        /* Diagnostic: AGB_QS_DEBUG=<substring> logs every querySelector
+         * whose selector contains the substring, with the hit/miss. */
+        std::string sel = selector;
+
+        if (*qsFilter && sel.find(qsFilter) != std::string::npos)
+            fprintf(stderr, "[qs] sel=%s found=%d\n", sel.c_str(), matches.empty() ? 0 : 1);
+    }
+    antb_free(selector);
+
+    if (matches.empty()) {
+        assignNull(engine, out);   /* null, not undefined (R95) */
+        return 1;
+    }
+
+    {
+        AntbValue* first = wrapNode(engine, matches[0]);
+
         if (first) {
             antb_value_assign(out, first);
             antb_value_release(first);
-        } else
-            assignNull(engine, out);   /* null, not undefined (R95) */
+        }
     }
-
-    antb_value_release(holder);
     return 1;
 }
 
@@ -11990,8 +12441,7 @@ int nodeGetElementsByTagName(AntbEngine* engine, AntbValue* self, AntbValue** ar
 {
     WebCore::Node* n = nodeOf(self);
     char* name;
-    RefPtr<WebCore::NodeList> list;
-    AntbValue* arr;
+    AntbValue* list;
 
     if (!n || argc < 1)
         return 1;
@@ -12000,30 +12450,14 @@ int nodeGetElementsByTagName(AntbEngine* engine, AntbValue* self, AntbValue** ar
     if (!name)
         return 1;
 
-    list = n->getElementsByTagName(WebCore::String::fromUTF8(name));
+    list = wrapCollection(engine, n, AgbCollectionTags, std::string(name));
     antb_free(name);
 
-    arr = antb_make_array(engine);
-    if (!arr)
+    if (!list)
         return 1;
 
-    if (list) {
-        unsigned count = list->length();
-        for (unsigned i = 0; i < count; ++i) {
-            WebCore::Node* child = list->item(i);
-            AntbValue* wrapped;
-            if (!child)
-                continue;
-            wrapped = wrapNode(engine, child);
-            if (wrapped) {
-                antb_array_push(engine, arr, wrapped);
-                antb_value_release(wrapped);
-            }
-        }
-    }
-
-    antb_value_assign(out, arr);
-    antb_value_release(arr);
+    antb_value_assign(out, list);
+    antb_value_release(list);
     return 1;
 }
 
@@ -14306,7 +14740,11 @@ static const DomIfaceDef kDomIfaces[] = {
     { "HTMLTimeElement",        "HTMLElement" },
     { "HTMLTitleElement",       "HTMLElement" },
     { "HTMLTrackElement",       "HTMLElement" },
-    { "HTMLUListElement",       "HTMLElement" }
+    { "HTMLUListElement",       "HTMLElement" },
+    /* Collections (B2-2): live list wrappers; querySelectorAll returns a
+     * static NodeList of these. */
+    { "NodeList",               NULL },
+    { "HTMLCollection",         NULL }
 };
 
 /* HTML tag -> interface. The names are lower case; WebCore reports HTML tag
@@ -14491,7 +14929,13 @@ static const DomMethodDef kDomMethods[] = {
     { "HTMLMediaElement", "pause",        nodeMediaPause, NULL },
     { "HTMLMediaElement", "load",         nodeMediaLoad, NULL },
     { "HTMLMediaElement", "canPlayType",  nodeMediaCanPlayType, NULL },
-    { "HTMLMediaElement", "addTextTrack", nodeMediaAddTextTrack, NULL }
+    { "HTMLMediaElement", "addTextTrack", nodeMediaAddTextTrack, NULL },
+
+    /* Collections (B2-2). forEach/iterators are JS-side (prelude), they only
+     * need this[i]/length which the class getter answers. */
+    { "NodeList", "item",       collectionItem, NULL },
+    { "HTMLCollection", "item", collectionItem, NULL },
+    { "HTMLCollection", "namedItem", collectionNamedItemMethod, NULL }
 };
 
 static AntbClass* g_documentIface       = NULL;
@@ -14614,6 +15058,8 @@ void ensureInterfaceClasses(AntbEngine* engine)
     g_commentIface          = byName["Comment"];
     g_unknownElementIface   = byName["HTMLUnknownElement"];
     g_windowClass           = byName["Window"];
+    g_nodeListClass         = byName["NodeList"];
+    g_htmlCollectionClass   = byName["HTMLCollection"];
 
     /* Window inherits EventTarget in the DOM. prelude relinks each realm's
      * global object to this prototype, which is what makes `window instanceof
@@ -14649,6 +15095,14 @@ void ensureInterfaceClasses(AntbEngine* engine)
     /* The whole facade is per class now: one dispatching getter/setter pair
      * that receives every property the class does not declare. */
     antb_class_set_property_rw(engine, g_nodeClass, "", nodeGetter, nodeSetter, NULL);
+    /* Collections answer length/numeric indices through the same catch-all
+     * mechanism; item()/namedItem()/forEach/iterators stay on the prototype. */
+    if (g_nodeListClass)
+        antb_class_set_property_rw(engine, g_nodeListClass, "", collectionGetter,
+                                   (AntbSetterFn)NULL, NULL);
+    if (g_htmlCollectionClass)
+        antb_class_set_property_rw(engine, g_htmlCollectionClass, "", collectionGetter,
+                                   (AntbSetterFn)NULL, NULL);
     if (g_documentIface)
         antb_class_set_property_rw(engine, g_documentIface, "", titleGetter, titleSetter, NULL);
     if (g_htmlDocumentIface)
