@@ -506,9 +506,10 @@
       ok('click tag/constructor', !!seen &&
          Object.prototype.toString.call(seen) === '[object MouseEvent]' &&
          seen.constructor === MouseEvent);
-      /* Chrome marks a scripted el.click() untrusted; this engine cannot tell
-       * a user click from a scripted one yet, so engine dispatch is trusted. */
-      ok('click engine dispatch trusted', !!inner && inner.trusted === true);
+      /* el.click() is scripted: Chrome marks it untrusted, and so do we now
+       * (a real user click is still trusted - proven by the probe-level check
+       * with --click in the commit that added this). */
+      ok('script click is untrusted', !!inner && inner.trusted === false);
       ok('click target/currentTarget/phase', !!inner && inner.target === host &&
          inner.current === host && inner.phase === 2);
       ok('click bubbles to parent', !!outer && outer.target === host &&
@@ -528,6 +529,12 @@
       ok('dispatchEvent target/tag', !!seen && seen.target === el &&
          Object.prototype.toString.call(seen) === '[object Event]');
       ok('dispatchEvent untrusted', !!seen && seen.isTrusted === false);
+      /* el.click() is script-initiated: Chrome reports isTrusted=false for it,
+       * true only for events the user caused (issues §18.5 item 1). */
+      var scriptClick = null;
+      el.addEventListener('click', function (e) { scriptClick = e.isTrusted; });
+      el.click();
+      ok('script click is untrusted (click listener)', scriptClick === false);
       ok('dispatchEvent return true', ret === true);
       el.addEventListener('probe2', function (e) { e.preventDefault(); });
       ok('dispatchEvent returns false when cancelled',

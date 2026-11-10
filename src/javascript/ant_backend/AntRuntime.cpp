@@ -1175,6 +1175,16 @@ static AntbValue* makeEventObject(const std::string& type, WebCore::Node* target
     return AntRuntime::makeEventObjectForDispatch(type, target, event);
 }
 
+/* Set while a *script-called* method (el.click(), el.focus(), ...) walks through
+ * the engine's dispatch: Chrome reports isTrusted=false for those, and true only
+ * for events the user really caused. */
+static bool g_scriptInitiatedEvent = false;
+
+struct ScriptInitiatedEventScope {
+    ScriptInitiatedEventScope() { g_scriptInitiatedEvent = true; }
+    ~ScriptInitiatedEventScope() { g_scriptInitiatedEvent = false; }
+};
+
 /* prelude's __agbEventPhase(evt, current, phase): currentTarget/eventPhase are
  * own data properties on facade events and have to be defined on a native
  * Event (its prototype accessors are getter-only), so the update goes through
@@ -11293,8 +11303,11 @@ int nodeClick(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
 
     (void)engine; (void)args; (void)argc; (void)out;
 
-    if (n && n->isHTMLElement())
+    if (n && n->isHTMLElement()) {
+        ScriptInitiatedEventScope scope;
+
         static_cast<WebCore::HTMLElement*>(n)->click();
+    }
     return 1;
 }
 
@@ -16757,6 +16770,18 @@ AntbValue* makeEventObjectForDispatch(const std::string& type, WebCore::Node* ta
     antb_value_release(factory);
     if (!evt)
         return NULL;
+
+    /* el.click() / el.focus() were called by script, not by the user. The
+     * factory marks engine events trusted; override it here (the property is
+     * writable: prelude's `own()` defines it that way). */
+    if (g_scriptInitiatedEvent) {
+        AntbValue* untrusted = antb_make_boolean(g_engine, 0);
+
+        if (untrusted) {
+            antb_set_prop(g_engine, evt, "isTrusted", untrusted);
+            antb_value_release(untrusted);
+        }
+    }
     /* target / currentTarget / isTrusted / eventPhase come from
      * __agbMakeEvent: the engine is the trusted source, while a JS
      * dispatchEvent() passes the caller's own object through nodeDispatchEvent

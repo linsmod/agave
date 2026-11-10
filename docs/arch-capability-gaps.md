@@ -165,7 +165,7 @@ agave_shell.exe --probe ../tools/pages/cap_input_events.html     --pre-eval "doc
 | `addEventListener` / `on*` 属性 / capture / bubble / `stopPropagation` / `removeEventListener` | **支持** | 16 种类型全通（`#a`–`#j` 用例） |
 | `{once:true}` | **支持**（R45） | 引擎派发与 JS `dispatchEvent` 两条路径都会摘除 |
 | `event.key` / `event.code` | **支持**（R45） | 由 `keyIdentifier()`+`charCode()`+shift 推出（`a`/`Enter`/`ArrowLeft`/`KeyA`/`Digit1`） |
-| `event.isTrusted` | **支持**（R45） | 引擎派发 `true`，JS `dispatchEvent` 为 `false` |
+| `event.isTrusted` | **支持**（R45 + 2026-11-10） | 用户真实操作（引擎派发）为 `true`；脚本调用 `el.click()`/`focus()`/`blur()` 与 JS `dispatchEvent` 为 `false` |
 | `dispatchEvent()` 冒泡 | **支持（2026-11-10）** | 按 `event.bubbles` 逐级向上（`eventPhase=3`、`currentTarget`=当前祖先、`stopPropagation()` 阻断），非冒泡事件停在 target 的 phase 2；返回后 `currentTarget`/`eventPhase` 复位 |
 | `beforeinput` + `data`/`inputType` + `preventDefault` 取消插入 | **支持**（R45） | 由 `textInput` 映射；`#c` 用例 `c[val="",prevented=1]` |
 | `input` 事件的 `inputType`/`data` | **支持**（R45） | `inputType="insertText"`，`data` 取自同一次 `textInput` |
