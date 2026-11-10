@@ -101,7 +101,17 @@ add_library(${LIB_NAME} ${SOURCES})
 if (OPT_JS_ANT)
     target_sources(${LIB_NAME} PRIVATE
         ${PROJ_ROOT}/src/javascript/ant_backend/AntRuntime.cpp
-        ${PROJ_ROOT}/src/javascript/ant_backend/RealmDocument.cpp)
+        ${PROJ_ROOT}/src/javascript/ant_backend/RealmDocument.cpp
+        ${PROJ_ROOT}/src/javascript/ant_backend/AntBindings.cpp)
+    # Generated interface tables (tools/gen_bindings.ps1 -Generator ANT): one
+    # buildANT/Ant<Interface>.cpp per migrated IDL, signed in like buildKJS/ and
+    # buildQJS/. CONFIGURE_DEPENDS so a newly generated file is picked up by the
+    # next build without a manual re-run of cmake.
+    file(GLOB ANT_BINDING_SOURCES CONFIGURE_DEPENDS
+        ${PROJ_ROOT}/src/webcore/buildANT/*.cpp)
+    if (ANT_BINDING_SOURCES)
+        target_sources(${LIB_NAME} PRIVATE ${ANT_BINDING_SOURCES})
+    endif()
     target_include_directories(${LIB_NAME} PRIVATE
         ${PROJ_ROOT}/src/javascript/ant_backend
         ${PROJ_ROOT}/3rdparty/ant/include)

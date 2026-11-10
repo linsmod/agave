@@ -110,6 +110,18 @@ pwsh -File tools\gen_bindings.ps1 -Generator QJS -Idl Node.idl -OutDir $env:TEMP
 - 现状（2026-11-10）：QJS **483/490 逐字节一致**（其余 7 个是签入副本的历史配置差异，见上）；
   JS 后端 484 一致但 `DOMWindow.idl` 已无法用它生成（`LegacyParent=KJS::Window` vs 现在的 `Window`）。
   `buildQJS/` 里有 32 个文件是 sign-in 时从没生成过的 mixin/protocol 接口（`SVGTests` 等），工具会单列。
+- **ant 后端（A1 spike，已签入 Node/Element）**：`CodeGeneratorAnt.pm` 只生成**数据表**（接口/父接口/属性 flags/
+  方法 arity/常量），运行期行为仍在门面里；每个 `buildANT/Ant<Interface>.cpp` 自注册到 `AntBindings` 的
+  registry，`src/src.cmake` 的 `OPT_JS_ANT` 分支 `GLOB CONFIGURE_DEPENDS` 编译它们：
+
+  ```powershell
+  pwsh -File tools\gen_bindings.ps1 -Generator ANT -Idl dom/Node.idl    -OutDir src\webcore\buildANT
+  pwsh -File tools\gen_bindings.ps1 -Generator ANT -Idl dom/Element.idl -OutDir src\webcore\buildANT
+  # IDL 表 vs 门面表 的对账（2 个接口、writability 漂移必须是 0）
+  $env:AGB_BINDING_CHECK='1'; build-zig-native\agave_shell.exe --probe tools/pages/cap_dom.html --eval "probeExit('ok')" --wait 800 --settle 400
+  ```
+
+  这条对账也已进 `run_binding_semantics_tests.ps1`（"generated tables" 用例）。
 - **改 IDL 或生成器后必须跑这个对拍**：产物是签入的，构建不会替你重新生成；ant 后端（`CodeGeneratorAnt.pm`）
   落地后的入库门禁也是"与 `buildQJS/` 同源的可复现性 + 差异清单为 0"。
 - 详见 [ref-code-index.md](ref-code-index.md) 的"生成文件与 `buildKJS/` 目录"一节。

@@ -76,6 +76,69 @@ if ($err -and $err.Trim().Length -gt 0) {
     Write-Host "      stderr: $(($err -split "`n" | Select-Object -First 3) -join ' ')"
 }
 
+# --- generated interface tables (A1 spike) ---------------------------------
+# buildANT/Ant<Interface>.cpp is generated from the IDL by
+# bindings/scripts/CodeGeneratorAnt.pm. The runtime does not consume the tables
+# yet; AGB_BINDING_CHECK=1 makes it compare them against the hand-written facade
+# and print one line per interface. This pins the count of IDL members and, more
+# importantly, that the IDL and the facade agree on writability (a mismatch means
+# the accessor lets a read-only property be assigned, or hides a setter).
+$checkJs = Join-Path $tmp 'binding_table_check.js'
+"probeExit('check');" | Set-Content -Path $checkJs -Encoding ascii
+
+$env:AGB_BINDING_CHECK = '1'
+# agbLog writes the [bind] lines to stderr: this run needs both streams.
+$stdout2 = Join-Path $tmp 'tables_out.txt'
+$stderr2 = Join-Path $tmp 'tables_err.txt'
+$p2 = Start-Process -FilePath $exe -NoNewWindow -PassThru -Wait -ArgumentList @(
+    '--probe', $page, '--eval-file', $checkJs,
+    '--wait', '800', '--settle', '300', '--timeout', '60000'
+) -RedirectStandardOutput $stdout2 -RedirectStandardError $stderr2
+Remove-Item Env:AGB_BINDING_CHECK
+
+$tableText = ((Get-Content $stdout2 -Raw) -as [string]) + ((Get-Content $stderr2 -Raw) -as [string])
+
+# Interface name -> matched [bind] summary line, e.g.
+#   [bind] Node: idl 17 attrs / 14 methods / 12 consts; facade 12 registered, ...
+$expected = @(
+    @{ Name = 'Node';    Attrs = 17; Methods = 14; Constants = 12 },
+    @{ Name = 'Element'; Attrs = 15; Methods = 23; Constants = 0 }
+)
+
+if ($p2.ExitCode -ne 0) {
+    $failures++
+    Write-Host ("FAIL  generated tables: probe exit {0}" -f $p2.ExitCode)
+} else {
+    $tableFailures = 0
+    foreach ($want in $expected) {
+        $pattern = '\[bind\] ' + $want.Name + ': idl (\d+) attrs / (\d+) methods / (\d+) consts; ' +
+                   'facade (\d+) registered, (\d+) idl-only, (\d+) facade-only, (\d+) flag-mismatch'
+        $m = [regex]::Match($tableText, $pattern)
+        if (-not $m.Success) {
+            Write-Host ("FAIL  generated tables: no summary for {0} (is buildANT/Ant{0}.cpp compiled in?)" -f $want.Name)
+            $tableFailures++
+            continue
+        }
+        if ([int]$m.Groups[1].Value -ne $want.Attrs -or
+            [int]$m.Groups[2].Value -ne $want.Methods -or
+            [int]$m.Groups[3].Value -ne $want.Constants) {
+            Write-Host ("FAIL  generated tables: {0} idl {1}/{2}/{3}, want {4}/{5}/{6} (IDL changed? re-generate)" -f
+                $want.Name, $m.Groups[1].Value, $m.Groups[2].Value, $m.Groups[3].Value,
+                $want.Attrs, $want.Methods, $want.Constants)
+            $tableFailures++
+        }
+        if ([int]$m.Groups[7].Value -ne 0) {
+            Write-Host ("FAIL  generated tables: {0} has {1} writability mismatch(es) against the facade" -f
+                $want.Name, $m.Groups[7].Value)
+            $tableFailures++
+        }
+    }
+    $failures += $tableFailures
+    if ($tableFailures -eq 0) {
+        Write-Host ("PASS  generated tables ({0} interfaces, 0 writability mismatch)" -f $expected.Count)
+    }
+}
+
 Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 
 if ($failures -gt 0) {

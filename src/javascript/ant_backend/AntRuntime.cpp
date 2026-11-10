@@ -18,6 +18,7 @@
 #include <map>
 
 #include "AgbLog.h"
+#include "AntBindings.h"
 /* cb_clipboard_set_data: the host's Win32 clipboard writer, used by
  * __agbClipboardSetText (the engine has no document.execCommand('copy')). */
 #include "../../webview/WebCallback.h"
@@ -15546,6 +15547,102 @@ static bool perRealmIfacesEnabled()
     return !value || strcmp(value, "0") != 0;
 }
 
+/* ---- generated interface tables (A1 spike) ------------------------------- *
+ * CodeGeneratorAnt.pm turns an IDL file into a table of the interface's own
+ * attributes (with writability/flags), methods (with arity) and constants, and
+ * every table registers itself at load time (see AntBindings.h). The runtime
+ * does not consume them yet - the hand-written facade still answers every
+ * property - so this only *measures* the gap: for each generated interface, how
+ * many of its IDL attributes the facade already declares explicitly (a real
+ * accessor/descriptor on the interface prototype) versus how many are still
+ * catch-all only, plus the names the facade has that the IDL does not (the
+ * modern API the 2008 IDL never knew: querySelector, classList, ...).
+ *
+ * AGB_BINDING_CHECK=1 prints one line per interface, once per process. */
+static const DomAttrDef* findFacadeAttribute(const char* iface, const char* name)
+{
+    size_t i;
+
+    for (i = 0; i < sizeof(kDomAttributes) / sizeof(kDomAttributes[0]); ++i) {
+        if (!strcmp(kDomAttributes[i].iface, iface) && !strcmp(kDomAttributes[i].name, name))
+            return &kDomAttributes[i];
+    }
+    return 0;
+}
+
+
+static void checkGeneratedBindingTables()
+{
+    unsigned i;
+
+    agbLog(AGB_LOG_EVT, "[bind] generated interface tables: %u",
+           AntBindings::interfaceCount());
+
+    for (i = 0; i < AntBindings::interfaceCount(); ++i) {
+        const AntbInterfaceDef* def = AntBindings::interfaceAt(i);
+        unsigned registered = 0, idlOnly = 0, flagMismatch = 0, facadeOnly = 0;
+        std::string idlOnlyNames, facadeOnlyNames;
+        size_t k;
+
+        if (!def || !def->name)
+            continue;
+
+        for (unsigned a = 0; a < def->attributeCount; ++a) {
+            const DomAttrDef* found = findFacadeAttribute(def->name, def->attributes[a].name);
+
+            if (!found) {
+                ++idlOnly;
+                if (!idlOnlyNames.empty())
+                    idlOnlyNames += ",";
+                idlOnlyNames += def->attributes[a].name;
+                continue;
+            }
+            ++registered;
+            if (!!found->writable != !!(def->attributes[a].flags & ANTB_ATTR_WRITABLE)) {
+                ++flagMismatch;
+                agbLog(AGB_LOG_EVT, "[bind]   %s.%s: idl writable=%u, facade=%u",
+                       def->name, def->attributes[a].name,
+                       (def->attributes[a].flags & ANTB_ATTR_WRITABLE) ? 1u : 0u,
+                       found->writable ? 1u : 0u);
+            }
+        }
+
+        /* Names the facade registers for an interface the IDL never mentions:
+         * the 2008 IDL predates most of them, they are the permanent custom
+         * layer (A2 keeps them, generated bindings must not hide them). */
+        for (k = 0; k < sizeof(kDomAttributes) / sizeof(kDomAttributes[0]); ++k) {
+            unsigned a;
+            int inIdl = 0;
+
+            if (strcmp(kDomAttributes[k].iface, def->name))
+                continue;
+
+            for (a = 0; a < def->attributeCount; ++a) {
+                if (!strcmp(def->attributes[a].name, kDomAttributes[k].name)) {
+                    inIdl = 1;
+                    break;
+                }
+            }
+            if (!inIdl) {
+                ++facadeOnly;
+                if (!facadeOnlyNames.empty())
+                    facadeOnlyNames += ",";
+                facadeOnlyNames += kDomAttributes[k].name;
+            }
+        }
+
+        agbLog(AGB_LOG_EVT,
+               "[bind] %s: idl %u attrs / %u methods / %u consts; "
+               "facade %u registered, %u idl-only, %u facade-only, %u flag-mismatch",
+               def->name, def->attributeCount, def->methodCount, def->constantCount,
+               registered, idlOnly, facadeOnly, flagMismatch);
+        if (!idlOnlyNames.empty())
+            agbLog(AGB_LOG_EVT, "[bind]   %s idl-only: %s", def->name, idlOnlyNames.c_str());
+        if (!facadeOnlyNames.empty())
+            agbLog(AGB_LOG_EVT, "[bind]   %s facade-only: %s", def->name, facadeOnlyNames.c_str());
+    }
+}
+
 void ensureInterfaceClasses(AntbEngine* engine)
 {
     RuntimeState* state;
@@ -15554,6 +15651,15 @@ void ensureInterfaceClasses(AntbEngine* engine)
 
     if (!engine || g_buildingInterfaces)
         return;
+
+    if (getenv("AGB_BINDING_CHECK")) {
+        static int checked = 0;
+
+        if (!checked) {
+            checked = 1;
+            checkGeneratedBindingTables();
+        }
+    }
 
     /* The classes belong to one engine, so they are looked up (and mirrored)
      * in that engine's state - not in whichever state the engine thread happens

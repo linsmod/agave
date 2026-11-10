@@ -120,9 +120,13 @@ if (-not (Test-Path $perl)) {
 # somewhere else than the checkout this script was started from.
 Remove-Item Env:SOURCE_ROOT -ErrorAction SilentlyContinue
 
-$generatorModule = Join-Path $scripts "CodeGenerator$Generator.pm"
+# The module name is CodeGenerator<Name>.pm: QJS/JS are all-caps, the ant
+# backend is CodeGeneratorAnt.pm (named after the engine), so the CLI keeps the
+# shouted id "ANT" (it is also the buildANT/ directory name) and maps it here.
+$generatorName = if ($Generator -eq "ANT") { "Ant" } else { $Generator }
+$generatorModule = Join-Path $scripts "CodeGenerator$generatorName.pm"
 if (-not (Test-Path $generatorModule)) {
-    throw "CodeGenerator$Generator.pm is missing from $scripts (the $Generator backend is not implemented yet)"
+    throw "CodeGenerator$generatorName.pm is missing from $scripts (the $Generator backend is not implemented yet)"
 }
 
 if (-not $OutDir) {
@@ -181,7 +185,7 @@ $results = $idlFiles | ForEach-Object -ThrottleLimit $Throttle -Parallel {
         (Join-Path $using:scriptsSlash 'generate-bindings.pl'),
         '--include', $using:idlRootSlash,
         '--outputdir', $using:outSlash,
-        '--generator', $using:Generator,
+        '--generator', $using:generatorName,
         '--defines', $using:Defines,
         $file.FullName.Replace('\', '/')
     )
@@ -263,5 +267,6 @@ if ($cmpFull) {
 if ($failed.Count) { exit 1 }
 if ($Strict -and $diff.Count) { exit 1 }
 exit 0
+
 
 
