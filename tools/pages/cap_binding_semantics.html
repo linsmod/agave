@@ -400,6 +400,40 @@
     })());
     ok('document/window interfaces', document instanceof HTMLDocument &&
        document instanceof Document && window instanceof Window);
+    /* G1-3: ParentNode/ChildNode are C++ extra methods on the mixin's interfaces
+     * (Chrome's ownership), not JS polyfills on Node.prototype. */
+    ok('ParentNode/ChildNode ownership', (function () {
+      return typeof Element.prototype.append === 'function' &&
+             typeof Element.prototype.prepend === 'function' &&
+             typeof Document.prototype.append === 'function' &&
+             typeof DocumentFragment.prototype.prepend === 'function' &&
+             typeof CharacterData.prototype.remove === 'function' &&
+             typeof CharacterData.prototype.replaceWith === 'function' &&
+             typeof Node.prototype.append === 'undefined' &&
+             typeof Node.prototype.remove === 'undefined';
+    })());
+    ok('ParentNode/ChildNode behaviour', (function () {
+      var host = document.createElement('div');
+      host.append('a', document.createElement('b'), 'c');
+      host.prepend('x');
+      var i = document.createElement('i');
+      host.firstChild.after(i);
+      var u = document.createElement('u');
+      host.firstChild.before(u);
+      host.lastChild.remove();
+      var s = document.createElement('s');
+      host.lastChild.replaceWith(s, 'y');
+      var text = host.textContent;
+      host.replaceChildren('only');
+      var frag = document.createDocumentFragment();
+      frag.append('f1', 'f2');
+      var tn = document.createTextNode('t');
+      host.appendChild(tn);
+      tn.remove();
+      return text === 'xay' && host.childNodes.length === 1 &&
+             host.textContent === 'only' && frag.childNodes.length === 2 &&
+             host.lastChild.nodeType === 3;
+    })());
     /* element.style is a real CSSStyleDeclaration (Chrome's shape), not a shim
      * object: instanceof, @@toStringTag, identity, array-like indexed access and
      * the cssText / getPropertyValue / setProperty surface. */

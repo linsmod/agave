@@ -1150,6 +1150,11 @@ int nodeHasChildNodes(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, voi
 int nodeContains(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeCompareDocumentPosition(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeRemove(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeAppendChildren(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodePrependChildren(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeBefore(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeAfter(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeReplaceWith(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeGetBoundingClientRect(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeGetRootNode(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeGetAttributeNames(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
@@ -8770,6 +8775,120 @@ int nodeReplaceChildren(AntbEngine* engine, AntbValue* self, AntbValue** args, i
     return 1;
 }
 
+/* ParentNode/ChildNode mixins: the 2008 IDL has none of these, so they are extra
+ * methods (kExtraMethods). Chrome's signatures are variadic and every non-node
+ * argument is converted with String() - append(null) really inserts the text
+ * "null" - so the conversion goes through antb_to_utf8 rather than skipping
+ * non-node values. These used to be a JS polyfill in polyfills.js (G1-3). */
+static WebCore::Node* mixinArgNode(AntbValue* arg, WebCore::Document* document,
+                                   RefPtr<WebCore::Node>& hold)
+{
+    WebCore::Node* n = arg ? nodeOf(arg) : NULL;
+
+    if (n) {
+        hold = n;
+        return n;
+    }
+    if (!arg || !document)
+        return NULL;
+
+    {
+        char* text = antb_to_utf8(arg);
+
+        if (!text)
+            return NULL;
+        hold = document->createTextNode(WebCore::String::fromUTF8(text));
+        antb_free(text);
+    }
+    return hold.get();
+}
+
+/* op: 0 append, 1 prepend, 2 before, 3 after, 4 replaceWith. */
+static int mixinInsert(AntbValue* self, AntbValue** args, int argc, int op)
+{
+    WebCore::Node* receiver = nodeOf(self);
+    WebCore::Document* document;
+    WebCore::Node* parent = NULL;
+    WebCore::Node* ref = NULL;
+    RefPtr<WebCore::Node> refHold;
+    WebCore::ExceptionCode ec = 0;
+    int i;
+
+    if (!receiver)
+        return 1;
+
+    document = receiver->document();
+
+    switch (op) {
+    case 0: parent = receiver; ref = NULL; break;
+    case 1: parent = receiver; ref = receiver->firstChild(); break;
+    case 2: parent = receiver->parentNode(); ref = receiver; break;
+    case 3: parent = receiver->parentNode(); ref = receiver->nextSibling(); break;
+    default: parent = receiver->parentNode(); ref = receiver; break;
+    }
+
+    if (!parent)
+        return 1;
+    if (ref)
+        refHold = ref;          /* keep the insertion point alive while moving nodes */
+
+    for (i = 0; i < argc; ++i) {
+        RefPtr<WebCore::Node> hold;
+        WebCore::Node* node = mixinArgNode(args[i], document, hold);
+
+        if (!node || node == receiver || node == parent)
+            continue;
+        if (node->parentNode())
+            node->parentNode()->removeChild(node, ec);   /* move, like Chrome */
+        ec = 0;
+        if (ref)
+            parent->insertBefore(node, ref, ec);
+        else
+            parent->appendChild(node, ec);
+        ec = 0;
+    }
+
+    if (op == 4 && receiver->parentNode())
+        receiver->parentNode()->removeChild(receiver, ec);
+
+    return 1;
+}
+
+int nodeAppendChildren(AntbEngine*, AntbValue* self, AntbValue** args, int argc,
+                       AntbValue* out, void*)
+{
+    (void)out;
+    return mixinInsert(self, args, argc, 0);
+}
+
+int nodePrependChildren(AntbEngine*, AntbValue* self, AntbValue** args, int argc,
+                        AntbValue* out, void*)
+{
+    (void)out;
+    return mixinInsert(self, args, argc, 1);
+}
+
+int nodeBefore(AntbEngine*, AntbValue* self, AntbValue** args, int argc,
+               AntbValue* out, void*)
+{
+    (void)out;
+    return mixinInsert(self, args, argc, 2);
+}
+
+int nodeAfter(AntbEngine*, AntbValue* self, AntbValue** args, int argc,
+              AntbValue* out, void*)
+{
+    (void)out;
+    return mixinInsert(self, args, argc, 3);
+}
+
+int nodeReplaceWith(AntbEngine*, AntbValue* self, AntbValue** args, int argc,
+                    AntbValue* out, void*)
+{
+    (void)out;
+    return mixinInsert(self, args, argc, 4);
+}
+
 int nodeScrollIntoView(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
                        AntbValue* out, void*)
 {
@@ -15474,7 +15593,10 @@ static const DomMethodImpl kDomMethodImpls[] = {
     { "addEventListener"          , nodeAddEventListener },
     { "addTextTrack"              , nodeMediaAddTextTrack },
     { "adoptNode"                 , nodeDocumentAdoptNode },
+    { "after"                     , nodeAfter },
+    { "append"                    , nodeAppendChildren },
     { "appendChild"               , nodeAppendChild },
+    { "before"                    , nodeBefore },
     { "blur"                      , nodeBlur },
     { "canPlayType"               , nodeMediaCanPlayType },
     { "checkValidity"             , nodeFormCheckValidity },
@@ -15519,7 +15641,9 @@ static const DomMethodImpl kDomMethodImpls[] = {
     { "queryCommandState"         , docQueryCommandState },
     { "queryCommandSupported"     , docQueryCommandSupported },
     { "querySelector"             , nodeQuerySelector },
+    { "prepend"                   , nodePrependChildren },
     { "querySelectorAll"          , nodeQuerySelectorAll },
+    { "replaceWith"               , nodeReplaceWith },
     { "remove"                    , nodeRemove },
     { "removeAttribute"           , nodeRemoveAttribute },
     { "removeChild"               , nodeRemoveChild },
@@ -15586,7 +15710,21 @@ static const DomMethodExtra kExtraMethods[] = {
     { "Node", "dispatchEvent" },
     { "Node", "getRootNode" },
     { "Node", "removeEventListener" },
+    { "Element", "append" },
+    { "Element", "prepend" },
+    { "Element", "before" },
+    { "Element", "after" },
+    { "Element", "replaceWith" },
+    { "Element", "replaceChildren" },
     { "Element", "remove" },
+    { "CharacterData", "before" },
+    { "CharacterData", "after" },
+    { "CharacterData", "replaceWith" },
+    { "CharacterData", "remove" },
+    { "Document", "append" },
+    { "Document", "prepend" },
+    { "DocumentFragment", "append" },
+    { "DocumentFragment", "prepend" },
     { "HTMLMediaElement", "load" },
 };
 

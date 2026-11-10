@@ -11,13 +11,12 @@
     var g = window;
 
     /* --- modern DOM methods ------------------------------------------------ *
-     * The engine now has one interface prototype per interface, so these have
-     * to land on the right prototype (they used to share one hidden prototype
-     * for every node). Mixin ownership follows the DOM:
-     *   ParentNode  append/prepend        Element, Document, DocumentFragment
-     *   ChildNode   before/after/remove/replaceWith   Element, CharacterData
-     *   Element     matches/closest
-     * and text.remove() keeps working through CharacterData. */
+     * ParentNode (append/prepend/replaceChildren) and ChildNode
+     * (before/after/remove/replaceWith) used to live here as JS; they are C++
+     * extra methods now (G1-3, src/javascript/ant_backend/AntRuntime.cpp), on
+     * the same prototypes Chrome puts them on. What stays is matches/closest:
+     * they need the selector engine, which is a C-side concern too but they are
+     * not part of G1. */
     if (document && document.createElement) {
         function polyfillTarget(ctor) {
             return (typeof ctor === 'function' && ctor.prototype) ? ctor.prototype : null;
@@ -28,50 +27,8 @@
             try { proto[name] = fn; } catch (e) { /* read only prototype */ }
         }
 
-        var parentTargets = [polyfillTarget(Element), polyfillTarget(Document),
-                             polyfillTarget(DocumentFragment)];
-        var childTargets = [polyfillTarget(Element), polyfillTarget(CharacterData)];
         var elementTarget = polyfillTarget(Element);
 
-        function appendFn() {
-            for (var i = 0; i < arguments.length; ++i) {
-                var n = arguments[i];
-                if (n === null || n === undefined) continue;
-                this.appendChild(typeof n === 'string' ? document.createTextNode(n) : n);
-            }
-            return this;
-        }
-        function prependFn() {
-            var first = this.firstChild;
-            for (var i = 0; i < arguments.length; ++i) {
-                var n = arguments[i];
-                if (n === null || n === undefined) continue;
-                this.insertBefore(typeof n === 'string' ? document.createTextNode(n) : n, first);
-            }
-            return this;
-        }
-        function beforeFn() {
-            var p = this.parentNode;
-            if (!p) return;
-            for (var i = 0; i < arguments.length; ++i) p.insertBefore(arguments[i], this);
-        }
-        function afterFn() {
-            var p = this.parentNode;
-            if (!p) return;
-            var next = this.nextSibling;
-            for (var i = 0; i < arguments.length; ++i) p.insertBefore(arguments[i], next);
-        }
-        function removeFn() {
-            if (this.parentNode) this.parentNode.removeChild(this);
-        }
-        function replaceWithFn() {
-            var p = this.parentNode;
-            if (!p) return;
-            var next = this.nextSibling;
-            for (var i = 0; i < arguments.length; ++i) p.insertBefore(arguments[i], this);
-            p.removeChild(this);
-            if (next) this.nextSibling;
-        }
         function matchesFn(sel) {
             var p = this.parentNode || this.ownerDocument;
             if (!p || !p.querySelectorAll) return false;
@@ -88,20 +45,9 @@
             return null;
         }
 
-        for (var t = 0; t < parentTargets.length; ++t) {
-            defineMethod(parentTargets[t], 'append', appendFn);
-            defineMethod(parentTargets[t], 'prepend', prependFn);
-        }
-        for (var c = 0; c < childTargets.length; ++c) {
-            defineMethod(childTargets[c], 'before', beforeFn);
-            defineMethod(childTargets[c], 'after', afterFn);
-            defineMethod(childTargets[c], 'remove', removeFn);
-            defineMethod(childTargets[c], 'replaceWith', replaceWithFn);
-        }
         defineMethod(elementTarget, 'matches', matchesFn);
         defineMethod(elementTarget, 'closest', closestFn);
     }
-
     /* instanceof is answered by the interface prototype chain (Node ->
      * EventTarget, HTMLElement -> Element -> Node, ...); the old
      * Symbol.hasInstance overrides are gone, they hid SVG/prototype bugs. */
