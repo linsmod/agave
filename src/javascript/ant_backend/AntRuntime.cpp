@@ -6803,6 +6803,11 @@ void bindDocument(void* document)
 
     runtime = documentRuntimeFor(state, target);
 
+    if (getenv("AGB_BIND_TRACE"))
+        agbLog(AGB_LOG_EVT, "bindDocument target=%p parent=%p prev=%p depth=%d",
+               (void*)target, (void*)(target->parentDocument() ? target->parentDocument() : target),
+               (void*)previous, antb_engines_js_depth());
+
     if (!runtime || !state->engine)
         return;
 
@@ -16081,6 +16086,7 @@ void dispatchWindowEvent(const char* type)
 {
     dispatchWindowEventState(type, NULL);
 }
+
 
 /* Dispatch a window event for a named document. The caller knows which frame
  * the event belongs to: the main frame's load can fire while a child frame's

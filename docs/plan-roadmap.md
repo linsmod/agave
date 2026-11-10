@@ -268,12 +268,14 @@
 
 ### P1-bind 脚本动态插入 iframe 后 eval/脚本"停住"（2026-11-10 发现，**待查**）
 
-- 现象：`var f=document.createElement('iframe'); document.body.appendChild(f); probeExit('x')` 在探针 eval 里执行 →
-  子 frame 的 about:blank 导航开始后，后面的语句不执行，探针 exit 4；无 JS 报错、无崩溃。静态 `<iframe>` 不受影响，
-  `run_realm_tests`/`run_nav_tests` 全绿。
+- 现象（2026-11-10 晚修正）：脚本里 `appendChild(iframe)` 之后，**调用方脚本的剩余部分在子 frame 的 realm 里执行**
+  （`window.__after` 丢失、`document.title` 落到子文档）；探针 eval 里表现为 `probeExit` 找不到 → exit 4。
+  内联解析期、timer 回调、探针 eval 都触发；`AGB_PER_FRAME_REALM=0` 也触发；静态 `<iframe>` 不受影响。
+  `AGB_BIND_TRACE=1` 打印 `bindDocument()` 的 target/prev/JS depth（本次为此加的诊断开关）。
 - 影响：页面脚本动态插入 iframe 之后的逻辑可能整体不执行（页面可见）。
-- 起点：`FrameLoaderClientMC` 创建子 frame/realm 时是否顶掉当前 realm（`contextActivate`/`contextLeave` 的 `bindStack`
-  配对、`KJSProxy::evaluate` 的 keepAlive/bindDocument），与 R182 同一片状态。
+- 起点：`bindDocument(子)` 与恢复`为什么不配对`——恢复点分散在 `dispatchFrameDocumentEvent`/`dispatchWindowEventFor`，
+  而 `Document::finishedParsing()` → `dispatchEvent()` 的嵌套顺序让最后一次绑定落在子文档；建议把绑定做成
+  `bindDocument()` 内的 push/pop 栈（同 `contextActivate`/`contextLeave` 的 `bindStack`）。
 - 详细记录：`issues/wip/ant-dom-bindings.md` §28.6。
 
 ### P1-z 图片解码离开 paint（L0–L3，2026-11-08 起；L0–L3 已完成，剩余见下）
