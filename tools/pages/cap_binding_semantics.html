@@ -160,12 +160,12 @@
     ok('readyState string', typeof document.readyState === 'string');
 
     /* ---- already-wrapped classes ------------------------------------------ */
-    /* element.style is still the facade's plain shim (known gap): it reflects
-     * CSS properties but is not a CSSStyleDeclaration interface instance yet. */
+    /* element.style is a real CSSStyleDeclaration instance now (A3): it reflects
+     * the element's inline style and the interface identity holds. */
     div.style.color = 'red';
-    ok('style shim write', div.style.color === 'red');
-    ok('style is object (known gap)', typeof div.style === 'object' &&
-       !(div.style instanceof CSSStyleDeclaration));
+    ok('style write', div.style.color === 'red');
+    ok('style is a CSSStyleDeclaration', div.style instanceof CSSStyleDeclaration &&
+       Object.prototype.toString.call(div.style) === '[object CSSStyleDeclaration]');
     ok('StyleSheetList global', typeof StyleSheetList === 'function');
     ok('selection instanceof Selection', window.getSelection() instanceof Selection);
     ok('range instanceof Range', document.createRange() instanceof Range);
@@ -334,6 +334,37 @@
       return c.width === 300 && c.height === 150;
     })());
     ok('isContentEditable is DOM state', document.createElement('div').isContentEditable === false);
+    /* element.style is a real CSSStyleDeclaration (Chrome's shape), not a shim
+     * object: instanceof, @@toStringTag, identity, array-like indexed access and
+     * the cssText / getPropertyValue / setProperty surface. */
+    ok('style is a CSSStyleDeclaration', (function () {
+      var d = document.createElement('div'), s = d.style;
+      d.style.color = 'red';
+      d.style.marginTop = '3px';
+      return (s instanceof CSSStyleDeclaration) &&
+             Object.prototype.toString.call(s) === '[object CSSStyleDeclaration]' &&
+             d.style === s &&
+             /* WebCore 2008 serializes with a trailing space; Chrome has none
+              * (cosmetic, recorded in issues §30). */
+             d.getAttribute('style').replace(/\s+$/, '') === 'color: red; margin-top: 3px;';
+    })());
+    ok('style indexed access', (function () {
+      var d = document.createElement('div');
+      d.style.color = 'red';
+      d.style.marginTop = '3px';
+      return d.style.length === 2 && d.style[0] === 'color' &&
+             d.style.item(1) === 'margin-top' && d.style.getPropertyValue('color') === 'red';
+    })());
+    ok('style cssText / setProperty / removeProperty', (function () {
+      var d = document.createElement('div');
+      d.style.cssText = 'width: 10px; height: 5px';
+      var text = d.style.cssText;
+      d.style.setProperty('color', 'blue');
+      var color = d.style.getPropertyValue('color');
+      d.style.removeProperty('color');
+      return /width: 10px/.test(text) && /height: 5px/.test(text) &&
+             color === 'blue' && d.style.getPropertyValue('color') === '';
+    })());
     /* A3: attributes whose value is DOM state, not the attribute. Built off-DOM so
      * the matrix does not disturb the page (form ownership walks the ancestor
      * chain, so it resolves without being in the document). */
@@ -416,11 +447,11 @@
     })());
 
     /* ---- known gaps (A flips these) --------------------------------------- */
-    /* `style` is now a real accessor on HTMLElement.prototype (B2-3), but the
-     * object it returns is still the facade shim, not a CSSStyleDeclaration. */
-    ok('HTMLElement.prototype.style is an accessor (known gap: value is a shim)',
+    /* `style` is an accessor on HTMLElement.prototype and its value is a real
+     * CSSStyleDeclaration (A3 flipped this from a known gap). */
+    ok('HTMLElement.prototype.style is an accessor',
        typeof Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'style').get === 'function' &&
-       !(div.style instanceof CSSStyleDeclaration));
+       div.style instanceof CSSStyleDeclaration);
     /* ---- B2: window identity ---------------------------------------------- */
     ok('window instanceof Window', window instanceof Window);
     ok('window proto is Window.prototype', protoIs(window, Window.prototype));

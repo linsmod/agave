@@ -141,7 +141,9 @@
       setProperty: function (name, value, priority) { this[String(name)] = value; },
       getPropertyValue: function (name) { var v = this[String(name)]; return v === undefined || v === null ? '' : String(v); },
       removeProperty: function (name) { var old = this[String(name)]; this[String(name)] = ''; return old === undefined ? '' : old; },
-      item: function (i) { return ''; },
+      /* style[i] / style.item(i): the declaration's property names in order; the numeric read itself is answered by the
+       * engine's styleGetter. */
+      item: function (i) { var v = this[String(i | 0)]; return v === undefined || v === null ? '' : String(v); },
       length: 0
     };
   }

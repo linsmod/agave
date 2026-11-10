@@ -8241,6 +8241,20 @@ static int styleGetter(AntbEngine* engine, AntbValue* self, const char* name, An
         return 1;
     }
 
+    /* Indexed access: style[0] is the first property name and style[i] the i-th
+     * (CSSStyleDeclaration is array-like in Chrome; `style[0]` is how a lot of
+     * code enumerates the inline properties). */
+    {
+        unsigned index;
+
+        if (cssomNumericName(name, &index)) {
+            WebCore::String property = element ? element->style()->item(index) : WebCore::String();
+
+            makeStringResult(engine, out, property.isNull() ? "" : property.utf8().data());
+            return 1;
+        }
+    }
+
     makeStringResult(engine, out, stylePropertyText(element, name).c_str());
     return 1;
 }
@@ -9989,25 +10003,27 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
         }
         return 1;
     } else if (!strcmp(name, "style")) {
-        /* Real CSSStyleDeclaration is not exposed; a plain object keeps scripts
-         * that only poke at style properties working. */
-        AntbValue* existing = antb_get_prop(engine, self, "__agbStyle");
-        if (existing && !antb_is_number(existing)) {
-            antb_value_assign(out, existing);
-            antb_value_release(existing);
-            return 1;
-        }
-        antb_value_release(existing);
+        /* element.style is a real CSSStyleDeclaration instance (Chrome's shape:
+         * instanceof, @@toStringTag, live inline styles), not a plain object.
+         * The declaration belongs to the element, so the bridge cache gives the
+         * same wrapper back every time (`el.style === el.style`); the property
+         * dispatch stays the facade's styleGetter/styleSetter, installed as this
+         * wrapper's instance hook (it knows cssText/length/methods and the
+         * camelCase -> CSS property translation). */
+        WebCore::StyledElement* styled = n->isStyledElement()
+            ? static_cast<WebCore::StyledElement*>(n) : NULL;
+
+        if (!styled)
+            return 0;
+
         {
-            AntbValue* style = antb_make_object(engine);
+            AntbValue* style = cssomWrap(engine, styled->style(), CSSOM_DECL);
+
             if (!style)
                 return 0;
 
-            /* Back reference plus the single dispatcher; see styleGetter(). */
             antb_set_prop(engine, style, "__agbElement", self);
             antb_define_property_rw(engine, style, "style", styleGetter, styleSetter, NULL);
-
-            antb_set_prop(engine, self, "__agbStyle", style);
             antb_value_assign(out, style);
             antb_value_release(style);
         }
