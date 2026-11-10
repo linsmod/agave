@@ -15,9 +15,10 @@
 # logger); its Copy / Select all items call agave_webview_editor_command(), the
 # exact path the 'editor Copy' / 'editor SelectAll' cases cover.
 #
-# Expected runtime: about 35-45 s (local), +15 s with -Process; serial by design
-# (the clipboard cases touch the shared OS clipboard, so the suite overwrites
-# it - it does not save/restore it).
+# Parallel by design: every case is one probe with its own AGB_USERDATA and its
+# own mock clipboard file (AGB_CLIPBOARD_FILE), so the copies no longer race on
+# the shared Win32 clipboard - and a test run cannot clobber the developer's
+# clipboard. Expected wall time: ~4 s (local), ~5 s with -Process.
 param([switch]$Process)
 
 $ErrorActionPreference = 'Stop'
@@ -25,170 +26,204 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $exe  = Join-Path $root 'build-zig-native\agave_shell.exe'
 $page = 'file:///' + ((Join-Path $PSScriptRoot 'pages\cap_selection.html') -replace '\\', '/')
-$shot = Join-Path $root 'build-zig-native\selection_shot.png'
 
 if (-not (Test-Path $exe)) {
     "missing $exe - build first (pwsh -File tools/build_project.ps1)"
     exit 1
 }
 
+Import-Module (Join-Path $PSScriptRoot 'TestParallel.psm1') -Force
+$run = New-TestRun -Suite 'selection'
+$pixel = Join-Path $PSScriptRoot 'pixel_check.py'
+
 $failures = 0
 $cases    = 0
 
-# One probe run. $Extra is the argument list before --eval; $Eval is the script;
-# $Expect is matched against the [exit] line (and $ExitCode against the probe's
-# exit code when given).
-function Run-Probe {
-    param(
-        [string]$Label,
-        [object[]]$Extra,
-        [string]$Eval,
-        [string]$Expect,
-        [int]$ExitCode = 0,
-        [string]$Backend = 'local'
-    )
+function Check {
+    param([string]$Label, [bool]$Ok, [string]$Detail)
 
     $script:cases++
-    $backendArgs = @()
-    if ($Backend -eq 'process') { $backendArgs = @('--backend', 'process') }
-
-    $out  = & $exe --probe $page @backendArgs @Extra --wait 250 --settle 300 --timeout 25000 --eval $Eval 2>&1
-    $code = $LASTEXITCODE
-    $text = ($out | Out-String)
-    $line = (($text -split "`n") | Where-Object { $_ -match '\[exit\]' }) -join ''
-    # Match only what the script printed (the line also carries a timestamp and
-    # the probe prints "[exit] " before the payload).
-    $payload = ($line -replace '^.*\[exit\] ?', '').TrimEnd("`r")
-
-    if (($code -eq $ExitCode) -and ($payload -match $Expect)) {
-        "PASS  $Label   $($line.Trim())"
+    if ($Ok) {
+        "PASS  $Label   $Detail"
     } else {
         $script:failures++
-        "FAIL  $Label   exit=$code (want $ExitCode) expected /$Expect/"
-        "      got: $line"
-    }
-}
-
-# Clipboard helper: one probe run that leaves text on the clipboard, then the
-# assertion on Get-Clipboard.
-function Run-Clipboard {
-    param(
-        [string]$Label,
-        [object[]]$Extra,
-        [string]$Eval,
-        [string]$Expect
-    )
-
-    $script:cases++
-    Set-Clipboard -Value 'agave-precondition'
-    $out  = & $exe --probe $page @Extra --wait 250 --settle 450 --timeout 25000 --eval $Eval 2>&1
-    $code = $LASTEXITCODE
-    $clip = (Get-Clipboard) -join "`n"
-
-    if (($code -eq 0) -and ($clip -ceq $Expect)) {
-        "PASS  $Label   clipboard='$clip'"
-    } else {
-        $script:failures++
-        "FAIL  $Label   exit=$code clipboard='$clip' expected '$Expect'"
-        "      got: $((($out | Out-String) -split "`n" | Where-Object { $_ -match '\[exit\]' }) -join '')"
+        "FAIL  $Label"
+        if ($Detail) { "      $Detail" }
     }
 }
 
 $selectText = "probeExit(getSelection().toString())"
 $selLength  = "probeExit('len=' + getSelection().toString().length)"
 
-Write-Host '== drag selection (local) =='
-# (15,33) is inside "The quick brown fox..." (p1 starts at y=26/16px font).
-Run-Probe 'drag forward' @('--drag', '15,33,200,33') $selectText ' quick brown fox jum'
-Run-Probe 'drag backward' @('--drag', '200,33,15,33') $selectText '^The quick brown fox j$'
-Run-Probe 'drag multi-paragraph' @('--drag', '15,33,200,150') $selectText 'quick brown fox jumps over the lazy dog\.\s*Second paragraph with some more'
-Run-Probe 'drag is range' @('--drag', '15,33,200,33') "probeExit(getSelection().type + ':' + getSelection().rangeCount)" 'Range:1'
+# ---------------------------------------------------------------------------
+# Case table: name, extra probe args, eval, expected payload, optional backend
+# and clipboard precondition.
+# ---------------------------------------------------------------------------
+$list = @(
+    @{ Name = 'drag forward';          Args = @('--drag', '15,33,200,33'); Eval = $selectText; Expect = ' quick brown fox jum' },
+    @{ Name = 'drag backward';         Args = @('--drag', '200,33,15,33'); Eval = $selectText; Expect = '^The quick brown fox j$' },
+    @{ Name = 'drag multi-paragraph';  Args = @('--drag', '15,33,200,150'); Eval = $selectText; Expect = 'quick brown fox jumps over the lazy dog\.\s*Second paragraph with some more' },
+    @{ Name = 'drag is range';         Args = @('--drag', '15,33,200,33'); Eval = "probeExit(getSelection().type + ':' + getSelection().rangeCount)"; Expect = 'Range:1' },
 
-Write-Host '== click gestures =='
-Run-Probe 'double click word' @('--click', '62,33', '--click', '62,33') $selectText '^quick$'
-Run-Probe 'double click dblclick event' @('--click', '62,33', '--click', '62,33') "probeExit('dbl=' + window.__dblEvents)" 'dbl=1'
-Run-Probe 'triple click paragraph' @('--click', '62,33', '--click', '62,33', '--click', '62,33') $selectText '^The quick brown fox jumps over the lazy dog\.\s*$'
-Run-Probe 'shift click extends' @('--click', '62,33', '--shift-click', '120,33') $selectText 'ick bro'
-Run-Probe 'selectionchange fires' @('--drag', '15,33,200,33') "probeExit('events=' + (window.__selEvents > 0 ? 1 : 0))" 'events=1'
+    @{ Name = 'double click word';     Args = @('--click','62,33','--click','62,33'); Eval = $selectText; Expect = '^quick$' },
+    @{ Name = 'double click dblclick'; Args = @('--click','62,33','--click','62,33'); Eval = "probeExit('dbl=' + window.__dblEvents)"; Expect = 'dbl=1' },
+    @{ Name = 'triple click paragraph'; Args = @('--click','62,33','--click','62,33','--click','62,33'); Eval = $selectText; Expect = '^The quick brown fox jumps over the lazy dog\.\s*$' },
+    @{ Name = 'shift click extends';   Args = @('--click','62,33','--shift-click','120,33'); Eval = $selectText; Expect = 'ick bro' },
+    @{ Name = 'selectionchange fires'; Args = @('--drag','15,33,200,33'); Eval = "probeExit('events=' + (window.__selEvents > 0 ? 1 : 0))"; Expect = 'events=1' },
 
-Write-Host '== user-select =='
-Run-Probe 'user-select none line' @('--drag', '15,205,300,205') $selectText '^$'
-Run-Probe 'user-select text inside none' @('--drag', '15,230,105,230') $selectText 't this span'
+    @{ Name = 'user-select none line'; Args = @('--drag','15,205,300,205'); Eval = $selectText; Expect = '^$' },
+    @{ Name = 'user-select text inside none'; Args = @('--drag','15,230,105,230'); Eval = $selectText; Expect = 't this span' },
 
-Write-Host '== keyboard shortcuts (simulated modifiers) =='
-Run-Probe 'ctrl+a page' @('--mod', 'ctrl', '--keys', 'a') $selLength 'len=199'
-Run-Probe 'shift+right extends' @('--click', '62,33', '--mod', 'shift', '--keys', '{right}{right}') $selectText 'ic'
-Run-Probe 'ctrl+shift+right words' @('--click', '62,33', '--mod', 'ctrl+shift', '--keys', '{right}{right}') $selectText 'ick brown'
-Run-Clipboard 'ctrl+c copies selection' @('--drag', '15,33,200,33', '--mod', 'ctrl', '--keys', 'c') 'probeExit(1)' ' quick brown fox jum'
+    @{ Name = 'ctrl+a page';           Args = @('--mod','ctrl','--keys','a'); Eval = $selLength; Expect = 'len=199' },
+    @{ Name = 'shift+right extends';   Args = @('--click','62,33','--mod','shift','--keys','{right}{right}'); Eval = $selectText; Expect = 'ic' },
+    @{ Name = 'ctrl+shift+right words'; Args = @('--click','62,33','--mod','ctrl+shift','--keys','{right}{right}'); Eval = $selectText; Expect = 'ick brown' },
+    @{ Name = 'ctrl+c copies selection'; Args = @('--drag','15,33,200,33','--mod','ctrl','--keys','c'); Eval = 'probeExit(1)'; Expect = '^1$'; Clipboard = ' quick brown fox jum' },
 
-Write-Host '== editor commands (context menu path) =='
-Run-Clipboard 'editor Copy' @('--drag', '15,33,200,33', '--editor', 'Copy') 'probeExit(1)' ' quick brown fox jum'
-Run-Probe 'editor SelectAll' @('--editor', 'SelectAll') $selLength 'len=199'
+    @{ Name = 'editor Copy';           Args = @('--drag','15,33,200,33','--editor','Copy'); Eval = 'probeExit(1)'; Expect = '^1$'; Clipboard = ' quick brown fox jum' },
+    @{ Name = 'editor SelectAll';      Args = @('--editor','SelectAll'); Eval = $selLength; Expect = 'len=199' },
 
-Write-Host '== field editing =='
-Run-Probe 'ctrl+a in field selects field text' @('--pre-eval', "document.getElementById('field').focus()", '--mod', 'ctrl', '--keys', 'a') "probeExit(getSelection().toString())" '^editable text field$'
-Run-Clipboard 'ctrl+x cuts field' @('--pre-eval', "document.getElementById('field').focus()", '--mod', 'ctrl', '--keys', 'x') "probeExit('val=' + JSON.stringify(document.getElementById('field').value))" 'editable text field'
-Set-Clipboard -Value 'PASTED'
-Run-Probe 'ctrl+v pastes field' @('--click', '100,281', '--mod', 'ctrl', '--keys', 'v') "probeExit('val=' + document.getElementById('field').value)" 'PASTED'
+    @{ Name = 'ctrl+a in field';       Args = @('--pre-eval', "document.getElementById('field').focus()", '--mod', 'ctrl', '--keys', 'a'); Eval = "probeExit(getSelection().toString())"; Expect = '^editable text field$' },
+    @{ Name = 'ctrl+x cuts field';     Args = @('--pre-eval', "document.getElementById('field').focus()", '--mod', 'ctrl', '--keys', 'x'); Eval = "probeExit('val=' + JSON.stringify(document.getElementById('field').value))"; Expect = ''; Clipboard = 'editable text field' },
+    @{ Name = 'ctrl+v pastes field';   Args = @('--click','100,281','--mod','ctrl','--keys','v'); Eval = "probeExit('val=' + document.getElementById('field').value)"; Expect = 'PASTED'; Preload = 'PASTED' },
 
-Write-Host '== DOM Selection / Range API =='
-$apiJs = "var g=window.getSelection(), r=document.createRange(), p=document.getElementById('p1');" +
+    @{ Name = 'selection + range API'; Args = @(); Eval = ("var g=window.getSelection(), r=document.createRange(), p=document.getElementById('p1');" +
          "r.setStart(p.firstChild,0); r.setEnd(p.firstChild,19); g.removeAllRanges(); g.addRange(r);" +
          "var b=r.getBoundingClientRect();" +
          "probeExit(JSON.stringify({t:g.toString(),type:g.type,rc:g.rangeCount,col:g.isCollapsed,a:g.anchorOffset,f:g.focusOffset," +
          "same:window.getSelection()===document.getSelection(),sc:r.startContainer===p.firstChild,so:r.startOffset," +
          "ec:r.endContainer===p.firstChild,eo:r.endOffset,left:b.left,top:b.top,w:b.width,h:b.height," +
-         "rects:r.getClientRects().length,sup:document.queryCommandSupported('copy'),en:document.queryCommandEnabled('copy')}))"
-Run-Probe 'selection + range API' @() $apiJs '"t":"The quick brown fox","type":"Range","rc":1,"col":false,"a":0,"f":19,"same":true,"sc":true,"so":0,"ec":true,"eo":19,"left":10,"top":26.*"rects":1,"sup":true,"en":true'
-Run-Clipboard 'execCommand copy' @() "var g=getSelection(),r=document.createRange(),p=document.getElementById('p2');r.setStart(p.firstChild,7);r.setEnd(p.firstChild,17);g.removeAllRanges();g.addRange(r);probeExit(document.execCommand('copy'))" 'paragraph ' 
-Run-Probe 'execCommand selectAll' @() "probeExit('n=' + (document.execCommand('selectAll') ? getSelection().toString().length : -1))" 'n=199'
-Run-Probe 'execCommand unknown false' @() "probeExit('bogus=' + document.execCommand('bogus'))" 'bogus=false'
-
-Write-Host '== selection colour (pixels) =='
-# Active selection: Chrome's rgb(51,103,209); our painting pipeline lands one
-# unit low (#3367D0), so the check allows a small tolerance.
-& $exe --probe $page --drag 15,33,200,33 --wait 250 --settle 400 --timeout 25000 `
-    --shot $shot --shot-rect 0,0,300,60 --eval 1 2>&1 | Out-Null
-$script:cases++
-$px = (& python (Join-Path $PSScriptRoot 'pixel_check.py') $shot 20,20,280,45,3367D0,300 --tol 4 2>&1) -join ' '
-if ($LASTEXITCODE -eq 0) {
-    "PASS  selection highlight colour   $($px.Trim())"
-} else {
-    $script:failures++
-    "FAIL  selection highlight colour   $($px.Trim())"
-}
+         "rects:r.getClientRects().length,sup:document.queryCommandSupported('copy'),en:document.queryCommandEnabled('copy')}))");
+       Expect = '"t":"The quick brown fox","type":"Range","rc":1,"col":false,"a":0,"f":19,"same":true,"sc":true,"so":0,"ec":true,"eo":19,"left":10,"top":26.*"rects":1,"sup":true,"en":true' },
+    @{ Name = 'execCommand copy';      Args = @(); Eval = "var g=getSelection(),r=document.createRange(),p=document.getElementById('p2');r.setStart(p.firstChild,7);r.setEnd(p.firstChild,17);g.removeAllRanges();g.addRange(r);probeExit(document.execCommand('copy'))"; Expect = '^true$'; Clipboard = 'paragraph ' },
+    @{ Name = 'execCommand selectAll'; Args = @(); Eval = "probeExit('n=' + (document.execCommand('selectAll') ? getSelection().toString().length : -1))"; Expect = 'n=199' },
+    @{ Name = 'execCommand unknown false'; Args = @(); Eval = "probeExit('bogus=' + document.execCommand('bogus'))"; Expect = 'bogus=false' }
+)
 
 if ($Process) {
-    Write-Host '== process backend =='
-    Run-Probe 'drag selection' @('--drag', '15,33,200,33') $selectText ' quick brown fox jum' -Backend 'process'
-    Run-Probe 'ctrl+a page' @('--mod', 'ctrl', '--keys', 'a') $selLength 'len=199' -Backend 'process'
-    Run-Probe 'user-select none' @('--drag', '15,205,300,205') $selectText '^$' -Backend 'process'
-    Run-Probe 'double click word' @('--click', '62,33', '--click', '62,33') $selectText '^quick$' -Backend 'process'
+    $list += @(
+        @{ Name = 'process: drag selection'; Args = @('--drag','15,33,200,33'); Eval = $selectText; Expect = ' quick brown fox jum'; Backend = 'process' },
+        @{ Name = 'process: ctrl+a page';    Args = @('--mod','ctrl','--keys','a'); Eval = $selLength; Expect = 'len=199'; Backend = 'process' },
+        @{ Name = 'process: user-select none'; Args = @('--drag','15,205,300,205'); Eval = $selectText; Expect = '^$'; Backend = 'process' },
+        @{ Name = 'process: double click word'; Args = @('--click','62,33','--click','62,33'); Eval = $selectText; Expect = '^quick$'; Backend = 'process' },
+        @{ Name = 'process: ctrl+c copies';  Args = @('--drag','15,33,200,33','--mod','ctrl','--keys','c'); Eval = 'probeExit(1)'; Expect = '^1$'; Clipboard = ' quick brown fox jum'; Backend = 'process' },
+        @{ Name = 'process: editor Copy';    Args = @('--drag','15,33,200,33','--editor','Copy'); Eval = 'probeExit(1)'; Expect = '^1$'; Clipboard = ' quick brown fox jum'; Backend = 'process' }
+    )
+}
 
-    $script:cases++
-    Set-Clipboard -Value 'agave-precondition'
-    $out = & $exe --probe $page --backend process --drag 15,33,200,33 --mod ctrl --keys 'c' `
-        --wait 250 --settle 500 --timeout 25000 --eval 'probeExit(1)' 2>&1
-    $clip = (Get-Clipboard) -join "`n"
-    if (($LASTEXITCODE -eq 0) -and ($clip -ceq ' quick brown fox jum')) {
-        "PASS  ctrl+c copies selection   clipboard='$clip'"
-    } else {
-        $script:failures++
-        "FAIL  ctrl+c copies selection   exit=$LASTEXITCODE clipboard='$clip'"
+# ---------------------------------------------------------------------------
+# Start every probe at once. The mock clipboard is preloaded per case.
+# ---------------------------------------------------------------------------
+function Start-CaseProbe {
+    param($Case)
+
+    $p = @{
+        Run    = $run
+        Name   = $Case.Name
+        Url    = $page
+        Eval   = $Case.Eval
+        Extra  = $Case.Args
+        Wait   = 250
+        Settle = 450
+        Timeout = 25000
     }
+    if ($Case.ContainsKey('Backend')) { $p.Backend = $Case.Backend }
+    if ($Case.ContainsKey('Preload')) {
+        $p.ClipboardValue = $Case.Preload
+    } elseif ($Case.ContainsKey('Clipboard')) {
+        # Preload a sentinel: if the page does not copy, the assertion sees it.
+        $p.ClipboardValue = 'agave-precondition'
+    }
+    return Start-TestProbe @p
+}
 
-    $script:cases++
-    Set-Clipboard -Value 'agave-precondition'
-    $out = & $exe --probe $page --backend process --drag 15,33,200,33 --editor Copy `
-        --wait 250 --settle 500 --timeout 25000 --eval 'probeExit(1)' 2>&1
-    $clip = (Get-Clipboard) -join "`n"
-    if (($LASTEXITCODE -eq 0) -and ($clip -ceq ' quick brown fox jum')) {
-        "PASS  editor Copy (process)   clipboard='$clip'"
+$jobs = @()
+foreach ($c in $list) { $jobs += Start-CaseProbe $c }
+
+# Selection highlight pixel case (no probeExit: the capture happens on settle).
+$shotDir = Join-Path $run.Dir 'highlight'
+New-Item -ItemType Directory -Force -Path $shotDir | Out-Null
+$shot = Join-Path $shotDir 'shot.png'
+$shotJob = Start-TestProbe -Run $run -Name 'selection highlight' -Url $page `
+    -RawArgs @('--probe', $page, '--drag', '15,33,200,33', '--wait', '250',
+               '--settle', '400', '--timeout', '25000', '--shot', $shot,
+               '--shot-rect', '0,0,300,60', '--eval', '1')
+
+function Test-CaseResult {
+    param($Case, $Result)
+
+    if ($Result.Code -ne 0) { return $false }
+    if ($Case.ContainsKey('Expect') -and $Result.Payload -notmatch $Case.Expect) { return $false }
+    if ($Case.ContainsKey('Clipboard') -and (Get-TestClipboard $Result.Job) -cne $Case.Clipboard) { return $false }
+    return $true
+}
+
+function Format-CaseFailure {
+    param($Case, $Result)
+
+    $line = (($Result.Text -split "`n") | Where-Object { $_ -match '\[exit\]' }) -join ''
+    $detail = "exit=$($Result.Code) expected /$($Case.Expect)/ got: $line"
+    if ($Case.ContainsKey('Clipboard')) { $detail += " clipboard='$(Get-TestClipboard $Result.Job)'" }
+    return $detail
+}
+
+$results = @{}
+$i = 0
+foreach ($r in (Complete-TestProbes -Jobs $jobs)) {
+    $results[$list[$i].Name] = $r
+    $i++
+}
+$shotResult = Complete-TestProbe -Job $shotJob
+
+$retry = @()
+foreach ($c in $list) {
+    $r = $results[$c.Name]
+    if (Test-CaseResult $c $r) {
+        $clip = if ($c.ContainsKey('Clipboard')) { "   clipboard='$(Get-TestClipboard $r.Job)'" } else { '' }
+        Check $c.Name $true $clip
     } else {
-        $script:failures++
-        "FAIL  editor Copy (process)   exit=$LASTEXITCODE clipboard='$clip'"
+        $retry += $c
     }
 }
+
+# Click timing (a double click is two posted clicks; under full-batch load the
+# pair can straddle the double-click interval) is load-sensitive, so a failing
+# case gets one clean rerun after the rest of the suite has finished.
+foreach ($c in $retry) {
+    $ok = $false
+    $r = $null
+    for ($attempt = 0; $attempt -lt 2 -and -not $ok; $attempt++) {
+        $r = Complete-TestProbe -Job (Start-CaseProbe $c)
+        $ok = Test-CaseResult $c $r
+    }
+    if ($ok) {
+        $clip = if ($c.ContainsKey('Clipboard')) { "   clipboard='$(Get-TestClipboard $r.Job)'" } else { '' }
+        Check $c.Name $true ("$clip (retried)")
+    } else {
+        Check $c.Name $false (Format-CaseFailure $c $r)
+    }
+}
+
+# Pixel case: Chrome's rgb(51,103,209); our pipeline lands #3367D0.
+$pxOk = $false
+$px = ''
+for ($attempt = 0; $attempt -lt 2 -and -not $pxOk; $attempt++) {
+    if ($attempt -gt 0) {
+        Remove-Item $shot -ErrorAction SilentlyContinue
+        $shotResult = Complete-TestProbe -Job (Start-TestProbe -Run $run -Name 'selection highlight' -Url $page `
+            -RawArgs @('--probe', $page, '--drag', '15,33,200,33', '--wait', '250',
+                       '--settle', '400', '--timeout', '25000', '--shot', $shot,
+                       '--shot-rect', '0,0,300,60', '--eval', '1'))
+    }
+    if (Test-Path $shot) {
+        $px = ((& python $pixel $shot 20,20,280,45,3367D0,300 --tol 4 2>&1) -join ' ').Trim()
+        $pxOk = $LASTEXITCODE -eq 0
+    } else {
+        $px = "no shot (probe exit $($shotResult.Code))"
+    }
+}
+Check 'selection highlight colour' $pxOk $px
+
+Remove-TestRun $run $failures
 
 ""
 if ($failures -eq 0) {

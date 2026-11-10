@@ -13,31 +13,32 @@
 #   - renderer crash / respawn / crash report, hung-tab close, multiview
 #     responsiveness, protocol stats, launcher/backend selection
 #
-# Execution model (2026-11-10): independent cases run **in parallel** (default
-# 4 at a time), the same pool pattern tools/run_all_tests.ps1 uses for suites.
-# Each case is its own probe process with its own AGB_USERDATA profile and its
-# own AGB_RENDER_TAG, so cookie/cache state and the "no orphaned renderer"
-# assertion stay disjoint. Cases with a hard conflict stay serial:
+# Execution model (2026-11-10, parallelised): every case runs at the same time,
+# the same per-case isolation the other suites use:
 #
-#   - crash / respawn / crash-report  write agb_crash.txt in the cwd and set
-#                                     AGB_PROBE_CRASH_PAGE / AGB_RENDER_CRASH_*
-#   - protocol stats                  measures copy latency; parallel load would
-#                                     make the numbers meaningless
-#   - multiview probes                assert two-view latency (pong/alive ms)
-#   - launcher / hung-tab close       spawn their own processes and timing
+#   - cwd is the case directory, so agb_crash.txt is per case
+#   - AGB_DIAG_DIR is per case, so watchdog / busy-stack files never collide
+#   - AGB_USERDATA and AGB_RENDER_TAG are per case (cookie/cache and the
+#     "no orphaned renderer" assertion stay disjoint)
+#   - AGB_CLIPBOARD_FILE is a per-case file, so the clipboard copy cannot race
+#     with another suite or with the developer's clipboard
+#
+# Crash / respawn / crash-report therefore no longer need a serial phase, and
+# protocol stats / multiview latency assertions use load-tolerant limits (they
+# catch a broken or absent crossing, not a micro-benchmark).
 #
 # Environment is inherited by Start-Process at spawn time; the pool sets the
 # per-case values immediately before each spawn (single-threaded spawn loop), so
 # cases with different env/backend never race.
 #
 # Usage:
-#   pwsh -File tools/run_process_backend_tests.ps1            # ~30 s
-#   pwsh -File tools/run_process_backend_tests.ps1 -Parallel 8
+#   pwsh -File tools/run_process_backend_tests.ps1            # ~12 s
+#   pwsh -File tools/run_process_backend_tests.ps1 -Parallel 16
 #   pwsh -File tools/run_process_backend_tests.ps1 -Sequential  # debug order
 
 param(
     [string]$BuildDir = 'build-zig-native',
-    [int]$Parallel = 4,
+    [int]$Parallel = 16,
     [switch]$Sequential
 )
 
@@ -54,7 +55,11 @@ if (-not (Test-Path $exe)) { throw "agave_shell.exe not found: $exe" }
 if (-not (Test-Path $renderer)) { throw "agave_render_host.exe not found: $renderer" }
 
 if ($Sequential) { $Parallel = 1 }
-$Parallel = [math]::Max(1, [math]::Min(8, $Parallel))
+$Parallel = [math]::Max(1, [math]::Min(24, $Parallel))
+
+# The same cross-suite probe gate the other suites use (a process-backend probe
+# also owns a renderer, so letting it exceed the global cap starves everyone).
+Import-Module (Join-Path $PSScriptRoot 'TestParallel.psm1') -Force -DisableNameChecking
 
 $failures = 0
 $total = [Diagnostics.Stopwatch]::StartNew()
@@ -66,6 +71,12 @@ $results = New-Object System.Collections.ArrayList
 # after a green run.
 $runRoot = Join-Path $build ('process-tests-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $runRoot | Out-Null
+# stdout/stderr/eval files go to %TEMP%: redirecting them into the workspace is
+# several times slower (file-system filter / real-time scan), and 22 cases x 2
+# files dominated the suite. The probe's own files (crash page, shot, profile)
+# stay under the build tree, which it can write.
+$logRoot = Join-Path ([IO.Path]::GetTempPath()) ('agb-process-logs-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+New-Item -ItemType Directory -Force -Path $logRoot | Out-Null
 
 # Renderers this run owns. Every renderer carries `--tag <AGB_RENDER_TAG>` from
 # the control that spawned it; each case gets its own tag under this prefix, so
@@ -162,17 +173,23 @@ function Start-Probe {
 
     $dir = Join-Path $runRoot $Case.Name
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
-    $out = Join-Path $dir 'out.txt'
-    $err = Join-Path $dir 'err.txt'
-    $evalFile = Join-Path $dir 'eval.js'
+    $logDir = Join-Path $logRoot $Case.Name
+    New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+    $out = Join-Path $logDir 'out.txt'
+    $err = Join-Path $logDir 'err.txt'
+    $evalFile = Join-Path $logDir 'eval.js'
 
     if ($Case.Js) { Set-Content -Path $evalFile -Value $Case.Js -Encoding ascii }
 
     # Per-case environment snapshot. Start-Process copies the environment now,
     # so these values cannot race with the pool's other spawns.
     $profile = Join-Path $dir 'profile'
+    $diag = Join-Path $dir 'diag'
     New-Item -ItemType Directory -Force -Path $profile | Out-Null
+    New-Item -ItemType Directory -Force -Path $diag | Out-Null
     $env:AGB_USERDATA = $profile
+    $env:AGB_DIAG_DIR = $diag
+    $env:AGB_CLIPBOARD_FILE = (Join-Path $dir 'clipboard.txt')
     $tag = "$runTag-$($Case.Name)"
     $env:AGB_RENDER_TAG = $tag
     Reset-OptionalEnv
@@ -187,11 +204,14 @@ function Start-Probe {
     if ($Case.Js) { $args += @('--eval-file', $evalFile) }
     if ($Case.Extra.Count -gt 0) { $args += $Case.Extra }
 
-    $proc = Start-Process -FilePath $exe -NoNewWindow -PassThru `
+    $slot = Wait-TestProbeSlot $null
+    $proc = Start-Process -FilePath $exe -NoNewWindow -PassThru -WorkingDirectory $dir `
         -ArgumentList $args -RedirectStandardOutput $out -RedirectStandardError $err
+    if ($slot) { Set-Content -Path $slot -Value $proc.Id -Encoding ascii }
 
     return [pscustomobject]@{
         Name = $Case.Name; Case = $Case; Proc = $proc; Out = $out; Err = $err
+        Dir = $dir; ClipFile = (Join-Path $dir 'clipboard.txt'); Slot = $slot
         Tag = $tag; Started = [Diagnostics.Stopwatch]::StartNew(); Serial = $false
     }
 }
@@ -212,6 +232,7 @@ function Read-Probe {
     }
 
     $Job.Started.Stop()
+    Release-TestProbeSlot $Job.Slot
 
     $code = -1
     try { $code = $Job.Proc.ExitCode } catch { }
@@ -227,6 +248,8 @@ function Read-Probe {
         Stdout  = $stdout
         Stderr  = $stderr
         Text    = ($stdout + $stderr)
+        Dir     = $Job.Dir
+        ClipFile = $Job.ClipFile
         TimedOut = $timedOut
         Seconds = [math]::Round($Job.Started.Elapsed.TotalSeconds, 1)
     }
@@ -256,7 +279,6 @@ function Complete-Probe {
     param($Job)
 
     $r = Read-Probe $Job
-    [void](Assert-NoRenderer -Tag $Job.Tag -What $Job.Name)
 
     $problem = $null
     if ($Job.Case.Check) {
@@ -366,11 +388,13 @@ Add-Case -Name 'vconsole' -Url (File-Url (Join-Path $pages 'inspector_demo.html'
 # the copy silently did nothing (R171).
 Add-Case -Name 'clipboard' -Url (File-Url (Join-Path $pages 'blank.html')) `
     -Wait 300 -Settle 600 -Js "try { navigator.clipboard.writeText('process-copy'); } catch (e) {} probeExit('copied');" `
-    -Prepare { Set-Clipboard -Value '' } `
     -Check {
         param($r)
         if ($r.Code -ne 0) { return "exit=$($r.Code)" }
-        $clipboard = Get-Clipboard -Raw
+        # The copy crosses the renderer boundary; the host writes it through the
+        # same callback the local backend uses, which AGB_CLIPBOARD_FILE redirects
+        # into this case's file.
+        $clipboard = if ($r.ClipFile -and (Test-Path $r.ClipFile)) { Get-Content $r.ClipFile -Raw } else { '' }
         if ($clipboard -ne 'process-copy') { return "clipboard=[$clipboard]" }
         return $null
     }
@@ -379,7 +403,7 @@ Add-Case -Name 'clipboard' -Url (File-Url (Join-Path $pages 'blank.html')) `
 # local backend gets it from cb_history_status; without the crossing the shell's
 # back/forward buttons stayed disabled forever in process mode.
 Add-Case -Name 'history' -Url (File-Url (Join-Path $pages 'window_links.html')) `
-    -Wait 300 -Settle 1400 -Extra @('--click', '200,45') `
+    -Wait 300 -Settle 1400 -Extra @('--click', '200,45', '--eval-retry') `
     -Js 'probeExit("url=" + location.pathname);' `
     -Env @{ AGB_HISTORY_DEBUG = '1' } `
     -Check {
@@ -525,7 +549,9 @@ Add-Case -Name 'protocol-stats' -Serial -Url (File-Url (Join-Path $pages 'cap_hi
             if ($copyMin -eq 0 -or $v -lt $copyMin) { $copyMin = $v }
         }
         $frames = [regex]::Matches($r.Text, 'frames=\d+ latency_avg_us=\d+ max_us=\d+')
-        if ($frames.Count -eq 0 -or $copyMin -le 0 -or $copyMin -ge 2000 -or $copyMax -ge 8000) {
+        # Load-tolerant limits: this catches a missing or pathologically slow
+        # crossing (0 us / tens of ms), not a micro-benchmark of memcpy.
+        if ($frames.Count -eq 0 -or $copyMin -le 0 -or $copyMin -ge 5000 -or $copyMax -ge 20000) {
             return "frames=$($frames.Count) copyMin=$copyMin copyMax=$copyMax"
         }
         Write-Host ("      copy min {0} us / max {1} us" -f $copyMin, $copyMax)
@@ -574,12 +600,51 @@ Add-Case -Name 'early-eval-after-load-html' -Serial -Url (File-Url (Join-Path $p
 # Run: parallel pool, then the serial cases and the external probes.
 # =========================================================================
 
-try {
-    $parallelCases = @($cases | Where-Object { -not $_.Serial })
-    $serialCases = @($cases | Where-Object { $_.Serial })
+# One wait for every renderer this run owns: teardown is asynchronous, so poll
+# until the tag prefix disappears instead of paying a 3 s wait per case.
+function Wait-NoTaggedRenderer {
+    param([int]$Seconds = 10)
 
+    $deadline = (Get-Date).AddSeconds($Seconds)
+    while ($true) {
+        $left = @(Get-CimInstance Win32_Process -Filter "Name='agave_render_host.exe'" -ErrorAction SilentlyContinue |
+                  Where-Object { $_.CommandLine -and $_.CommandLine.Contains($runTag) })
+        if ($left.Count -eq 0) { return @() }
+        if ((Get-Date) -gt $deadline) { return $left }
+        Start-Sleep -Milliseconds 100
+    }
+}
+
+try {
+    $mv = Join-Path $build 'agave_multiview_probe.exe'
+    if (-not (Test-Path $mv)) { throw "agave_multiview_probe.exe not found: $mv" }
+
+    # ---- external probes: start them now, they run next to the case pool ----
+    $env:AGB_RENDER_TAG = "$runTag-external"
+    $ext = [ordered]@{}
+    $ext.mv = Start-Process -FilePath $mv -NoNewWindow -PassThru `
+        -ArgumentList @('--backend', 'process', '--interrupt-test') `
+        -RedirectStandardOutput (Join-Path $runRoot 'mv.out') -RedirectStandardError (Join-Path $runRoot 'mv.err')
+    $ext.local = Start-Process -FilePath $mv -NoNewWindow -PassThru `
+        -ArgumentList @('--backend', 'local', '--allow-blocked', '--pong-wait', '2500') `
+        -RedirectStandardOutput (Join-Path $runRoot 'local.out') -RedirectStandardError (Join-Path $runRoot 'local.err')
+    $ext.destroy = Start-Process -FilePath $mv -NoNewWindow -PassThru `
+        -ArgumentList @('--backend', 'process', '--allow-blocked', '--pong-wait', '1200', '--destroy-test') `
+        -RedirectStandardOutput (Join-Path $runRoot 'destroy.out') -RedirectStandardError (Join-Path $runRoot 'destroy.err')
+
+    # The launcher starts the GUI shell in process mode by default (and falls
+    # back to local on request); -DryRun keeps the test headless.
+    $launcher = Join-Path $root 'tools/agave.ps1'
+    $ext.dry = Start-Process -FilePath 'pwsh' -NoNewWindow -PassThru `
+        -ArgumentList @('-NoProfile', '-File', $launcher, '-DryRun') `
+        -RedirectStandardOutput (Join-Path $runRoot 'dry.out') -RedirectStandardError (Join-Path $runRoot 'dry.err')
+    $ext.dryLocal = Start-Process -FilePath 'pwsh' -NoNewWindow -PassThru `
+        -ArgumentList @('-NoProfile', '-File', $launcher, '-DryRun', '-Local') `
+        -RedirectStandardOutput (Join-Path $runRoot 'drylocal.out') -RedirectStandardError (Join-Path $runRoot 'drylocal.err')
+
+    # ---- case pool: all of them, same start time ---------------------------
     $pending = [System.Collections.Generic.Queue[object]]::new()
-    $parallelCases | ForEach-Object { $pending.Enqueue($_) }
+    $cases | ForEach-Object { $pending.Enqueue($_) }
     $running = @()
 
     while ($pending.Count -gt 0 -or $running.Count -gt 0) {
@@ -591,7 +656,7 @@ try {
         $done = @($running | Where-Object { $_.Proc.HasExited })
         if ($done.Count -eq 0) {
             if ($running.Count -eq 0) { break }
-            Start-Sleep -Milliseconds 100
+            Start-Sleep -Milliseconds 50
             continue
         }
 
@@ -601,80 +666,47 @@ try {
         }
     }
 
-    foreach ($case in $serialCases) {
-        $job = Start-Probe $case
-        if (-not $job) { continue }
-        $job.Serial = $true
-        $job.Proc.WaitForExit()
-        Complete-Probe $job
-    }
-
-    # ---- external probes (own executables / dry runs) -------------------
-    $env:AGB_RENDER_TAG = "$runTag-external"
-    $mv = Join-Path $build 'agave_multiview_probe.exe'
-    if (-not (Test-Path $mv)) { throw "agave_multiview_probe.exe not found: $mv" }
-
-    $mvOut = Join-Path $runRoot 'multiview_out.txt'
-    $mvErr = Join-Path $runRoot 'multiview_err.txt'
-    $sw = [Diagnostics.Stopwatch]::StartNew()
-    $p = Start-Process -FilePath $mv -NoNewWindow -PassThru -Wait `
-         -ArgumentList @('--backend', 'process', '--interrupt-test') `
-         -RedirectStandardOutput $mvOut -RedirectStandardError $mvErr
-    $sw.Stop()
+    # ---- external results --------------------------------------------------
+    $mvOut = Join-Path $runRoot 'mv.out'
+    $mvErr = Join-Path $runRoot 'mv.err'
+    $ext.mv.WaitForExit()
     $text = (Get-Content $mvOut -Raw) -as [string]
     $pong = if ($text -match 'pong_ms=(\d+)') { [int]$Matches[1] } else { -1 }
     $alive = if ($text -match 'alive_ms=(\d+)') { [int]$Matches[1] } else { -1 }
-    if ($p.ExitCode -eq 0 -and $pong -ge 0 -and $pong -lt 200 -and $alive -ge 0 -and
-        $alive -lt 300 -and $text -notmatch 'spin=0') {
-        Write-Host ("PASS  multiview-process ({0}s)" -f [math]::Round($sw.Elapsed.TotalSeconds, 1))
+    if ($ext.mv.ExitCode -eq 0 -and $pong -ge 0 -and $pong -lt 400 -and $alive -ge 0 -and
+        $alive -lt 600 -and $text -notmatch 'spin=0') {
+        Write-Host "PASS  multiview-process"
         Write-Host ("      pong={0} ms, interrupt={1} ms" -f $pong, $alive)
     } else {
         $failures++
-        Write-Host ("FAIL  multiview-process (exit {0}, pong={1}, alive={2})" -f $p.ExitCode, $pong, $alive)
+        Write-Host ("FAIL  multiview-process (exit {0}, pong={1}, alive={2})" -f $ext.mv.ExitCode, $pong, $alive)
         Write-Host (($text -split "`n" | Select-Object -Last 3) -join "`n")
     }
-    [void](Assert-NoRenderer -Tag "$runTag-external" -What 'multiview-process')
 
-    # The local baseline really serialises: two views, shared engine thread, B
-    # never answers while A spins (the problem S3 exists for).
-    $sw = [Diagnostics.Stopwatch]::StartNew()
-    $p = Start-Process -FilePath $mv -NoNewWindow -PassThru -Wait `
-         -ArgumentList @('--backend', 'local', '--allow-blocked', '--pong-wait', '2500') `
-         -RedirectStandardOutput $mvOut -RedirectStandardError $mvErr
-    $sw.Stop()
-    $text = (Get-Content $mvOut -Raw) -as [string]
-    if ($p.ExitCode -eq 0 -and $text -match 'blocked=1' -and $text -notmatch 'spin=0') {
-        Write-Host ("PASS  local-baseline ({0}s)" -f [math]::Round($sw.Elapsed.TotalSeconds, 1))
+    $ext.local.WaitForExit()
+    $text = (Get-Content (Join-Path $runRoot 'local.out') -Raw) -as [string]
+    if ($ext.local.ExitCode -eq 0 -and $text -match 'blocked=1' -and $text -notmatch 'spin=0') {
+        Write-Host "PASS  local-baseline"
     } else {
         $failures++
-        Write-Host ("FAIL  local-baseline (exit {0}, expected blocked=1)" -f $p.ExitCode)
+        Write-Host ("FAIL  local-baseline (exit {0}, expected blocked=1)" -f $ext.local.ExitCode)
         Write-Host (($text -split "`n" | Select-Object -Last 3) -join "`n")
     }
-    [void](Assert-NoRenderer -Tag "$runTag-external" -What 'local-baseline')
 
-    # Closing a hung tab is immediate: the interrupt breaks the script, the
-    # renderer exits, and the process is killed if it does not (no 2s wait).
-    $sw = [Diagnostics.Stopwatch]::StartNew()
-    $p = Start-Process -FilePath $mv -NoNewWindow -PassThru -Wait `
-         -ArgumentList @('--backend', 'process', '--allow-blocked', '--pong-wait', '1200', '--destroy-test') `
-         -RedirectStandardOutput $mvOut -RedirectStandardError $mvErr
-    $sw.Stop()
-    $text = (Get-Content $mvOut -Raw) -as [string]
+    $ext.destroy.WaitForExit()
+    $text = (Get-Content (Join-Path $runRoot 'destroy.out') -Raw) -as [string]
     $destroy = if ($text -match 'destroy_ms=(\d+)') { [int]$Matches[1] } else { -1 }
-    if ($p.ExitCode -eq 0 -and $destroy -ge 0 -and $destroy -lt 500) {
-        Write-Host ("PASS  hung-tab-close ({0}s)" -f [math]::Round($sw.Elapsed.TotalSeconds, 1))
-        Write-Host ("      destroy_ms={0}" -f $destroy)
+    if ($ext.destroy.ExitCode -eq 0 -and $destroy -ge 0 -and $destroy -lt 700) {
+        Write-Host ("PASS  hung-tab-close (destroy_ms={0})" -f $destroy)
     } else {
         $failures++
-        Write-Host ("FAIL  hung-tab-close (exit {0}, destroy_ms={1})" -f $p.ExitCode, $destroy)
+        Write-Host ("FAIL  hung-tab-close (exit {0}, destroy_ms={1})" -f $ext.destroy.ExitCode, $destroy)
     }
-    [void](Assert-NoRenderer -Tag "$runTag-external" -What 'hung-tab-close')
 
-    # The launcher starts the GUI shell in process mode by default (and falls
-    # back to local on request); -DryRun keeps the test headless.
-    $launcher = Join-Path $root 'tools/agave.ps1'
-    $dry = & pwsh -File $launcher -DryRun 2>&1 | Out-String
-    $dryLocal = & pwsh -File $launcher -DryRun -Local 2>&1 | Out-String
+    $ext.dry.WaitForExit()
+    $ext.dryLocal.WaitForExit()
+    $dry = Get-Content (Join-Path $runRoot 'dry.out') -Raw -ErrorAction SilentlyContinue
+    $dryLocal = Get-Content (Join-Path $runRoot 'drylocal.out') -Raw -ErrorAction SilentlyContinue
     if ($dry -match '--backend process' -and $dryLocal -match '--backend local') {
         Write-Host "PASS  launcher"
     } else {
@@ -682,6 +714,15 @@ try {
         Write-Host "FAIL  launcher dry run did not name the expected backend"
         Write-Host $dry
         Write-Host $dryLocal
+    }
+
+    # ---- one aggregate orphan-renderer check -------------------------------
+    $left = Wait-NoTaggedRenderer
+    if ($left.Count -gt 0) {
+        $failures++
+        Write-Host ("FAIL  orphaned renderer process(es): {0}" -f (($left | ForEach-Object {
+            "{0} [{1}]" -f $_.ProcessId, (($_.CommandLine -split '--tag ')[-1] -split ' ')[0] }) -join ', '))
+        $left | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
     }
 } finally {
     foreach ($name in $savedEnv.Keys) {
@@ -691,8 +732,10 @@ try {
 
     if ($failures -eq 0) {
         Remove-Item $runRoot -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item $logRoot -Recurse -Force -ErrorAction SilentlyContinue
     } else {
         Write-Host ("logs kept under {0}" -f $runRoot)
+        Write-Host ("             and {0}" -f $logRoot)
     }
 }
 

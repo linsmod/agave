@@ -15,6 +15,8 @@
 #   ime cjk            WM_IME_CHAR text arrives as UTF-8, not as code-page bytes
 #   ime emoji          a surrogate pair survives the two-message split
 #   emoji + text       the caret ends up after an astral character (R38)
+#
+# All cases (and the two caret captures) run at once; expected wall time ~3 s.
 $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $PSScriptRoot
@@ -26,89 +28,82 @@ if (-not (Test-Path $exe)) {
     exit 1
 }
 
+Import-Module (Join-Path $PSScriptRoot 'TestParallel.psm1') -Force -DisableNameChecking
+$run = New-TestRun -Suite 'typing'
+
 $failures = 0
 $cases    = 0
 
-function Run-Case {
-    param(
-        [string]$Label,
-        [string]$Keys,
-        [string]$Eval,
-        [string]$Expect,
-        [string]$Ime = ''
-    )
+function Check {
+    param([string]$Label, [bool]$Ok, [string]$Detail)
 
     $script:cases++
-    $extra = @()
-    if ($Keys) { $extra += @('--keys', $Keys) }
-    if ($Ime)  { $extra += @('--ime', $Ime) }
-
-    $out  = & $exe --probe $page @extra --wait 300 --settle 300 --timeout 25000 --eval $Eval 2>&1
-    $code = $LASTEXITCODE
-    $text = ($out | Out-String)
-    $line = (($text -split "`n") | Where-Object { $_ -match '\[exit\]' }) -join ''
-
-    if (($code -eq 0) -and ($text -match $Expect)) {
-        "PASS  $Label"
+    if ($Ok) {
+        "PASS  $Label   $Detail"
     } else {
         $script:failures++
-        "FAIL  $Label   exit=$code expected /$Expect/"
-        "      got: $line"
+        "FAIL  $Label"
+        if ($Detail) { "      $Detail" }
     }
 }
 
-Run-Case 'type ab1'      'ab1'              'probeExit(reportTyping())' 'value=ab1 len=3'
-Run-Case 'backspace'     'abc{backspace}'  'probeExit(reportTyping())' 'value=ab len=2'
-Run-Case 'tab + filter'  '{tab}a1'         'probeExit(reportTyping() + '' active='' + document.activeElement.id)' 'filter=1.*active=filter'
-Run-Case 'arrow trap'    '{tab}{left}1'    'probeExit(reportTyping() + '' active='' + document.activeElement.id)' 'filter=1.*active=filter'
-Run-Case 'textarea'      '{tab}{tab}ab{enter}cd' 'probeExit(''area='' + JSON.stringify(area.value))' 'area="ab\\ncd"'
-# IME: WM_IME_CHAR per UTF-16 code unit - the path a Chinese IME uses.
-Run-Case 'ime cjk'       ''                 'probeExit(''value='' + text.value + '' len='' + text.value.length)' 'value=中文输入 len=4' -Ime '中文输入'
-Run-Case 'ime emoji'     ''                 'probeExit(''value='' + text.value + '' len='' + text.value.length)' 'value=😀 len=2' -Ime '😀'
-# Astral character typed through the keyboard path, then more text: the caret
-# must end up after the surrogate pair, not before it.
-Run-Case 'emoji + text'  'a😀b'            'probeExit(reportTyping())' 'value=a😀b len=4'
+$list = @(
+    @{ Name = 'type ab1';     Extra = @('--keys', 'ab1');               Eval = 'probeExit(reportTyping())'; Expect = 'value=ab1 len=3' },
+    @{ Name = 'backspace';    Extra = @('--keys', 'abc{backspace}');   Eval = 'probeExit(reportTyping())'; Expect = 'value=ab len=2' },
+    @{ Name = 'tab + filter'; Extra = @('--keys', '{tab}a1');          Eval = "probeExit(reportTyping() + ' active=' + document.activeElement.id)"; Expect = 'filter=1.*active=filter' },
+    @{ Name = 'arrow trap';   Extra = @('--keys', '{tab}{left}1');     Eval = "probeExit(reportTyping() + ' active=' + document.activeElement.id)"; Expect = 'filter=1.*active=filter' },
+    @{ Name = 'textarea';     Extra = @('--keys', '{tab}{tab}ab{enter}cd'); Eval = "probeExit('area=' + JSON.stringify(area.value))"; Expect = 'area="ab\\ncd"' },
+    # IME: WM_IME_CHAR per UTF-16 code unit - the path a Chinese IME uses.
+    @{ Name = 'ime cjk';      Extra = @('--ime', '中文输入');          Eval = "probeExit('value=' + text.value + ' len=' + text.value.length)"; Expect = 'value=中文输入 len=4' },
+    @{ Name = 'ime emoji';    Extra = @('--ime', '😀');                Eval = "probeExit('value=' + text.value + ' len=' + text.value.length)"; Expect = 'value=😀 len=2' },
+    # Astral character typed through the keyboard path, then more text.
+    @{ Name = 'emoji + text'; Extra = @('--keys', 'a😀b');             Eval = 'probeExit(reportTyping())'; Expect = 'value=a😀b len=4' }
+)
+
+$jobs = @()
+foreach ($c in $list) {
+    $jobs += Start-TestProbe -Run $run -Name $c.Name -Url $page -Eval $c.Eval `
+        -Extra $c.Extra -Wait 300 -Settle 300 -Timeout 25000
+}
 
 # Caret geometry: a text field's caret is as tall as the *text*, not as the
-# input box / line box (Chrome: 14px font with line-height:25px => ~17px caret,
-# not 25). AGB_CARET_DEBUG=1 paints it red regardless of focus and blink phase,
-# so the headless screenshot always has one; tools/caret_check.py measures it.
-Write-Host '== caret height (text height, not the line box)'
+# input box / line box. AGB_CARET_DEBUG=1 paints it red regardless of focus and
+# blink phase, so the headless screenshot always has one; caret_check.py
+# measures it.
 $caretPage = 'file:///' + ((Join-Path $PSScriptRoot 'pages\cap_caret.html') -replace '\\', '/')
-$caretShot = Join-Path $root 'build-zig-native\caret_typing.png'
-
-function Test-Caret {
-    param([string]$Label, [object[]]$Extra, [string]$Expect)
-
-    $env:AGB_CARET_DEBUG = '1'
-    try {
-        $out = & $exe --probe $caretPage @Extra --wait 400 --settle 300 --timeout 25000 `
-            --shot $caretShot --shot-rect 0,0,240,120 2>&1
-    } finally {
-        Remove-Item Env:\AGB_CARET_DEBUG -ErrorAction SilentlyContinue
-    }
-
-    $script:cases++
-    $measured = ((& python (Join-Path $PSScriptRoot 'caret_check.py') $caretShot 2>&1) -join ' ').Trim()
-
-    if ($measured -match $Expect) {
-        "PASS  $Label   $measured"
-    } else {
-        $script:failures++
-        "FAIL  $Label   expected /$Expect/ got: $measured"
-        "      probe: $(($out | Out-String).Trim())"
-    }
+$caretShotDir = Join-Path $run.Dir 'carets'
+New-Item -ItemType Directory -Force -Path $caretShotDir | Out-Null
+$caretCases = @(
+    @{ Name = 'empty caret'; Shot = (Join-Path $caretShotDir 'empty.png'); Extra = @('--eval', "document.getElementById('a').focus()"); Expect = 'x=12 y=15\.\.31 height=17' },
+    @{ Name = 'typed caret'; Shot = (Join-Path $caretShotDir 'typed.png'); Extra = @('--pre-eval', "document.getElementById('b').focus()", '--keys', 'Hxg', '--eval', '1'); Expect = 'x=36 y=52\.\.68 height=17' }
+)
+$caretJobs = @()
+foreach ($c in $caretCases) {
+    $caretJobs += Start-TestProbe -Run $run -Name $c.Name -Url $caretPage `
+        -RawArgs (@('--probe', $caretPage, '--wait', '400', '--settle', '300', '--timeout', '25000',
+                    '--shot', $c.Shot, '--shot-rect', '0,0,240,120') + $c.Extra) `
+        -Env @{ AGB_CARET_DEBUG = '1' }
 }
 
-# Empty control (placeholder path, RenderTextControlInnerBlock::caretRect):
-# line-height is 25px, so a 25px caret would mean the bug is back. 17px is the
-# 14px default font's ascent+descent (default family is the bundled Noto Sans SC
-# now, R168; these numbers follow its metrics).
-Test-Caret 'empty caret' @('--eval', "document.getElementById('a').focus()") `
-    'x=12 y=15\.\.31 height=17'
-# Typed text (RenderText::caretRect): same height, on the second input's line.
-Test-Caret 'typed caret' @('--pre-eval', "document.getElementById('b').focus()", '--keys', 'Hxg', '--eval', '1') `
-    'x=36 y=52\.\.68 height=17'
+$results = Complete-TestProbes -Jobs $jobs
+for ($i = 0; $i -lt $list.Count; $i++) {
+    $c = $list[$i]
+    $r = $results[$i]
+    Check $c.Name ($r.Code -eq 0 -and $r.Payload -match $c.Expect) ("exit=$($r.Code) payload=[$($r.Payload)]")
+}
+
+$caretRes = Complete-TestProbes -Jobs $caretJobs
+for ($i = 0; $i -lt $caretCases.Count; $i++) {
+    $c = $caretCases[$i]
+    $r = $caretRes[$i]
+    $measured = ''
+    if (Test-Path $c.Shot) {
+        $measured = ((& python (Join-Path $PSScriptRoot 'caret_check.py') $c.Shot 2>&1) -join ' ').Trim()
+    }
+    Check $c.Name ($measured -match $c.Expect) ("measured=$measured probeExit=$($r.Code)")
+}
+
+Remove-TestRun $run $failures
 
 ""
 if ($failures -eq 0) {

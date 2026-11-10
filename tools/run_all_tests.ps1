@@ -10,40 +10,44 @@
 #   run_media_real_tests.ps1 ffmpeg + remote samples         -IncludeReal
 #   run_c3.ps1               external workspace + 8899 port  (never; not a suite)
 #
-# Execution model (2026-11-09): suites run **in parallel** (default 4 at a time),
-# each as its own pwsh process with its own AGB_USERDATA profile under
-# %TEMP%\agb-suites-<id>\profile-<suite>. That keeps their cookie/cache stores
-# from racing; the runners only share the build tree. A few suites cannot share
-# the machine and are queued afterwards one at a time (see $serialOrder):
+# Execution model (2026-11-10): every suite runs **at the same time** (default
+# = 16, or the CPU count when lower), each as its own pwsh process. Inside a
+# suite the probes also run together (tools/TestParallel.psm1): every case gets
+# its own AGB_USERDATA profile, cwd (agb_crash.txt), AGB_DIAG_DIR
+# (agb_watchdog.txt / agb_busy_*.txt) and AGB_CLIPBOARD_FILE (a mock clipboard,
+# so copy cases no longer race on Win32). Cross-process probe concurrency is
+# bounded by AGB_TEST_MAX_PROBES (default 32) via a running-process count.
 #
-#   run_hang_recovery_tests   asserts that *no* agb_crash.txt / agb_watchdog.txt
-#                             appears; another suite that intentionally crashes a
-#                             renderer (process backend) would trip it
-#   run_process_backend_tests crashes renderers on purpose (crash report case) and
-#                             measures command latency, so it wants the machine
-#   run_image_tests           asserts paint/rAF time limits (90/70 ms); parallel
-#                             load makes those numbers meaningless
-#   run_selection_tests       writes the system clipboard (copy cases); the
-#                             process-backend suite copies too, so they must not
-#                             overlap
-#   run_media_real_tests      ffmpeg decode + audio device, single-instance
+# There is no serial phase any more. The four suites that used to need one now
+# isolate the resource instead of the machine:
+#
+#   run_hang_recovery_tests   per-case diag dir + cwd; only its own crash files
+#                             are asserted, so another suite's crash is invisible
+#   run_process_backend_tests per-case cwd/diag/clipboard and one aggregate
+#                             "no orphaned renderer" check; latency limits are
+#                             load-tolerant
+#   run_image_tests           relative timing (sliced vs a one-shot control
+#                             captured in the same wave), two waves so the timed
+#                             probes do not run next to ten more decoders
+#   run_selection_tests       mock clipboard file per case; the OS clipboard is
+#                             neither read nor written
 #
 # Every suite prints its own PASS/FAIL line; this script's exit code is the
-# authority (0 = all green). Per-suite wall times are printed: the soft baseline
-# table in docs/dev-tests.md §1 is measured **serially**, so a parallel run
-# inflates them — compare with -Parallel 1 when a number looks off (AGENTS rule 9).
+# authority (0 = all green). Per-suite wall times are printed: the table in
+# docs/dev-tests.md §1 is a **single-suite** baseline, so a full parallel run
+# inflates them (AGENTS rule 9 compares the per-suite line, or run -Only).
 # -SlowSeconds is only a sanity cap (a suite that never finishes).
 #
 # Usage:
 #   pwsh -File tools/run_all_tests.ps1
 #   pwsh -File tools/run_all_tests.ps1 -Parallel 8
-#   pwsh -File tools/run_all_tests.ps1 -Sequential        # old one-at-a-time order
+#   pwsh -File tools/run_all_tests.ps1 -Sequential        # suites one at a time (debug)
 #   pwsh -File tools/run_all_tests.ps1 -Only process      # name substring
 #   pwsh -File tools/run_all_tests.ps1 -Skip run_layout_tests,run_media_tests
 #   pwsh -File tools/run_all_tests.ps1 -IncludeNetwork -IncludeReal
 #
-# Expected duration: docs/dev-tests.md §1 (20 suites ≈ 4.3 minutes with the default
-# parallelism; ≈6.5 minutes with -Sequential, on a 16-core machine).
+# Expected duration: docs/dev-tests.md §1 (20 suites ≈ 23-28 s wall clock on a
+# 16-core machine; -Sequential runs the suites one at a time, ≈2 minutes).
 
 param(
     [string]$Only = '',
@@ -51,7 +55,7 @@ param(
     [switch]$IncludeNetwork,
     [switch]$IncludeReal,
     [int]$SlowSeconds = 180,
-    [int]$Parallel = 4,
+    [int]$Parallel = 0,
     [switch]$Sequential,
     [switch]$KeepLogs
 )
@@ -89,24 +93,17 @@ $suites = @(
 if ($IncludeNetwork) { $suites += 'run_site_smoke' }
 if ($IncludeReal)    { $suites += 'run_media_real_tests' }
 
-# Suites with a hard conflict (shared crash/watchdog files) or timing
-# assertions. They run after the parallel phase, one at a time, in this order.
-$serialOrder = @(
-    'run_hang_recovery_tests',
-    'run_process_backend_tests',
-    'run_image_tests',
-    'run_selection_tests'
-)
-if ($IncludeReal) { $serialOrder += 'run_media_real_tests' }
-
 $selected = @($suites | Where-Object {
     (-not $Only -or $_ -like "*$Only*") -and ($Skip -notcontains $_)
 })
-$serial = @($serialOrder | Where-Object { $selected -contains $_ })
-$parallelList = @($selected | Where-Object { $serial -notcontains $_ })
+$parallelList = $selected
 
 if ($Sequential) { $Parallel = 1 }
-$Parallel = [math]::Max(1, [math]::Min(16, $Parallel))
+if ($Parallel -le 0) { $Parallel = [math]::Min(16, [Environment]::ProcessorCount) }
+$Parallel = [math]::Max(1, [math]::Min(32, $Parallel))
+
+# Bound the probes inside all suites together (TestParallel.psm1 reads this).
+if (-not $env:AGB_TEST_MAX_PROBES) { $env:AGB_TEST_MAX_PROBES = '24' }
 
 $runRoot = Join-Path ([IO.Path]::GetTempPath()) ('agb-suites-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $runRoot | Out-Null
@@ -141,7 +138,6 @@ function Start-Suite([string]$name) {
         Out     = $out
         Err     = $err
         Started = [Diagnostics.Stopwatch]::StartNew()
-        Serial  = $false
     }
 }
 
@@ -157,12 +153,11 @@ function Complete-Suite($job) {
         if (Test-Path $path) { $text += ((Get-Content $path -Raw) -as [string]) }
     }
 
-    $mark = if ($job.Serial) { '  (serial)' } else { '' }
     if ($code -eq 0) {
-        Write-Host ("PASS  {0,-30} {1,7}s{2}" -f $job.Name, $seconds, $mark)
+        Write-Host ("PASS  {0,-30} {1,7}s" -f $job.Name, $seconds)
     } else {
         $script:failed++
-        Write-Host ("FAIL  {0,-30} {1,7}s  exit={2}{3}" -f $job.Name, $seconds, $code, $mark)
+        Write-Host ("FAIL  {0,-30} {1,7}s  exit={2}" -f $job.Name, $seconds, $code)
         @($text -split "`n" | Where-Object { $_ -match '^FAIL|FAILED|LAYOUT=FAIL' } |
             Select-Object -Last 4) | ForEach-Object { "      $($_.TrimEnd())" }
         if (-not $KeepLogs) {
@@ -206,15 +201,6 @@ try {
         }
     }
 
-    # ---- serial phase (conflicts / timing-sensitive) --------------------
-    foreach ($name in $serial) {
-        if ($selected -notcontains $name) { continue }
-        $job = Start-Suite $name
-        if (-not $job) { continue }
-        $job.Serial = $true
-        $job.Proc.WaitForExit()
-        [void](Complete-Suite $job)
-    }
 } finally {
     $env:AGB_USERDATA = $savedUserData
 
@@ -253,12 +239,9 @@ $results | Sort-Object Seconds -Descending | Select-Object -First 5 | ForEach-Ob
 }
 
 Write-Host ""
-if ($serial.Count -gt 0) {
-    Write-Host ("serial: {0}" -f ($serial -join ', '))
-}
-Write-Host ("{0} suite(s), {1}s total, {2} failed (parallel={3})" -f $results.Count,
+Write-Host ("{0} suite(s), {1}s total, {2} failed (parallel={3}, probes<={4})" -f $results.Count,
             [math]::Round($total.Elapsed.TotalSeconds, 1), $failed,
-            $(if ($Sequential) { 1 } else { $Parallel }))
+            $(if ($Sequential) { 1 } else { $Parallel }), $env:AGB_TEST_MAX_PROBES)
 
 if ($failed -gt 0) {
     Write-Host "ALL SUITES: FAILED"

@@ -15,14 +15,15 @@
 # override the HTTP header. Both 163 pages from the report rendered mojibake
 # for exactly one of those two reasons.
 #
+# The five probes run at once; the server binds a free port unless -Port says
+# otherwise. Expected wall time: ~3 s.
+#
 # Usage:
 #   pwsh -File tools/run_encoding_tests.ps1
 #   pwsh -File tools/run_encoding_tests.ps1 -Port 8997
-#
-# Runtime: ~8-12 s (five probes against a local server).
 
 param(
-    [int]$Port = 8993,
+    [int]$Port = 0,
     [string]$BuildDir = 'build-zig-native'
 )
 
@@ -38,11 +39,13 @@ foreach ($p in @($exe, $server, $check)) {
     if (-not (Test-Path $p)) { throw "not found: $p" }
 }
 
-$tmp = Join-Path ([IO.Path]::GetTempPath()) ('agb-encoding-' + [guid]::NewGuid().ToString('N'))
-New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+Import-Module (Join-Path $PSScriptRoot 'TestParallel.psm1') -Force -DisableNameChecking
+$run = New-TestRun -Suite 'encoding'
 
-$serverOut = Join-Path $tmp 'server.out.txt'
-$serverErr = Join-Path $tmp 'server.err.txt'
+if ($Port -le 0) { $Port = Get-TestFreePort }
+
+$serverOut = Join-Path $run.Dir 'server.out.txt'
+$serverErr = Join-Path $run.Dir 'server.err.txt'
 $watch = [Diagnostics.Stopwatch]::StartNew()
 $serverProc = Start-Process -FilePath 'python' -PassThru -NoNewWindow `
     -ArgumentList @($server, '--port', $Port) `
@@ -73,25 +76,22 @@ try {
         @{ Name = 'bom-beats-header-and-meta';  Path = '/bom_utf8.html' }
     )
 
+    $jobs = @()
     foreach ($case in $cases) {
         $url = "http://127.0.0.1:$Port$($case.Path)?t=$([guid]::NewGuid().ToString('N'))"
-        $stdout = Join-Path $tmp ("$($case.Name).out.txt")
-        $stderr = Join-Path $tmp ("$($case.Name).err.txt")
+        $jobs += Start-TestProbe -Run $run -Name $case.Name -Url $url `
+            -EvalFile $check -Wait 1500 -Settle 400 -Timeout 30000
+    }
 
-        $p = Start-Process -FilePath $exe -NoNewWindow -PassThru -Wait -ArgumentList @(
-            '--probe', $url,
-            '--eval-file', $check,
-            '--wait', '1500', '--settle', '400', '--timeout', '30000'
-        ) -RedirectStandardOutput $stdout -RedirectStandardError $stderr
-
-        $err = (Get-Content $stderr -Raw) -as [string]
-        $encLines = @($err -split "`n" | Where-Object { $_ -match 'ENC-' })
-        $detail = ($encLines | Select-Object -Last 2) -join "`n"
-
-        if ($p.ExitCode -ne 0) {
+    $results = Complete-TestProbes -Jobs $jobs
+    for ($i = 0; $i -lt $cases.Count; $i++) {
+        $case = $cases[$i]
+        $r = $results[$i]
+        if ($r.Code -ne 0) {
             $failures++
-            Write-Host ("FAIL  {0} (probe exit {1})" -f $case.Name, $p.ExitCode)
-            if ($detail) { Write-Host $detail }
+            Write-Host ("FAIL  {0} (probe exit {1})" -f $case.Name, $r.Code)
+            $encLines = @($r.Stderr -split "`n" | Where-Object { $_ -match 'ENC-' })
+            if ($encLines.Count) { Write-Host (($encLines | Select-Object -Last 2) -join "`n") }
         } else {
             Write-Host ("PASS  {0}" -f $case.Name)
         }
@@ -111,7 +111,7 @@ try {
     Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $_.CommandLine -and $_.CommandLine -like "*encoding_server.py*--port $Port*" } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-    Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+    Remove-TestRun $run $failures
 }
 
 if ($failures -gt 0) { exit 1 }

@@ -3037,6 +3037,14 @@ static int g_probeTimeoutMs = 60000;  /* hard cap from start                */
 static int g_probeFinished;
 static int g_probeLoadArmed;   /* the load-finished signal already scheduled --eval */
 static int g_probeEvalDone;
+/* --eval-retry: a script click/navigation can replace the document between
+ * arming the eval timer and the eval reaching the engine; the control then
+ * drops the command ("document replaced by a navigation"). Without this flag
+ * the probe runs to --timeout with no payload. With it, the eval is retried
+ * against the new document (bounded). Used by the nav/window suites, whose
+ * whole point is a navigation triggered by the input. */
+static int g_probeEvalRetry;
+static int g_probeEvalRetryCount;
 static int g_probeGotExit;
 static int g_probeSawError;
 static int g_probeRespawned;   /* AGB_PROBE_RESPAWN: at most one respawn */
@@ -3667,6 +3675,21 @@ static void probeOnCommandDropped(AgaveWebView* view, const char* kind,
     fflush(stdout);
     agbLog(AGB_LOG_PROBE, "dropped command kind=%s reason=%s",
            kind ? kind : "?", reason ? reason : "?");
+
+    /* The eval lost the race with a navigation the probe's own click started:
+     * the new document is committing right now, so arm the eval again in a
+     * moment instead of letting the run sit until --timeout. Bounded: a page
+     * that navigates forever still ends at --timeout. */
+    if (g_probeEvalRetry && !g_probeGotExit && g_probeEvalRetryCount < 8 &&
+        kind && !strcmp(kind, "eval")) {
+        ++g_probeEvalRetryCount;
+        agbLog(AGB_LOG_PROBE, "retrying eval after navigation (%d)", g_probeEvalRetryCount);
+        /* The eval was already dispatched (g_probeEvalDone is set before the
+         * queue sees it), so clear both gates before arming it again. */
+        g_probeEvalDone = 0;
+        g_probeFinished = 0;
+        PostMessageA(g_probeWnd, AGW_PROBE_MSG, 600, 0);
+    }
 }
 
 /* Right click reaches the host on the UI thread (the control copies the payload
@@ -4825,6 +4848,8 @@ static void parseShellArgv(void)
             strncpy(g_backendArg, argv[i] + 10, sizeof(g_backendArg) - 1);
             g_backendArg[sizeof(g_backendArg) - 1] = 0;
             g_backendArgSet = 1;
+        } else if (!strcmp(argv[i], "--eval-retry")) {
+            g_probeEvalRetry = 1;
         } else if (!strcmp(argv[i], "--probe")) {
             g_probeMode = 1;
         } else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {

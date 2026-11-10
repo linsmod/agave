@@ -18,19 +18,16 @@
 #   3. `AGB_PAGE_EVAL=eval` still opts back into the old semantics;
 #   4. bench_hot.js stays in single-digit..tens of ns per iteration (eval mode
 #      was 100-600 ns);
-#   5. document.currentScript (R95): the <script> element while its code runs
-#      (inline, external, defer, async, dynamic, nested), null for modules and
-#      for anything that runs after the script returned.
+#   5. document.currentScript (R95): the <script> element while its code runs;
 #   6. per-frame module entry + per-realm import() (P1-e);
 #   7. a classic script whose first token is `import(` is not a module;
-#   8. Node.baseURI / document.baseURI (R176): <base href> applied, every node
-#      reports the document base URL;
-#   9. HTML import maps (R176): bare specifiers resolve through
-#      <script type="importmap"> (exact + trailing-slash prefix), relative
-#      imports still work, an unmapped bare specifier still fails.
-#  10. browser shims (R176): the URLSearchParams wrapper iterates / reports
-#      size + toStringTag, and a frame realm gets the web globals (URL,
-#      TextEncoder, Blob, Headers, DOMException, ...) the main realm has.
+#   8. Node.baseURI / document.baseURI (R176);
+#   9. HTML import maps (R176);
+#  10. browser shims (R176): URLSearchParams iteration + frame realm web globals.
+#
+# All probes run at once (own profiles); the bench keeps a clean retry if its
+# per-iteration budget is exceeded while the batch is loading the machine.
+# Expected wall time: ~4 s.
 #
 # Usage:
 #   pwsh -File tools/run_script_mode_tests.ps1
@@ -47,52 +44,16 @@ $root = Split-Path -Parent $PSScriptRoot
 $build = Join-Path $root $BuildDir
 $exe = Join-Path $build 'agave_shell.exe'
 $page = Join-Path $root $Page
-$tmp = Join-Path ([IO.Path]::GetTempPath()) ('agb-script-mode-' + [guid]::NewGuid().ToString('N'))
 
 if (-not (Test-Path $exe)) { throw "agave_shell.exe not found: $exe" }
 if (-not (Test-Path $page)) { throw "page not found: $page" }
-New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+
+Import-Module (Join-Path $PSScriptRoot 'TestParallel.psm1') -Force -DisableNameChecking
+$run = New-TestRun -Suite 'script-mode'
 
 $failures = 0
 
-function Invoke-Probe {
-    param([string]$Url, [string]$ScriptFile, [string]$Js, [int]$Wait = 300, [int]$Settle = 1000,
-          [int]$Timeout = 60000, [string]$PageEval = $null)
-
-    if ($Js) {
-        $ScriptFile = Join-Path $tmp ('js-' + [guid]::NewGuid().ToString('N') + '.js')
-        Set-Content -Path $ScriptFile -Value $Js -Encoding ascii
-    }
-
-    # Not $args: that is PowerShell's automatic argument array, and assigning to
-    # it then splatting it silently loses the assignments (the bench case used to
-    # start the probe with no arguments at all and report an empty exit code).
-    $cmdArgs = @('--probe', $Url)
-    if ($ScriptFile) { $cmdArgs += @('--eval-file', $ScriptFile) }
-    $cmdArgs += @('--wait', "$Wait", '--settle', "$Settle", '--timeout', "$Timeout")
-
-    $stdout = Join-Path $tmp 'out.txt'
-    $stderr = Join-Path $tmp 'err.txt'
-
-    $old = $env:AGB_PAGE_EVAL
-    if ($null -eq $PageEval) { Remove-Item Env:AGB_PAGE_EVAL -ErrorAction SilentlyContinue }
-    else { $env:AGB_PAGE_EVAL = $PageEval }
-
-    try {
-        $p = Start-Process -FilePath $exe -NoNewWindow -PassThru -Wait -ArgumentList $cmdArgs `
-            -RedirectStandardOutput $stdout -RedirectStandardError $stderr
-        [pscustomobject]@{
-            Code   = $p.ExitCode
-            Stdout = (Get-Content $stdout -Raw) -as [string]
-            Stderr = (Get-Content $stderr -Raw) -as [string]
-        }
-    } finally {
-        if ($null -eq $old) { Remove-Item Env:AGB_PAGE_EVAL -ErrorAction SilentlyContinue }
-        else { $env:AGB_PAGE_EVAL = $old }
-    }
-}
-
-# 1. antb_retain on a function value.
+# ---- 1. antb_retain on a function value (bare engine, own process) ---------
 $pin = Join-Path $build 'ant_pin_repro.exe'
 $pinSrc = Join-Path $root 'tools/ant_pin_repro.c'
 
@@ -105,84 +66,128 @@ if (-not (Test-Path $pin) -or ((Get-Item $pinSrc).LastWriteTime -gt (Get-Item $p
         if ($LASTEXITCODE -ne 0) { throw "zig cc failed for $pinSrc" }
     } finally { Pop-Location }
 }
+$pinOutFile = Join-Path $run.Dir 'pin.out'
+$pinErrFile = Join-Path $run.Dir 'pin.err'
+$pinProc = Start-Process -FilePath $pin -NoNewWindow -PassThru `
+    -RedirectStandardOutput $pinOutFile -RedirectStandardError $pinErrFile
 
-$pinOut = & $pin 2>&1 | Out-String
-$pinCode = $LASTEXITCODE
+$jobs = [ordered]@{}
 
-if ($pinCode -ne 0 -or $pinOut -notmatch 'result: 42') {
+# 2. classic-script semantics of page scripts (the default now).
+# No string literals in the probe script: the shell parses its own command line
+# and treats quotes as syntax, so keep the payload quote-free. The helper writes
+# it to --eval-file, so spaces are fine.
+$semJs = 'probeExit([typeof pageVar, this === window, topThis, topGlobalThis, hoisted, typeof earlyFn, pageFn()].join(String.fromCharCode(124)))'
+$jobs.sem = Start-TestProbe -Run $run -Name 'classic-semantics' `
+    -Url (Join-Path $root 'tools/pages/cap_script_semantics.html') `
+    -Eval $semJs -Wait 300 -Settle 1000 -Timeout 60000
+
+# 3. AGB_PAGE_EVAL=eval is still selectable.
+$evJs = 'probeExit([typeof pageVar, this === window, pageFn()].join(String.fromCharCode(124)))'
+$jobs.eval = Start-TestProbe -Run $run -Name 'page-eval-eval' `
+    -Url (Join-Path $root 'tools/pages/cap_script_semantics.html') `
+    -Eval $evJs -Wait 300 -Settle 1000 -Timeout 60000 `
+    -Env @{ AGB_PAGE_EVAL = 'eval' }
+
+# 4. Hot-loop cost: the point of R66 was 20-60x on these.
+$jobs.bench = Start-TestProbe -Run $run -Name 'bench-hot' -Url $page `
+    -EvalFile (Join-Path $root 'debug/bench_hot.js') -Wait 2000 -Settle 1000 -Timeout 120000
+
+# 5. document.currentScript (R95).
+$jobs.current = Start-TestProbe -Run $run -Name 'current-script' `
+    -Url (Join-Path $root 'tools/pages/cap_currentscript.html') `
+    -EvalFile (Join-Path $root 'tools/pages/check_currentscript.js') -Wait 2500 -Settle 300
+
+# 6. Module semantics come from the parser (P1-e).
+$modUrl = 'file:///' + ((Join-Path $root 'tools/pages/cap_module_import_frame.html') -replace '\\', '/')
+$modJs = "var f=document.getElementById('f');probeExit([f.contentWindow.__dynImport, window.__ownImport, f.contentWindow.__inlineModule].join(String.fromCharCode(124)))"
+$jobs.modules = Start-TestProbe -Run $run -Name 'frame-modules' -Url $modUrl -Eval $modJs -Wait 2000 -Settle 300
+
+# 7. A classic <script> whose first token is `import(` is a classic script with
+#    a dynamic import - not module syntax.
+$firstUrl = 'file:///' + ((Join-Path $root 'tools/pages/cap_module_import_first_token.html') -replace '\\', '/')
+$jobs.first = Start-TestProbe -Run $run -Name 'import-first-token' -Url $firstUrl `
+    -Eval 'probeExit(String(window.__firstToken))' -Wait 1500 -Settle 300
+
+# 8. Node.baseURI / document.baseURI (R176).
+$buUrl = 'file:///' + ((Join-Path $root 'tools/pages/cap_baseuri.html') -replace '\\', '/')
+$jobs.baseuri = Start-TestProbe -Run $run -Name 'baseuri' -Url $buUrl `
+    -Eval 'probeExit(String(window.__baseuri))' -Wait 1500 -Settle 300
+
+# 9. HTML import maps (R176).
+$imUrl = 'file:///' + ((Join-Path $root 'tools/pages/importmap/index.html') -replace '\\', '/')
+$jobs.importmap = Start-TestProbe -Run $run -Name 'importmap' -Url $imUrl `
+    -Eval 'probeExit(String(window.__imap) + "/" + String(window.__imapDynamic))' -Wait 2500 -Settle 800
+
+# 10. Browser shims (R176).
+$polyUrl = 'file:///' + ((Join-Path $root 'tools/pages/cap_polyfills.html') -replace '\\', '/')
+$jobs.polyfills = Start-TestProbe -Run $run -Name 'polyfills' -Url $polyUrl `
+    -Eval 'probeExit(String(window.__poly))' -Wait 2500 -Settle 500
+
+$res = @{}
+foreach ($name in @($jobs.Keys)) { $res[$name] = Complete-TestProbe -Job $jobs[$name] }
+$pinProc.WaitForExit()
+$pinOut = (Get-Content $pinOutFile -Raw -ErrorAction SilentlyContinue) +
+          (Get-Content $pinErrFile -Raw -ErrorAction SilentlyContinue)
+
+if ($pinProc.ExitCode -ne 0 -or $pinOut -notmatch 'result: 42') {
     $failures++
-    Write-Host ("FAIL  retain a function across GC (exit {0})" -f $pinCode)
+    Write-Host ("FAIL  retain a function across GC (exit {0})" -f $pinProc.ExitCode)
     Write-Host (($pinOut -split "`n" | Select-Object -Last 6) -join "`n")
 } else {
     Write-Host "PASS  retain a function across GC"
 }
 
-# 2. classic-script semantics of page scripts (the default now).
-# No string literals in the probe script: the shell parses its own command line
-# and treats quotes as syntax, so keep the payload quote-free.
-$semJs = 'probeExit([typeof pageVar, this === window, topThis, topGlobalThis, hoisted, typeof earlyFn, pageFn()].join(String.fromCharCode(124)))'
-$sem = Invoke-Probe -Url (Join-Path $root 'tools/pages/cap_script_semantics.html') -Js $semJs
-
-if ($sem.Code -ne 0) {
+if ($res.sem.Code -ne 0) {
     $failures++
-    Write-Host ("FAIL  classic script semantics: exit {0}" -f $sem.Code)
-    Write-Host (($sem.Stderr -split "`n" | Select-Object -Last 8) -join "`n")
-} elseif ($sem.Stdout -notmatch 'number\|true\|true\|true\|function\|function\|51') {
+    Write-Host ("FAIL  classic script semantics: exit {0}" -f $res.sem.Code)
+    Write-Host (($res.sem.Stderr -split "`n" | Select-Object -Last 8) -join "`n")
+} elseif ($res.sem.Text -notmatch 'number\|true\|true\|true\|function\|function\|51') {
     $failures++
     Write-Host "FAIL  classic script semantics: wrong payload"
-    Write-Host (($sem.Stdout -split "`n" | Select-Object -Last 4) -join "`n")
+    Write-Host (($res.sem.Text -split "`n" | Select-Object -Last 4) -join "`n")
 } else {
     Write-Host "PASS  classic script semantics (window.pageVar / this / hoisting)"
 }
 
-# 3. AGB_PAGE_EVAL=eval is still selectable.
-$evJs = 'probeExit([typeof pageVar, this === window, pageFn()].join(String.fromCharCode(124)))'
-$ev = Invoke-Probe -Url (Join-Path $root 'tools/pages/cap_script_semantics.html') -Js $evJs -PageEval 'eval'
-
-if ($ev.Code -ne 0 -or $ev.Stdout -notmatch 'number\|true\|51') {
+if ($res.eval.Code -ne 0 -or $res.eval.Text -notmatch 'number\|true\|51') {
     $failures++
-    Write-Host ("FAIL  AGB_PAGE_EVAL=eval fallback (exit {0})" -f $ev.Code)
-    Write-Host (($ev.Stderr -split "`n" | Select-Object -Last 8) -join "`n")
+    Write-Host ("FAIL  AGB_PAGE_EVAL=eval fallback (exit {0})" -f $res.eval.Code)
+    Write-Host (($res.eval.Stderr -split "`n" | Select-Object -Last 8) -join "`n")
 } else {
     Write-Host "PASS  AGB_PAGE_EVAL=eval fallback"
 }
 
-# 4. Hot-loop cost: the point of R66 was 20-60x on these.
-$bench = Invoke-Probe -Url $page -ScriptFile (Join-Path $root 'debug/bench_hot.js') -Wait 2000 -Settle 1000 -Timeout 120000
-$benchText = $bench.Stdout + $bench.Stderr
+# ---- bench: retry once on its own if the batch load polluted the numbers ---
 $limits = @{ 'vm-dispatch' = 50; 'static-key' = 50; 'dense-read' = 50 }
+function Test-Bench($Result) {
+    if ($Result.Code -ne 0) { return @{ Ok = $false; Why = "exit $($Result.Code)" } }
+    foreach ($name in $limits.Keys) {
+        $m = [regex]::Match($Result.Text, "$name=(\d+)ms \(([\d.]+) ns/iter\)")
+        if (-not $m.Success) { return @{ Ok = $false; Why = "no measurement for $name" } }
+        $ns = [double]$m.Groups[2].Value
+        if ($ns -gt $limits[$name]) { return @{ Ok = $false; Why = "$name $ns ns/iter (limit $($limits[$name]))" } }
+    }
+    return @{ Ok = $true; Why = '' }
+}
 
-if ($bench.Code -ne 0) {
+$bench = Test-Bench $res.bench
+if (-not $bench.Ok) {
+    $res.bench = Complete-TestProbe -Job (Start-TestProbe -Run $run -Name 'bench-hot-retry' -Url $page `
+        -EvalFile (Join-Path $root 'debug/bench_hot.js') -Wait 2000 -Settle 1000 -Timeout 120000)
+    $bench = Test-Bench $res.bench
+}
+if (-not $bench.Ok) {
     $failures++
-    Write-Host ("FAIL  bench_hot: exit {0}" -f $bench.Code)
+    Write-Host ("FAIL  bench_hot: {0}" -f $bench.Why)
 } else {
     foreach ($name in $limits.Keys) {
-        $m = [regex]::Match($benchText, "$name=(\d+)ms \(([\d.]+) ns/iter\)")
-
-        if (-not $m.Success) {
-            $failures++
-            Write-Host ("FAIL  bench_hot: no measurement for {0}" -f $name)
-            continue
-        }
-
-        $ns = [double]$m.Groups[2].Value
-        if ($ns -gt $limits[$name]) {
-            $failures++
-            Write-Host ("FAIL  bench_hot {0}: {1} ns/iter (limit {2})" -f $name, $ns, $limits[$name])
-        } else {
-            Write-Host ("PASS  bench_hot {0}: {1} ns/iter" -f $name, $ns)
-        }
+        $m = [regex]::Match($res.bench.Text, "$name=(\d+)ms \(([\d.]+) ns/iter\)")
+        Write-Host ("PASS  bench_hot {0}: {1} ns/iter" -f $name, $m.Groups[2].Value)
     }
 }
 
-# 5. document.currentScript (R95). The page writes `key=value` into #out and the
-# observer reports that text, so the needles below are the page's own answers.
-# Chrome agrees on every one of them except the microtask case: its microtask
-# checkpoint runs inside "run a classic script", before currentScript is
-# cleared, so Chrome reports inline1 there and agave reports null.
-$cs = Invoke-Probe -Url (Join-Path $root 'tools/pages/cap_currentscript.html') `
-    -ScriptFile (Join-Path $root 'tools/pages/check_currentscript.js') -Wait 2500 -Settle 300
-
+$cs = $res.current
 if ($cs.Code -ne 0) {
     $failures++
     Write-Host ("FAIL  document.currentScript: exit {0}" -f $cs.Code)
@@ -196,7 +201,7 @@ if ($cs.Code -ne 0) {
                           'timer=null', 'microtask=null', 'module=null', 'afterLoad=null',
                           'ext.seen=ext', 'ext.data=ext', 'defer.seen=defer',
                           'async.seen=async', 'module.inDom=yes')) {
-        if ($cs.Stdout -notmatch [regex]::Escape($needle)) {
+        if ($cs.Text -notmatch [regex]::Escape($needle)) {
             $failures++
             $csMissing++
             Write-Host ("FAIL  document.currentScript: missing '{0}'" -f $needle)
@@ -205,93 +210,52 @@ if ($cs.Code -ne 0) {
     if (-not $csMissing) { Write-Host 'PASS  document.currentScript (inline/external/defer/async/nested, null elsewhere)' }
 }
 
-# 6. Module semantics come from the parser (P1-e): the frame's inline module
-#    runs, a frame's classic script can import(), and each realm evaluates the
-#    shared module once (its own window.__sharedLoads). Before P1-e the frame's
-#    module never ran, the frame's import() rejected with
-#    ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING, and a classic script starting with
-#    `import(` was rerouted through the module queue by a source sniff.
-$modUrl = 'file:///' + ((Join-Path $root 'tools/pages/cap_module_import_frame.html') -replace '\\', '/')
-$modJs = "var f=document.getElementById('f');probeExit([f.contentWindow.__dynImport, window.__ownImport, f.contentWindow.__inlineModule].join(String.fromCharCode(124)))"
-$mod = Invoke-Probe -Url $modUrl -Js $modJs -Wait 2000 -Settle 300
-
-if ($mod.Code -ne 0) {
+if ($res.modules.Code -ne 0) {
     $failures++
-    Write-Host ("FAIL  frame modules / per-realm import: exit {0}" -f $mod.Code)
-    Write-Host (($mod.Stderr -split "`n" | Select-Object -Last 8) -join "`n")
-} elseif ($mod.Stdout -notmatch '1\|1\|1') {
+    Write-Host ("FAIL  frame modules / per-realm import: exit {0}" -f $res.modules.Code)
+    Write-Host (($res.modules.Stderr -split "`n" | Select-Object -Last 8) -join "`n")
+} elseif ($res.modules.Text -notmatch '1\|1\|1') {
     $failures++
     Write-Host "FAIL  frame modules / per-realm import: wrong payload"
-    Write-Host (($mod.Stdout -split "`n" | Select-Object -Last 4) -join "`n")
+    Write-Host (($res.modules.Text -split "`n" | Select-Object -Last 4) -join "`n")
 } else {
     Write-Host 'PASS  frame module entry + per-realm import()'
 }
 
-# 7. A classic <script> whose first token is `import(` is a classic script with a
-#    dynamic import - not module syntax.
-$firstUrl = 'file:///' + ((Join-Path $root 'tools/pages/cap_module_import_first_token.html') -replace '\\', '/')
-$first = Invoke-Probe -Url $firstUrl -Js 'probeExit(String(window.__firstToken))' -Wait 1500 -Settle 300
-
-if ($first.Code -ne 0 -or $first.Stdout -notmatch '1') {
+if ($res.first.Code -ne 0 -or $res.first.Text -notmatch '1') {
     $failures++
-    Write-Host ("FAIL  classic script starting with import(): exit {0}" -f $first.Code)
-    Write-Host (($first.Stderr -split "`n" | Select-Object -Last 6) -join "`n")
-    Write-Host (($first.Stdout -split "`n" | Select-Object -Last 4) -join "`n")
+    Write-Host ("FAIL  classic script starting with import(): exit {0}" -f $res.first.Code)
+    Write-Host (($res.first.Stderr -split "`n" | Select-Object -Last 6) -join "`n")
+    Write-Host (($res.first.Text -split "`n" | Select-Object -Last 4) -join "`n")
 } else {
     Write-Host 'PASS  classic script starting with import( (dynamic import, not a module)'
 }
 
-# 8. Node.baseURI / document.baseURI (R176). monaco's playground evaluates
-#    `document.baseURI.toString()` at the top of its bundle; the property did
-#    not exist on the bridge, so the template threw and the playground module
-#    aborted. The page writes its four checks into window.__baseuri.
-$buUrl = 'file:///' + ((Join-Path $root 'tools/pages/cap_baseuri.html') -replace '\\', '/')
-$bu = Invoke-Probe -Url $buUrl -Js 'probeExit(String(window.__baseuri))' -Wait 1500 -Settle 300
-
-if ($bu.Code -ne 0 -or $bu.Stdout -notmatch '1\|1\|1\|1') {
+if ($res.baseuri.Code -ne 0 -or $res.baseuri.Text -notmatch '1\|1\|1\|1') {
     $failures++
-    Write-Host ("FAIL  document.baseURI: exit {0}" -f $bu.Code)
-    Write-Host (($bu.Stdout + $bu.Stderr) -split "`n" | Select-Object -Last 8 | Out-String)
+    Write-Host ("FAIL  document.baseURI: exit {0}" -f $res.baseuri.Code)
+    Write-Host (($res.baseuri.Text + $res.baseuri.Stderr) -split "`n" | Select-Object -Last 8 | Out-String)
 } else {
     Write-Host 'PASS  document.baseURI / Node.baseURI (with <base href>)'
 }
 
-# 9. HTML import maps (R176). GitHub ships <script type="importmap"> for
-#    react/react-dom/...; without it the bare specifier was opened as a file
-#    ("Cannot open module: react") and every React entry module failed. The
-#    page writes "<exact>|<prefix>|<relative>" and the rejection of an unmapped
-#    bare specifier.
-$imUrl = 'file:///' + ((Join-Path $root 'tools/pages/importmap/index.html') -replace '\\', '/')
-$im = Invoke-Probe -Url $imUrl -Wait 2500 -Settle 800 `
-    -Js 'probeExit(String(window.__imap) + "/" + String(window.__imapDynamic))'
-
-if ($im.Code -ne 0 -or $im.Stdout -notmatch 'hello\|helper\|relative/rejected') {
+if ($res.importmap.Code -ne 0 -or $res.importmap.Text -notmatch 'hello\|helper\|relative/rejected') {
     $failures++
-    Write-Host ("FAIL  import map: exit {0}" -f $im.Code)
-    Write-Host (($im.Stdout + $im.Stderr) -split "`n" | Select-Object -Last 8 | Out-String)
+    Write-Host ("FAIL  import map: exit {0}" -f $res.importmap.Code)
+    Write-Host (($res.importmap.Text + $res.importmap.Stderr) -split "`n" | Select-Object -Last 8 | Out-String)
 } else {
     Write-Host 'PASS  import map (exact + prefix bare specifiers, relative, unmapped rejects)'
 }
 
-# 10. Browser shims (R176): the URLSearchParams wrapper is a plain JS object
-#     that delegates to the native one, so it has to forward every member -
-#     `for (const [k, v] of params)` reads Symbol.iterator (monaco's playground
-#     died with "not iterable" without it). A frame realm is created by the
-#     bridge, which only installs ant's intrinsics + timers; the web globals are
-#     copied from the parent realm (monaco's isolated playground iframe threw
-#     "URLSearchParams is not defined").
-$polyUrl = 'file:///' + ((Join-Path $root 'tools/pages/cap_polyfills.html') -replace '\\', '/')
-$poly = Invoke-Probe -Url $polyUrl -Js 'probeExit(String(window.__poly))' -Wait 2500 -Settle 1500
-
-if ($poly.Code -ne 0 -or $poly.Stdout -notmatch 'usp:function,2,a=1,2,\[object URLSearchParams\]\|frameMissing:\|frameUsp:function') {
+if ($res.polyfills.Code -ne 0 -or $res.polyfills.Text -notmatch 'usp:function,2,a=1,2,\[object URLSearchParams\]\|frameMissing:\|frameUsp:function') {
     $failures++
-    Write-Host ("FAIL  browser shims: exit {0}" -f $poly.Code)
-    Write-Host (($poly.Stdout + $poly.Stderr) -split "`n" | Select-Object -Last 8 | Out-String)
+    Write-Host ("FAIL  browser shims: exit {0}" -f $res.polyfills.Code)
+    Write-Host (($res.polyfills.Text + $res.polyfills.Stderr) -split "`n" | Select-Object -Last 8 | Out-String)
 } else {
     Write-Host 'PASS  URLSearchParams wrapper iteration + frame-realm web globals'
 }
 
-Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+Remove-TestRun $run $failures
 
 if ($failures -gt 0) {
     Write-Host "`nSCRIPT MODE CHECKS FAILED ($failures)"
@@ -300,4 +264,3 @@ if ($failures -gt 0) {
 
 Write-Host "`nALL SCRIPT MODE CHECKS PASSED"
 exit 0
-

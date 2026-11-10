@@ -45,6 +45,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         pass
 
 
-socketserver.TCPServer.allow_reuse_address = True
-with socketserver.TCPServer(('127.0.0.1', PORT), Handler) as httpd:
+# Threaded: the four lifecycle probes run in parallel and one of them sits in
+# the /slow.ttf sleep; a single-threaded server would make the others wait
+# behind it (and made the font case hit its timeout under a loaded machine).
+socketserver.ThreadingTCPServer.allow_reuse_address = True
+socketserver.ThreadingTCPServer.daemon_threads = True
+with socketserver.ThreadingTCPServer(('127.0.0.1', PORT), Handler) as httpd:
     httpd.serve_forever()

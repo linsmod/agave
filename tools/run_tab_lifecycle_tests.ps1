@@ -12,12 +12,16 @@
 #   4. font still downloading when the view is torn down: no crash, and the
 #      new documentDetached() hook unregisters the font sources
 #
+# The four probes run at once (one shared server on a free port; each probe has
+# its own profile and cwd, so agb_crash.txt cannot collide). Expected wall
+# time: ~3 s.
+#
 #   pwsh -File tools/run_tab_lifecycle_tests.ps1
 #
 # The pages live in tools/pages/tab_lifecycle_*.html; the server
 # (tools/tab_lifecycle_server.py) delays /slow.ttf so the font is in flight.
 param(
-    [int]$Port = 8979
+    [int]$Port = 0
 )
 
 $ErrorActionPreference = 'Stop'
@@ -26,15 +30,17 @@ $root  = Split-Path -Parent $PSScriptRoot
 $exe   = Join-Path $root 'build-zig-native\agave_shell.exe'
 $pages = Join-Path $PSScriptRoot 'pages'
 $font  = Join-Path $root 'fonts\NotoSansSC-Regular.ttf'
-$base  = "http://127.0.0.1:$Port"
-$work  = Join-Path $env:TEMP ("agave_tab_lifecycle_" + [guid]::NewGuid().ToString('N').Substring(0, 8))
 
 if (-not (Test-Path $exe)) {
     "missing $exe - build first (pwsh -File tools/build_project.ps1)"
     exit 1
 }
 
-New-Item -ItemType Directory -Force -Path $work | Out-Null
+Import-Module (Join-Path $PSScriptRoot 'TestParallel.psm1') -Force -DisableNameChecking
+$run = New-TestRun -Suite 'tab-lifecycle'
+
+if ($Port -le 0) { $Port = Get-TestFreePort }
+$base = "http://127.0.0.1:$Port"
 
 $server = Start-Process -FilePath 'python' -ArgumentList @(
     (Join-Path $PSScriptRoot 'tab_lifecycle_server.py'), "$Port", $pages, $font, '1.5'
@@ -44,7 +50,7 @@ $script:failures = 0
 $script:cases = 0
 
 function Wait-Server {
-    for ($i = 0; $i -lt 40; $i++) {
+    for ($i = 0; $i -lt 60; $i++) {
         try {
             Invoke-WebRequest -UseBasicParsing -Uri "$base/tab_lifecycle_events.html" -TimeoutSec 1 | Out-Null
             return $true
@@ -53,41 +59,6 @@ function Wait-Server {
         }
     }
     return $false
-}
-
-function Run-Probe {
-    param(
-        [string]$Page,
-        [int]$Wait = 600,
-        [hashtable]$Env = @{}
-    )
-
-    $saved = @{}
-    foreach ($k in $Env.Keys) {
-        $saved[$k] = [Environment]::GetEnvironmentVariable($k)
-        [Environment]::SetEnvironmentVariable($k, $Env[$k])
-    }
-
-    $crash = Join-Path $work 'agb_crash.txt'
-    Remove-Item $crash -ErrorAction SilentlyContinue
-
-    Push-Location $work
-    try {
-        $out = & $exe --probe "$base/$Page" --wait $Wait --settle 200 --timeout 25000 `
-                     --eval "probeExit(document.title)" 2>&1
-        $code = $LASTEXITCODE
-    } finally {
-        Pop-Location
-        foreach ($k in $saved.Keys) {
-            [Environment]::SetEnvironmentVariable($k, $saved[$k])
-        }
-    }
-
-    [pscustomobject]@{
-        Text   = ($out | Out-String)
-        Code   = $code
-        Crashed = (Test-Path $crash)
-    }
 }
 
 function Check {
@@ -121,8 +92,30 @@ try {
         exit 1
     }
 
+    $jobs = [ordered]@{}
+    $jobs.events = Start-TestProbe -Run $run -Name 'events' -Url "$base/tab_lifecycle_events.html" `
+        -Eval 'probeExit(document.title)' -Wait 600 -Settle 200 -Timeout 25000 `
+        -Env @{ AGB_EVT_DEBUG = '1' }
+    $jobs.pins = Start-TestProbe -Run $run -Name 'pins' -Url "$base/tab_lifecycle_pins.html" `
+        -Eval 'probeExit(document.title)' -Wait 600 -Settle 200 -Timeout 25000 `
+        -Env @{ AGB_EVT_DEBUG = '1' }
+    # 3. two views: the popup from window.open is a second engine context and
+    #    must go through the same teardown.
+    $jobs.popup = Start-TestProbe -Run $run -Name 'popup' -Url "$base/tab_lifecycle_popup.html" `
+        -Eval 'probeExit(document.title)' -Wait 900 -Settle 200 -Timeout 25000 `
+        -Env @{ AGB_EVT_DEBUG = '1' }
+    # 4. font still in flight when the view is destroyed.
+    $jobs.font = Start-TestProbe -Run $run -Name 'font' -Url "$base/tab_lifecycle_font.html" `
+        -Eval 'probeExit(document.title)' -Wait 300 -Settle 200 -Timeout 25000 `
+        -Env @{ AGB_FONT_LOG = '1' }
+
+    $res = @{}
+    foreach ($name in @($jobs.Keys)) { $res[$name] = Complete-TestProbe -Job $jobs[$name] }
+
+    function Crashed($Result) { return (Test-Path (Join-Path $Result.Dir 'agb_crash.txt')) }
+
     # 1. teardown order, on a page that registered pagehide/unload listeners.
-    $r = Run-Probe 'tab_lifecycle_events.html' -Env @{ AGB_EVT_DEBUG = '1' }
+    $r = $res.events
     $text = $r.Text
     $iPageHide = Index-Of $text '\[evt\] window event pagehide'
     $iVisibility = Index-Of $text '\[evt\] window event visibilitychange'
@@ -131,38 +124,36 @@ try {
     $ordered = ($iPageHide -ge 0) -and ($iPageHide -lt $iVisibility) -and
                ($iVisibility -lt $iUnload) -and ($iUnload -lt $iStop)
     Check 'teardown order pagehide -> visibilitychange -> unload -> realm stop' `
-          (($r.Code -eq 0) -and $ordered -and (-not $r.Crashed)) $text
+          (($r.Code -eq 0) -and $ordered -and (-not (Crashed $r))) $text
 
     Check 'every realm start has a realm stop' `
           ((Count-Of $text '\[evt\] realm start') -eq (Count-Of $text '\[evt\] realm stop gen=')) $text
 
     # 2. JS-created nodes must not pin the document after the view is gone.
-    $r = Run-Probe 'tab_lifecycle_pins.html' -Env @{ AGB_EVT_DEBUG = '1' }
+    $r = $res.pins
     $text = $r.Text
     $pinsLine = ($text -split "`n" | Where-Object { $_ -match 'pins release .* nodes=' } | Select-Object -First 1)
     Check 'JS-created nodes are released on teardown (no LEAK line)' `
           (($r.Code -eq 0) -and ($pinsLine -ne $null) -and (-not ($text -match 'LEAK:\s+\d+ Node'))) $text
 
-    # 3. two views: the popup from window.open is a second engine context and
-    #    must go through the same teardown.
-    $r = Run-Probe 'tab_lifecycle_popup.html' -Wait 900 -Env @{ AGB_EVT_DEBUG = '1' }
+    # 3. popup view context.
+    $r = $res.popup
     $text = $r.Text
     $starts = Count-Of $text '\[evt\] realm start .*\(view context\)'
     $stops = Count-Of $text '\[evt\] realm stop gen='
     Check 'window.open popup gets its own view context and is torn down' `
-          (($r.Code -eq 0) -and ($starts -eq 2) -and ($stops -eq 2) -and (-not $r.Crashed)) $text
+          (($r.Code -eq 0) -and ($starts -eq 2) -and ($stops -eq 2) -and (-not (Crashed $r))) $text
 
-    # 4. font still in flight when the view is destroyed: the download must not
-    #    come back into a document without a render tree.
-    $r = Run-Probe 'tab_lifecycle_font.html' -Wait 300 -Env @{ AGB_FONT_LOG = '1' }
+    # 4. font in flight during teardown.
+    $r = $res.font
     $text = $r.Text
     Check 'font in flight during teardown: no crash, sources released' `
-          (($r.Code -eq 0) -and (-not $r.Crashed) -and ($text -match '\[fontsel\] documentDetached faces=')) $text
+          (($r.Code -eq 0) -and (-not (Crashed $r)) -and ($text -match '\[fontsel\] documentDetached faces=')) $text
 } finally {
     if ($server -and -not $server.HasExited) {
         Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
     }
-    Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-TestRun $run $failures
 }
 
 ""

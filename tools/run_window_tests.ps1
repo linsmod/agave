@@ -18,8 +18,13 @@
 #                             the host to show that tab (activate=1)
 #   5. window.close()      -> the popup asks the host to close it
 #
+# All ten probes run at once. Each has its own AGB_RENDER_TAG, so the "no
+# orphaned renderer" check is per case even while the other nine are still
+# working; one tag-prefix query covers them all at the end.
+#
 # Usage:
 #   pwsh -File tools/run_window_tests.ps1
+# Expected wall time: ~5 s.
 
 param(
     [string]$BuildDir = 'build-zig-native'
@@ -34,152 +39,98 @@ $pages = Join-Path $root 'tools/pages'
 
 if (-not (Test-Path $exe)) { throw "agave_shell.exe not found: $exe" }
 
+Import-Module (Join-Path $PSScriptRoot 'TestParallel.psm1') -Force -DisableNameChecking
+$run = New-TestRun -Suite 'window'
+
 $failures = 0
-$out = Join-Path $build 'window_out.txt'
-$err = Join-Path $build 'window_err.txt'
-
-function Invoke-Probe {
-    param(
-        [string]$Backend,
-        [string]$Page,
-        [string]$Js = '',
-        [int]$Wait = 700,
-        [int]$Settle = 700,
-        [string[]]$Extra = @()
-    )
-
-    $jsFile = Join-Path $build 'window_eval.js'
-    if ($Js) { Set-Content -Path $jsFile -Value $Js -Encoding ascii }
-
-    $saved = $env:AGB_VIEW_BACKEND
-    if ($Backend) { $env:AGB_VIEW_BACKEND = $Backend }
-    else { Remove-Item Env:AGB_VIEW_BACKEND -ErrorAction SilentlyContinue }
-
-    try {
-        $args = @('--probe', "file:///$($Page -replace '\\','/')",
-                  '--wait', "$Wait", '--settle', "$Settle", '--timeout', '30000')
-        if ($Js) { $args += @('--eval-file', $jsFile) }
-        if ($Extra.Count -gt 0) { $args += $Extra }
-
-        $p = Start-Process -FilePath $exe -NoNewWindow -PassThru -Wait `
-            -ArgumentList $args -RedirectStandardOutput $out -RedirectStandardError $err
-
-        [pscustomobject]@{
-            Code   = $p.ExitCode
-            Text   = ((Get-Content $out -Raw) -as [string]) + ((Get-Content $err -Raw) -as [string])
-        }
-    } finally {
-        if ($null -eq $saved) { Remove-Item Env:AGB_VIEW_BACKEND -ErrorAction SilentlyContinue }
-        else { $env:AGB_VIEW_BACKEND = $saved }
-    }
-}
-
-# Renderers this run owns: the control passes AGB_RENDER_TAG to every renderer it
-# spawns (--tag), and this run has its own tag. A renderer without it belongs to
-# a developer's own shell - never counted, never killed.
-$script:runTag = 'agvwin' + ([guid]::NewGuid().ToString('N').Substring(0, 12))
-$env:AGB_RENDER_TAG = $script:runTag
-
-function Get-StrayRenderers {
-    $stray = @()
-    foreach ($p in (Get-CimInstance Win32_Process -Filter "Name='agave_render_host.exe'" -ErrorAction SilentlyContinue)) {
-        if ($p.CommandLine -and $p.CommandLine.Contains($script:runTag))
-            { $stray += $p }
-    }
-    return $stray
-}
-
-function Assert-NoRenderer {
-    param([string]$What)
-
-    for ($i = 0; $i -lt 30; ++$i) {
-        if (-not (Get-StrayRenderers)) { return }
-        Start-Sleep -Milliseconds 100
-    }
-
-    $left = @(Get-StrayRenderers)
-    if ($left.Count -gt 0) {
-        $script:failures++
-        Write-Host ("FAIL  {0} left renderer process(es): {1}" -f $What,
-                    (($left | ForEach-Object { $_.ProcessId }) -join ', '))
-        $left | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-    }
-}
-
+$runTag = 'agvwin' + ([guid]::NewGuid().ToString('N').Substring(0, 12))
 $links = Join-Path $pages 'window_links.html'
+$jobs = @()
+
+function Add-Case {
+    param([string]$Name, [string]$Backend, [string]$Js, [int]$Wait, [int]$Settle, [string[]]$Extra)
+
+    $script:jobs += Start-TestProbe -Run $run -Name "$Backend-$Name" -Url $links `
+        -Eval $Js -Wait $Wait -Settle $Settle -Timeout 30000 -Extra $Extra `
+        -Backend $Backend -RenderTag "$runTag-$Backend-$Name"
+}
+
+foreach ($backend in @('local', 'process')) {
+    # --eval-retry: the plain/named cases navigate as a result of the click,
+    # and under load the eval can be dispatched while that navigation is
+    # committing (the control drops it; the retry runs it on the new document).
+    Add-Case 'plain' $backend 'probeExit("url=" + document.URL);' 700 700 @('--click', '60,40', '--eval-retry')
+    Add-Case 'blank' $backend 'probeExit("main=" + document.URL);' 700 700 @('--click', '60,140', '--eval-retry')
+    Add-Case 'open' $backend 'var w = window.open("window_target.html"); probeExit("opened=" + (w ? "obj" : "null"));' 700 900 @()
+    Add-Case 'named' $backend 'probeExit("main=" + document.URL);' 700 1200 @('--click', '60,240', '--click', '60,340', '--eval-retry')
+    Add-Case 'close' $backend 'window.open("window_closer.html");' 700 2500 @()
+}
+
+$results = @{}
+for ($i = 0; $i -lt $jobs.Count; $i++) {
+    $r = Complete-TestProbe -Job $jobs[$i]
+    $results[$jobs[$i].Name] = $r
+}
+
+function Check {
+    param([string]$Name, [bool]$Ok, [string]$Detail)
+
+    if ($Ok) {
+        Write-Host "PASS  $Name"
+    } else {
+        $script:failures++
+        Write-Host "FAIL  $Name"
+        if ($Detail) {
+            $Detail -split "`n" | Where-Object { $_ -match 'url=|requested|opened=|activate|close\]|exit' } |
+                Select-Object -Last 3 | ForEach-Object { Write-Host ("      " + $_.TrimEnd()) }
+        }
+    }
+}
 
 foreach ($backend in @('local', 'process')) {
     Write-Host "`n-- backend $backend --"
 
-    # 1. plain link: same tab, no new window.
-    $r = Invoke-Probe $backend $links -Js 'probeExit("url=" + document.URL);' `
-        -Extra @('--click', '60,40')
-    if ($r.Code -eq 0 -and $r.Text -match 'url=.*window_target\.html' -and
-        $r.Text -notmatch 'new window requested') {
-        Write-Host "PASS  $backend plain link: same tab"
-    } else {
-        $script:failures++
-        Write-Host "FAIL  $backend plain link did not navigate in place"
-        Write-Host (($r.Text -split "`n" | Where-Object { $_ -match 'url=|requested|exit' } | Select-Object -Last 3) -join "`n")
-    }
+    $r = $results["$backend-plain"]
+    Check "$backend plain link: same tab" `
+        ($r.Code -eq 0 -and $r.Text -match 'url=.*window_target\.html' -and $r.Text -notmatch 'new window requested') $r.Text
 
-    # 2. target=_blank: a new tab with the link, loaded and titled.
-    $r = Invoke-Probe $backend $links -Js 'probeExit("main=" + document.URL);' `
-        -Extra @('--click', '60,140')
-    if ($r.Code -eq 0 -and $r.Text -match 'new window requested url=.*window_target\.html' -and
-        $r.Text -match 'new window url=.*window_target\.html' -and
-        $r.Text -match 'main=.*window_links\.html') {
-        Write-Host "PASS  $backend target=_blank: new tab loaded, main tab unchanged"
-    } else {
-        $script:failures++
-        Write-Host "FAIL  $backend target=_blank did not open a loaded tab"
-        Write-Host (($r.Text -split "`n" | Where-Object { $_ -match 'new window|main=|exit' } | Select-Object -Last 3) -join "`n")
-    }
-    Assert-NoRenderer "$backend _blank"
+    $r = $results["$backend-blank"]
+    Check "$backend target=_blank: new tab loaded, main tab unchanged" `
+        ($r.Code -eq 0 -and $r.Text -match 'new window requested url=.*window_target\.html' -and
+         $r.Text -match 'new window url=.*window_target\.html' -and
+         $r.Text -match 'main=.*window_links\.html') $r.Text
 
-    # 3. window.open(): same new-tab path, and the page gets a window object.
-    $r = Invoke-Probe $backend $links -Settle 900 `
-        -Js 'var w = window.open("window_target.html"); probeExit("opened=" + (w ? "obj" : "null"));'
-    if ($r.Code -eq 0 -and $r.Text -match 'opened=obj' -and
-        $r.Text -match 'new window url=.*window_target\.html') {
-        Write-Host "PASS  $backend window.open: new tab loaded, window object returned"
-    } else {
-        $script:failures++
-        Write-Host "FAIL  $backend window.open"
-        Write-Host (($r.Text -split "`n" | Where-Object { $_ -match 'opened=|new window|exit' } | Select-Object -Last 3) -join "`n")
-    }
-    Assert-NoRenderer "$backend window.open"
+    $r = $results["$backend-open"]
+    Check "$backend window.open: new tab loaded, window object returned" `
+        ($r.Code -eq 0 -and $r.Text -match 'opened=obj' -and $r.Text -match 'new window url=.*window_target\.html') $r.Text
 
-    # 4. named target twice: one window, second click navigates it and asks the
-    #    host to bring its tab forward.
-    $r = Invoke-Probe $backend $links -Settle 1200 `
-        -Js 'probeExit("main=" + document.URL);' `
-        -Extra @('--click', '60,240', '--click', '60,340')
+    $r = $results["$backend-named"]
     $requested = ([regex]::Matches($r.Text, 'new window requested')).Count
-    if ($r.Code -eq 0 -and $requested -eq 1 -and $r.Text -match 'activate=1' -and
-        $r.Text -match 'new window url=.*window_target2\.html') {
-        Write-Host "PASS  $backend named target: one window, reused and activated"
-    } else {
-        $script:failures++
-        Write-Host "FAIL  $backend named target reuse (windows=$requested)"
-        Write-Host (($r.Text -split "`n" | Where-Object { $_ -match 'requested|activate|new window url|exit' } | Select-Object -Last 4) -join "`n")
-    }
-    Assert-NoRenderer "$backend named"
+    Check "$backend named target: one window, reused and activated" `
+        ($r.Code -eq 0 -and $requested -eq 1 -and $r.Text -match 'activate=1' -and
+         $r.Text -match 'new window url=.*window_target2\.html') $r.Text
 
-    # 5. window.close() from the popup reaches the host (probe exits OK on it).
-    $r = Invoke-Probe $backend $links -Settle 2500 `
-        -Js 'window.open("window_closer.html");'
-    if ($r.Code -eq 0 -and $r.Text -match '\[close\] window.close\(\) reached the host') {
-        Write-Host "PASS  $backend window.close from a popup reaches the host"
-    } else {
-        $script:failures++
-        Write-Host "FAIL  $backend window.close (exit $($r.Code))"
-        Write-Host (($r.Text -split "`n" | Where-Object { $_ -match 'requested|close\]|exit' } | Select-Object -Last 3) -join "`n")
-    }
-    Assert-NoRenderer "$backend close"
+    $r = $results["$backend-close"]
+    Check "$backend window.close from a popup reaches the host" `
+        ($r.Code -eq 0 -and $r.Text -match '\[close\] window.close\(\) reached the host') $r.Text
 }
 
-Remove-Item $out, $err, (Join-Path $build 'window_eval.js') -ErrorAction SilentlyContinue
+# One aggregate orphan check for all ten tags (teardown is asynchronous).
+$left = @()
+$deadline = (Get-Date).AddSeconds(10)
+while ($true) {
+    $left = @(Get-CimInstance Win32_Process -Filter "Name='agave_render_host.exe'" -ErrorAction SilentlyContinue |
+              Where-Object { $_.CommandLine -and $_.CommandLine.Contains($runTag) })
+    if ($left.Count -eq 0 -or (Get-Date) -gt $deadline) { break }
+    Start-Sleep -Milliseconds 100
+}
+if ($left.Count -gt 0) {
+    $failures++
+    Write-Host ("FAIL  leftover renderer process(es): {0}" -f (($left | ForEach-Object { $_.ProcessId }) -join ', '))
+    $left | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+}
+
+Remove-TestRun $run $failures
 
 if ($failures -gt 0) {
     Write-Host "`nWINDOW CHECKS FAILED ($failures)"

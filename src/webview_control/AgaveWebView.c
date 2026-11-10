@@ -1281,6 +1281,43 @@ static const char* agwHangReason(int kind)
     }
 }
 
+/* Watchdog / busy-stack files default to the exe's directory, but parallel test
+ * probes (and any two shells sharing one build tree) must not overwrite each
+ * other's evidence. AGB_DIAG_DIR redirects them into a per-probe directory. */
+static int agwDiagPath(char* out, size_t cap, const char* leaf)
+{
+    const char* dir = getenv("AGB_DIAG_DIR");
+    int n;
+
+    if (!out || cap == 0)
+        return 0;
+
+    if (dir && *dir) {
+        n = _snprintf(out, cap, "%s\\%s", dir, leaf);
+        if (n < 0 || (size_t)n >= cap)
+            return 0;
+        return 1;
+    }
+
+    {
+        DWORD len = GetModuleFileNameA(NULL, out, (DWORD)cap - 1);
+
+        if (!len || len >= cap - 1)
+            return 0;
+
+        out[len] = 0;
+        while (len > 0 && out[len - 1] != '\\' && out[len - 1] != '/')
+            --len;
+        out[len] = 0;
+
+        n = _snprintf(out + len, cap - len, "%s", leaf);
+        if (n < 0 || (size_t)n >= cap - len)
+            return 0;
+    }
+
+    return 1;
+}
+
 /* GUI-only failures leave no stderr behind: the page simply stays broken. Keep
  * one line next to the exe (same idea as agb_crash.txt) so "it works in the
  * probe but not in the window" has evidence - including the command that was
@@ -1289,21 +1326,11 @@ static void agwWatchdogRecord(int kind, unsigned int jsDepth, int headType,
                               DWORD busyMs, DWORD jsBusyMs, DWORD queueMs)
 {
     char path[MAX_PATH];
-    DWORD len = GetModuleFileNameA(NULL, path, sizeof(path) - 1);
     SYSTEMTIME st;
     FILE* f;
 
-    if (!len || len >= sizeof(path) - 1)
+    if (!agwDiagPath(path, sizeof(path), "agb_watchdog.txt"))
         return;
-
-    path[len] = 0;
-    while (len > 0 && path[len - 1] != '\\' && path[len - 1] != '/')
-        --len;
-    path[len] = 0;
-
-    if (strlen(path) + sizeof("agb_watchdog.txt") >= sizeof(path))
-        return;
-    strcat(path, "agb_watchdog.txt");
 
     f = fopen(path, "a");
     if (!f)
@@ -1403,28 +1430,22 @@ static int agwCaptureBusyStack(const char* reason, unsigned int busyMs,
 {
     char path[MAX_PATH];
     char stack[MAX_PATH];
-    DWORD len = GetModuleFileNameA(NULL, path, sizeof(path) - 1);
+    char leaf[64];
     SYSTEMTIME st;
     int captured = 0;
 
     if (out && cap)
         out[0] = 0;
 
-    if (!len || len >= sizeof(path) - 1)
-        return 0;
-
-    path[len] = 0;
-    while (len > 0 && path[len - 1] != '\\' && path[len - 1] != '/')
-        --len;
-    path[len] = 0;
-
     GetLocalTime(&st);
-    _snprintf(path + len, sizeof(path) - len,
-              "agb_busy_%04d%02d%02d-%02d%02d%02d_pid%lu.txt",
+    _snprintf(leaf, sizeof(leaf), "agb_busy_%04d%02d%02d-%02d%02d%02d_pid%lu.txt",
               (int)st.wYear, (int)st.wMonth, (int)st.wDay,
               (int)st.wHour, (int)st.wMinute, (int)st.wSecond,
               (unsigned long)GetCurrentProcessId());
-    path[sizeof(path) - 1] = 0;
+    leaf[sizeof(leaf) - 1] = 0;
+
+    if (!agwDiagPath(path, sizeof(path), leaf))
+        return 0;
 
     if (out && cap) {
         strncpy(out, path, cap - 1);
@@ -3166,15 +3187,69 @@ int agave_control_open_window(const char* url, const char* name)
  * the engine's copy/paste (Editor -> Pasteboard) had nowhere to go, so
  * ctrl+c / ctrl+v in a page did nothing. */
 
+/* Test hook: AGB_CLIPBOARD_FILE replaces the OS clipboard with one UTF-8 file
+ * per probe. Parallel suites can then copy at the same time without racing on
+ * the single Win32 clipboard, and a test run cannot clobber the developer's
+ * clipboard. Reads return the file's current bytes (empty when it is absent),
+ * writes replace it, so the value a test preloaded survives until the page
+ * copies. */
+static const char* agwClipboardMockFile(void)
+{
+    const char* file = getenv("AGB_CLIPBOARD_FILE");
+    return (file && *file) ? file : NULL;
+}
+
+static unsigned int agwMockClipboardLen(const char* file)
+{
+    FILE* f = fopen(file, "rb");
+    long size;
+
+    if (!f)
+        return 0;
+    if (fseek(f, 0, SEEK_END) != 0 || (size = ftell(f)) < 0) {
+        fclose(f);
+        return 0;
+    }
+    fclose(f);
+    return size > 0 ? (unsigned int)size : 0;
+}
+
+static unsigned int agwMockClipboardGet(const char* file, void* buffer, unsigned int len)
+{
+    FILE* f = fopen(file, "rb");
+    size_t got;
+
+    if (!f)
+        return 0;
+    if (!buffer || !len) {
+        fclose(f);
+        return 0;
+    }
+    got = fread(buffer, 1, len, f);
+    fclose(f);
+    return (unsigned int)got;
+}
+
 static void agwOnClipboardSetData(void* data, unsigned int len)
 {
     const char* text = (const char*)data;
+    const char* mock = agwClipboardMockFile();
     int chars;
     HGLOBAL memory;
     wchar_t* target;
 
     if (!text || !len)
         return;
+
+    if (mock) {
+        FILE* f = fopen(mock, "wb");
+
+        if (f) {
+            fwrite(text, 1, len, f);
+            fclose(f);
+        }
+        return;
+    }
 
     chars = MultiByteToWideChar(CP_UTF8, 0, text, (int)len, NULL, 0);
     if (chars <= 0)
@@ -3207,9 +3282,13 @@ static void agwOnClipboardSetData(void* data, unsigned int len)
 
 static unsigned int agwOnClipboardDataLen(void)
 {
+    const char* mock = agwClipboardMockFile();
     HANDLE handle;
     wchar_t* text;
     int bytes = 0;
+
+    if (mock)
+        return agwMockClipboardLen(mock);
 
     if (!OpenClipboard(NULL))
         return 0;
@@ -3231,12 +3310,16 @@ static unsigned int agwOnClipboardDataLen(void)
 
 static unsigned int agwOnClipboardGetData(void* buffer, unsigned int len)
 {
+    const char* mock = agwClipboardMockFile();
     HANDLE handle;
     wchar_t* text;
     int bytes = 0;
 
     if (!buffer || !len)
         return 0;
+
+    if (mock)
+        return agwMockClipboardGet(mock, buffer, len);
 
     if (!OpenClipboard(NULL))
         return 0;

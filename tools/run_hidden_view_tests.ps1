@@ -14,6 +14,8 @@
 #      comes back repaints the whole surface, so a colour change that happened
 #      while it was hidden (blue -> green box) is on screen.
 #
+# The three probes run at once (own profiles). Expected wall time: ~4 s.
+#
 # Usage:
 #   pwsh -File tools/run_hidden_view_tests.ps1
 #   pwsh -File tools/run_hidden_view_tests.ps1 -BuildDir build-zig-native
@@ -33,65 +35,51 @@ $pixelCheck = Join-Path $root 'tools/pixel_check.py'
 if (-not (Test-Path $exe)) { throw "agave_shell.exe not found: $exe" }
 if (-not (Test-Path $page)) { throw "page not found: $page" }
 
-$tmp = Join-Path ([IO.Path]::GetTempPath()) ('agb-hidden-' + [guid]::NewGuid().ToString('N'))
-New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+Import-Module (Join-Path $PSScriptRoot 'TestParallel.psm1') -Force -DisableNameChecking
+$run = New-TestRun -Suite 'hidden-view'
 
 $failures = 0
+$url = "file:///$($page -replace '\\','/')"
 
-function Invoke-Probe {
-    param(
-        [int]$Wait = 2600,
-        [int]$Settle = 300,
-        [string]$Js,
-        [string[]]$Extra = @()
-    )
-
-    $stdout = Join-Path $tmp 'out.txt'
-    $stderr = Join-Path $tmp 'err.txt'
-    $script = Join-Path $tmp ('js-' + [guid]::NewGuid().ToString('N') + '.js')
-
-    if ($Js) { Set-Content -Path $script -Value $Js -Encoding ascii }
-
-    $old = $env:AGB_LOOP_DEBUG
-    $env:AGB_LOOP_DEBUG = '1'
-
-    try {
-        $cmdArgs = @('--probe', "file:///$($page -replace '\\','/')", '--wait', "$Wait",
-                     '--settle', "$Settle", '--timeout', '30000')
-        if ($Js) { $cmdArgs += @('--eval-file', $script) }
-        if ($Extra.Count -gt 0) { $cmdArgs += $Extra }
-
-        $p = Start-Process -FilePath $exe -NoNewWindow -PassThru -Wait `
-             -ArgumentList $cmdArgs `
-             -RedirectStandardOutput $stdout -RedirectStandardError $stderr
-
-        $text = (Get-Content $stdout -Raw) -as [string]
-        $errText = (Get-Content $stderr -Raw) -as [string]
-
-        # [loop] view=<ptr> paints=<n> skips=<m>: the per-view accounting.
-        $points = @()
-        foreach ($m in [regex]::Matches($errText, '\[loop\] view=\S+ paints=(\d+) skips=(\d+)')) {
-            $points += [pscustomobject]@{ Paints = [int]$m.Groups[1].Value; Skips = [int]$m.Groups[2].Value }
-        }
-
-        [pscustomobject]@{
-            Code   = $p.ExitCode
-            Stdout = $text
-            Stderr = $errText
-            Points = $points
-        }
-    } finally {
-        if ($null -eq $old) { Remove-Item Env:AGB_LOOP_DEBUG -ErrorAction SilentlyContinue }
-        else { $env:AGB_LOOP_DEBUG = $old }
+function Get-LoopPoints([string]$text) {
+    $points = @()
+    foreach ($m in [regex]::Matches($text, '\[loop\] view=\S+ paints=(\d+) skips=(\d+)')) {
+        $points += [pscustomobject]@{ Paints = [int]$m.Groups[1].Value; Skips = [int]$m.Groups[2].Value }
     }
+    return $points
 }
 
 # 1. hidden view: JS keeps running, paint stops
-$hidden = Invoke-Probe -Js 'probeExit("ticks=" + window.__ticks + " hidden=" + (+!!document.hidden) + " seen=" + window.__hiddenSeen);' -Extra @('--hide-after', '300')
+$hiddenJob = Start-TestProbe -Run $run -Name 'hidden' -Url $url `
+    -Eval 'probeExit("ticks=" + window.__ticks + " hidden=" + (+!!document.hidden) + " seen=" + window.__hiddenSeen);' `
+    -Extra @('--hide-after', '300') -Wait 2600 -Settle 300 -Timeout 30000 `
+    -Env @{ AGB_LOOP_DEBUG = '1' }
+
+# 2. control: a visible view keeps painting
+$visibleJob = Start-TestProbe -Run $run -Name 'visible' -Url $url `
+    -Eval 'probeExit("ticks=" + window.__ticks);' `
+    -Wait 2600 -Settle 300 -Timeout 30000 `
+    -Env @{ AGB_LOOP_DEBUG = '1' }
+
+# 3. hide -> show: the changed content is on screen after coming back.
+#    No eval here: the probe's shot path runs after --settle, and a probeExit()
+#    would close the window before the capture.
+$shotDir = Join-Path $run.Dir 'shot'
+New-Item -ItemType Directory -Force -Path $shotDir | Out-Null
+$shot = Join-Path $shotDir 'hidden_view.png'
+$shownJob = Start-TestProbe -Run $run -Name 'shown' -Url $url `
+    -RawArgs @('--probe', $url, '--wait', '1500', '--settle', '800', '--timeout', '30000',
+               '--hide-after', '400', '--show-after', '900', '--shot', $shot) `
+    -Env @{ AGB_LOOP_DEBUG = '1' }
+
+$hidden = Complete-TestProbe -Job $hiddenJob
+$visible = Complete-TestProbe -Job $visibleJob
+$shown = Complete-TestProbe -Job $shownJob
 
 $ticks = if ($hidden.Stdout -match 'ticks=(\d+)') { [int]$Matches[1] } else { -1 }
-$first = $hidden.Points | Select-Object -First 1
-$last = $hidden.Points | Select-Object -Last 1
+$points = Get-LoopPoints $hidden.Stderr
+$first = $points | Select-Object -First 1
+$last = $points | Select-Object -Last 1
 
 $checks = @(
     @{ Name = 'hidden view still runs timers'; Want = 'ticks >= 100'; Ok = ($hidden.Code -eq 0 -and $ticks -ge 100) },
@@ -108,34 +96,23 @@ foreach ($c in $checks) {
     } else {
         $failures++
         Write-Host ("FAIL  hidden view: {0} (wanted {1})" -f $c.Name, $c.Want)
-        Write-Host ("      ticks={0} code={1} points={2}" -f $ticks, $hidden.Code, ($hidden.Points.Count))
-        Write-Host (($hidden.Stdout -split "`n" | Select-String -Pattern 'ticks=|exit code' | Select-Object -Last 2) -join "`n")
+        Write-Host ("      ticks={0} code={1} points={2}" -f $ticks, $hidden.Code, $points.Count)
     }
 }
 
-# 2. control: a visible view keeps painting
-$visible = Invoke-Probe -Js 'probeExit("ticks=" + window.__ticks);'
-$first = $visible.Points | Select-Object -First 1
-$last = $visible.Points | Select-Object -Last 1
-
-if ($visible.Code -eq 0 -and $null -ne $first -and $null -ne $last -and $last.Paints -gt $first.Paints -and $last.Skips -eq 0) {
+$vPoints = Get-LoopPoints $visible.Stderr
+$vFirst = $vPoints | Select-Object -First 1
+$vLast = $vPoints | Select-Object -Last 1
+if ($visible.Code -eq 0 -and $null -ne $vFirst -and $null -ne $vLast -and
+    $vLast.Paints -gt $vFirst.Paints -and $vLast.Skips -eq 0) {
     Write-Host "PASS  visible view: paints keep growing, skips stay 0"
 } else {
     $failures++
     Write-Host "FAIL  visible view: expected growing paints and no skips"
     Write-Host ("      code={0} first={1} last={2}" -f $visible.Code,
-                ($(if ($first) { "$($first.Paints)/$($first.Skips)" } else { 'none' })),
-                ($(if ($last) { "$($last.Paints)/$($last.Skips)" } else { 'none' })))
+                ($(if ($vFirst) { "$($vFirst.Paints)/$($vFirst.Skips)" } else { 'none' })),
+                ($(if ($vLast) { "$($vLast.Paints)/$($vLast.Skips)" } else { 'none' })))
 }
-
-# 3. hide -> show: the changed content is on screen after coming back.
-#    No eval here: the probe's shot path runs after --settle, and a probeExit()
-#    would close the window before the capture. The capture path is written
-#    next to the build output (the probe cannot fopen() a file under %TEMP%).
-$shot = Join-Path $build 'hidden_view_shot.png'
-Remove-Item $shot -ErrorAction SilentlyContinue
-$shown = Invoke-Probe -Wait 1500 -Settle 800 -Js $null `
-    -Extra @('--hide-after', '400', '--show-after', '900', '--shot', $shot)
 
 if ($shown.Code -ne 0 -or -not (Test-Path $shot)) {
     $failures++
@@ -152,8 +129,7 @@ if ($shown.Code -ne 0 -or -not (Test-Path $shot)) {
     }
 }
 
-Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
-Remove-Item $shot -ErrorAction SilentlyContinue
+Remove-TestRun $run $failures
 if ($failures -gt 0) {
     Write-Host "`nHIDDEN VIEW CHECKS FAILED ($failures)"
     exit 1

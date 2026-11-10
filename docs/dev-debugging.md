@@ -7,7 +7,7 @@ exe 旁的 `libagave.dll` / `antjsb.dll` / `prelude.js` 是它运行时需要的
 之类的 helper 会自己拼这个路径。
 
 ```powershell
-build-zig-native\agave_shell.exe --probe <url> [--eval <js>] [--wait ms] [--settle ms] [--timeout ms] [--reload n] [--offline] [--resize WxH] [--zoom percent]
+build-zig-native\agave_shell.exe --probe <url> [--eval <js>] [--wait ms] [--settle ms] [--timeout ms] [--reload n] [--offline] [--resize WxH] [--zoom percent] [--eval-retry]
 ```
 
 - **eval 时机** = 页面 `window load` 事件 + `--wait`；`on_progress finished` 只是长延迟兜底
@@ -138,6 +138,13 @@ stderr 的 `[probe] userdata=<路径>` 是实际生效的根。要隔离到别�
 build-zig-native\agave_shell.exe --probe <url> --userdata E:\tmp\probe-a ...   # 也可用环境变量 AGB_USERDATA
 ```
 
+探针沙箱只保证能写 `build-zig-native\`（`%TEMP%` 下的 profile 可能静默失败），所以并行测试把
+`AGB_USERDATA` 放在 `build-zig-native\test-runs\<case>\profile`。配套的隔离变量：
+`AGB_DIAG_DIR`（`agb_watchdog.txt` / `agb_busy_*.txt` 的去处，默认 exe 目录）、
+`AGB_CLIPBOARD_FILE`（用 UTF-8 文件模拟剪贴板，读写都不碰 Win32 剪贴板，测试专用）。
+`--eval-retry` 让探针在 eval 因“document replaced by a navigation”被丢弃时，等新文档提交后重试
+（最多 8 次）；nav/window 这类“点击触发导航”的用例用它，否则 eval 会和导航抢时间。
+
 注意 `--offline` 重放用的是**探针自己**的缓存：先在线跑一次暖它，不要指望 GUI 会话的缓存。
 
 **本地测试页**：直接 `file://`（模块管线对 `file:` URL 本地直读，不用起服务）。
@@ -259,6 +266,9 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
 | 日志 | `AGB_CON_LOG=0` | 关掉页面 `console.*` 的收口（`[con-*]`，默认开启；级别在 tag 里） |
 | 探针 | `AGB_PROBE_SHOW=1` | 显示探针窗口（调试可见性相关的差异；截图不需要它） |
 | 探针 | `AGB_PROBE_ALLOW_UNLOAD=1` | beforeunload 守卫直接放行（默认拒绝） |
+| 探针 | `AGB_DIAG_DIR=<dir>` | watchdog / busy-stack 文件写到这个目录（默认 exe 旁边；并行探针必须隔离） |
+| 探针 | `AGB_CLIPBOARD_FILE=<file>` | 用 UTF-8 文件当剪贴板（测试用；读=文件当前内容，写=覆盖文件），不碰系统剪贴板 |
+| 测试 | `AGB_TEST_MAX_PROBES=<n>` | `tools/TestParallel.psm1` 的跨进程探针并发上限，默认 24；`run_all_tests.ps1` 也读它 |
 | 日志 | `AGB_EVT_LOG=0` | **关掉默认开启的页面生命周期日志**（`[evt]`） |
 | 日志 | `AGB_EVT_DEBUG=1` | 生命周期的详细版：evaluate 深度、listener 记账、JS `dispatchEvent` |
 | 日志 | `AGB_NAV_LOG=0` | **关掉默认开启的导航动作日志**（`[nav]`：open/request/submit/redirect/popup/download） |
