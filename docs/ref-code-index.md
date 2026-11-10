@@ -48,3 +48,22 @@
 | 输入法 / Unicode 输入 | `src/webview_control/AgaveWebView.c`：`agwRegisterClass()`（`RegisterClassW`，Unicode 窗口）、`agwUtf16ToUtf8()`（代理对配对）、`agwProc` 的 `WM_CHAR`/`WM_IME_CHAR`；宿主循环 `GetMessageW`/`DispatchMessageW`；死循环与光标：`src/webcore/platform/unicode/TextBoundary.cpp`、`src/webcore/rendering/RenderText.cpp`；回归 `--ime` 三例（R38） |
 | 注入调试脚本 / 剪贴板（R112） | `src/javascript/ant_backend/inspector.js`：hover 高亮 + 页内右键菜单（`onContextMenu` / `onMouseDown` / `openMenu` / `elementInfo`），`window.__agaveInspector` 的 `inspectAt` / `menuAt` / `menuSelect` / `elementInfo`；复制链 `prelude.js`（`navigator.clipboard.writeText`）→ `AntRuntime.cpp`：`globalClipboardSetText`（`__agbClipboardSetText`）→ `src/webview/WebCallback.h` 的 `cb_clipboard_set_data` → `AgaveWebView.c`：`agwOnClipboardSetData`（`CF_UNICODETEXT`）；回归 `tools/run_inspector_tests.ps1` + `tools/send_ui_events.ps1`（`-RightClick` / `-LeftClick`） |
 | flex 布局（R54/R81/R110/R113） | `RenderFlexibleBox.cpp`：`layoutFlexLines()`（行 flex：宽度分配、`align-items:stretch`、`align-content` + `m_preFlexHeight`、gap）、`layoutVerticalBox()`（列 flex 的旧 `-webkit-box` 路径）、`calcHorizontalPrefWidths()`（容器 preferred width，含 gap）；`RenderBox.cpp::calcHeight()` 的 `isStretchingChildren()` 分支；调试 `AGB_FLEX_DEBUG=1`；回归 `tools/pages/layout/flex_*.html` + `tools/run_layout_tests.ps1` |
+
+## 生成文件与 `buildKJS/` 目录（不是 JS 引擎）
+
+> 看到目录名里的 "KJS" 时先读这一节：**本项目只用 ant 跑 JS，没有 KJS / QuickJS。**
+
+- **JS 引擎是 ant**（`antjsb.dll`，源码在 `H:\ant-v16`）。页面 JS 的语法/编译/VM 都在 ant 仓库，
+  与 `buildKJS/` 无关。`buildQJS/` 是 QuickJS 路线的同一批生成文件，当前构建**不使用**。
+- `buildKJS/` 是 WebKit 移植遗留的**生成文件目录名**，里面是 **CSS 侧**的生成产物；
+  当前构建仍然直接编译/链接它们（不是死代码）。名字带 KJS 只是历史包袱，不表示 JS 引擎归属：
+
+| 真源（要改的） | 生成物（构建实际消费的） | 怎么生成 |
+|---|---|---|
+| `src/webcore/css/CSSGrammar.y`（bison 语法） | `src/webcore/buildKJS/CSSGrammar.cpp` | `bison` 不在 PATH；没有就**同步手改生成文件**（R173 的 custom property 规则就是手改的）。只改 `.y` 不会生效。生成文件里的 `#line` 指向旧 WebKit 路径，行号不可信 |
+| `src/webcore/css/{html4,quirks,svg,view-source}.css` | `src/webcore/buildKJS/UserAgentStyleSheets.{h,cpp}` | `python tools/gen-ua-stylesheets.py`（复刻 `src/webcore/css/make-css-file-arrays.pl`，后者要 perl+CPP）；改完必须重链 `libagave`（字节数组是编译进去的） |
+
+- 常见错误：①只改 `.y` / `.css` 就以为生效（实际被编译的是生成文件）；②把 `buildKJS/` 当"KJS 引擎"删掉或绕开；
+  ③把 `buildQJS/` 当现状去改。三种都会得到"改完没反应"或改错副本。
+- 改这两处的验证：`tools/gen-ua-stylesheets.py` 后重跑 `run_layout_tests.ps1` + 受影响的探针；
+  语法改动用最小页面探针断言（R173：`--VC-BG-0` 的 `var()` 解析；R174：UA `form` 边距）。
