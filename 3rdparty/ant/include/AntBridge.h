@@ -404,7 +404,10 @@ AGB_API void antb_expose_classes(AntbEngine* engine);
 AGB_API int  antb_class_set_property(AntbEngine* engine, AntbClass* klass,
                                      const char* name, AntbGetterFn fn, void* user);
 AGB_API void antb_class_install_properties(AntbEngine* engine, AntbClass* klass,
-                                           AntbValue* instance);
+                                           AntbValue* instance);/* Declares the object's own keys as 0..length-1 (Object.keys, for-in, spread),
+ * which is what a NodeList/HTMLCollection wrapper needs. `length` is asked
+ * through the existing property dispatch, so the object must answer it. */
+AGB_API void antb_object_set_indexed_keys(AntbEngine* engine, AntbValue* obj);
 
 /* ---- misc --------------------------------------------------------------- */
 

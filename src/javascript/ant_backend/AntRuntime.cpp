@@ -9106,6 +9106,7 @@ static AgbCollection* collectionFor(WebCore::Node* root, int kind, const std::st
 static AntbValue* collectionWrap(AntbEngine* engine, AgbCollection* c)
 {
     AntbClass* klass;
+    AntbValue* v;
 
     if (!engine || !c)
         return NULL;
@@ -9115,7 +9116,15 @@ static AntbValue* collectionWrap(AntbEngine* engine, AgbCollection* c)
     if (!klass)
         return NULL;
 
-    return antb_wrap_native_as_owner(engine, klass, c, AGB_TAG_COLLECTION, c->document);
+    v = antb_wrap_native_as_owner(engine, klass, c, AGB_TAG_COLLECTION, c->document);
+    if (!v)
+        return NULL;
+
+    /* Array-like own keys: Object.keys(nl) / for-in / hasOwnProperty('0') see
+     * 0..length-1, like a browser. The engine asks `length` through the normal
+     * dispatch, so live collections stay live (issues §34.2). */
+    antb_object_set_indexed_keys(engine, v);
+    return v;
 }
 
 static AntbValue* wrapCollection(AntbEngine* engine, WebCore::Node* root, int kind,

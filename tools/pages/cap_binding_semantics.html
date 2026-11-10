@@ -310,6 +310,27 @@
     /* getElementsByClassName is a live HTMLCollection whose node walk is cached
      * per Document::domTreeVersion(): the length has to follow insert/remove (a
      * stale cache would show it), and repeated reads must stay cheap. */
+    /* NodeList/HTMLCollection are array-like in a browser: the indexes are own
+     * keys, so Object.keys/for-in/hasOwnProperty see them (issues §31.1/§34.2;
+     * answered by the ant bridge's indexed own-keys hook). */
+    ok('collection indexes are own keys', (function () {
+      var host = document.createElement('div');
+      host.innerHTML = '<p class="k">1</p><p class="k">2</p>';
+      document.body.appendChild(host);
+      var list = host.getElementsByClassName('k');
+      var keys = Object.keys(list).join(',');
+      var forin = [];
+      for (var k in list) forin.push(k);
+      var has0 = list.hasOwnProperty('0');
+      var has9 = list.hasOwnProperty('9');
+      var qsa = document.querySelectorAll('div p');
+      var nlKeys = Object.keys(qsa).length;
+      var spread = [].slice.call(list).length;
+      host.parentNode.removeChild(host);
+      return keys === '0,1' && has0 === true && has9 === false &&
+             forin.indexOf('0') >= 0 && forin.indexOf('1') >= 0 &&
+             nlKeys > 0 && spread === 2;
+    })());
     ok('getElementsByClassName is live across mutations', (function () {
       var host = document.createElement('div');
       host.innerHTML = '<p class="cls">1</p><p class="cls">2</p><p>x</p>';
