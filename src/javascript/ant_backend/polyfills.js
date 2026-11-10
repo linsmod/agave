@@ -134,20 +134,10 @@
     } catch (e) { /* no stylesheet support to patch */ }
 
     /* --- matchMedia -------------------------------------------------------- */
-    if (!g.matchMedia) {
-        g.matchMedia = function (query) {
-            return {
-                media: String(query),
-                matches: false,
-                onchange: null,
-                addListener: function () {},
-                removeListener: function () {},
-                addEventListener: function () {},
-                removeEventListener: function () {},
-                dispatchEvent: function () { return false; }
-            };
-        };
-    }
+
+    /* matchMedia lives in prelude.js (it evaluates the queries for real, so a
+     * `matches` answer is worth something); the blind stub that used to be here
+     * was dead code once prelude runs first. */
 
     /* --- CSS.supports ------------------------------------------------------ */
     if (!g.CSS) g.CSS = {};
