@@ -522,9 +522,12 @@
       host.click();
       ok('click instanceof MouseEvent/UIEvent/Event', !!seen &&
          (seen instanceof MouseEvent) && (seen instanceof UIEvent) && (seen instanceof Event));
-      ok('click tag/constructor', !!seen &&
-         Object.prototype.toString.call(seen) === '[object MouseEvent]' &&
-         seen.constructor === MouseEvent);
+      /* Chrome's mouse events are PointerEvent instances (PointerEvent extends
+       * MouseEvent, so the instanceof checks above stay true). */
+      ok('click is a PointerEvent', !!seen &&
+         Object.prototype.toString.call(seen) === '[object PointerEvent]' &&
+         seen.constructor === PointerEvent && seen instanceof MouseEvent);
+      ok('scripted click pointerType is empty', !!seen && seen.pointerType === '');
       /* el.click() is scripted: Chrome marks it untrusted, and so do we now
        * (a real user click is still trusted - proven by the probe-level check
        * with --click in the commit that added this). */

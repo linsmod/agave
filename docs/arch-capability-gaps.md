@@ -167,6 +167,7 @@ agave_shell.exe --probe ../tools/pages/cap_input_events.html     --pre-eval "doc
 | `event.key` / `event.code` | **支持**（R45） | 由 `keyIdentifier()`+`charCode()`+shift 推出（`a`/`Enter`/`ArrowLeft`/`KeyA`/`Digit1`） |
 | `event.isTrusted` | **支持**（R45 + 2026-11-10） | 用户真实操作（引擎派发）为 `true`；脚本调用 `el.click()`/`focus()`/`blur()` 与 JS `dispatchEvent` 为 `false` |
 | `dispatchEvent()` 冒泡 | **支持（2026-11-10）** | 按 `event.bubbles` 逐级向上（`eventPhase=3`、`currentTarget`=当前祖先、`stopPropagation()` 阻断），非冒泡事件停在 target 的 phase 2；返回后 `currentTarget`/`eventPhase` 复位 |
+| 鼠标事件的接口 | **支持（2026-11-10）** | 引擎派发的 mouse 事件是 `PointerEvent` 实例（`instanceof MouseEvent` 仍成立），`pointerType` 真实鼠标 `"mouse"`、脚本 `el.click()` 为 `""`，`pointerId=1`/`isPrimary=true` |
 | `beforeinput` + `data`/`inputType` + `preventDefault` 取消插入 | **支持**（R45） | 由 `textInput` 映射；`#c` 用例 `c[val="",prevented=1]` |
 | `input` 事件的 `inputType`/`data` | **支持**（R45） | `inputType="insertText"`，`data` 取自同一次 `textInput` |
 | `keydown` 的 `preventDefault` 拦字符 | **支持** | `#b` 用例 `b[val="",prevented=1]` |

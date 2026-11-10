@@ -16732,8 +16732,12 @@ static const char* eventInterfaceFor(WebCore::Event* event, const std::string& t
     if (event) {
         if (event->isWheelEvent())
             return "WheelEvent";
+        /* Chrome's mouse events are PointerEvent instances (PointerEvent extends
+         * MouseEvent, so `e instanceof MouseEvent` still holds). prelude defines
+         * PointerEvent with the pointer fields; the values are filled in
+         * makeEventObjectForDispatch(). */
         if (event->isMouseEvent())
-            return "MouseEvent";
+            return "PointerEvent";
         if (event->isKeyboardEvent())
             return "KeyboardEvent";
         if (event->isTextEvent())
@@ -16808,6 +16812,30 @@ AntbValue* makeEventObjectForDispatch(const std::string& type, WebCore::Node* ta
         if (untrusted) {
             antb_set_prop(g_engine, evt, "isTrusted", untrusted);
             antb_value_release(untrusted);
+        }
+    }
+
+    /* PointerEvent fields for engine-dispatched mouse events. Chrome reports
+     * pointerType "mouse" for a real mouse and "" for a scripted el.click();
+     * pointerId 1 / isPrimary true / 1x1 contact are its defaults. */
+    if (event && event->isMouseEvent()) {
+        static const struct { const char* name; double value; } pointerNums[] = {
+            { "pointerId", 1.0 }, { "isPrimary", 1.0 },
+            { "width", 1.0 }, { "height", 1.0 }, { "pressure", 0.0 }
+        };
+        AntbValue* pointerType = antb_make_string(g_engine, g_scriptInitiatedEvent ? "" : "mouse");
+
+        if (pointerType) {
+            antb_set_prop(g_engine, evt, "pointerType", pointerType);
+            antb_value_release(pointerType);
+        }
+        for (i = 0; i < sizeof(pointerNums) / sizeof(pointerNums[0]); ++i) {
+            AntbValue* v = antb_make_number(g_engine, pointerNums[i].value);
+
+            if (v) {
+                antb_set_prop(g_engine, evt, pointerNums[i].name, v);
+                antb_value_release(v);
+            }
         }
     }
     /* target / currentTarget / isTrusted / eventPhase come from
