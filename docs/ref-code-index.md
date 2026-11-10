@@ -63,6 +63,23 @@
 |---|---|---|
 | `src/webcore/css/CSSGrammar.y`（bison 语法） | `src/webcore/buildKJS/CSSGrammar.cpp` | `bison` 不在 PATH；没有就**同步手改生成文件**（R173 的 custom property 规则就是手改的）。只改 `.y` 不会生效。生成文件里的 `#line` 指向旧 WebKit 路径，行号不可信 |
 | `src/webcore/css/{html4,quirks,svg,view-source}.css` | `src/webcore/buildKJS/UserAgentStyleSheets.{h,cpp}` | `python tools/gen-ua-stylesheets.py`（复刻 `src/webcore/css/make-css-file-arrays.pl`，后者要 perl+CPP）；改完必须重链 `libagave`（字节数组是编译进去的） |
+| `src/webcore/**/*.idl` + `bindings/scripts/CodeGenerator{JS,QJS}.pm` | `buildKJS/JS<Interface>.{h,cpp}`、`buildQJS/QJS<Interface>.{h,cpp}`（**ant 构建两份都不编译**：`src/src.cmake` 只在 `OPT_USE_KJS`/`OPT_USE_QJS` 时 glob 它们） | `pwsh -File tools/gen_bindings.ps1 -Generator QJS -Compare`（MSYS2 perl，16 并发约 95 s）。见下 |
+
+- **IDL 绑定生成**（`tools/gen_bindings.ps1`，2026-11-10）：261 个 `.idl` 一次性生成，`-Compare` 与签入目录逐字节对拍。
+  **QJS：483/490 逐字节一致**；7 个不一致是**签入副本的历史配置混合产物**，不是生成器缺陷——
+  `QJSDOMWindow.{h,cpp}`、`QJSHTMLEmbedElement.{h,cpp}`、`QJSHTMLObjectElement.{h,cpp}` 是当年**不带
+  `ENABLE_SVG`（和 `ENABLE_SVG_EXPERIMENTAL_FEATURES`）** 生成的（单独用去掉这两个 define 的命令重跑即逐字节一致），
+  `QJSDOMParser.h` 只差一行的行尾空格（签入时被删）。`-Skip` 列上这 7 个再加 `-Strict` 就是严格门禁
+  （实测 exit 0）。另有 32 个文件只出现在新生成里（`SVGTests`/`SVGLangSpace`/`EventTarget` 等 16 个
+  mixin/protocol 接口，签入树从来没为它们生成过文件）。
+- **JS 后端只算半个**：484 个一致，`JSHTMLEmbedElement`/`JSHTMLObjectElement` 同样是当年的 SVG-off 产物，
+  但 `page/DOMWindow.idl` **已经无法用它生成**——`CodeGeneratorJS.pm` 的 `GetLegacyHeaderIncludes` 只认
+  `LegacyParent=KJS::Window`，而现在的 IDL 写的是 `LegacyParent=Window`（KJS 侧早已停用），于是 die
+  "Don't know what headers to include for module window"。JS 后端仅作历史对照，新后端照 `CodeGeneratorQJS.pm` 写。
+- 顺带修了 `CodeGenerator.pm` 的 `ScanDirectory`：`$thisDir` 少一个 `my`，递归会把父层循环的目录覆盖掉，
+  于是**只搜索 `--include` 根的第一个子目录链**——真实构建给每个 IDL 目录单独 `--include`，所以一直没暴露；
+  用单一根目录生成时 `SVGCircleElement → SVGTests` 这类 mixin 父接口就会 "Could NOT find specified parent"
+  （47 个 SVG IDL 全挂）。
 
 - 常见错误：①只改 `.y` / `.css` 就以为生效（实际被编译的是生成文件）；②把 `buildKJS/` 当"KJS 引擎"删掉或绕开；
   ③把 `buildQJS/` 当现状去改。三种都会得到"改完没反应"或改错副本。

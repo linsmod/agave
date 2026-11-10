@@ -89,6 +89,31 @@ bison -d -p cssyy src\webcore\css\CSSGrammar.y -o debug\CSSGrammar.tab.c
 - ⚠ 用 bison 3.8 重新生成会把整个文件换掉（原来那份是 bison 2.5 的骨架），diff 约 4k 行，必须整体回归
   （`run_layout_tests.ps1` + 站点冒烟），不适合夹在别的改动里做。
 
+### 生成物：DOM IDL 绑定（`buildKJS/` / `buildQJS/`）
+
+`src/webcore/**/*.idl` 的绑定由 `bindings/scripts/generate-bindings.pl` + `CodeGenerator<Backend>.pm` 生成，
+产物签入在 `buildKJS/`（JS/KJS 时代）和 `buildQJS/`（QuickJS 时代）。**ant 构建不编译这两份**
+（`src/src.cmake` 只在 `OPT_USE_KJS`/`OPT_USE_QJS` 时 glob），它们是 ant 后端的模板与对拍基线：
+
+```powershell
+# 全量重生成到 %TEMP%，并和签入的 buildQJS/ 逐字节对拍（需要 MSYS2 perl，16 并发 ~95 s）
+pwsh -File tools\gen_bindings.ps1 -Generator QJS -Compare
+
+# 严格门禁：把 7 个已知历史差异（DOMWindow/HTMLEmbedElement/HTMLObjectElement 的 SVG-off 产物、
+# DOMParser.h 的行尾空格）列进 -Skip，再要求 0 差异（exit 1 = 有回归）
+pwsh -File tools\gen_bindings.ps1 -Generator QJS -Compare -Strict -Skip QJSDOMParser.h,QJSDOMWindow.h,QJSDOMWindow.cpp,QJSHTMLEmbedElement.h,QJSHTMLEmbedElement.cpp,QJSHTMLObjectElement.h,QJSHTMLObjectElement.cpp
+
+# 单个接口，直接看生成结果
+pwsh -File tools\gen_bindings.ps1 -Generator QJS -Idl Node.idl -OutDir $env:TEMP\gen
+```
+
+- 现状（2026-11-10）：QJS **483/490 逐字节一致**（其余 7 个是签入副本的历史配置差异，见上）；
+  JS 后端 484 一致但 `DOMWindow.idl` 已无法用它生成（`LegacyParent=KJS::Window` vs 现在的 `Window`）。
+  `buildQJS/` 里有 32 个文件是 sign-in 时从没生成过的 mixin/protocol 接口（`SVGTests` 等），工具会单列。
+- **改 IDL 或生成器后必须跑这个对拍**：产物是签入的，构建不会替你重新生成；ant 后端（`CodeGeneratorAnt.pm`）
+  落地后的入库门禁也是"与 `buildQJS/` 同源的可复现性 + 差异清单为 0"。
+- 详见 [ref-code-index.md](ref-code-index.md) 的"生成文件与 `buildKJS/` 目录"一节。
+
 ## 4. 产物与运行拓扑
 
 `build-zig-native\` 是**唯一可以直接运行的目录**（所有 DLL 和运行时 JS 都在这里）：

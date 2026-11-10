@@ -239,6 +239,14 @@ sub ScanDirectory
     return if ($endCondition eq 1) and ($reportAllFiles eq 0);
 
     my $sourceRoot = $ENV{SOURCE_ROOT};
+    # `my`: ScanDirectory recurses, and a package-level $thisDir means a child
+    # call leaves the parent looping over its own entries with the child's
+    # directory - so only the first subdirectory chain of an --include root was
+    # ever searched. The real build passed every IDL directory as its own
+    # --include, which hid it; searching one root (tools/gen_bindings.ps1) needs
+    # this to actually walk the tree, otherwise parent lookups such as
+    # SVGCircleElement -> SVGTests die with "Could NOT find specified parent".
+    my $thisDir;
     if ($sourceRoot) {
         $thisDir = "$sourceRoot/$directory";
     } else {
