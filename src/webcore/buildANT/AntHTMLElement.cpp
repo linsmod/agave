@@ -25,12 +25,16 @@ static const AntbAttributeDef kHTMLElementDefAttributes[] = {
     { "offsetHeight", 0, "long" },
     /* from Element (Chrome owner) */
     { "offsetParent", 0, "Element" },
+    /* from HTMLAnchorElement (Chrome owner) */
+    { "accessKey", ANTB_ATTR_WRITABLE, "DOMString" },
+    /* from HTMLAnchorElement (Chrome owner) */
+    { "tabIndex", ANTB_ATTR_WRITABLE, "long" },
 };
 
 const AntbInterfaceDef kHTMLElementDef = {
     "HTMLElement",
     "Element",
-    kHTMLElementDefAttributes, 13,
+    kHTMLElementDefAttributes, 15,
     0, 0,
     0, 0
 };

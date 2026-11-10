@@ -64,7 +64,7 @@
 | `src/webcore/css/CSSGrammar.y`（bison 语法） | `src/webcore/buildKJS/CSSGrammar.cpp` | `bison` 不在 PATH；没有就**同步手改生成文件**（R173 的 custom property 规则就是手改的）。只改 `.y` 不会生效。生成文件里的 `#line` 指向旧 WebKit 路径，行号不可信 |
 | `src/webcore/css/{html4,quirks,svg,view-source}.css` | `src/webcore/buildKJS/UserAgentStyleSheets.{h,cpp}` | `python tools/gen-ua-stylesheets.py`（复刻 `src/webcore/css/make-css-file-arrays.pl`，后者要 perl+CPP）；改完必须重链 `libagave`（字节数组是编译进去的） |
 | `src/webcore/**/*.idl` + `bindings/scripts/CodeGenerator{JS,QJS}.pm` | `buildKJS/JS<Interface>.{h,cpp}`、`buildQJS/QJS<Interface>.{h,cpp}`（**ant 构建两份都不编译**：`src/src.cmake` 只在 `OPT_USE_KJS`/`OPT_USE_QJS` 时 glob 它们） | `pwsh -File tools/gen_bindings.ps1 -Generator QJS -Compare`（MSYS2 perl，16 并发约 95 s）。见下 |
-| 同上 + `CodeGeneratorAnt.pm` | `buildANT/Ant<Interface>.cpp`（**ant 构建编译**：`OPT_JS_ANT` 分支 `GLOB CONFIGURE_DEPENDS`，见 `src.cmake`） | `pwsh -File tools/gen_bindings.ps1 -Generator ANT -Idl dom/Node.idl -OutDir src\webcore\buildANT`；表 ABI 在 `src/javascript/ant_backend/AntBindings.h` |
+| 同上 + `CodeGeneratorAnt.pm` | `buildANT/Ant<Interface>.cpp`（**ant 构建编译**：`OPT_JS_ANT` 分支 `GLOB CONFIGURE_DEPENDS`，见 `src.cmake`）；2026-11-10 起 18 个接口 / 204 属性由它提供，`AntRuntime.cpp` 里不再有手写属性表 | `pwsh -File tools/gen_bindings.ps1 -Generator ANT -Idl html/HTMLInputElement.idl -OutDir src\webcore\buildANT`（全量 18 条见 dev-build-and-run.md）；表 ABI 在 `src/javascript/ant_backend/AntBindings.h` |
 
 - **IDL 绑定生成**（`tools/gen_bindings.ps1`，2026-11-10）：261 个 `.idl` 一次性生成，`-Compare` 与签入目录逐字节对拍。
   **QJS：483/490 逐字节一致**；7 个不一致是**签入副本的历史配置混合产物**，不是生成器缺陷——

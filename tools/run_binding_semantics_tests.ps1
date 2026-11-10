@@ -105,7 +105,7 @@ $tableText = ((Get-Content $stdout2 -Raw) -as [string]) + ((Get-Content $stderr2
 $expected = @(
     @{ Name = 'Node';         Attrs = 13; Methods = 14; Constants = 12 },
     @{ Name = 'Element';      Attrs = 18; Methods = 23; Constants = 0 },
-    @{ Name = 'HTMLElement';  Attrs = 13; Methods = 0;  Constants = 0 },
+    @{ Name = 'HTMLElement';  Attrs = 15; Methods = 0;  Constants = 0 },
     @{ Name = 'Document';     Attrs = 29; Methods = 29; Constants = 0 },
     @{ Name = 'HTMLCollection'; Attrs = 1; Methods = 3; Constants = 0 },
     @{ Name = 'NodeList';     Attrs = 1;  Methods = 1;  Constants = 0 }
@@ -133,13 +133,27 @@ if ($p2.ExitCode -ne 0) {
             $tableFailures++
         }
     }
-    if ($tableText -notmatch '\[bind\] generated tables: \d+ interfaces, \d+ attrs, \d+ methods, \d+ consts, 0 missing owner\(s\)') {
-        Write-Host "FAIL  generated tables: an interface table has no owning class (nothing would be installed)"
+    # The invariant: every table found its interface class (a table without one
+    # would silently install nothing). The counts themselves are allowed to grow
+    # as more IDLs are migrated; the six pinned above are the ones whose shape
+    # the semantics matrix depends on.
+    $summary = [regex]::Match($tableText, '\[bind\] generated tables: (\d+) interfaces, \d+ attrs, \d+ methods, \d+ consts, (\d+) missing owner\(s\)')
+    if (-not $summary.Success) {
+        Write-Host "FAIL  generated tables: no inventory line (AGB_BINDING_CHECK did not run?)"
         $tableFailures++
+    } else {
+        if ([int]$summary.Groups[2].Value -ne 0) {
+            Write-Host ("FAIL  generated tables: {0} table(s) have no owning interface class (nothing installed)" -f $summary.Groups[2].Value)
+            $tableFailures++
+        }
+        if ([int]$summary.Groups[1].Value -lt $expected.Count) {
+            Write-Host ("FAIL  generated tables: only {0} interfaces registered, expected at least {1}" -f $summary.Groups[1].Value, $expected.Count)
+            $tableFailures++
+        }
     }
     $failures += $tableFailures
     if ($tableFailures -eq 0) {
-        Write-Host ("PASS  generated tables ({0} interfaces, 0 missing owners)" -f $expected.Count)
+        Write-Host ("PASS  generated tables ({0} interfaces, 0 missing owners)" -f $summary.Groups[1].Value)
     }
 }
 
@@ -152,3 +166,5 @@ if ($failures -gt 0) {
 
 Write-Host "`nALL BINDING SEMANTICS CHECKS PASSED"
 exit 0
+
+

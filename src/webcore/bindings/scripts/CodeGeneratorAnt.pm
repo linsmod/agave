@@ -61,6 +61,18 @@ my @kOwnershipMoves = (
     [ 'HTMLElement', 'innerHTML', 'Element', 'ANTB_ATTR_WRITABLE', 'DOMString' ],
     [ 'HTMLElement', 'outerHTML', 'Element', 'ANTB_ATTR_WRITABLE', 'DOMString' ],
     [ 'HTMLElement', 'children',  'Element', 0,                    'HTMLCollection' ],
+
+    # Chrome: accessKey/tabIndex are HTMLElement attributes (the 2008 IDL repeats
+    # them per element interface: anchor, button, input, select, textarea).
+    [ 'HTMLAnchorElement',   'accessKey', 'HTMLElement', 'ANTB_ATTR_WRITABLE', 'DOMString' ],
+    [ 'HTMLAnchorElement',   'tabIndex',  'HTMLElement', 'ANTB_ATTR_WRITABLE', 'long' ],
+    [ 'HTMLButtonElement',   'accessKey', 'HTMLElement', 'ANTB_ATTR_WRITABLE', 'DOMString' ],
+    [ 'HTMLButtonElement',   'tabIndex',  'HTMLElement', 'ANTB_ATTR_WRITABLE', 'long' ],
+    [ 'HTMLInputElement',    'accessKey', 'HTMLElement', 'ANTB_ATTR_WRITABLE', 'DOMString' ],
+    [ 'HTMLInputElement',    'tabIndex',  'HTMLElement', 'ANTB_ATTR_WRITABLE', 'long' ],
+    [ 'HTMLSelectElement',   'tabIndex',  'HTMLElement', 'ANTB_ATTR_WRITABLE', 'long' ],
+    [ 'HTMLTextAreaElement', 'accessKey', 'HTMLElement', 'ANTB_ATTR_WRITABLE', 'DOMString' ],
+    [ 'HTMLTextAreaElement', 'tabIndex',  'HTMLElement', 'ANTB_ATTR_WRITABLE', 'long' ],
 );
 
 sub movedOutOf
@@ -185,8 +197,15 @@ sub GenerateInterface
     }
 
     my $movedIn = movedInto($name);
+    my %already = map { my $n = $_; $n =~ s/^.*"(\w+)".*$/$1/; ($n => 1) } @attrLines;
     foreach my $move (@{$movedIn}) {
         my $flagText = $move->[3] ? $move->[3] : "0";
+
+        # Several source interfaces can move the same member (accessKey/tabIndex:
+        # anchor, button, input, select, textarea all declare them); the target
+        # must get the entry once.
+        next if $already{$move->[1]};
+        $already{$move->[1]} = 1;
         push(@attrLines, "    /* from " . $move->[0] . " (Chrome owner) */");
         push(@attrLines, "    { " . CString($move->[1]) . ", " . $flagText . ", "
                              . CString($move->[4]) . " },");
@@ -280,4 +299,6 @@ EOF
 }
 
 1;
+
+
 

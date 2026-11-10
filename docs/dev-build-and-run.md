@@ -115,9 +115,14 @@ pwsh -File tools\gen_bindings.ps1 -Generator QJS -Idl Node.idl -OutDir $env:TEMP
   registry，`src/src.cmake` 的 `OPT_JS_ANT` 分支 `GLOB CONFIGURE_DEPENDS` 编译它们：
 
   ```powershell
-  # 已迁移的 6 个接口（属性声明来自生成表；归属按 Chrome，见 CodeGeneratorAnt.pm 的 @kOwnershipMoves）
+  # 已迁移的 18 个接口（属性声明来自生成表；归属按 Chrome，见 CodeGeneratorAnt.pm 的 @kOwnershipMoves）。
+  # 改过某个 .idl 或生成器后重跑对应那一条；新增接口就是多生成一个文件（src.cmake 会 CONFIGURE_DEPENDS 捡到）。
   foreach ($idl in 'dom/Node.idl','dom/Element.idl','html/HTMLElement.idl','dom/Document.idl',
-                   'html/HTMLCollection.idl','dom/NodeList.idl') {
+                   'html/HTMLCollection.idl','dom/NodeList.idl',
+                   'html/HTMLAnchorElement.idl','html/HTMLButtonElement.idl','html/HTMLCanvasElement.idl',
+                   'html/HTMLFormElement.idl','html/HTMLIFrameElement.idl','html/HTMLImageElement.idl',
+                   'html/HTMLInputElement.idl','html/HTMLLinkElement.idl','html/HTMLOptionElement.idl',
+                   'html/HTMLScriptElement.idl','html/HTMLSelectElement.idl','html/HTMLTextAreaElement.idl') {
     pwsh -File tools\gen_bindings.ps1 -Generator ANT -Idl $idl -OutDir src\webcore\buildANT
   }
   # 清单 + "0 missing owner(s)"（表找不到自己的接口类 = 静默不安装）；AGB_BINDING_TRACE=1 逐条打印
