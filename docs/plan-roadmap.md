@@ -286,7 +286,8 @@
 - 影响：`===` 身份比较（库的 memo/缓存、`el === parent.firstChild`）会偶发不成立；wrapper cache 的 identity 被破坏。
 - 起点：`Node::setTextContent()` 路径上是否触发了 `antb_release_owner`/`Document::updateDocumentsRendering` 时的 wrapper 失效，
   以及 `wrapNode()` 的 `(ptr, tag, realm)` 缓存键是否被 realm/owner 变化打散。
-- 记录：`issues/wip/ant-dom-bindings.md` §28.8.1。
+- 已查明边界（2026-11-10 晚，`AGB_WRAP_TRACE=1`）：最小复现需要"页面含静态 iframe"+完整写入序列；无 iframe 的页面不复现。已排除 wrapper 释放、realm/owner 不同、form 归属解析错误、帧解析归还（试过无效已回退）。下一步：让 `wrapNode` 的缓存命中/未命中可见（桥侧），分清"命中失败"还是"返回另一对象"。
+- 记录：`issues/wip/ant-dom-bindings.md` §28.8.1–§28.8.2。
 
 ### P1-z 图片解码离开 paint（L0–L3，2026-11-08 起；L0–L3 已完成，剩余见下）
 

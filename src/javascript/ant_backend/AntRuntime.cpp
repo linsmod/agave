@@ -14159,6 +14159,10 @@ AntbValue* wrapNode(AntbEngine* engine, WebCore::Node* node)
         }
     }
 
+    if (getenv("AGB_WRAP_TRACE"))
+        agbLog(AGB_LOG_EVT, "wrap node=%p type=%d realm=%p doc=%p", (void*)node,
+               node->nodeType(), (void*)antb_realm_current(engine), (void*)g_document);
+
     /* The interface class carries the prototype chain, the constructor and
      * @@toStringTag; the property table (nodeGetter/nodeSetter) is installed
      * once by the class, not per wrapper. */
