@@ -188,9 +188,10 @@ try {
     $e = if ($edit -ne [IntPtr]::Zero) { ClientRect $edit } else { $null }
     $v = ClientRect $view
 
-    # Tab strip 40 + toolbar 44 above the page, status bar 24 below it.
+    # Tab strip 40 + toolbar 44 above the page. The status bar is a floating
+    # bubble now: the page keeps its full height (that is the point of U12).
     $contentTop = [int][math]::Round(84 * $scale)
-    $statusH = [int][math]::Round(24 * $scale)
+    $statusH = 0
 
     Write-Host ("      client={0}x{1} bar=({2},{3} {4}x{5}) edit=({6},{7} {8}x{9}) view=({10},{11} {12}x{13})" -f `
         $cr.right, $cr.bottom, $b.x, $b.y, $b.w, $b.h,

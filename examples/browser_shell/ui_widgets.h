@@ -11,7 +11,9 @@
 
 #include "ui_theme.h"
 
-#define UI_MAX_TABS 16
+/* Chrome keeps all tabs in the strip (it scrolls); we keep all of them too and
+ * reach the ones that no longer fit through the tab-search popup. */
+#define UI_MAX_TABS 128
 
 typedef struct {
     int  used;
@@ -54,7 +56,8 @@ typedef enum {
     UI_PART_STATUS,
     UI_PART_WINDOW_MIN,
     UI_PART_WINDOW_MAX,
-    UI_PART_WINDOW_CLOSE
+    UI_PART_WINDOW_CLOSE,
+    UI_PART_TAB_SEARCH
 } UiPart;
 
 typedef enum {
@@ -104,26 +107,50 @@ typedef struct {
     UiRect tab[UI_MAX_TABS];       /* slot rect per model index */
     UiRect close[UI_MAX_TABS];     /* close hit rect */
     int    slot_of[UI_MAX_TABS];   /* visual slot -> model index */
-    int    count;
+    int    count;                  /* tabs that fit on the strip (painted) */
+    int    total;                  /* used tabs, including the hidden tail */
     UiRect new_tab;
+    UiRect search;                 /* tab-search entry at the left edge */
 
     int    hover_tab;              /* model index, -1 */
     int    hover_close;
     int    hover_new_tab;
+    int    hover_search;
     int    pressed_tab;
     int    pressed_close;
     int    pressed_new_tab;
+    int    pressed_search;
 } UiTabStrip;
 
 typedef struct {
     int activate;   /* model index or -1 */
     int close;      /* model index or -1 */
     int new_tab;    /* 1 = the + button completed */
+    int open_search;/* 1 = the tab-search entry completed */
 } UiTabAction;
 
 /* Width (device px) of the hairline painted between two resting tabs. */
 int     uiTabStripSeparatorWidth(const UiTheme* theme);
 
+/* Favicon size for a tab of width `tab_w` with a close chip of `close_w`.
+ * The icon never shrinks (it is already 16 px, its minimum), so this only
+ * answers "does it fit": 0 = the active tab dropped it for the close button.
+ * A background tab always keeps a full-size icon - its 16 px minimum is
+ * exactly the icon. */
+int     uiTabFaviconSize(const UiTheme* theme, int tab_w, int close_w, int active);
+
+/* The letter chip used for favicons (url determines the colour, title the
+ * letter) - the tab-search popup lists tabs that are not in the strip. */
+void    uiFaviconChip(UiPainter* painter, const UiTheme* theme, UiRect rect,
+                      const char* url, const char* title);
+
+/* Lays the strip out. While compressed (the tabs no longer fit at tab_max_w)
+ * the visible tab rects plus their gaps fill the strip's usable width exactly,
+ * so the "+" keeps the same right edge whatever the tab count is - clicking
+ * that spot never lands on a different control. Widths that would fall below
+ * the per-item minimums are not squeezed further: the tabs that do not fit are
+ * left out (strip->count < strip->total) and are reached through the tab-search
+ * popup. */
 void    uiTabStripLayout(UiTabStrip* strip, const UiTheme* theme,
                          const UiChromeModel* model, UiRect area);
 void    uiTabStripPaint(UiTabStrip* strip, const UiTheme* theme,

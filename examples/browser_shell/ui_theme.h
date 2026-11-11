@@ -112,7 +112,8 @@ typedef struct UiTheme {
     int find_h;
     int status_h;
     int tab_h;
-    int tab_min_w;
+    int tab_min_w;         /* background tab rect floor (16@96) = its favicon */
+    int tab_active_min_w;  /* active tab rect floor (36@96): the one being read */
     int tab_max_w;
     int tab_gap;
     int tab_radius;

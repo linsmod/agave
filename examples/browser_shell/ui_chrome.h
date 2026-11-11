@@ -34,6 +34,7 @@ typedef struct {
     void (*activate_tab)(void* user, int index);
     void (*close_tab)(void* user, int index);
     void (*new_tab)(void* user);
+    void (*tab_search)(void* user);
     /* A click landed on the address/find field chrome; 1 = address, 2 = find. */
     void (*focus_field)(void* user, int field);
 } UiChromeCallbacks;
@@ -122,6 +123,11 @@ void uiChromePaint(UiChrome* chrome, HDC hdc);
  * origin is that window's client. The shell positions the window at
  * chrome->findbar.rect and the native EDIT at chrome->find_edit. */
 void uiChromePaintFindOverlay(UiChrome* chrome, HDC hdc, int width, int height);
+
+/* Same pattern for the status bubble: a bottom-left overlay that only exists
+ * while the model has a message (or the page is zoomed). A zero statusbar rect
+ * means "hidden". */
+void uiChromePaintStatusOverlay(UiChrome* chrome, HDC hdc, int width, int height);
 
 /* Refresh derived widget state (enabled back/forward) after the model changed. */
 void uiChromeSync(UiChrome* chrome);

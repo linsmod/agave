@@ -221,8 +221,10 @@ void uiChromeLayout(UiChrome* chrome, int width, int height)
 
     content_top = strip_h + toolbar_h;
 
-    chrome->content = uiRectMake(0, content_top, width,
-                                 height - content_top - status_h);
+    /* The page keeps its full height: the status bar is a bubble that floats
+     * over the bottom-left corner and only exists while it has something to say
+     * (see the statusbar block below). */
+    chrome->content = uiRectMake(0, content_top, width, height - content_top);
 
     if (chrome->content.h < 0)
         chrome->content.h = 0;
@@ -284,23 +286,51 @@ void uiChromeLayout(UiChrome* chrome, int width, int height)
         chrome->find_edit = uiRectMake(0, 0, 0, 0);
     }
 
-    chrome->statusbar.rect = uiRectMake(0, height - status_h, width, status_h);
-    chrome->statusbar.text = uiRectMake(scale(theme, 10), height - status_h,
-                                        width - scale(theme, 20), status_h);
-    chrome->statusbar.zoom = uiRectMake(0, 0, 0, 0);
+    /* Status bubble: bottom-left of the content, sized to its text (plus the
+     * zoom pill when zoomed). Hidden when there is no message - "Ready" is not
+     * a message, and a permanent row used to cost the page 24 px. A zero rect
+     * means "not shown, nothing to hit". */
+    memset(&chrome->statusbar, 0, sizeof(chrome->statusbar));
 
-    if (model->zoom != 100) {
-        int zw = scale(theme, 46);
-        int zh = status_h - scale(theme, 8);
+    {
+        int has_message = model->status[0] != 0 &&
+                          strcmp(model->status, "Ready") != 0;
+        int zoomed = model->zoom != 100;
+        int bubble_h = status_h;
+        int zoom_w = zoomed ? scale(theme, 46) + scale(theme, 8) : 0;
+        int max_w = chrome->content.w - scale(theme, 24);
+        int text_w = 0;
+        int w;
 
-        chrome->statusbar.zoom = uiRectMake(width - scale(theme, 10) - zw,
-                                            height - status_h + scale(theme, 4),
-                                            zw, zh);
-        chrome->statusbar.text.w = chrome->statusbar.zoom.x - chrome->statusbar.text.x - scale(theme, 8);
+        if ((has_message || zoomed) && max_w > scale(theme, 90)) {
+            uiMeasureText(theme, theme->font_small,
+                          has_message ? model->status : "", &text_w, NULL);
+
+            w = scale(theme, 24) + text_w + zoom_w + scale(theme, 12);
+
+            if (w > max_w)
+                w = max_w;
+            if (w < scale(theme, 90))
+                w = scale(theme, 90);
+
+            chrome->statusbar.rect = uiRectMake(
+                chrome->content.x + scale(theme, 8),
+                height - bubble_h - scale(theme, 8), w, bubble_h);
+            chrome->statusbar.text = uiRectMake(
+                chrome->statusbar.rect.x + scale(theme, 12),
+                chrome->statusbar.rect.y,
+                w - scale(theme, 24) - zoom_w, bubble_h);
+
+            if (zoomed) {
+                int zh = bubble_h - scale(theme, 8);
+
+                chrome->statusbar.zoom = uiRectMake(
+                    chrome->statusbar.rect.x + w - zoom_w + scale(theme, 4),
+                    chrome->statusbar.rect.y + scale(theme, 4),
+                    scale(theme, 46), zh);
+            }
+        }
     }
-
-    if (chrome->statusbar.text.w < 0)
-        chrome->statusbar.text.w = 0;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -460,26 +490,53 @@ void uiChromePaintFindOverlay(UiChrome* chrome, HDC hdc, int width, int height)
     uiPainterEnd(&painter);
 }
 
-static void paintStatus(UiChrome* chrome, UiPainter* painter)
+/* The status bubble is painted into its own overlay window (like the find bar):
+ * rounded card, the message, and the zoom pill when the page is zoomed. */
+static void paintStatusBubble(UiChrome* chrome, UiPainter* painter, int dx, int dy)
 {
     UiTheme* theme = &chrome->theme;
     UiStatusBar* bar = &chrome->statusbar;
-    const char* text = chrome->model.status[0] ? chrome->model.status : "Ready";
+    UiRect rect = uiRectMake(bar->rect.x + dx, bar->rect.y + dy,
+                             bar->rect.w, bar->rect.h);
+    UiRect text = uiRectMake(bar->text.x + dx, bar->text.y + dy,
+                             bar->text.w, bar->text.h);
 
-    uiFillRect(painter, bar->rect, theme->surface_alt);
-    uiFillRect(painter, uiRectMake(0, bar->rect.y, bar->rect.w, scale(theme, 1)), theme->border);
+    if (bar->rect.w <= 0 || bar->rect.h <= 0)
+        return;
 
-    uiText(painter, text, bar->text, theme->font_small, theme->text_muted, UI_ALIGN_LEFT);
+    uiFillRoundRect(painter, rect, scale(theme, 8), theme->surface_alt);
+    uiStrokeRoundRect(painter, rect, scale(theme, 8), theme->border, 1.0f);
+
+    uiText(painter, chrome->model.status, text, theme->font_small,
+           theme->text_muted, UI_ALIGN_LEFT);
 
     if (chrome->model.zoom != 100 && bar->zoom.w > 0) {
         char label[32];
+        UiRect zoom = uiRectMake(bar->zoom.x + dx, bar->zoom.y + dy,
+                                 bar->zoom.w, bar->zoom.h);
 
         _snprintf(label, sizeof(label), "%d%%", chrome->model.zoom);
         label[sizeof(label) - 1] = 0;
 
-        uiFillRoundRect(painter, bar->zoom, scale(theme, 8), theme->accent_soft);
-        uiText(painter, label, bar->zoom, theme->font_small, theme->accent, UI_ALIGN_CENTER);
+        uiFillRoundRect(painter, zoom, scale(theme, 8), theme->accent_soft);
+        uiText(painter, label, zoom, theme->font_small, theme->accent, UI_ALIGN_CENTER);
     }
+}
+
+void uiChromePaintStatusOverlay(UiChrome* chrome, HDC hdc, int width, int height)
+{
+    UiPainter painter;
+
+    if (!chrome || !hdc)
+        return;
+
+    if (!uiPainterBegin(&painter, hdc, &chrome->theme, width, height))
+        return;
+
+    paintStatusBubble(chrome, &painter,
+                      -chrome->statusbar.rect.x, -chrome->statusbar.rect.y);
+
+    uiPainterEnd(&painter);
 }
 
 void uiChromePaint(UiChrome* chrome, HDC hdc)
@@ -506,7 +563,7 @@ void uiChromePaint(UiChrome* chrome, HDC hdc)
     paintToolbar(chrome, &painter);
     /* No find bar here: it floats over the page in its own overlay window
      * (uiChromePaintFindOverlay). */
-    paintStatus(chrome, &painter);
+    /* No status row: it is a bubble in its own overlay window now. */
 
     uiPainterEnd(&painter);
 }
@@ -590,6 +647,9 @@ static UiRect partRect(UiChrome* chrome, UiPart part, int index)
 
     case UI_PART_TAB_NEW:
         return strip->new_tab;
+
+    case UI_PART_TAB_SEARCH:
+        return strip->search;
 
     case UI_PART_BACK:     return bar->back.rect;
     case UI_PART_FORWARD:  return bar->forward.rect;
@@ -859,7 +919,8 @@ int uiChromeMouse(UiChrome* chrome, const UiMouseEvent* event)
         if (part != UI_PART_NONE)
             chromeMarkDirty(chrome, uiRectMake(0, 0, chrome->width, chrome->height));
 
-        if (part == UI_PART_TAB || part == UI_PART_TAB_CLOSE || part == UI_PART_TAB_NEW) {
+        if (part == UI_PART_TAB || part == UI_PART_TAB_CLOSE ||
+            part == UI_PART_TAB_NEW || part == UI_PART_TAB_SEARCH) {
             uiTabStripMouse(&chrome->tabstrip, &chrome->model, event, NULL);
 
             /* The press switches tabs, not the release: the click on a tab body
@@ -904,7 +965,8 @@ int uiChromeMouse(UiChrome* chrome, const UiMouseEvent* event)
 
         if (chrome->tabstrip.pressed_tab >= 0 ||
             chrome->tabstrip.pressed_close >= 0 ||
-            chrome->tabstrip.pressed_new_tab) {
+            chrome->tabstrip.pressed_new_tab ||
+            chrome->tabstrip.pressed_search) {
             uiTabStripMouse(&chrome->tabstrip, &chrome->model, event, &action);
 
             /* action.activate is deliberately ignored: the press switched the
@@ -914,6 +976,8 @@ int uiChromeMouse(UiChrome* chrome, const UiMouseEvent* event)
                 chrome->cb.close_tab(chrome->cb.user, action.close);
             else if (action.new_tab && chrome->cb.new_tab)
                 chrome->cb.new_tab(chrome->cb.user);
+            else if (action.open_search && chrome->cb.tab_search)
+                chrome->cb.tab_search(chrome->cb.user);
 
             handled = 1;
         }

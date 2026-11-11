@@ -347,7 +347,12 @@ static void applyMetrics(UiTheme* theme)
     theme->find_h = scalePx(dpi, 40);
     theme->status_h = scalePx(dpi, 24);
     theme->tab_h = scalePx(dpi, 32);
-    theme->tab_min_w = scalePx(dpi, 84);
+    /* Chrome's shrinking rules (user-measured), applied to the tab *rect*: a
+     * background tab bottoms out at 16 px (exactly its favicon), the active one
+     * at 36 px - it is the tab being read, so it keeps more room before the
+     * icon has to go and only the close chip is left. */
+    theme->tab_min_w = scalePx(dpi, 16);
+    theme->tab_active_min_w = scalePx(dpi, 36);
     theme->tab_max_w = scalePx(dpi, 220);
     theme->tab_gap = scalePx(dpi, 2);
     theme->tab_radius = scalePx(dpi, 8);

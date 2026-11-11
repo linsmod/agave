@@ -26,8 +26,9 @@
 #include "ui_chrome.h"
 #include "ui_menu.h"
 #include "ui_menu_host.h"
+#include "ui_tabsearch.h"
 
-#define MAX_TABS        16
+#define MAX_TABS        UI_MAX_TABS
 #define MAX_PATH_CHARS  1024
 
 /* The command IDs live in ui_chrome.h (UI_CMD_*): the custom-drawn chrome and
@@ -85,11 +86,18 @@ typedef struct {
     /* Callbacks arrive with the Tab* as their user pointer and no window; the
      * back pointer is how they find the window whose UI they may touch. */
     struct ShellWindow* window;
+    /* For the tab-search popup's "2h ago" column: when this tab was last the
+     * active one (shell tick). */
+    unsigned long long activeMs;
 } Tab;
 
 /* Closed tabs, so ctrl+shift+T can bring the last one back. */
-#define MAX_CLOSED_TABS 16
-typedef struct { char url[MAX_PATH_CHARS]; char title[256]; } ClosedTab;
+#define MAX_CLOSED_TABS UI_MAX_TABS
+typedef struct {
+    char url[MAX_PATH_CHARS];
+    char title[256];
+    unsigned long long closedMs;   /* shell tick, for the tab-search popup */
+} ClosedTab;
 
 /* One top-level shell window. The shell used to keep all of this in file-scope
  * globals; one process may now own several windows (Chrome's
@@ -103,6 +111,7 @@ typedef struct ShellWindow {
     HWND          hwnd;
     HWND          address, findEdit;
     HWND          findBar;       /* find overlay: child window above the view */
+    HWND          statusBar;     /* status bubble: bottom-left overlay */
     UiChrome      chrome;
     Tab           tabs[MAX_TABS];
     int           activeTab;
@@ -699,6 +708,14 @@ static void placeChild(HWND child, int x, int y, int w, int h)
 static HWND createFindOverlay(ShellWindow* win);
 static void invalidateFindOverlay(void);
 
+/* Status bubble: only while there is a message (or the page is zoomed); "Ready"
+ * is not a message, and the page keeps its full height either way. Called from
+ * layoutAll() and whenever the status text changes. */
+static void syncStatusOverlay(void);
+static HWND createStatusOverlay(ShellWindow* win);
+static void syncTabSearch(void);
+static void toggleTabSearchPopup(void);
+
 static void layoutAll(void)
 {
     RECT client;
@@ -744,6 +761,8 @@ static void layoutAll(void)
         ShowWindow(g_findEdit, SW_HIDE);
     }
 
+    syncStatusOverlay();
+
     for (i = 0; i < MAX_TABS; ++i)
         layoutTab(i);
 }
@@ -753,30 +772,28 @@ static void updateStatus(void)
     Tab* tab = &g_tabs[g_activeTab];
     char text[1024];
 
+    /* The bubble only exists while it has something to say: a load in progress,
+     * a message (hover link / download / error / bookmark), or a zoom level. The
+     * plain URL is not a message - a bubble that never hides is just the old
+     * status bar wearing a costume. */
+    text[0] = 0;
+
     if (tab->used) {
         if (tab->loading)
             _snprintf(text, sizeof(text), "Loading %s... %d%%", tab->url, tab->progress);
         else if (tab->status[0])
             _snprintf(text, sizeof(text), "%s", tab->status);
-        else
-            _snprintf(text, sizeof(text), "%s", tab->url[0] ? tab->url : "Ready");
-    } else {
-        strcpy(text, "Ready");
     }
 
     text[sizeof(text) - 1] = 0;
 
-    if (g_zoom != 100) {
-        char zoom[32];
-
-        _snprintf(zoom, sizeof(zoom), "  [%d%%]", g_zoom);
-        strncat(text, zoom, sizeof(text) - strlen(text) - 1);
-    }
-
+    /* The zoom level is the bubble's own pill (uiChromeFieldState-style: the
+     * message and the pill are separate), so it is not glued into the text. */
     strncpy(g_status, text, sizeof(g_status) - 1);
     g_status[sizeof(g_status) - 1] = 0;
     syncChrome();
     InvalidateRect(g_hwnd, NULL, FALSE);
+    syncStatusOverlay();
 }
 
 static void applyZoomToActive(void)
@@ -838,6 +855,8 @@ static void setActiveTab(int index)
 
     if (index < 0 || index >= MAX_TABS || !g_tabs[index].used)
         return;
+
+    g_tabs[index].activeMs = shellOps()->tick_ms(NULL);
 
     if (index != g_activeTab || !g_tabs[index].hwnd)
         agbLog(AGB_LOG_SHELL, "tab activate index=%d (was %d) url=%s",
@@ -903,6 +922,7 @@ static void closeTab(int index)
         g_closed[g_closedCount].url[MAX_PATH_CHARS - 1] = 0;
         strncpy(g_closed[g_closedCount].title, g_tabs[index].title, sizeof(g_closed[0].title) - 1);
         g_closed[g_closedCount].title[sizeof(g_closed[0].title) - 1] = 0;
+        g_closed[g_closedCount].closedMs = shellOps()->tick_ms(NULL);
         g_closedCount++;
     }
 
@@ -932,17 +952,31 @@ static void closeTab(int index)
     InvalidateRect(g_hwnd, NULL, TRUE);
 }
 
+/* Reopen a specific recently-closed entry (the tab-search popup indexes into
+ * the same array the snapshot handed out). */
+static void reopenClosedAt(int slot);
+
 /* ctrl+shift+T: reopen the tab that was closed last. */
 static void reopenClosedTab(void)
 {
-    ClosedTab closed;
+    reopenClosedAt(g_closedCount - 1);
+}
 
-    if (g_closedCount <= 0) {
+static void reopenClosedAt(int slot)
+{
+    ClosedTab closed;
+    int i;
+
+    if (slot < 0 || slot >= g_closedCount) {
         agbLog(AGB_LOG_SHELL, "tab reopen: nothing was closed");
         return;
     }
 
-    closed = g_closed[--g_closedCount];
+    closed = g_closed[slot];
+    for (i = slot; i < g_closedCount - 1; ++i)
+        g_closed[i] = g_closed[i + 1];
+    g_closedCount--;
+
     agbLog(AGB_LOG_SHELL, "tab reopen url=%s left=%d", closed.url, g_closedCount);
     createTab(closed.url);
 }
@@ -2624,6 +2658,7 @@ static void updateToolbarState(void)
 {
     syncChrome();
     InvalidateRect(g_hwnd, NULL, FALSE);
+    syncTabSearch();
 }
 
 /* ------------------------------------------------------------------------- */
@@ -2828,6 +2863,8 @@ static void invalidateChromeDirty(HWND hwnd)
         InvalidateRect(g_address, NULL, TRUE);
     if (g_findEdit && dirtyHits(dirty, CHROME->findbar.field))
         InvalidateRect(g_findEdit, NULL, TRUE);
+    if (g_cur->statusBar && dirtyHits(dirty, CHROME->statusbar.rect))
+        InvalidateRect(g_cur->statusBar, NULL, FALSE);
 }
 
 /* The address and find fields are native EDITs: mouse moves over the text go to
@@ -3180,6 +3217,17 @@ static void onChromeNewTab(void* user)
 
     g_cur = win;
     navigateActive("about:blank", 1, "button");
+}
+
+static void onChromeTabSearch(void* user)
+{
+    ShellWindow* win = (ShellWindow*)user;
+
+    if (!win)
+        return;
+
+    g_cur = win;
+    toggleTabSearchPopup();
 }
 
 static void onChromeFocusField(void* user, int field)
@@ -3633,6 +3681,10 @@ static LRESULT CALLBACK shellProcInner(HWND hwnd, UINT message, WPARAM wParam, L
          * Session state is flat (all windows' tabs), so a restart restores one
          * window with every tab; noted in the design doc. */
         int last = (g_shellWindows <= 1);
+
+        /* The popup is a top-level window of its own; a shell going away must
+         * not leave it (and its capture) behind. */
+        uiTabSearchClose();
 
         if (last)
             saveSession();
@@ -6312,12 +6364,21 @@ static int uiShotMain(void)
             uiCheck("pixel-tab-no-outside-body",
                     sameColor(high, chrome.theme.chrome));
         }
-        uiCheck("pixel-status", sameColor(shotPixel((const unsigned char*)bits, width, height,
-                                                    2, height - 2),
-                                          chrome.theme.surface_alt));
+        /* The status bar is a floating bubble now: the page keeps its full
+         * height, so the bottom-left corner of the content is page, and the
+         * bubble is checked in its own DIB below. */
         uiCheck("pixel-content", sameColor(shotPixel((const unsigned char*)bits, width, height,
                                                      width / 2, chrome.content.y + chrome.content.h / 2),
                                            chrome.theme.window));
+        uiCheck("pixel-content-bottom",
+                sameColor(shotPixel((const unsigned char*)bits, width, height,
+                                    width / 2, chrome.content.y + chrome.content.h - 2),
+                          chrome.theme.window));
+        uiCheck("status-bubble-in-content",
+                chrome.statusbar.rect.w > 0 &&
+                chrome.statusbar.rect.y + chrome.statusbar.rect.h <=
+                    chrome.content.y + chrome.content.h &&
+                chrome.statusbar.rect.x >= chrome.content.x);
     }
 
     /* --- Chrome dark tint relationships ---------------------------------- */
@@ -6763,6 +6824,61 @@ static int uiShotMain(void)
             }
         }
 
+        /* Status bubble: painted into its own window too, so the chrome's own
+         * pixels at the bottom of the content are page. */
+        {
+            const UiRect* bubble = &chrome.statusbar.rect;
+            BITMAPINFO bubbleInfo;
+            HDC bubbleDc;
+            HBITMAP bubbleBitmap;
+            HGDIOBJ bubbleOld;
+            void* bubbleBits = NULL;
+
+            memset(&bubbleInfo, 0, sizeof(bubbleInfo));
+            bubbleInfo.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+            bubbleInfo.bmiHeader.biWidth = bubble->w;
+            bubbleInfo.bmiHeader.biHeight = bubble->h;   /* bottom-up: shotPixel */
+            bubbleInfo.bmiHeader.biPlanes = 1;
+            bubbleInfo.bmiHeader.biBitCount = 32;
+            bubbleInfo.bmiHeader.biCompression = BI_RGB;
+
+            bubbleDc = CreateCompatibleDC(screen);
+            bubbleBitmap = CreateDIBSection(bubbleDc, &bubbleInfo, DIB_RGB_COLORS,
+                                            &bubbleBits, NULL, 0);
+
+            if (bubbleBitmap && bubbleBits) {
+                bubbleOld = SelectObject(bubbleDc, bubbleBitmap);
+                uiChromePaintStatusOverlay(&chrome, bubbleDc, bubble->w, bubble->h);
+                GdiFlush();
+
+                /* The centre row is text; sample the fill between the message
+                 * and the zoom pill, and the pill itself. */
+                uiCheck("pixel-status-bubble",
+                        sameColor(shotPixel((const unsigned char*)bubbleBits,
+                                            bubble->w, bubble->h,
+                                            bubble->w -
+                                                uiThemeScale(&chrome.theme, 58),
+                                            bubble->h / 2),
+                                  chrome.theme.surface_alt));
+                uiCheck("pixel-status-zoom",
+                        sameColor(shotPixel((const unsigned char*)bubbleBits,
+                                            bubble->w, bubble->h,
+                                            chrome.statusbar.zoom.x -
+                                                chrome.statusbar.rect.x +
+                                                chrome.statusbar.zoom.w / 2,
+                                            bubble->h / 2),
+                                  chrome.theme.accent_soft));
+                SelectObject(bubbleDc, bubbleOld);
+            } else {
+                uiCheck("pixel-status-bubble", 0);
+            }
+
+            if (bubbleBitmap)
+                DeleteObject(bubbleBitmap);
+            if (bubbleDc)
+                DeleteDC(bubbleDc);
+        }
+
         /* Every tab carries its close chip at rest, not only when hovered, and
          * only loses it once the strip is squeezed below half the natural
          * width. Asserted as the rule so the check holds at any window size. */
@@ -6900,23 +7016,137 @@ static int uiShotMain(void)
         uiCheck("compact-tabs-no-overlap", !overlap);
     }
 
-    /* --- minimum tab width: squeeze further and the strip overflows --------- */
+    /* --- narrow strip: minimums hold, the tail hides, "+" does not move ----- */
     {
-        int narrow_w = uiThemeScale(&chrome.theme, 420);
-        int slot;
+        int narrow_w = uiThemeScale(&chrome.theme, 330);
+        int gap = chrome.theme.tab_gap;
+        int item = chrome.theme.tab_min_w + gap;   /* one tab at its minimum */
+        int extra = chrome.theme.tab_active_min_w - chrome.theme.tab_min_w;
+        int avail;
+        int i;
+        int fit = 1;
+        int bg_min = narrow_w;
+        int full_icon = uiThemeScale(&chrome.theme, 16);
+        int close_w = uiThemeScale(&chrome.theme, 24);
 
         uiChromeLayout(&chrome, narrow_w, uiThemeScale(&chrome.theme, 460));
 
-        slot = chrome.tabstrip.count > 1
-                   ? chrome.tabstrip.tab[chrome.tabstrip.slot_of[1]].x -
-                         chrome.tabstrip.tab[chrome.tabstrip.slot_of[0]].x
-                   : chrome.theme.tab_min_w;
+        avail = chrome.tabstrip.rect.w - chrome.theme.strip_pad * 2 -
+                chrome.theme.button_w * 2 - gap * 2 - chrome.tabstrip.right_reserved;
 
-        uiCheck("tab-min-width", slot >= chrome.theme.tab_min_w);
-        /* Overflowing tabs stay clipped inside the strip and the "+" is pinned
-         * inside it rather than pushed under the window buttons. */
-        uiCheck("tab-min-plus-inside",
+        /* Every laid-out tab meets its minimum and stays left of the "+"; the
+         * tabs that do not fit are hidden instead of squeezed. */
+        for (i = 0; i < chrome.tabstrip.count; ++i) {
+            int index = chrome.tabstrip.slot_of[i];
+            const UiRect* tab = &chrome.tabstrip.tab[index];
+
+            if (tab->w <= 0 || tab->x + tab->w > chrome.tabstrip.new_tab.x - gap)
+                fit = 0;
+            if (index != chrome.model.active && tab->w < bg_min)
+                bg_min = tab->w;
+        }
+
+        uiCheck("tab-shrink-fits", fit);
+        uiCheck("tab-active-min",
+                chrome.tabstrip.tab[chrome.model.active].w >=
+                    chrome.theme.tab_active_min_w);
+        uiCheck("tab-bg-min", bg_min >= chrome.theme.tab_min_w);
+        uiCheck("tab-active-wider",
+                chrome.tabstrip.tab[chrome.model.active].w > bg_min);
+        uiCheck("tab-plus-inside",
                 chrome.tabstrip.new_tab.x + chrome.tabstrip.new_tab.w <= narrow_w);
+
+        /* Capacity is derived from the minimums: what fits fits, one more would
+         * break the minimums (that is when hiding starts). */
+        uiCheck("tab-capacity",
+                chrome.tabstrip.count * item + extra <= avail &&
+                (chrome.tabstrip.count + 1) * item + extra > avail);
+        uiCheck("tab-hidden-tail",
+                chrome.tabstrip.count > 0 &&
+                chrome.tabstrip.count < chrome.tabstrip.total);
+
+        fit = 1;
+        for (i = chrome.tabstrip.count; i < chrome.tabstrip.total; ++i) {
+            if (chrome.tabstrip.tab[chrome.tabstrip.slot_of[i]].w != 0 ||
+                chrome.tabstrip.close[chrome.tabstrip.slot_of[i]].w != 0)
+                fit = 0;
+        }
+        uiCheck("tab-hidden-no-rect", fit);
+
+        /* The point of the exact fill: while compressed the "+" right edge is
+         * the strip's right edge minus its padding and the window buttons. */
+        uiCheck("tab-plus-right-fixed",
+                chrome.tabstrip.new_tab.x + chrome.tabstrip.new_tab.w ==
+                    narrow_w - chrome.theme.strip_pad -
+                        chrome.tabstrip.right_reserved);
+
+        /* The icon never shrinks; only the active tab may trade it for its
+         * close chip at the 36 px minimum. */
+        uiCheck("icon-never-shrinks",
+                uiTabFaviconSize(&chrome.theme, chrome.theme.tab_min_w, 0, 0) ==
+                        full_icon &&
+                    uiTabFaviconSize(&chrome.theme, chrome.theme.tab_max_w,
+                                     close_w, 0) == full_icon);
+        uiCheck("active-drops-icon-for-chip",
+                uiTabFaviconSize(&chrome.theme, chrome.theme.tab_active_min_w,
+                                 close_w, 1) == 0 &&
+                    uiTabFaviconSize(&chrome.theme, chrome.theme.tab_active_min_w,
+                                     0, 1) == full_icon);
+
+        /* All 128 slots: the tail is hidden and nothing overlaps the "+". */
+        for (i = 5; i < UI_MAX_TABS; ++i) {
+            chrome.model.tabs[i].used = 1;
+            strcpy(chrome.model.tabs[i].title, "Tab");
+            strcpy(chrome.model.tabs[i].url, "https://example.com/");
+        }
+
+        uiChromeLayout(&chrome, uiThemeScale(&chrome.theme, 700),
+                       uiThemeScale(&chrome.theme, 460));
+
+        uiCheck("slots-128", UI_MAX_TABS == 128 &&
+                             chrome.tabstrip.total == UI_MAX_TABS);
+        uiCheck("slots-128-hidden", chrome.tabstrip.count < chrome.tabstrip.total);
+
+        fit = 1;
+        for (i = 0; i < chrome.tabstrip.count; ++i) {
+            const UiRect* tab = &chrome.tabstrip.tab[chrome.tabstrip.slot_of[i]];
+
+            if (tab->w <= 0 ||
+                tab->x + tab->w > chrome.tabstrip.new_tab.x - chrome.theme.tab_gap)
+                fit = 0;
+        }
+        uiCheck("slots-128-fit", fit);
+
+        /* Same strip width, 3 tabs instead of 128: the "+" must not have moved
+         * (this is the "clicking + repeatedly hits the same spot" requirement). */
+        {
+            int right_128 = chrome.tabstrip.new_tab.x + chrome.tabstrip.new_tab.w;
+            int right_3;
+
+            for (i = 3; i < UI_MAX_TABS; ++i)
+                chrome.model.tabs[i].used = 0;
+
+            uiChromeLayout(&chrome, uiThemeScale(&chrome.theme, 700),
+                           uiThemeScale(&chrome.theme, 460));
+
+            right_3 = chrome.tabstrip.new_tab.x + chrome.tabstrip.new_tab.w;
+
+            uiCheck("tab-plus-stable", right_128 == right_3);
+
+            for (i = 3; i < 5; ++i)
+                chrome.model.tabs[i].used = 1;
+        }
+
+        /* A minimized window reports a 1 px client (the shell logs 199x1), so
+         * `available` goes negative. The layout must degrade to "one 1 px tab"
+         * instead of dividing by a zero background-tab count (that used to
+         * crash with 0xC0000094 when minimizing). */
+        uiChromeLayout(&chrome, uiThemeScale(&chrome.theme, 199),
+                       uiThemeScale(&chrome.theme, 1));
+        uiCheck("degenerate-minimized-width",
+                chrome.tabstrip.count >= 1 &&
+                    chrome.tabstrip.tab[chrome.tabstrip.slot_of[0]].w >= 1 &&
+                    chrome.tabstrip.tab[chrome.tabstrip.slot_of[0]].x >= 0);
 
         /* Restore the compact geometry the DPI block expects to start from. */
         uiChromeLayout(&chrome, uiThemeScale(&chrome.theme, 700),
@@ -7570,6 +7800,242 @@ static HWND createFindOverlay(ShellWindow* win)
     return bar;
 }
 
+/* Status bubble: same overlay pattern as the find bar, but display only - no
+ * hover states, no native controls, so the window proc is tiny. The corners are
+ * rounded with a region, otherwise the bubble's square corners would leave
+ * stale page pixels behind. */
+static void statusBarUpdateRegion(HWND hwnd, ShellWindow* win)
+{
+    RECT client;
+    HRGN region;
+    int radius;
+
+    if (!win || !GetClientRect(hwnd, &client) || client.right <= 0)
+        return;
+
+    radius = uiThemeScale(&win->chrome.theme, 8);
+    region = CreateRoundRectRgn(0, 0, client.right + 1, client.bottom + 1,
+                                radius * 2, radius * 2);
+
+    if (region)
+        SetWindowRgn(hwnd, region, TRUE);
+}
+
+static LRESULT CALLBACK statusBarProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    ShellWindow* win = windowForHwnd(hwnd);
+
+    (void)wParam;
+
+    if (message == WM_PAINT) {
+        PAINTSTRUCT ps;
+        RECT client;
+        HDC hdc = BeginPaint(hwnd, &ps);
+
+        if (win && GetClientRect(hwnd, &client))
+            uiChromePaintStatusOverlay(&win->chrome, hdc, client.right, client.bottom);
+
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+
+    if (message == WM_ERASEBKGND)
+        return 1;
+
+    if (message == WM_SIZE) {
+        statusBarUpdateRegion(hwnd, win);
+        return 0;
+    }
+
+    return DefWindowProcA(hwnd, message, wParam, lParam);
+}
+
+static void syncStatusOverlay(void)
+{
+    if (!g_cur || !g_hwnd)
+        return;
+
+    if (CHROME->statusbar.rect.w > 0) {
+        const UiRect* bubble = &CHROME->statusbar.rect;
+
+        if (!g_cur->statusBar)
+            g_cur->statusBar = createStatusOverlay(g_cur);
+
+        if (g_cur->statusBar) {
+            placeChild(g_cur->statusBar, bubble->x, bubble->y, bubble->w, bubble->h);
+            ShowWindow(g_cur->statusBar, SW_SHOW);
+            SetWindowPos(g_cur->statusBar, HWND_TOP, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            InvalidateRect(g_cur->statusBar, NULL, FALSE);
+        }
+    } else if (g_cur->statusBar) {
+        ShowWindow(g_cur->statusBar, SW_HIDE);
+    }
+}
+
+static HWND createStatusOverlay(ShellWindow* win)
+{
+    HWND bar;
+
+    if (!win || !win->hwnd || !g_instance)
+        return NULL;
+
+    bar = CreateWindowExA(0, "AgaveShellStatusBar", "",
+                          WS_CHILD | WS_CLIPSIBLINGS, 0, 0, 0, 0,
+                          win->hwnd, NULL, g_instance, NULL);
+
+    if (!bar) {
+        agbLog(AGB_LOG_SHELL, "status overlay create failed: %lu",
+               (unsigned long)GetLastError());
+        return NULL;
+    }
+
+    return bar;
+}
+
+/* ------------------------------------------------------------------------- */
+/* tab search popup (Ctrl+Shift+A / the tab strip's v button)                */
+/* ------------------------------------------------------------------------- */
+
+static UiTabSearchItem g_tabSearchItems[UI_TABSEARCH_MAX_ITEMS];
+static int g_tabSearchItemCount;
+
+/* Snapshot of this window's open + recently closed tabs. The popup copies it,
+ * so the indices the callbacks receive stay valid until the next refresh. */
+static void fillTabSearchItems(void)
+{
+    unsigned long long now = shellOps()->tick_ms(NULL);
+    int i;
+
+    g_tabSearchItemCount = 0;
+
+    for (i = 0; i < MAX_TABS && g_tabSearchItemCount < UI_TABSEARCH_MAX_ITEMS; ++i) {
+        UiTabSearchItem* item = &g_tabSearchItems[g_tabSearchItemCount];
+
+        if (!g_tabs[i].used || !g_tabs[i].url[0])
+            continue;
+
+        memset(item, 0, sizeof(*item));
+        strncpy(item->title, g_tabs[i].title[0] ? g_tabs[i].title : g_tabs[i].url,
+                sizeof(item->title) - 1);
+        strncpy(item->url, g_tabs[i].url, sizeof(item->url) - 1);
+        item->kind = UI_TABSEARCH_OPEN;
+        item->age_ms = (int)(now - (g_tabs[i].activeMs ? g_tabs[i].activeMs : now));
+        ++g_tabSearchItemCount;
+    }
+
+    for (i = 0; i < g_closedCount && g_tabSearchItemCount < UI_TABSEARCH_MAX_ITEMS; ++i) {
+        UiTabSearchItem* item = &g_tabSearchItems[g_tabSearchItemCount];
+
+        memset(item, 0, sizeof(*item));
+        strncpy(item->title, g_closed[i].title[0] ? g_closed[i].title : g_closed[i].url,
+                sizeof(item->title) - 1);
+        strncpy(item->url, g_closed[i].url, sizeof(item->url) - 1);
+        item->kind = UI_TABSEARCH_CLOSED;
+        item->age_ms = (int)(now - (g_closed[i].closedMs ? g_closed[i].closedMs : now));
+        ++g_tabSearchItemCount;
+    }
+}
+
+static void syncTabSearch(void)
+{
+    if (!uiTabSearchIsOpen() || !g_cur)
+        return;
+
+    fillTabSearchItems();
+    uiTabSearchRefresh(g_tabSearchItems, g_tabSearchItemCount);
+}
+
+static void onTabSearchActivate(void* user, int index)
+{
+    ShellWindow* win = (ShellWindow*)user;
+    UiTabSearchItem* item;
+    int i;
+
+    if (!win || index < 0 || index >= g_tabSearchItemCount)
+        return;
+
+    item = &g_tabSearchItems[index];
+    g_cur = win;
+
+    if (item->kind == UI_TABSEARCH_OPEN) {
+        for (i = 0; i < MAX_TABS; ++i) {
+            if (g_tabs[i].used && strcmp(g_tabs[i].url, item->url) == 0) {
+                setActiveTab(i);
+                break;
+            }
+        }
+    } else {
+        for (i = 0; i < g_closedCount; ++i) {
+            if (strcmp(g_closed[i].url, item->url) == 0) {
+                reopenClosedAt(i);
+                break;
+            }
+        }
+    }
+}
+
+static void onTabSearchClose(void* user, int index)
+{
+    ShellWindow* win = (ShellWindow*)user;
+    UiTabSearchItem* item;
+    int i;
+
+    if (!win || index < 0 || index >= g_tabSearchItemCount)
+        return;
+
+    item = &g_tabSearchItems[index];
+
+    if (item->kind != UI_TABSEARCH_OPEN)
+        return;
+
+    g_cur = win;
+
+    for (i = 0; i < MAX_TABS; ++i) {
+        if (g_tabs[i].used && strcmp(g_tabs[i].url, item->url) == 0) {
+            closeTab(i);
+            break;
+        }
+    }
+}
+
+static void toggleTabSearchPopup(void)
+{
+    UiTabSearchCallbacks callbacks;
+
+    if (uiTabSearchIsOpen()) {
+        uiTabSearchClose();
+        return;
+    }
+
+    if (!g_cur || !g_hwnd)
+        return;
+
+    fillTabSearchItems();
+
+    if (g_tabSearchItemCount <= 0) {
+        agbLog(AGB_LOG_SHELL, "tab search: no tabs to list");
+        return;
+    }
+
+    memset(&callbacks, 0, sizeof(callbacks));
+    callbacks.user = g_cur;
+    callbacks.activate = onTabSearchActivate;
+    callbacks.close = onTabSearchClose;
+
+    {
+        UiRect search = CHROME->tabstrip.search;
+        POINT anchor;
+
+        anchor.x = search.x;
+        anchor.y = search.y + search.h + uiThemeScale(&CHROME->theme, 4);
+        ClientToScreen(g_hwnd, &anchor);
+
+        uiTabSearchOpen(g_hwnd, &CHROME->theme, g_tabSearchItems,
+                        g_tabSearchItemCount, &callbacks, anchor.x, anchor.y);
+    }
+}
+
 static void registerShellWindowClass(void)
 {
     static int registered;
@@ -7592,6 +8058,14 @@ static void registerShellWindowClass(void)
     wc.hCursor = LoadCursorA(NULL, (LPCSTR)IDC_ARROW);
     wc.hbrBackground = NULL;   /* painted by uiChromePaintFindOverlay */
     wc.lpszClassName = "AgaveShellFindBar";
+    RegisterClassA(&wc);
+
+    memset(&wc, 0, sizeof(wc));
+    wc.lpfnWndProc = statusBarProc;
+    wc.hInstance = g_instance;
+    wc.hCursor = LoadCursorA(NULL, (LPCSTR)IDC_ARROW);
+    wc.hbrBackground = NULL;   /* painted by uiChromePaintStatusOverlay */
+    wc.lpszClassName = "AgaveShellStatusBar";
     RegisterClassA(&wc);
 
     registered = 1;
@@ -7634,6 +8108,7 @@ static ShellWindow* createShellWindow(const char* title)
         callbacks.activate_tab = onChromeActivateTab;
         callbacks.close_tab = onChromeCloseTab;
         callbacks.new_tab = onChromeNewTab;
+        callbacks.tab_search = onChromeTabSearch;
         callbacks.focus_field = onChromeFocusField;
 
         uiChromeInit(&win->chrome, shellThemeKind(),
@@ -8383,6 +8858,20 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
              * or the chrome - and otherwise stops a load in progress, like
              * Chrome. Neither had a handler: the bar could only be closed with
              * the mouse, and the README's "Esc stops" was never wired up. */
+            /* The tab-search popup owns the keyboard while it is open: the shell
+             * types the query and moves the selection, everything else is
+             * swallowed until it goes away. Ctrl+Shift+A toggles (handled below,
+             * before this branch). */
+            if (uiTabSearchIsOpen() && msg.message != WM_MOUSEMOVE) {
+                if (msg.message == WM_KEYDOWN || msg.message == WM_CHAR) {
+                    if (!(GetKeyState(VK_CONTROL) & 0x8000) ||
+                        msg.wParam == VK_UP || msg.wParam == VK_DOWN) {
+                        uiTabSearchKey(msg.message, msg.wParam, msg.lParam);
+                        continue;
+                    }
+                }
+            }
+
             if (msg.wParam == VK_ESCAPE && g_cur) {
                 if (g_findVisible) {
                     agbLog(AGB_LOG_SHELL, "esc closes find bar");
@@ -8414,6 +8903,10 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
                     continue;
                 }
                 if (msg.wParam == 'W' && !shift) { closeTab(g_activeTab); continue; }
+                /* Ctrl+Shift+A: Chrome's "Search tabs". Toggling keeps it a
+                 * one-key round trip, and it must run before the popup-open
+                 * branch below swallows keys. */
+                if (msg.wParam == 'A' && shift) { toggleTabSearchPopup(); continue; }
                 if (msg.wParam == 'R' && !shift) { reloadActive("ctrl+r"); continue; }
                 /* Ctrl+Shift+I, like Chrome. inspector.js re-injects as a
                  * toggle, so the same key closes it again. */

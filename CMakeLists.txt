@@ -130,7 +130,8 @@ if (OPT_SHELL AND WIN32)
         ${PROJ_ROOT}/examples/browser_shell/ui_widgets.c
         ${PROJ_ROOT}/examples/browser_shell/ui_chrome.c
         ${PROJ_ROOT}/examples/browser_shell/ui_menu.c
-        ${PROJ_ROOT}/examples/browser_shell/ui_menu_host.c)
+        ${PROJ_ROOT}/examples/browser_shell/ui_menu_host.c
+        ${PROJ_ROOT}/examples/browser_shell/ui_tabsearch.c)
     target_include_directories(agave_shell PRIVATE ${PROJ_ROOT}/include ${PROJ_OUT}
                                                 ${PROJ_ROOT}/examples/browser_shell)
     target_compile_definitions(agave_shell PRIVATE AGW_USE_DLL)

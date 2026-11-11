@@ -109,6 +109,11 @@ static void fillTabPill(UiPainter* painter, const UiTheme* theme, UiRect rect,
 
     inset = uiThemeScale(theme, 1);
 
+    /* A 128-tab strip can squeeze a tab to a few pixels: GDI+ needs the radius
+     * smaller than half the pill, otherwise the arc degenerates. */
+    if (radius > rect.w / 2)
+        radius = rect.w / 2;
+
     if (rect.h - inset * 3 < 2) {
         uiFillRoundRect(painter, rect, radius, color);
         return;
@@ -132,6 +137,13 @@ static void paintFavicon(UiPainter* painter, const UiTheme* theme,
 
     text = uiRectMake(rect.x, rect.y, rect.w, rect.h);
     uiTextW(painter, letter, text, theme->font_small, 0xFFFFFFFF, UI_ALIGN_CENTER);
+}
+
+/* Public for the tab-search popup, which lists tabs that are not in the strip. */
+void uiFaviconChip(UiPainter* painter, const UiTheme* theme,
+                   UiRect rect, const char* url, const char* title)
+{
+    paintFavicon(painter, theme, rect, url, title);
 }
 
 static void paintTabClose(UiPainter* painter, const UiTheme* theme,
@@ -341,7 +353,12 @@ void uiTabStripLayout(UiTabStrip* strip, const UiTheme* theme,
                       const UiChromeModel* model, UiRect area)
 {
     int i;
-    int slot_w;
+    int slot[UI_MAX_TABS];   /* slot width per visible tab (rect + tab_gap) */
+    int visible;
+    int total;
+    int active_slot;
+    int active_exists;
+    int compressed;
     int x;
     int tab_y;
     int available;
@@ -357,6 +374,8 @@ void uiTabStripLayout(UiTabStrip* strip, const UiTheme* theme,
     int pressed_close;
     int hover_new;
     int pressed_new;
+    int hover_search;
+    int pressed_search;
 
     if (!strip || !theme || !model)
         return;
@@ -367,15 +386,20 @@ void uiTabStripLayout(UiTabStrip* strip, const UiTheme* theme,
     pressed_close = strip->pressed_close;
     hover_new = strip->hover_new_tab;
     pressed_new = strip->pressed_new_tab;
+    hover_search = strip->hover_search;
+    pressed_search = strip->pressed_search;
 
     strip->rect = area;
     strip->count = 0;
+    strip->total = 0;
     strip->hover_tab = -1;
     strip->hover_close = -1;
     strip->pressed_tab = -1;
     strip->pressed_close = -1;
     strip->hover_new_tab = 0;
     strip->pressed_new_tab = 0;
+    strip->hover_search = 0;
+    strip->pressed_search = 0;
 
     memset(strip->tab, 0, sizeof(strip->tab));
     memset(strip->close, 0, sizeof(strip->close));
@@ -386,44 +410,115 @@ void uiTabStripLayout(UiTabStrip* strip, const UiTheme* theme,
             strip->slot_of[strip->count++] = i;
     }
 
+    total = strip->count;
+
     pad = theme->strip_pad;
     gap = theme->tab_gap;
     plus = theme->button_w;
-    available = area.w - pad * 2 - plus - gap - strip->right_reserved;
+    /* The tab-search entry (left) and the + (right) both live in the strip. */
+    available = area.w - pad * 2 - plus * 2 - gap * 2 - strip->right_reserved;
 
-    slot_w = theme->tab_max_w;
+    if (available < 0)
+        available = 0;
 
-    if (strip->count > 0) {
-        if (available < strip->count)
-            available = strip->count;
-
-        slot_w = available / strip->count;
-
-        if (slot_w > theme->tab_max_w)
-            slot_w = theme->tab_max_w;
-
-        /* Floor at the minimum width: a tab keeps enough room for its icon plus
-         * a couple of title glyphs even with many tabs. Beyond that the strip
-         * overflows to the right and is clipped (no horizontal scrolling /
-         * overflow menu yet - Ctrl+T still works, the extra tabs are simply off
-         * screen, which is also what a browser without tab scrolling does). */
-        if (slot_w < theme->tab_min_w)
-            slot_w = theme->tab_min_w;
+    active_slot = -1;
+    for (i = 0; i < total; ++i) {
+        if (strip->slot_of[i] == model->active)
+            active_slot = i;
     }
 
-    if (slot_w < 1)
-        slot_w = 1;
+    active_exists = active_slot >= 0;
+    /* Compressed = the tabs no longer fit at their natural width. From here on
+     * the visible rects + gaps fill `available` exactly, which is what pins the
+     * "+" to the right edge (see the header comment). */
+    compressed = total > 0 && total * theme->tab_max_w > available;
 
-    x = area.x + pad;
+    visible = total;
+
+    if (compressed) {
+        /* Every item costs its minimum width plus one gap; an active tab costs
+         * 20 more than a background one (tab_active_min_w - tab_min_w). Taking
+         * that off the width up front turns the capacity question into a single
+         * division. Beyond this count the tabs cannot meet their minimums, so
+         * the tail is hidden instead of squeezed (the tab-search popup is how
+         * they are reached). */
+        int item = theme->tab_min_w + gap;
+        int usable = available -
+                     (active_exists ? theme->tab_active_min_w - theme->tab_min_w : 0);
+        int fit = item > 0 ? usable / item : 0;
+
+        if (fit < 1)
+            fit = 1;    /* degenerate window: one tab beats none */
+        if (fit < visible)
+            visible = fit;
+
+        strip->count = visible;
+
+        if (visible > 0) {
+            int rects = available - visible * gap;  /* width left for the rects */
+            int active_rect = 0;
+            int bg_n = visible;
+            int bg_base;
+            int bg_rem;
+            int k = 0;
+
+            if (rects < visible)
+                rects = visible;    /* degenerate: 1 px each */
+
+            bg_base = rects / visible;
+
+            /* The active tab keeps a wider minimum, but only when the equal
+             * share would take it below it AND the other tabs still get at
+             * least 1 px each. Without the second half a minimized window
+             * (WM_SIZE 0x0 -> available < 0 -> rects == 1) would hand the
+             * active tab everything and divide by a zero background count. */
+            if (active_exists && active_slot < visible && visible > 1 &&
+                bg_base < theme->tab_active_min_w &&
+                rects - theme->tab_active_min_w >= visible - 1) {
+                active_rect = theme->tab_active_min_w;
+                --bg_n;
+                bg_base = (rects - active_rect) / bg_n;
+            }
+
+            bg_rem = rects - active_rect - bg_base * bg_n;
+
+            for (i = 0; i < visible; ++i) {
+                int w;
+
+                if (active_rect && i == active_slot) {
+                    slot[i] = active_rect + gap;
+                    continue;
+                }
+
+                /* Spread the leftover pixels instead of dumping them on one
+                 * tab: the sum still equals `rects`, so the "+" cannot drift. */
+                w = bg_base + ((k + 1) * bg_rem) / bg_n - (k * bg_rem) / bg_n;
+                ++k;
+
+                if (w < 1)
+                    w = 1;
+
+                slot[i] = w + gap;
+            }
+        }
+    } else {
+        for (i = 0; i < visible; ++i)
+            slot[i] = theme->tab_max_w + gap;
+    }
+
+    x = area.x + pad + plus + gap;
     tab_y = area.y + area.h - theme->tab_h;
 
-    for (i = 0; i < strip->count; ++i) {
+    strip->search = uiRectMake(area.x + pad, tab_y, plus, theme->button_h);
+
+    for (i = 0; i < visible; ++i) {
         int index = strip->slot_of[i];
-        int w = slot_w - gap;
+        int w = slot[i] - gap;
         int close_w = uiThemeScale(theme, 24);
 
-        if (w < gap + 2)
-            w = gap + 2;
+        /* A slot is never narrower than its gap, so the rect stays positive. */
+        if (w < 1)
+            w = 1;
 
         strip->tab[index] = uiRectMake(x, tab_y, w, theme->tab_h);
 
@@ -444,9 +539,15 @@ void uiTabStripLayout(UiTabStrip* strip, const UiTheme* theme,
             strip->close[index] = uiRectMake(0, 0, 0, 0);
         }
 
-        x += slot_w;
+        x += slot[i];
     }
 
+    strip->total = total;
+    strip->count = visible;
+
+    /* Compressed: `x` is exactly the fixed right edge, so the clamp below is a
+     * no-op. Natural width: the "+" follows the last tab (Chrome) and the clamp
+     * only guards a window too narrow for the reserved controls. */
     strip->new_tab = uiRectMake(x + gap,
                                 area.y + area.h - theme->button_h,
                                 theme->button_w, theme->button_h);
@@ -473,6 +574,8 @@ void uiTabStripLayout(UiTabStrip* strip, const UiTheme* theme,
 
     strip->hover_new_tab = hover_new;
     strip->pressed_new_tab = pressed_new;
+    strip->hover_search = hover_search;
+    strip->pressed_search = pressed_search;
 }
 
 UiPart uiTabStripHit(UiTabStrip* strip, int x, int y, int* model_index)
@@ -485,8 +588,11 @@ UiPart uiTabStripHit(UiTabStrip* strip, int x, int y, int* model_index)
     if (!strip || !uiRectContains(strip->rect, x, y))
         return UI_PART_NONE;
 
-    /* "+" before the tabs: with more tabs than fit it is pinned at the right
-     * edge and can overlap one, and it has to stay clickable there. */
+    /* The search entry and "+" before the tabs: both stay clickable where they
+     * overlap an overflowing tab. */
+    if (uiRectContains(strip->search, x, y))
+        return UI_PART_TAB_SEARCH;
+
     if (uiRectContains(strip->new_tab, x, y))
         return UI_PART_TAB_NEW;
 
@@ -520,19 +626,22 @@ static void paintTab(UiPainter* painter, const UiTheme* theme,
     UiRect rect = strip->tab[index];
     UiRect favicon;
     UiRect title;
-    int show_close;
-    int show_favicon;
+    int show_close = strip->close[index].w > 0;
+    int close_w = show_close ? strip->close[index].w : 0;
+    int icon_full = uiThemeScale(theme, 16);
+    int icon = icon_full;
+    int title_min = uiThemeScale(theme, 12);
+    int pad_l = uiThemeScale(theme, 10);
+    int pad_mid = uiThemeScale(theme, 8);
+    int pad_r = uiThemeScale(theme, 8);
+    int title_w;
+    int spare;
 
     if (rect.w <= 0)
         return;
 
-    /* Layout already decided whether this tab has a chip (it drops out below
-     * half the natural width); painting follows the rect so what looks
-     * clickable and what is clickable cannot drift apart. */
-    show_close = strip->close[index].w > 0;
-    /* The icon never goes away: shrinking only takes room from the title. */
-    show_favicon = 1;
-
+    /* Layout already decided whether this tab has a chip; the rect is the single
+     * source of truth for "painted" and "clickable". */
     if (active)
         fillTabShape(painter, theme, rect, theme->surface);
     else if (pressed)
@@ -540,31 +649,72 @@ static void paintTab(UiPainter* painter, const UiTheme* theme,
     else if (hovered)
         fillTabPill(painter, theme, rect, theme->tab_radius, theme->tab_hover);
 
-    if (show_favicon) {
-        favicon = uiRectMake(rect.x + uiThemeScale(theme, 10),
-                             rect.y + (rect.h - uiThemeScale(theme, 16)) / 2,
-                             uiThemeScale(theme, 16), uiThemeScale(theme, 16));
+    /* Shrinking order: title, then padding. The icon never shrinks - it is
+     * already its minimum size (16 px), and a background tab's 16 px minimum
+     * width is exactly that icon. The active tab is the one exception: when the
+     * close chip no longer fits beside the icon the chip wins and the icon is
+     * dropped, so at 36 px the active tab shows the close button only. */
+    title_w = rect.w - pad_l - icon - pad_mid - close_w - pad_r;
+
+    if (title_w < title_min) {
+        title_w = 0;
+        spare = rect.w - icon - close_w;
+
+        if (spare >= pad_l + pad_mid + pad_r) {
+            /* Enough room for the full padding: centre the icon + close group. */
+            pad_l = (rect.w - icon - close_w) / 2;
+            pad_mid = 0;
+            pad_r = 0;
+        } else if (spare > 0) {
+            /* Paddings shrink evenly until they are gone. */
+            pad_l = spare / 3;
+            pad_mid = spare / 3;
+            pad_r = spare - pad_l - pad_mid;
+        } else {
+            /* Paddings are gone: check whether the icon still fits next to the
+             * chip (the active tab drops it, a background tab keeps it). */
+            pad_l = pad_mid = pad_r = 0;
+            icon = uiTabFaviconSize(theme, rect.w, close_w, active);
+        }
+    }
+
+    /* Never let the icon spill into the neighbour. */
+    if (icon > rect.w - close_w) {
+        icon = rect.w - close_w;
+        if (icon < 0)
+            icon = 0;
+    }
+
+    if (icon > 0) {
+        favicon = uiRectMake(rect.x + pad_l,
+                             rect.y + (rect.h - icon) / 2, icon, icon);
+
+        if (icon < icon_full)
+            favicon.x = rect.x + (rect.w - close_w - icon) / 2;
+
         paintFavicon(painter, theme, favicon,
                      model->tabs[index].url, model->tabs[index].title);
 
-        if (model->tabs[index].hung)
+        if (model->tabs[index].hung && icon >= uiThemeScale(theme, 12))
             uiFillCircle(painter, favicon.x + favicon.w - 1, favicon.y + 1,
                          uiThemeScale(theme, 3), theme->danger);
 
-        title.x = favicon.x + favicon.w + uiThemeScale(theme, 8);
+        title.x = favicon.x + favicon.w + pad_mid;
     } else {
-        title.x = rect.x + uiThemeScale(theme, 8);
+        title.x = rect.x + pad_l;
     }
 
     title.y = rect.y;
     title.h = rect.h;
+    title.w = 0;
 
-    if (show_close)
-        title.w = strip->close[index].x - title.x - uiThemeScale(theme, 2);
-    else
-        title.w = rect.x + rect.w - title.x - uiThemeScale(theme, 8);
+    if (title_w >= title_min) {
+        title.w = show_close
+                      ? strip->close[index].x - title.x - uiThemeScale(theme, 2)
+                      : rect.x + rect.w - title.x - pad_r;
+    }
 
-    if (title.w > 0) {
+    if (title.w >= title_min) {
         const char* label = model->tabs[index].title[0] ? model->tabs[index].title : "New tab";
         unsigned color = active ? theme->text
                                 : (hovered ? theme->text : theme->text_muted);
@@ -575,6 +725,32 @@ static void paintTab(UiPainter* painter, const UiTheme* theme,
     if (show_close)
         paintTabClose(painter, theme, strip->close[index], close_hovered,
                       close_pressed);
+}
+
+/* Shrinking order, expressed as "how big is the favicon for this tab":
+ *   1. title has room with full padding + full icon      -> full icon
+ *   2. title is gone, padding is being squeezed to zero  -> full icon
+ *   3. padding is gone, the icon needs the room          -> full icon
+ *      - the active tab is the one exception: when its close chip no longer
+ *        fits next to the icon, the chip wins and the icon is dropped, so at
+ *        its 36 px minimum the active tab shows only the close button
+ *      - a background tab always keeps its full-size icon; 16 px is both the
+ *        tab minimum and the icon size, so there is nothing to scale
+ * Exposed so --ui-shot can assert the rule without painting. */
+int uiTabFaviconSize(const UiTheme* theme, int tab_w, int close_w, int active)
+{
+    int icon = uiThemeScale(theme, 16);
+
+    if (icon + close_w <= tab_w)
+        return icon;            /* the icon fits at its natural size */
+
+    if (active)
+        return 0;               /* close button only */
+
+    /* Degenerate only (a window narrower than one tab's minimum): clip. */
+    icon = tab_w - close_w;
+
+    return icon > 0 ? icon : 0;
 }
 
 int uiTabStripSeparatorWidth(const UiTheme* theme)
@@ -639,8 +815,8 @@ void uiTabStripPaint(UiTabStrip* strip, const UiTheme* theme,
 
     uiFillRect(painter, strip->rect, theme->chrome);
 
-    /* Clip out the window buttons: with more tabs than fit the strip overflows,
-     * and those tabs must not paint under the caption buttons. */
+    /* Tabs never paint under the window buttons: the layout makes the visible
+     * ones fit exactly, so this only guards the degenerate case. */
     GdipSetClipRectI(painter->g, strip->rect.x, strip->rect.y,
                      strip->rect.w - strip->right_reserved, strip->rect.h,
                      CombineModeReplace);
@@ -648,8 +824,9 @@ void uiTabStripPaint(UiTabStrip* strip, const UiTheme* theme,
     paintTabSeparators(painter, theme, model, strip);
 
     /* Under every tab: the active tab's base flare reaches into its neighbours'
-     * rects, so it must be painted first or it eats a notch out of their pills. */
-    if (tabVisible(model, active))
+     * rects, so it must be painted first or it eats a notch out of their pills.
+     * A hidden active tab has a zero rect - nothing to flare. */
+    if (tabVisible(model, active) && strip->tab[active].w > 0)
         paintTabBaseFlare(painter, theme, strip->tab[active], theme->surface);
 
     for (i = 0; i < strip->count; ++i) {
@@ -663,43 +840,38 @@ void uiTabStripPaint(UiTabStrip* strip, const UiTheme* theme,
                  strip->pressed_tab == index, strip->pressed_close == index);
     }
 
-    if (tabVisible(model, active)) {
+    if (tabVisible(model, active) && strip->tab[active].w > 0) {
         paintTab(painter, theme, model, strip, active, 1,
                  strip->hover_tab == active, strip->hover_close == active,
                  strip->pressed_tab == active, strip->pressed_close == active);
     }
 
-    /* "+" new tab. When the strip overflows, the button is pinned at the right
-     * edge on top of a tab; a strip-coloured disc keeps the glyph readable. */
+    /* The two strip buttons: circular hover, glyphs on top. */
     {
-        int overlaps = 0;
         int radius = uiThemeScale(theme, 12);
-
-        for (i = 0; i < strip->count; ++i) {
-            UiRect tab = strip->tab[strip->slot_of[i]];
-
-            if (tab.w > 0 && tab.x < strip->new_tab.x + strip->new_tab.w &&
-                tab.x + tab.w > strip->new_tab.x) {
-                overlaps = 1;
-                break;
-            }
-        }
-
-        if (overlaps)
-            uiFillCircle(painter, strip->new_tab.x + strip->new_tab.w / 2,
-                         strip->new_tab.y + strip->new_tab.h / 2,
-                         radius, theme->chrome);
 
         if (strip->hover_new_tab || strip->pressed_new_tab)
             uiFillCircle(painter, strip->new_tab.x + strip->new_tab.w / 2,
                          strip->new_tab.y + strip->new_tab.h / 2,
                          radius, strip->pressed_new_tab ? theme->button_pressed
                                                         : theme->button_hover);
-    }
 
-    uiIcon(painter, UI_ICON_PLUS,
-           uiRectInset(strip->new_tab, uiThemeScale(theme, 9), uiThemeScale(theme, 9)),
-           theme->icon, (1.7f * theme->scale));
+        uiIcon(painter, UI_ICON_PLUS,
+               uiRectInset(strip->new_tab, uiThemeScale(theme, 9),
+                           uiThemeScale(theme, 9)),
+               theme->icon, (1.7f * theme->scale));
+
+        if (strip->hover_search || strip->pressed_search)
+            uiFillCircle(painter, strip->search.x + strip->search.w / 2,
+                         strip->search.y + strip->search.h / 2,
+                         radius, strip->pressed_search ? theme->button_pressed
+                                                       : theme->button_hover);
+
+        uiIcon(painter, UI_ICON_CHEVRON_DOWN,
+               uiRectInset(strip->search, uiThemeScale(theme, 9),
+                           uiThemeScale(theme, 9)),
+               theme->icon, (1.7f * theme->scale));
+    }
 
     GdipResetClip(painter->g);
 }
@@ -734,6 +906,7 @@ void uiTabStripMouse(UiTabStrip* strip, const UiChromeModel* model,
         strip->hover_tab = (part == UI_PART_TAB || part == UI_PART_TAB_CLOSE) ? index : -1;
         strip->hover_close = (part == UI_PART_TAB_CLOSE) ? index : -1;
         strip->hover_new_tab = (part == UI_PART_TAB_NEW);
+        strip->hover_search = (part == UI_PART_TAB_SEARCH);
         return;
 
     case UI_MOUSE_DOWN:
@@ -741,16 +914,19 @@ void uiTabStripMouse(UiTabStrip* strip, const UiChromeModel* model,
         strip->pressed_tab = (part == UI_PART_TAB || part == UI_PART_TAB_CLOSE) ? index : -1;
         strip->pressed_close = (part == UI_PART_TAB_CLOSE) ? index : -1;
         strip->pressed_new_tab = (part == UI_PART_TAB_NEW);
+        strip->pressed_search = (part == UI_PART_TAB_SEARCH);
         return;
 
     case UI_MOUSE_UP: {
         int pressed_tab = strip->pressed_tab;
         int pressed_close = strip->pressed_close;
         int pressed_new = strip->pressed_new_tab;
+        int pressed_search = strip->pressed_search;
 
         strip->pressed_tab = -1;
         strip->pressed_close = -1;
         strip->pressed_new_tab = 0;
+        strip->pressed_search = 0;
 
         part = uiTabStripHit(strip, event->x, event->y, &index);
 
@@ -772,6 +948,12 @@ void uiTabStripMouse(UiTabStrip* strip, const UiChromeModel* model,
             return;
         }
 
+        if (pressed_search && part == UI_PART_TAB_SEARCH) {
+            if (action)
+                action->open_search = 1;
+            return;
+        }
+
         return;
     }
 
@@ -788,7 +970,9 @@ void uiTabStripLeave(UiTabStrip* strip)
     strip->hover_tab = -1;
     strip->hover_close = -1;
     strip->hover_new_tab = 0;
+    strip->hover_search = 0;
     strip->pressed_tab = -1;
     strip->pressed_close = -1;
     strip->pressed_new_tab = 0;
+    strip->pressed_search = 0;
 }

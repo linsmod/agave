@@ -140,7 +140,13 @@ pwsh -File tools/run_all_tests.ps1 -KeepLogs                # 保留每个套件
 需要真实 HWND，所以不放进 probe-only 的默认回归。
 同一个启动方式下，`pwsh -File tools/check_shell_menu.ps1` 验证自绘菜单的分层弹窗
 路径：`☰` 打开应用菜单 → 首行点击生效；页面右键打开上下文菜单 → Esc 关闭；
-`WM_CLOSE` 干净退出。二者都约 2–3 s。
+`WM_CLOSE` 干净退出。`pwsh -File tools/check_shell_tabsearch.ps1` 验证标签条的
+v 入口打开"搜索标签"弹层、Esc 关闭；`pwsh -File tools/check_shell_findbar.ps1`
+验证查找栏是浮层（页面不被压高）。三者都约 2–3 s。
+
+⚠ `check_shell_frame.ps1` 的 `click-min` 是最小化路径的唯一覆盖：它曾经因为
+"最小化后客户端高 1px → 标签条可用宽度为负 → 整数除零"而稳定 FAIL，别再把它
+当成脚本竞态跳过。
 
 ## 2. 改动 → 该跑什么
 

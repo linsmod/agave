@@ -107,8 +107,9 @@ UI 侧的具体症状：
 
 ```
 tabStripH 40   toolbarH 44   statusH 24
-tab: minW 84  maxW 220   h 32   gap 2   radius 8   base flare 8
-     （超出可用宽度就溢出，clipped 到 caption 按钮之前；没有横向滚动）
+tab: bgMinW 16  activeMinW 36  maxW 220   h 32   gap 2   radius 8   base flare 8
+     （压缩时可见 tab 的 rect + gap 精确填满可用宽度 → `+` 右缘固定；
+       放不下的尾部隐藏，走左侧 tab-search 入口）
 window buttons: 46 x tabStripH, right-aligned
 address: h 32  radius 16  go 28×28
 content: y = tabStripH + toolbarH          （查找栏是浮层，不加高度）
@@ -120,12 +121,25 @@ find overlay: 右上角, w = min(360+24, content.w-2*pad)  h = findFieldH + 8
 border），`WM_NCHITTEST` 把标签条空白处当 `HTCAPTION`（拖动、双击最大化、右键系统菜单）。
 标签和右侧窗口按钮占同一行；tab 的可用宽度先扣掉 `3 * 46px` 的窗口按钮区。
 
-标签宽度随窗口自适应：`slot = (W - pad*2 - plusW - windowButtons)/n`，上限 220px，
-**没有最小宽度下限**——不够时继续压缩，但**只压标题**：favicon 永远在（Chrome 同），
+标签宽度随窗口自适应，按三种状态处理：
+
+- **自然宽度**：`n * tab_max_w <= 可用宽度` 时每个 tab 都是 `tab_max_w`，`+` 紧跟最后
+  一个 tab（Chrome 同）。
+- **压缩**：可见 tab 的 rect + gap **精确等于**可用宽度（余数按 Bresenham 均摊，不丢给
+  某一个 tab），所以 `+` 的右缘恒为 `条右边界 - strip_pad - 窗口按钮区`，不随 tab 数量
+  / 活动 tab 变化而抖动。收缩顺序是 标题 → padding，**favicon 不缩**：它本身就是最小
+  尺寸 16，背景 tab 的 16px 最小宽度正好就是这个 icon；活动标签例外，36px 里塞不下
+  icon + chip 时丢掉 icon，只留关闭。
+- **放不下**：最大可放置数从最小宽度直接算
+  `n_max = (可用宽度 - (有活动 tab ? activeMinW - bgMinW : 0)) / (bgMinW + tab_gap)`。
+  超过 `n_max` 的尾部不挤、直接隐藏（`strip->count < strip->total`，隐藏项的 rect 与
+  chip 都是零矩形），经左侧入口 / `Ctrl+Shift+A` 的搜索列表访问。活动标签落在隐藏区间
+  时也照常隐藏，不做滚动补偿。
+
 关闭 chip 按 `w * 2 < tab_max_w`（不足一半自然宽度）隐藏——**活动标签例外，任何宽度
 都留着它**（关闭"正在看的这个 tab"不该被迫走菜单）。隐藏时 `close[i]` 是零矩形，
 于是"看不见"和"点不到"由同一个数据决定；唯一仍为零矩形的活动标签是比 chip 本身还窄
-（`w <= 24+2`）的退化情况。`+` 永远排在最后一个 tab 与窗口按钮之间，不会压到按钮下面。
+（`w <= 24+2`）的退化情况。`+` 永远在标签条内，不会压到窗口按钮下面。
 
 ### 5.1 窗口按钮：Chromium 的 CUSTOM_DRAWN 做法
 
@@ -364,7 +378,10 @@ build-zig-native\agave_shell.exe --ui-shot build-zig-native\ui-focus.png --ui-th
 6. 标签条（5）：每个 tab 默认有 chip（按"w 是否过半"的规则断言，任意窗口尺寸都成立）、
    **活动标签任何宽度都有 chip**、tab 间分隔线 = `tab_sep`、活动标签两侧与 hover
    标签两侧的分隔线 = strip 色、压缩后背景标签 chip 为零矩形且 favicon 仍在、
-   再压到 `tab_min_w` 以下时槽位不再缩小（溢出）且 `+` 仍在标签条内；
+   最小宽度成立（背景 16 / 活动 36）、容量公式成立（`count` 恰好是 `n_max`、再多一个
+   就不够）、超出容量的尾部是零矩形、`+` 右缘 = `条宽 - strip_pad - 窗口按钮区` 且
+   128 个 tab 与 3 个 tab 时**完全相同**（整数压缩不漂移）、icon 永不缩小、
+   活动标签在 36px 时只留 chip；
 7. 150% DPI：tabstrip 60 / toolbar 66 / content top = **126**（查找栏不再占一行），
    菜单仍在窗口内；
 8. 暗色层次：strip < toolbar、胶囊 < toolbar、hover > 活动标签、焦点环 =
@@ -377,7 +394,7 @@ build-zig-native\agave_shell.exe --ui-shot build-zig-native\ui-focus.png --ui-th
     没有禁用行）；
 11. `--ui-focus`（81 项）：焦点字段、胶囊填充色、焦点环左右/上边像素与 token。
 
-各项计数（2026-11-11）：亮 72 / 暗 76 / 亮-150% 72 / 暗-菜单 99 / 暗-焦点 81。
+各项计数（2026-11-11）：亮 89 / 暗 93 / 亮-150% 89 / 暗-菜单 116 / 暗-焦点 98。
 窄窗口（如 `--ui-size 700x460`，背景标签不足一半宽度）会少 2 条 chip 像素断言：
 那里背景标签本来就没有 chip（活动标签的 chip 仍在，命中/点击断言照常跑）。
 
