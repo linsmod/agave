@@ -6012,9 +6012,13 @@ static int uiShotMain(void)
                                    chrome.tabstrip.tab[0].x + chrome.tabstrip.tab[0].w / 2,
                                    chrome.tabstrip.tab[0].y + chrome.tabstrip.tab[0].h / 2) == 0);
 
-    part = shotPartAt(&chrome, chrome.tabstrip.close[1]);
-    uiCheck("hit-tab-close", part == UI_PART_TAB_CLOSE);
-    printf("ui-part tab-close got=%s\n", uiPartName(part));
+    /* A squeezed strip (less than half the natural tab width) hides the chip,
+     * so the close assertions only run when the model actually has one. */
+    if (chrome.tabstrip.close[1].w > 0) {
+        part = shotPartAt(&chrome, chrome.tabstrip.close[1]);
+        uiCheck("hit-tab-close", part == UI_PART_TAB_CLOSE);
+        printf("ui-part tab-close got=%s\n", uiPartName(part));
+    }
 
     part = shotPartAt(&chrome, chrome.tabstrip.new_tab);
     uiCheck("hit-tab-new", part == UI_PART_TAB_NEW);
@@ -6039,9 +6043,11 @@ static int uiShotMain(void)
               chrome.tabstrip.tab[2].y + chrome.tabstrip.tab[2].h / 2);
     uiCheck("click-tab", g_uiShotLog.activated == 2);
 
-    shotClick(&chrome, chrome.tabstrip.close[2].x + chrome.tabstrip.close[2].w / 2,
-              chrome.tabstrip.close[2].y + chrome.tabstrip.close[2].h / 2);
-    uiCheck("click-tab-close", g_uiShotLog.closed == 2);
+    if (chrome.tabstrip.close[2].w > 0) {
+        shotClick(&chrome, chrome.tabstrip.close[2].x + chrome.tabstrip.close[2].w / 2,
+                  chrome.tabstrip.close[2].y + chrome.tabstrip.close[2].h / 2);
+        uiCheck("click-tab-close", g_uiShotLog.closed == 2);
+    }
 
     shotClick(&chrome, chrome.tabstrip.new_tab.x + chrome.tabstrip.new_tab.w / 2,
               chrome.tabstrip.new_tab.y + chrome.tabstrip.new_tab.h / 2);
@@ -6362,23 +6368,25 @@ static int uiShotMain(void)
 
         /* Close chip: 20 px circle with a 16 px glyph. The old code left the
          * X 4x4 device pixels, so the point on the new diagonal was plain chip. */
-        chip = chrome.theme.tab_close_hover;
-        cx = chrome.tabstrip.close[2].x + chrome.tabstrip.close[2].w / 2;
-        cy = chrome.tabstrip.close[2].y + chrome.tabstrip.close[2].h / 2;
+        if (chrome.tabstrip.close[2].w > 0) {
+            chip = chrome.theme.tab_close_hover;
+            cx = chrome.tabstrip.close[2].x + chrome.tabstrip.close[2].w / 2;
+            cy = chrome.tabstrip.close[2].y + chrome.tabstrip.close[2].h / 2;
 
-        move.type = UI_MOUSE_MOVE;
-        move.x = cx;
-        move.y = cy;
-        uiChromeMouse(&chrome, &move);
-        uiChromePaint(&chrome, memory);
-        GdiFlush();
+            move.type = UI_MOUSE_MOVE;
+            move.x = cx;
+            move.y = cy;
+            uiChromeMouse(&chrome, &move);
+            uiChromePaint(&chrome, memory);
+            GdiFlush();
 
-        uiCheck("pixel-close-chip",
-                sameColor(shotPixel((const unsigned char*)bits, width, height,
-                                    cx + pad + 1, cy), chip));
-        uiCheck("pixel-close-glyph",
-                !sameColor(shotPixel((const unsigned char*)bits, width, height,
-                                     cx + pad, cy + pad), chip));
+            uiCheck("pixel-close-chip",
+                    sameColor(shotPixel((const unsigned char*)bits, width, height,
+                                        cx + pad + 1, cy), chip));
+            uiCheck("pixel-close-glyph",
+                    !sameColor(shotPixel((const unsigned char*)bits, width, height,
+                                         cx + pad, cy + pad), chip));
+        }
 
         /* Park the pointer off the chrome again for the later samples. */
         move.type = UI_MOUSE_LEAVE;
@@ -6398,6 +6406,65 @@ static int uiShotMain(void)
                 chrome.model.find_visible &&
                 uiChromeHitTest(&chrome, chrome.findbar.field.x + 4,
                                 chrome.findbar.field.y + 4) == UI_PART_FIND_FIELD);
+
+        /* Every tab carries its close chip at rest, not only when hovered, and
+         * only loses it once the strip is squeezed below half the natural
+         * width. Asserted as the rule so the check holds at any window size. */
+        {
+            int first = chrome.tabstrip.slot_of[0];
+
+            uiCheck("tab-close-default",
+                    chrome.tabstrip.tab[first].w > 0 &&
+                    ((chrome.tabstrip.close[first].w > 0) ==
+                     (chrome.tabstrip.tab[first].w * 2 >= chrome.theme.tab_max_w)));
+        }
+
+        /* Separators: one hairline between resting neighbours, none where a tab
+         * merges with the strip (active) or opens a pill (hovered). */
+        {
+            int sep = uiThemeScale(&chrome.theme, 1);
+            int sy = chrome.tabstrip.tab[3].y + chrome.tabstrip.tab[3].h / 2;
+            int sx;
+
+            sx = chrome.tabstrip.tab[3].x - (chrome.theme.tab_gap + sep) / 2;
+            uiCheck("pixel-tab-sep",
+                    sameColor(shotPixel((const unsigned char*)bits, width, height,
+                                        sx, sy), chrome.theme.tab_sep));
+
+            /* tab 1 is active: no line on either side of it. */
+            sx = chrome.tabstrip.tab[2].x - (chrome.theme.tab_gap + sep) / 2;
+            uiCheck("pixel-tab-sep-active",
+                    sameColor(shotPixel((const unsigned char*)bits, width, height,
+                                        sx, sy), chrome.theme.chrome));
+
+            sx = chrome.tabstrip.tab[1].x - (chrome.theme.tab_gap + sep) / 2;
+            uiCheck("pixel-tab-sep-active-left",
+                    sameColor(shotPixel((const unsigned char*)bits, width, height,
+                                        sx, sy), chrome.theme.chrome));
+
+            move.type = UI_MOUSE_MOVE;
+            move.x = chrome.tabstrip.tab[3].x + chrome.tabstrip.tab[3].w / 2;
+            move.y = sy;
+            uiChromeMouse(&chrome, &move);
+            uiChromePaint(&chrome, memory);
+            GdiFlush();
+
+            sx = chrome.tabstrip.tab[3].x - (chrome.theme.tab_gap + sep) / 2;
+            uiCheck("pixel-tab-sep-hover-left",
+                    sameColor(shotPixel((const unsigned char*)bits, width, height,
+                                        sx, sy), chrome.theme.chrome));
+
+            sx = chrome.tabstrip.tab[4].x - (chrome.theme.tab_gap + sep) / 2;
+            uiCheck("pixel-tab-sep-hover-right",
+                    sameColor(shotPixel((const unsigned char*)bits, width, height,
+                                        sx, sy), chrome.theme.chrome));
+
+            move.type = UI_MOUSE_LEAVE;
+            uiChromeMouse(&chrome, &move);
+            uiChromeTakeDirty(&chrome, &dirty);
+            uiChromePaint(&chrome, memory);
+            GdiFlush();
+        }
     }
 
     /* --- focused address pill (--ui-focus) -------------------------------- */
@@ -6430,6 +6497,25 @@ static int uiShotMain(void)
         uiCheck("compact-content", chrome.content.h > uiThemeScale(&chrome.theme, 80));
         uiCheck("compact-address", chrome.toolbar.address.w >= uiThemeScale(&chrome.theme, 120));
         uiCheck("compact-menu-right", chrome.toolbar.menu.rect.x + chrome.toolbar.menu.rect.w <= compact_w);
+
+        /* Squeezed below half the natural width: the close chip drops out (and
+         * with it its hit target), the favicon stays. */
+        uiCheck("compact-close-hidden",
+                chrome.tabstrip.count > 0 &&
+                chrome.tabstrip.close[chrome.tabstrip.slot_of[0]].w == 0);
+
+        uiChromePaint(&chrome, memory);
+        GdiFlush();
+
+        if (chrome.tabstrip.count > 0) {
+            const UiRect* t = &chrome.tabstrip.tab[chrome.tabstrip.slot_of[0]];
+            int fx = t->x + uiThemeScale(&chrome.theme, 18);
+            int fy = t->y + t->h / 2;
+
+            uiCheck("compact-keeps-favicon",
+                    !sameColor(shotPixel((const unsigned char*)bits, width, height, fx, fy),
+                               chrome.theme.chrome));
+        }
     }
     uiCheck("compact-back-inside", chrome.toolbar.back.rect.x >= 0 &&
                                   chrome.toolbar.back.rect.y + chrome.toolbar.back.rect.h <=

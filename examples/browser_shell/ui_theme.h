@@ -89,6 +89,7 @@ typedef struct UiTheme {
     unsigned tab_pressed;        /* inactive tab while the button is held */
     unsigned tab_close_hover;    /* circular close chip inside a tab */
     unsigned tab_close_pressed;  /* close chip while the button is held */
+    unsigned tab_sep;            /* hairline between two resting tabs */
     unsigned button_hover;       /* circular hover behind toolbar icons */
     unsigned button_pressed;
     unsigned close_hover;        /* find-bar close / neutral chips */

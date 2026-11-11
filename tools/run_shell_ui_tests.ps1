@@ -30,16 +30,21 @@ Import-Module (Join-Path $PSScriptRoot 'TestParallel.psm1') -Force -DisableNameC
 $run = New-TestRun -Suite 'shell-ui'
 
 $failures = 0
+# Size is in *device* pixels, so the 150% case asks for the same 1100x760 logical
+# chrome scaled up. Passing 1100x760 at 144 DPI would be a 733x528 logical window,
+# which is small enough that the tab strip legitimately hides the close chips
+# (tabs below half their natural width) - the assertions that click a chip would
+# then be testing a layout nobody asked for.
 $cases = @(
-    [pscustomobject]@{ Name = 'light'; Theme = 'light'; Dpi = 96;  Extra = ''; Png = (Join-Path $run.Dir 'ui-light.png');
+    [pscustomobject]@{ Name = 'light'; Theme = 'light'; Dpi = 96;  Size = '1100x760'; Extra = ''; Png = (Join-Path $run.Dir 'ui-light.png');
                        Out = ''; Err = ''; Proc = $null; Started = $null; Timeout = $false },
-    [pscustomobject]@{ Name = 'dark';  Theme = 'dark';  Dpi = 96;  Extra = ''; Png = (Join-Path $run.Dir 'ui-dark.png');
+    [pscustomobject]@{ Name = 'dark';  Theme = 'dark';  Dpi = 96;  Size = '1100x760'; Extra = ''; Png = (Join-Path $run.Dir 'ui-dark.png');
                        Out = ''; Err = ''; Proc = $null; Started = $null; Timeout = $false },
-    [pscustomobject]@{ Name = 'light-150'; Theme = 'light'; Dpi = 144; Extra = ''; Png = (Join-Path $run.Dir 'ui-light-150.png');
+    [pscustomobject]@{ Name = 'light-150'; Theme = 'light'; Dpi = 144; Size = '1650x1140'; Extra = ''; Png = (Join-Path $run.Dir 'ui-light-150.png');
                        Out = ''; Err = ''; Proc = $null; Started = $null; Timeout = $false },
-    [pscustomobject]@{ Name = 'dark-menu'; Theme = 'dark'; Dpi = 96; Extra = '--ui-menu'; Png = (Join-Path $run.Dir 'ui-menu-dark.png');
+    [pscustomobject]@{ Name = 'dark-menu'; Theme = 'dark'; Dpi = 96; Size = '1100x760'; Extra = '--ui-menu'; Png = (Join-Path $run.Dir 'ui-menu-dark.png');
                        Out = ''; Err = ''; Proc = $null; Started = $null; Timeout = $false },
-    [pscustomobject]@{ Name = 'dark-focus'; Theme = 'dark'; Dpi = 96; Extra = '--ui-focus'; Png = (Join-Path $run.Dir 'ui-focus-dark.png');
+    [pscustomobject]@{ Name = 'dark-focus'; Theme = 'dark'; Dpi = 96; Size = '1100x760'; Extra = '--ui-focus'; Png = (Join-Path $run.Dir 'ui-focus-dark.png');
                        Out = ''; Err = ''; Proc = $null; Started = $null; Timeout = $false }
 )
 
@@ -54,8 +59,8 @@ foreach ($case in $cases) {
     $case.Started = [Diagnostics.Stopwatch]::StartNew()
     $case.Proc = Start-Process -FilePath $exe -NoNewWindow -PassThru `
         -WorkingDirectory $run.Dir `
-        -ArgumentList ("--ui-shot `"{0}`" --ui-theme {1} --ui-dpi {2} --ui-size 1100x760 {3}" -f `
-            $case.Png, $case.Theme, $case.Dpi, $case.Extra) `
+        -ArgumentList ("--ui-shot `"{0}`" --ui-theme {1} --ui-dpi {2} --ui-size {3} {4}" -f `
+            $case.Png, $case.Theme, $case.Dpi, $case.Size, $case.Extra) `
         -RedirectStandardOutput $case.Out `
         -RedirectStandardError $case.Err
 }

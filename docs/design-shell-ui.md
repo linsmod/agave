@@ -94,7 +94,7 @@ UI 侧的具体症状：
 | 组件 | 边界 | 关键交互 |
 |---|---|---|
 | `UiButton` | 32×32@96，圆形 hover 底（Chrome 工具栏），图标盒按按钮尺寸算（上限 16px），`enabled/toggled/pressed` | 命中 → `id` |
-| `UiTabStrip` | 标签条 + `+`；活动标签削底与工具栏融合，非活动标签 hover/press 是**内缩 pill**，关闭 chip 20px + 16px glyph；中键关闭 | 命中标签/关闭/新标签 |
+| `UiTabStrip` | 标签条 + `+`；活动标签削底与工具栏融合，非活动标签 hover/press 是**内缩 pill**；每 tab 默认带关闭 chip（20px 圆 + 16px glyph，压到不足一半宽度才隐藏）；tab 之间常驻分隔线；中键关闭 | 命中标签/关闭/新标签 |
 | `UiToolbar` | 后退/前进/刷新-停止/地址胶囊/Go/菜单 | 命令 ID 与旧按钮完全一致 |
 | `UiFindBar` | 右对齐浮条：搜索图标 + 输入 + 上/下/关闭 | `ID_FIND_*` |
 | `UiStatusBar` | 24px 状态栏 + 进度线 + 缩放胶囊 | 纯绘制 |
@@ -119,8 +119,10 @@ border），`WM_NCHITTEST` 把标签条空白处当 `HTCAPTION`（拖动、双�
 标签和右侧窗口按钮占同一行；tab 的可用宽度先扣掉 `3 * 46px` 的窗口按钮区。
 
 标签宽度随窗口自适应：`slot = (W - pad*2 - plusW - windowButtons)/n`，上限 220px，
-**没有最小宽度下限**——不够时继续压缩，标题省略、favicon/关闭按钮按宽度隐藏；
-`+` 永远排在最后一个 tab 与窗口按钮之间，不会压到按钮下面。
+**没有最小宽度下限**——不够时继续压缩，但**只压标题**：favicon 永远在（Chrome 同），
+关闭 chip 按 `w * 2 < tab_max_w`（不足一半自然宽度）隐藏——隐藏时 `close[i]` 是零矩形，
+于是"看不见"和"点不到"由同一个数据决定。`+` 永远排在最后一个 tab 与窗口按钮之间，
+不会压到按钮下面。
 
 ### 5.1 窗口按钮：Chromium 的 CUSTOM_DRAWN 做法
 
@@ -229,17 +231,24 @@ chrome 全部落在 `HTCLIENT` 里（只有标签条空白处是 `HTCAPTION`）�
   `button_pressed`、`window_close_hover`。活动标签按下不额外变色（Chrome 同）。
 - 光标：`IDC_IBEAM` 只给地址胶囊与查找框，其余 part 一律 `IDC_ARROW`——chrome 不是
   网页，工具栏按钮不该出现手型。
+- **tab 分隔线**（`paintTabSeparators`）：相邻两个 tab 之间画 1px 竖线（高 16px 居中），
+  位置在布局 gap 的中间，所以它**始终有自己的一份空间**，不会吃 tab 宽度。两侧任一
+  tab 处于"与 strip 融合"状态（活动 / hover / 按下）时整条不画——这就是"活动标签两侧
+  不显示、hover 的 tab 两侧不显示"。颜色 `tab_sep`：暗色深灰 `#3C4043`、亮色浅白
+  `#F4F6F8`（对 `#DEE1E6` 的 strip 是提亮而不是压暗）。
 
 ## 6 主题 token
 
 浅色（Chrome 2023 风格）：tab strip `#DEE1E6`、toolbar `#FFFFFF`、
-活动标签 `#FFFFFF`、非活动标签 hover `#D3D6DB`、地址胶囊 `#F1F3F4`（focus 时
+活动标签 `#FFFFFF`、非活动标签 hover `#D3D6DB` / 按下 `#C2C6CC`、tab 分隔线 `#F4F6F8`、
+地址胶囊 `#F1F3F4`（focus 时
 `#FFFFFF` + 2px `#1A73E8` 焦点环）、工具栏图标 hover `#F1F3F4`、文字 `#202124`、
 次要 `#5F6368`、边框 `#DADCE0`、强调 `#1A73E8`、窗口关闭 hover `#E81123`。
 
 暗色（对齐 Chrome 无痕窗口的实际截图，2026-11-11）：frame/tab strip `#1F2020`、
 toolbar/活动标签/content `#3C3C3C`、地址胶囊 `#282828`（focus 时 `#3C3C3C`）、
-非活动标签 hover `#474747` / 按下 `#505050`、工具栏图标 hover `#505050`、焦点环 `#A8C7FA`、
+非活动标签 hover `#474747` / 按下 `#505050`、tab 分隔线 `#3C4043`、
+工具栏图标 hover `#505050`、焦点环 `#A8C7FA`、
 文字 `#E8EAED`、次要 `#9AA0A6`、图标 `#C4C7C5`、边框 `#373737`、状态栏 `#1F1F1F`、
 窗口关闭 hover `#C42B1C`。**层次关系**是这组值的重点：strip 比 toolbar 暗、胶囊比
 toolbar 更暗；`--ui-shot` 用亮度关系断言它们（`dark-strip-darker` /
@@ -269,10 +278,13 @@ Noto Sans SC → Segoe UI → Arial` 取第一个装得上的。GDI+ 的 `DrawSt
 ```powershell
 build-zig-native\agave_shell.exe --ui-shot build-zig-native\ui-light.png --ui-theme light
 build-zig-native\agave_shell.exe --ui-shot build-zig-native\ui-dark.png  --ui-theme dark
-build-zig-native\agave_shell.exe --ui-shot build-zig-native\ui-150.png   --ui-theme light --ui-dpi 144
+build-zig-native\agave_shell.exe --ui-shot build-zig-native\ui-150.png   --ui-theme light --ui-dpi 144 --ui-size 1650x1140
 build-zig-native\agave_shell.exe --ui-shot build-zig-native\ui-menu.png  --ui-theme dark --ui-menu
 build-zig-native\agave_shell.exe --ui-shot build-zig-native\ui-focus.png --ui-theme dark --ui-focus
 ```
+
+`--ui-size` 是**设备像素**：高 DPI 要配同样逻辑尺寸（1100×760@96 ≈ 1650×1140@144），
+否则拿到的是一个很窄的逻辑窗口（tab 会合理地隐藏关闭 chip），断言口径就变了。
 
 不建窗口、不启动引擎、不读 profile：创建 32bpp 离屏 DIB → 填样例模型
 （5 个标签、进度 42%、查找栏展开、缩放 110%）→ `uiChromeLayout/Paint` →
@@ -291,15 +303,20 @@ build-zig-native\agave_shell.exe --ui-shot build-zig-native\ui-focus.png --ui-th
    同一 part 内移动**不产生**脏矩形、hover pill 与底部透出的 strip 像素、
    按下 = `tab_pressed`、press 整窗脏、关闭 chip 20px 圆与 16px glyph（对角线像素）、
    `IDC_IBEAM` 的两个 part；
-6. 150% DPI：tabstrip 60 / toolbar 66 / content top = 126，菜单仍在窗口内；
-7. 暗色层次：strip < toolbar、胶囊 < toolbar、hover > 活动标签、焦点环 =
+6. 标签条（5）：每个 tab 默认有 chip（按"w 是否过半"的规则断言，任意窗口尺寸都成立）、
+   tab 间分隔线 = `tab_sep`、活动标签两侧与 hover 标签两侧的分隔线 = strip 色、
+   压缩后 chip 为零矩形且 favicon 仍在；
+7. 150% DPI：tabstrip 60 / toolbar 66 / content top = 126，菜单仍在窗口内；
+8. 暗色层次：strip < toolbar、胶囊 < toolbar、hover > 活动标签、焦点环 =
    `#A8C7FA`；
-8. `--ui-menu`（72 项）：菜单宽度/锚定、子菜单打开与反向翻转、行/分隔行命中、
+9. `--ui-menu`（80 项）：菜单宽度/锚定、子菜单打开与反向翻转、行/分隔行命中、
    Down 跳过分隔行与禁用行、Right/Left 进出子菜单、点击选中/点外取消、
    hover/背景像素、圆形工具栏 hover；
-9. `--ui-focus`（54 项）：焦点字段、胶囊填充色、焦点环左右/上边像素与 token。
+10. `--ui-focus`（62 项）：焦点字段、胶囊填充色、焦点环左右/上边像素与 token。
 
-各项计数（2026-11-11）：亮 45 / 暗 49 / 亮-150% 45 / 暗-菜单 72 / 暗-焦点 54。
+各项计数（2026-11-11）：亮 53 / 暗 57 / 亮-150% 53 / 暗-菜单 80 / 暗-焦点 62。
+窄窗口（如 `--ui-size 700x460`，tab 不足一半）会跳过 4 条"关闭 chip"断言：那里
+chip 本来就不该存在。
 
 回归 `tools/run_shell_ui_tests.ps1`：亮/暗/亮-150%/暗-菜单/暗-焦点五份并行，
 实测约 **1.5 s**（单份 ~1.2–1.5 s，含进程启动）。

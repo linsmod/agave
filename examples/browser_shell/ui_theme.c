@@ -257,6 +257,8 @@ static void applyPalette(UiTheme* theme)
         theme->tab_pressed = UI_RGB(0x50, 0x50, 0x50);
         theme->tab_close_hover = UI_RGB(0x5A, 0x5A, 0x5A);
         theme->tab_close_pressed = UI_RGB(0x6A, 0x6A, 0x6A);
+        /* Dark gray: reads against the #1F2020 strip without becoming a border. */
+        theme->tab_sep = UI_RGB(0x3C, 0x40, 0x43);
         theme->button_hover = UI_RGB(0x50, 0x50, 0x50);
         theme->button_pressed = UI_RGB(0x5A, 0x5A, 0x5A);
         theme->close_hover = UI_RGB(0x4A, 0x4A, 0x4A);
@@ -298,6 +300,8 @@ static void applyPalette(UiTheme* theme)
         theme->tab_pressed = UI_RGB(0xC2, 0xC6, 0xCC);
         theme->tab_close_hover = UI_RGB(0xD0, 0xD3, 0xD8);
         theme->tab_close_pressed = UI_RGB(0xB4, 0xB9, 0xC0);
+        /* Pale white: the light strip is #DEE1E6, so the hairline is lighter. */
+        theme->tab_sep = UI_RGB(0xF4, 0xF6, 0xF8);
         theme->button_hover = UI_RGB(0xF1, 0xF3, 0xF4);
         theme->button_pressed = UI_RGB(0xE3, 0xE5, 0xE8);
         theme->close_hover = UI_RGB(0xE8, 0xEA, 0xED);

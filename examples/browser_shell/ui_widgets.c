@@ -381,9 +381,19 @@ void uiTabStripLayout(UiTabStrip* strip, const UiTheme* theme,
             w = gap + 2;
 
         strip->tab[index] = uiRectMake(x, tab_y, w, theme->tab_h);
-        strip->close[index] = uiRectMake(x + w - close_w - uiThemeScale(theme, 2),
-                                         tab_y + (theme->tab_h - close_w) / 2,
-                                         close_w, close_w);
+
+        /* Every tab carries its close chip, hovered or not (Chrome's default).
+         * It only drops out once the strip is squeezed to less than half the
+         * natural tab width: at that point the title needs the room more than
+         * the chip does. The rect is the single source of truth - a zero rect
+         * means "not painted, not clickable". */
+        if (w * 2 >= theme->tab_max_w) {
+            strip->close[index] = uiRectMake(x + w - close_w - uiThemeScale(theme, 2),
+                                             tab_y + (theme->tab_h - close_w) / 2,
+                                             close_w, close_w);
+        } else {
+            strip->close[index] = uiRectMake(0, 0, 0, 0);
+        }
 
         x += slot_w;
     }
@@ -446,11 +456,12 @@ static void paintTab(UiPainter* painter, const UiTheme* theme,
     if (rect.w <= 0)
         return;
 
-    /* Below ~52 px a close hit target would eat the whole tab; Chrome drops
-     * it too (the tab still closes with the context menu / middle click). */
-    show_close = (active || hovered || close_hovered) &&
-                 rect.w > uiThemeScale(theme, 52);
-    show_favicon = rect.w > uiThemeScale(theme, 58);
+    /* Layout already decided whether this tab has a chip (it drops out below
+     * half the natural width); painting follows the rect so what looks
+     * clickable and what is clickable cannot drift apart. */
+    show_close = strip->close[index].w > 0;
+    /* The icon never goes away: shrinking only takes room from the title. */
+    show_favicon = 1;
 
     if (active)
         fillTabShape(painter, rect, theme->tab_radius, theme->surface);
@@ -496,6 +507,50 @@ static void paintTab(UiPainter* painter, const UiTheme* theme,
                       close_pressed);
 }
 
+/* A tab that merges into the strip visually: the active one (its shape is
+ * squared off into the toolbar) and the one under the pointer (its pill already
+ * separates itself). Separators never touch those. */
+static int tabIsFlush(const UiChromeModel* model, const UiTabStrip* strip, int index)
+{
+    return index == model->active ||
+           index == strip->hover_tab ||
+           index == strip->pressed_tab;
+}
+
+/* Chrome's strip keeps a hairline between neighbours. It lives inside the
+ * layout gap, so it always has its own room and never eats a tab; it is skipped
+ * where either neighbour is flush (see above) - which is exactly "no line on
+ * both sides of the active/hovered tab". */
+static void paintTabSeparators(UiPainter* painter, const UiTheme* theme,
+                               const UiChromeModel* model, UiTabStrip* strip)
+{
+    int width = uiThemeScale(theme, 1);
+    int height = uiThemeScale(theme, 16);
+    int i;
+
+    if (height > theme->tab_h - uiThemeScale(theme, 10))
+        height = theme->tab_h - uiThemeScale(theme, 10);
+    if (height < 2)
+        height = 2;
+
+    for (i = 1; i < strip->count; ++i) {
+        int left = strip->slot_of[i - 1];
+        int right = strip->slot_of[i];
+        const UiRect* tab = &strip->tab[right];
+
+        if (tab->w <= 0)
+            continue;
+
+        if (tabIsFlush(model, strip, left) || tabIsFlush(model, strip, right))
+            continue;
+
+        uiFillRect(painter,
+                   uiRectMake(tab->x - (theme->tab_gap + width) / 2,
+                              tab->y + (tab->h - height) / 2, width, height),
+                   theme->tab_sep);
+    }
+}
+
 void uiTabStripPaint(UiTabStrip* strip, const UiTheme* theme,
                      const UiChromeModel* model, UiPainter* painter)
 {
@@ -509,6 +564,8 @@ void uiTabStripPaint(UiTabStrip* strip, const UiTheme* theme,
 
     GdipSetClipRectI(painter->g, strip->rect.x, strip->rect.y,
                      strip->rect.w, strip->rect.h, CombineModeReplace);
+
+    paintTabSeparators(painter, theme, model, strip);
 
     for (i = 0; i < strip->count; ++i) {
         int index = strip->slot_of[i];
