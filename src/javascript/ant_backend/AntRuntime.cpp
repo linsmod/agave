@@ -211,6 +211,7 @@ struct RuntimeState {
     AntbClass*         unknownElementIface;
     AntbClass*         namedNodeMapIface;
     AntbClass*         attrIface;
+    AntbClass*         shadowRootIface;
     std::map<std::string, AntbClass*>* tagClasses;   /* tag -> element interface */
     /* Engine-scoped aux interfaces (not part of the DOM tree; shared by every
      * realm of this view). They were statics too, so the same cross-engine
@@ -240,6 +241,9 @@ struct RuntimeState {
     /* HTMLTemplateElement.content (issues #18 phase B): one fragment per template,
      * created lazily and owned by the document, so it dies with it. */
     std::map<WebCore::Node*, WebCore::DocumentFragment*>* templateContents;
+    /* attachShadow() (issues #18 phase C): host element -> mode (1 open, 2 closed).
+     * The shadow children are the host's real children, so nothing else is kept. */
+    std::map<WebCore::Node*, int>* shadowRoots;
     AntbValue*         docObj;          /* the JS document object (rooted) */
     bool               documentBound;
     void*              listeners;       /* std::vector<Listener>* (see below) */
@@ -329,6 +333,7 @@ struct RealmInterfaces {
     AntbClass* unknownElementIface;
     AntbClass* namedNodeMapIface;
     AntbClass* attrIface;
+    AntbClass* shadowRootIface;
     AntbClass* windowClass;
     AntbClass* nodeListClass;
     AntbClass* htmlCollectionClass;
@@ -338,7 +343,7 @@ struct RealmInterfaces {
           elementIface(NULL), htmLElementIface(NULL), svgElementIface(NULL), svgSvgIface(NULL),
           documentFragmentIface(NULL), characterDataIface(NULL), textIface(NULL),
           commentIface(NULL), unknownElementIface(NULL), namedNodeMapIface(NULL),
-          attrIface(NULL), windowClass(NULL),
+          attrIface(NULL), shadowRootIface(NULL), windowClass(NULL),
           nodeListClass(NULL), htmlCollectionClass(NULL) {}
 };
 
@@ -377,6 +382,9 @@ struct DocumentRuntime {
     /* HTMLTemplateElement.content (issues #18 phase B): one fragment per template,
      * created lazily and owned by the document, so it dies with it. */
     std::map<WebCore::Node*, WebCore::DocumentFragment*>* templateContents;
+    /* attachShadow() (issues #18 phase C): host element -> mode (1 open, 2 closed).
+     * The shadow children are the host's real children, so nothing else is kept. */
+    std::map<WebCore::Node*, int>* shadowRoots;
     /* DOM Selection API: one live DOMSelection per document (a view over the
      * frame's selection) and the Range objects handed to JS. Ranges are ref'd
      * when wrapped and released with the document (see selectionReleaseRefs);
@@ -631,6 +639,7 @@ static void activateState(RuntimeState* state)
 #define g_characterDataIface    (g_currentState->characterDataIface)
 #define g_namedNodeMapIface     (g_currentState->namedNodeMapIface)
 #define g_attrIface             (g_currentState->attrIface)
+#define g_shadowRootIface       (g_currentState->shadowRootIface)
 #define g_textIface             (g_currentState->textIface)
 #define g_commentIface          (g_currentState->commentIface)
 #define g_unknownElementIface   (g_currentState->unknownElementIface)
@@ -957,6 +966,9 @@ static void releaseDocumentRuntime(DocumentRuntime* document, bool releaseValues
     delete document->upgradedCustom;
     document->upgradedCustom = NULL;
 
+    delete document->shadowRoots;
+    document->shadowRoots = NULL;
+
     if (document->templateContents) {
         for (std::map<WebCore::Node*, WebCore::DocumentFragment*>::iterator it =
                  document->templateContents->begin();
@@ -1204,6 +1216,9 @@ int nodePrependChildren(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, v
 int nodeBefore(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeAfter(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeReplaceWith(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeAssignedNodes(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int globalAttachShadow(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeAssignedElements(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int namedMapItemFn(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int namedMapGetNamedItemFn(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int namedMapSetNamedItem(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
@@ -6461,6 +6476,7 @@ static void installGlobalApi(AntbEngine* engine, AntbValue* global)
         antb_define_method(g_engine, global, "__agbCEGetName", globalCEGetName, NULL);
         antb_define_method(g_engine, global, "__agbCEDefine", globalCEDefine, NULL);
         antb_define_method(g_engine, global, "__agbCEUpgrade", globalCEUpgrade, NULL);
+        antb_define_method(g_engine, global, "__agbAttachShadow", globalAttachShadow, NULL);
         antb_define_method(g_engine, global, "__agbViewportWidth", globalViewportSize, (void*)0);
         antb_define_method(g_engine, global, "__agbViewportHeight", globalViewportSize, (void*)1);
         /* Direct value access for the prototype-level value accessor (React tracker). */
@@ -8942,6 +8958,121 @@ int nodeReplaceWith(AntbEngine*, AntbValue* self, AntbValue** args, int argc,
     return mixinInsert(self, args, argc, 4);
 }
 
+/* ---- Shadow DOM (issues #18 phase C) ------------------------------------ *
+ * A ShadowRoot wrapper is bound to its host element: it carries both the
+ * shadow-root tag (host/mode) and the node tag (everything else delegates to the
+ * host through the normal node machinery), and its children ARE the host's
+ * children, so component output renders through the normal layout path. */
+static int shadowRootMode(WebCore::Node* host)
+{
+    DocumentRuntime* runtime;
+
+    if (!host || !g_currentState || !host->document())
+        return 0;
+    runtime = documentRuntimeFor(g_currentState, host->document());
+    if (!runtime || !runtime->shadowRoots)
+        return 0;
+
+    {
+        std::map<WebCore::Node*, int>::iterator it = runtime->shadowRoots->find(host);
+
+        return it == runtime->shadowRoots->end() ? 0 : it->second;
+    }
+}
+
+static void rememberShadowRoot(WebCore::Node* host, int mode)
+{
+    DocumentRuntime* runtime;
+
+    if (!host || !host->document() || !g_currentState)
+        return;
+    runtime = documentRuntimeFor(g_currentState, host->document());
+    if (!runtime)
+        return;
+    if (!runtime->shadowRoots)
+        runtime->shadowRoots = new std::map<WebCore::Node*, int>();
+    (*runtime->shadowRoots)[host] = mode;
+}
+
+/* One wrapper per host (the bridge cache keys on pointer + tag), so
+ * `el.shadowRoot === el.shadowRoot` and `root.host === el`. */
+static AntbValue* wrapShadowRoot(AntbEngine* engine, WebCore::Element* host)
+{
+    AntbValue* v;
+
+    if (!engine || !host || !g_shadowRootIface)
+        return NULL;
+
+    v = antb_wrap_native_as_owner(engine, g_shadowRootIface, host, AGB_TAG_SHADOWROOT,
+                                  host->document());
+    if (!v)
+        return NULL;
+
+    /* The same wrapper also answers as the host node, which is what makes
+     * appendChild/querySelector/innerHTML/childNodes work on a shadow root. */
+    antb_set_native(v, host, AGB_TAG_NODE);
+    return v;
+}
+
+static int shadowRootGetter(AntbEngine* engine, AntbValue* self, const char* name,
+                            AntbValue* out, void*)
+{
+    WebCore::Element* host =
+        self ? static_cast<WebCore::Element*>(antb_get_native(self, AGB_TAG_SHADOWROOT)) : NULL;
+    int mode;
+
+    if (!host || !name)
+        return 0;
+
+    if (!strcmp(name, "host")) {
+        AntbValue* v = wrapNode(engine, host);
+
+        if (!v)
+            return assignNull(engine, out);
+        antb_value_assign(out, v);
+        antb_value_release(v);
+        return 1;
+    }
+
+    if (!strcmp(name, "mode")) {
+        AntbValue* v;
+
+        mode = shadowRootMode(host);
+        v = antb_make_string(engine, mode == 2 ? "closed" : "open");
+        if (!v)
+            return 0;
+        antb_value_assign(out, v);
+        antb_value_release(v);
+        return 1;
+    }
+
+    return 0;
+}
+
+/* Elements that cannot host a shadow root (same list Chrome uses). */
+static bool cannotHostShadowRoot(WebCore::Element* element)
+{
+    static const char* kForbidden[] = {
+        "a", "area", "base", "br", "col", "embed", "hr", "img", "input",
+        "link", "meta", "param", "source", "track", "wbr", NULL
+    };
+    std::string tag;
+    size_t i;
+
+    if (!element)
+        return true;
+
+    tag = element->tagName().utf8().data();
+    for (i = 0; i < tag.size(); ++i)
+        if (tag[i] >= 'A' && tag[i] <= 'Z')
+            tag[i] = (char)(tag[i] - 'A' + 'a');
+
+    for (i = 0; kForbidden[i]; ++i)
+        if (tag == kForbidden[i])
+            return true;
+    return false;
+}
+
 /* ---- HTMLTemplateElement (issues #18 phase B) --------------------------- *
  * This tree has no template-contents mode in the parser and no
  * HTMLNames::templateTag, so a <template>'s children are ordinary children until
@@ -9600,6 +9731,66 @@ static void customElementAttributeHook(void* elementPointer, const char* name)
         customElementAttributeChanged(element, name, value.utf8().data());
         g_inCustomElementHook = false;
     }
+}
+
+/* __agbAttachShadow(el, mode): records the root and hands back its wrapper. The
+ * spec checks (invalid mode, already attached, elements that cannot host one) run
+ * in prelude.js, which can throw the right error types (issues #18 phase C). */
+int globalAttachShadow(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
+                       AntbValue* out, void*)
+{
+    WebCore::Node* n = (argc > 0 && args[0]) ? nodeOf(args[0]) : NULL;
+    AntbValue* root;
+    int mode = 1;
+
+    if (!n || !n->isElementNode())
+        return 0;
+
+    if (argc > 1 && args[1]) {
+        char* text = antb_to_utf8(args[1]);
+
+        if (text) {
+            if (!strcmp(text, "closed"))
+                mode = 2;
+            antb_free(text);
+        }
+    }
+
+    if (shadowRootMode(n))
+        return 0;                          /* already attached: prelude throws */
+
+    rememberShadowRoot(n, mode);
+    root = wrapShadowRoot(engine, static_cast<WebCore::Element*>(n));
+    if (!root)
+        return 0;
+
+    antb_value_assign(out, root);
+    antb_value_release(root);
+    return 1;
+}
+/* slot.assignedNodes()/assignedElements(): no distribution yet, so the documented
+ * empty answer. Kept so component code does not throw. */
+int nodeAssignedNodes(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
+                      AntbValue* out, void*)
+{
+    AntbValue* list = antb_make_array(engine);
+    bool flatten;
+
+    (void)argc;
+    flatten = (argc > 0 && args[0]) && antb_to_boolean(args[0]);
+    (void)flatten;
+
+    if (!list)
+        return 0;
+    antb_value_assign(out, list);
+    antb_value_release(list);
+    return 1;
+}
+
+int nodeAssignedElements(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
+                         AntbValue* out, void*)
+{
+    return nodeAssignedNodes(engine, NULL, args, argc, out, NULL);
 }
 
 int nodeScrollIntoView(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
@@ -11087,6 +11278,22 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
         } else {
             return 0;
         }
+    } else if (!strcmp(name, "shadowRoot") && n->isElementNode()) {
+        /* Only an open root is exposed on the host (Chrome: closed ones are not). */
+        if (shadowRootMode(n) != 1)
+            return assignNull(engine, out);
+        {
+            AntbValue* root = wrapShadowRoot(engine, static_cast<WebCore::Element*>(n));
+
+            if (!root)
+                return assignNull(engine, out);
+            antb_value_assign(out, root);
+            antb_value_release(root);
+        }
+        return 1;
+    } else if (!strcmp(name, "assignedSlot")) {
+        /* No light-DOM distribution in this version: nothing is assigned. */
+        return assignNull(engine, out);
     } else if (!strcmp(name, "content") && n->isElementNode()
                && isTemplateElement(static_cast<WebCore::Element*>(n))) {
         /* HTMLTemplateElement.content: the lazily created fragment. */
@@ -16421,6 +16628,7 @@ static const DomIfaceDef kDomIfaces[] = {
     { "Document",               "Node" },
     { "HTMLDocument",           "Document" },
     { "NamedNodeMap",           NULL },
+    { "ShadowRoot",             "DocumentFragment" },
     { "HTMLTemplateElement",    "HTMLElement" },
     { "Attr",                   "Node" },
     { "Element",                "Node" },
@@ -16636,6 +16844,8 @@ static const DomMethodImpl kDomMethodImpls[] = {
     { "after"                     , nodeAfter },
     { "append"                    , nodeAppendChildren },
     { "appendChild"               , nodeAppendChild },
+    { "assignedNodes"             , nodeAssignedNodes },
+    { "assignedElements"          , nodeAssignedElements },
     { "before"                    , nodeBefore },
     { "blur"                      , nodeBlur },
     { "canPlayType"               , nodeMediaCanPlayType },
@@ -16756,6 +16966,10 @@ static const DomMethodExtra kExtraMethods[] = {
     { "Node", "dispatchEvent" },
     { "Node", "getRootNode" },
     { "Node", "removeEventListener" },
+    { "ShadowRoot", "querySelector" },
+    { "ShadowRoot", "querySelectorAll" },
+    { "HTMLSlotElement", "assignedNodes" },
+    { "HTMLSlotElement", "assignedElements" },
     { "Element", "append" },
     { "Element", "prepend" },
     { "Element", "before" },
@@ -16799,6 +17013,7 @@ void resetInterfaceClasses(RuntimeState* state)
     state->characterDataIface = NULL;
     state->namedNodeMapIface = NULL;
     state->attrIface = NULL;
+    state->shadowRootIface = NULL;
     state->textIface = NULL;
     state->commentIface = NULL;
     state->unknownElementIface = NULL;
@@ -16882,6 +17097,13 @@ static int attrHostGet(AntbEngine* engine, AntbValue* self, const char* name,
     /* NodeList/HTMLCollection declare `length` in their IDL too, and their
      * receiver is a collection wrapper, not a node: the collection dispatch must
      * answer (it also handles the numeric indices). */
+    result = 0;
+    if (antb_get_native(self, AGB_TAG_SHADOWROOT)) {
+        result = shadowRootGetter(engine, self, name, out, NULL);
+        if (result > 0)
+            return result;
+    }
+
     if (antb_get_native(self, AGB_TAG_NAMEDMAP))
         result = namedMapGetter(engine, self, name, out, NULL);
     else if (antb_get_native(self, AGB_TAG_COLLECTION))
@@ -17107,6 +17329,7 @@ static void applyRealmInterfacesFor(RuntimeState* state, AntbRealm* realm)
     state->characterDataIface    = set ? set->characterDataIface : NULL;
     state->namedNodeMapIface     = set ? set->namedNodeMapIface : NULL;
     state->attrIface             = set ? set->attrIface : NULL;
+    state->shadowRootIface       = set ? set->shadowRootIface : NULL;
     state->textIface             = set ? set->textIface : NULL;
     state->commentIface          = set ? set->commentIface : NULL;
     state->unknownElementIface   = set ? set->unknownElementIface : NULL;
@@ -17297,6 +17520,7 @@ void ensureInterfaceClasses(AntbEngine* engine)
         g_characterDataIface    = byName["CharacterData"];
         g_namedNodeMapIface     = byName["NamedNodeMap"];
         g_attrIface             = byName["Attr"];
+        g_shadowRootIface       = byName["ShadowRoot"];
         g_textIface             = byName["Text"];
         g_commentIface          = byName["Comment"];
         g_unknownElementIface   = byName["HTMLUnknownElement"];
@@ -17374,6 +17598,10 @@ void ensureInterfaceClasses(AntbEngine* engine)
             antb_class_set_property_rw(engine, g_namedNodeMapIface, "", namedMapGetter, NULL, NULL);
         if (g_attrIface)
             antb_class_set_property_rw(engine, g_attrIface, "", nodeGetter, nodeSetter, NULL);
+        /* The shadow root wrapper is host-backed: host/mode answered by its own
+         * getter, everything else (innerHTML, childNodes, ...) by the node one. */
+        if (g_shadowRootIface)
+            antb_class_set_property_rw(engine, g_shadowRootIface, "", shadowRootGetter, nodeSetter, NULL);
         /* Collections answer length/numeric indices through the same catch-all
          * mechanism; item()/namedItem()/forEach/iterators stay on the prototype. */
         if (g_nodeListClass)
@@ -17430,6 +17658,7 @@ void ensureInterfaceClasses(AntbEngine* engine)
         set->characterDataIface = g_characterDataIface;
     set->namedNodeMapIface  = g_namedNodeMapIface;
     set->attrIface          = g_attrIface;
+    set->shadowRootIface    = g_shadowRootIface;
         set->textIface = g_textIface;
         set->commentIface = g_commentIface;
         set->unknownElementIface = g_unknownElementIface;

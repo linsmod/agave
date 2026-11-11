@@ -113,9 +113,19 @@ qsChild=3 qsDesc=3 qsAdj=1 qsSib=2 qsNth=1 qsOdd=2 qsNot=2 qsFirst=1 qsList2=4 q
 `geolocation`、`FileReader`、`OffscreenCanvas`、
 `AudioContext`/`speechSynthesis`、`devicePixelRatio`、`print`、`Temporal`、`WebGL`。
 
-**Web Components 单列（P0，issues #18）**：`customElements`（`typeof` 为 `undefined`）、`attachShadow`/`ShadowRoot`、
-`HTMLTemplateElement`（**已支持**，见下方 G1/`#18 phase B` 说明，prelude 的占位构造器已被真接口取代）、
-`adoptedStyleSheets` 全缺；这也是 GitHub 首页 `core-*`/`marketing-*`/`landing-pages-*` 模块 `ReferenceError: 'customElements' is not defined` 的原因。
+**Web Components（P0，issues #18）现状**：`customElements`（**已支持**，阶段 A：`define/get/getName/whenDefined/upgrade` +
+`connectedCallback`/`disconnectedCallback`/`attributeChangedCallback`/`adoptedCallback` 的宿主侧分发 + `createElement` 升级）、
+`HTMLTemplateElement`（**已支持**，阶段 B）、`attachShadow`/`ShadowRoot`（**已支持**，阶段 C，务实版，见下）；
+**仍缺** `adoptedStyleSheets` 与构造式 `CSSStyleSheet`（阶段 D，未做）。GitHub 首页原先的
+`ReferenceError: 'customElements' is not defined` 已消失。
+
+**`attachShadow` / `ShadowRoot` 已支持（2026-11-11，issues #18 phase C，务实版）**：`attachShadow({mode})` 返回
+真 `ShadowRoot`（`instanceof ShadowRoot`/`DocumentFragment`、`[object ShadowRoot]`），`host`/`mode`/`innerHTML`/
+`querySelector(All)`/`appendChild`/`childNodes` 可用；`host.shadowRoot` 只在 open 模式暴露；重复 attach →
+`NotSupportedError`、非法 mode → `TypeError`、`<a>/<img>/<input>…` 泊位 → `NotSupportedError`；`<slot>.assignedNodes()`
+返回 `[]`、`assignedSlot` 为 `null`。⚠ **实现方式**：这棵树没有 shadow tree，wrapper 绑定在宿主元素上、它的子节点就是宿主的
+真实子节点（组件渲染什么就画什么）；因此**没有样式封装**（shadow 内的 `<style>` 会全局生效）、**没有 light-DOM 分发**、
+`document.querySelectorAll` 也能看到 shadow 内容。
 
 **`HTMLTemplateElement` 已支持（2026-11-11，issues #18 phase B）**：真接口类（IDL 表 + `tag→class` 映射），
 `content` 是懒创建的 `DocumentFragment`（解析器塞进元素的子节点在首次访问时搬进 content，和 Chrome 的模板内容一致），

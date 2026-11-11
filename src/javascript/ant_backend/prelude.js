@@ -147,6 +147,37 @@
       length: 0
     };
   }
+  /* attachShadow (issues #18 phase C): the spec checks live here because they have
+   * to throw real error types; the C++ side only records the root and returns the
+   * wrapper whose children are the host's real children (no shadow tree in this
+   * tree's WebCore, so what a component renders is what layout paints). */
+  if (!Element.prototype.attachShadow && typeof g.__agbAttachShadow === 'function') {
+    (function () {
+      var FORBIDDEN = { a: 1, area: 1, base: 1, br: 1, col: 1, embed: 1, hr: 1,
+                        img: 1, input: 1, link: 1, meta: 1, param: 1, source: 1,
+                        track: 1, wbr: 1 };
+      function domError(name, message) {
+        var error = new Error(message);
+        error.name = name;
+        return error;
+      }
+      Element.prototype.attachShadow = function (init) {
+        var mode = init && init.mode;
+        var tag = String(this.localName || this.tagName || '').toLowerCase();
+        var root = g.__agbAttachShadow(this, mode === 'closed' ? 'closed' : 'open');
+
+        if (!root)
+          throw domError('NotSupportedError',
+                         'attachShadow is not supported on <' + tag + '> (or a shadow root is already attached)');
+        if (mode !== undefined && mode !== 'open' && mode !== 'closed')
+          throw domError('TypeError', '"' + mode + '" is not a valid shadow root mode');
+        if (FORBIDDEN[tag])
+          throw domError('NotSupportedError', '<' + tag + '> cannot host a shadow root');
+        return root;
+      };
+    }());
+  }
+
   /* customElements (issues #18 phase A): the registry storage is per document and
    * lives in C++; this object owns the spec validation (name rules, duplicates),
    * whenDefined()'s promise bookkeeping and the upgrade() walk. */

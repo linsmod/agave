@@ -408,6 +408,40 @@
     /* issues #18 phase B: HTMLTemplateElement. The parser has no template-contents
      * mode in this tree, so the facade hoists the parser children into `content`
      * on first access; innerHTML and cloneNode go through the same fragment. */
+    /* issues #18 phase C: attachShadow / ShadowRoot. The root is host-backed (its
+     * children are the host's), so component output renders; there is no style
+     * encapsulation and no light-DOM distribution yet. */
+    ok('shadow root', (function () {
+      var host = document.createElement('div');
+      document.body.appendChild(host);
+      var sr = host.attachShadow({ mode: 'open' });
+      sr.innerHTML = '<p class="sh">hi</p><slot></slot>';
+      var okIdentity = sr instanceof ShadowRoot && sr instanceof DocumentFragment &&
+                       Object.prototype.toString.call(sr) === '[object ShadowRoot]' &&
+                       sr.host === host && host.shadowRoot === sr && sr.mode === 'open';
+      var okRender = host.childNodes.length === 2 &&
+                     sr.querySelector('.sh') === host.firstChild &&
+                     sr.childNodes.length === 2;
+      var okHtml = sr.innerHTML === '<p class="sh">hi</p><slot></slot>';
+      var span = document.createElement('span');
+      sr.appendChild(span);
+      var okAppend = sr.childNodes.length === 3 && host.lastChild === span;
+      var closedHost = document.createElement('div');
+      var closed = closedHost.attachShadow({ mode: 'closed' });
+      var okClosed = closed.mode === 'closed' && closedHost.shadowRoot === null;
+      var dup = null, bad = null, forbidden = null;
+      try { host.attachShadow({ mode: 'open' }); } catch (e) { dup = e.name; }
+      try { document.createElement('div').attachShadow({ mode: 'sideways' }); } catch (e) { bad = e.name; }
+      try { document.createElement('img').attachShadow({ mode: 'open' }); } catch (e) { forbidden = e.name; }
+      var slot = document.createElement('slot');
+      var slotOk = typeof slot.assignedNodes === 'function' &&
+                   slot.assignedNodes().length === 0 && slot.assignedElements().length === 0 &&
+                   host.assignedSlot === null;
+      host.parentNode.removeChild(host);
+      return okIdentity && okRender && okHtml && okAppend && okClosed && slotOk &&
+             dup === 'NotSupportedError' && bad === 'TypeError' &&
+             forbidden === 'NotSupportedError';
+    })());
     ok('template element', (function () {
       var parsed = document.getElementById('tpl-probe');
       var t = document.createElement('template');
