@@ -1767,6 +1767,7 @@ static void onContextMenu(AgaveWebView* view, int x, int y,
 {
     UiMenu menu;
     POINT point;
+    POINT reopen;
     Tab* tab = (Tab*)user;
     HWND viewHwnd = view ? (HWND)agave_webview_hwnd(view) : NULL;
     int choice;
@@ -1839,6 +1840,7 @@ static void onContextMenu(AgaveWebView* view, int x, int y,
     point.x = x;
     point.y = y;
     ClientToScreen(viewHwnd ? viewHwnd : g_hwnd, &point);
+    reopen = point;
 
     {
         /* uiMenuHostRun runs a modal loop; restore the context so the menu
@@ -1846,18 +1848,36 @@ static void onContextMenu(AgaveWebView* view, int x, int y,
         ShellWindow* previous = g_cur;
 
         choice = uiMenuHostRun(&CHROME->theme, &menu, point.x, point.y,
-                               UI_MENU_ALIGN_LEFT, g_hwnd);
+                               UI_MENU_ALIGN_LEFT, g_hwnd, &reopen);
         g_cur = previous;
     }
 
     /* choice==0 means the menu was dismissed (or the popup failed to open): the
      * one line that tells "the menu never opened" apart from "the item did
-     * nothing". */
+     * nothing". choice==UI_MENU_REOPEN means it was dismissed by a right click
+     * and is about to be re-opened elsewhere. */
     agbLog(AGB_LOG_SHELL, "context menu at %d,%d link=%s image=%s choice=%d",
            x, y,
            (linkUrl && linkUrl[0]) ? linkUrl : "(none)",
            (imageUrl && imageUrl[0]) ? imageUrl : "(none)",
            choice);
+
+    /* A second right click dismissed the menu (the popup had the mouse capture,
+     * so the click never reached the page). Replay it where the pointer is and
+     * let the engine decide what is under it now - link, image or plain page -
+     * instead of leaving the user with "the menu just closed". */
+    if (choice == UI_MENU_REOPEN) {
+        HWND target = viewHwnd ? viewHwnd : g_hwnd;
+        LPARAM at;
+
+        ScreenToClient(target, &reopen);
+        at = MAKELPARAM((short)reopen.x, (short)reopen.y);
+
+        agbLog(AGB_LOG_SHELL, "context menu re-open at %d,%d", reopen.x, reopen.y);
+        PostMessageA(target, WM_RBUTTONDOWN, MK_RBUTTON, at);
+        PostMessageA(target, WM_RBUTTONUP, 0, at);
+        return;
+    }
 
     switch (choice) {
     case 1: if (canBack) backActive("context menu"); break;
@@ -2524,6 +2544,22 @@ static void toggleFind(void)
     InvalidateRect(g_hwnd, NULL, FALSE);
 }
 
+/* Ctrl+F / the app menu always *open* the bar and select the query; only the
+ * close button and Esc take it away (Chrome). The old toggle made a second
+ * Ctrl+F hide a bar the user was trying to get back to. */
+static void openFind(void)
+{
+    if (!g_findVisible) {
+        toggleFind();
+        return;
+    }
+
+    if (g_findEdit) {
+        SetFocus(g_findEdit);
+        SendMessageW(g_findEdit, EM_SETSEL, (WPARAM)0, (LPARAM)-1);
+    }
+}
+
 static void doFind(int forward)
 {
     char text[256];
@@ -2645,10 +2681,13 @@ static void showMainMenu(void)
         ShellWindow* previous = g_cur;
 
         choice = uiMenuHostRun(&CHROME->theme, &root, anchor.x, anchor.y,
-                               UI_MENU_ALIGN_RIGHT, g_hwnd);
+                               UI_MENU_ALIGN_RIGHT, g_hwnd, NULL);
         g_cur = previous;
     }
 
+    /* The app menu has no "re-open where the pointer is" behaviour in Chrome:
+     * a right click just puts it away (UI_MENU_REOPEN falls through the switch
+     * below as a no-op). */
     agbLog(AGB_LOG_SHELL, "app menu choice=%d", choice);
 
     CHROME->toolbar.menu.toggled = 0;
@@ -2676,7 +2715,7 @@ static void showMainMenu(void)
     case 3: setZoom(g_zoom - 25, "menu zoom out"); break;
     case 4: setZoom(100, "menu reset zoom"); break;
     case 5: navigateActive("about:blank", 1, "menu"); break;
-    case 6: toggleFind(); break;
+    case 6: openFind(); break;
     case 7: reloadActive("menu"); break;
     case 8: injectVConsole(g_tabs[g_activeTab].view); break;
     case 9: injectInspector(g_tabs[g_activeTab].view); break;
@@ -6417,6 +6456,10 @@ static int uiShotMain(void)
                     chrome.tabstrip.tab[first].w > 0 &&
                     ((chrome.tabstrip.close[first].w > 0) ==
                      (chrome.tabstrip.tab[first].w * 2 >= chrome.theme.tab_max_w)));
+            /* ...except the active tab, which keeps its chip at any width. */
+            uiCheck("tab-close-active",
+                    chrome.model.active >= 0 &&
+                    chrome.tabstrip.close[chrome.model.active].w > 0);
         }
 
         /* Separators: one hairline between resting neighbours, none where a tab
@@ -6503,6 +6546,9 @@ static int uiShotMain(void)
         uiCheck("compact-close-hidden",
                 chrome.tabstrip.count > 0 &&
                 chrome.tabstrip.close[chrome.tabstrip.slot_of[0]].w == 0);
+        uiCheck("compact-close-active",
+                chrome.model.active >= 0 &&
+                chrome.tabstrip.close[chrome.model.active].w > 0);
 
         uiChromePaint(&chrome, memory);
         GdiFlush();
@@ -7786,6 +7832,23 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
                 continue;
             }
 
+            /* Escape takes the find bar away from anywhere - the EDIT, the page
+             * or the chrome - and otherwise stops a load in progress, like
+             * Chrome. Neither had a handler: the bar could only be closed with
+             * the mouse, and the README's "Esc stops" was never wired up. */
+            if (msg.wParam == VK_ESCAPE && g_cur) {
+                if (g_findVisible) {
+                    agbLog(AGB_LOG_SHELL, "esc closes find bar");
+                    toggleFind();
+                    continue;
+                }
+
+                if (g_tabs[g_activeTab].used && g_tabs[g_activeTab].loading) {
+                    stopActive("esc");
+                    continue;
+                }
+            }
+
             if (msg.hwnd == g_findEdit && msg.wParam == VK_RETURN) {
                 doFind(1);
                 continue;
@@ -7796,7 +7859,7 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
 
                 if (msg.wParam == 'D' && !shift) { addBookmarkCurrent(); continue; }
                 if (msg.wParam == 'J' && !shift) { navigateActive("agave://downloads", 1, "ctrl+j"); continue; }
-                if (msg.wParam == 'F' && !shift) { toggleFind(); continue; }
+                if (msg.wParam == 'F' && !shift) { openFind(); continue; }
                 if (msg.wParam == 'T') {
                     /* ctrl+shift+T reopens the last closed tab, ctrl+T a new one. */
                     if (shift) reopenClosedTab();

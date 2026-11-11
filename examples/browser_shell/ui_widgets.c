@@ -383,11 +383,15 @@ void uiTabStripLayout(UiTabStrip* strip, const UiTheme* theme,
         strip->tab[index] = uiRectMake(x, tab_y, w, theme->tab_h);
 
         /* Every tab carries its close chip, hovered or not (Chrome's default).
-         * It only drops out once the strip is squeezed to less than half the
-         * natural tab width: at that point the title needs the room more than
-         * the chip does. The rect is the single source of truth - a zero rect
-         * means "not painted, not clickable". */
-        if (w * 2 >= theme->tab_max_w) {
+         * A background tab loses it once the strip is squeezed below half the
+         * natural width - there the title needs the room more. The active tab
+         * keeps it whatever happens: closing the tab you are looking at must
+         * never need a menu. The rect is the single source of truth - a zero
+         * rect means "not painted, not clickable"; the only case that still
+         * yields a zero rect for the active tab is a tab narrower than the chip
+         * itself, where nothing fits. */
+        if ((index == model->active || w * 2 >= theme->tab_max_w) &&
+            w > close_w + uiThemeScale(theme, 2)) {
             strip->close[index] = uiRectMake(x + w - close_w - uiThemeScale(theme, 2),
                                              tab_y + (theme->tab_h - close_w) / 2,
                                              close_w, close_w);

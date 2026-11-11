@@ -30,6 +30,7 @@ typedef struct {
     HWND hwnd;
     HWND previous_focus;
     int  shown;
+    POINT reopen_point;   /* screen coords of the dismissing right click */
     int  done;
     int  chosen;
     int  has_capture;
@@ -263,9 +264,23 @@ static LRESULT CALLBACK menuHostProc(HWND hwnd, UINT message, WPARAM wParam,
         return 0;
     }
 
-    /* A menu is a one-shot interaction: any other button or the wheel closes
-     * it, like Chrome. */
-    case WM_RBUTTONUP:
+    /* A right click closes the menu and asks the caller to re-open it where the
+     * pointer went: the click was captured by the popup, so it never reached the
+     * window below, and swallowing it is what made "right click twice" look like
+     * show + hide instead of show + show. */
+    case WM_RBUTTONUP: {
+        POINT point;
+
+        point.x = GET_X_LPARAM(lParam);
+        point.y = GET_Y_LPARAM(lParam);
+        ClientToScreen(hwnd, &point);
+        host->reopen_point = point;
+
+        hostDismiss(host, UI_MENU_REOPEN);
+        return 0;
+    }
+
+    /* Every other extra button or the wheel just closes it, like Chrome. */
     case WM_MBUTTONUP:
     case WM_MOUSEWHEEL:
         hostDismiss(host, 0);
@@ -340,7 +355,7 @@ static int menuClassReady(HINSTANCE instance)
 }
 
 int uiMenuHostRun(const UiTheme* theme, const UiMenu* root, int x, int y,
-                  UiMenuAlign align, HWND owner)
+                  UiMenuAlign align, HWND owner, POINT* reopen_at)
 {
     UiMenuHost host;
     UiRect work;
@@ -443,6 +458,9 @@ int uiMenuHostRun(const UiTheme* theme, const UiMenu* root, int x, int y,
 
     if (host.previous_focus && IsWindow(host.previous_focus))
         SetFocus(host.previous_focus);
+
+    if (reopen_at)
+        *reopen_at = host.reopen_point;
 
     hostDestroySurface(&host);
 

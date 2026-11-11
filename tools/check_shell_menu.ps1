@@ -49,15 +49,24 @@ public static class MenuCheck {
   [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
   [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint msg, IntPtr wp, IntPtr lp);
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern IntPtr FindWindowExW(IntPtr parent, IntPtr after, string cls, string title);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
   public struct RECT { public int left, top, right, bottom; }
 
-  public static IntPtr FindByClass(string cls) {
+  /* Scoped to the process we started. A shell the developer already has open
+   * (or one of ours still tearing down) carries the same class name, and
+   * matching it by class alone means driving *their* window - which is exactly
+   * how a manual run reports nonsense. */
+  public static IntPtr FindByClass(string cls, uint pid) {
     IntPtr found = IntPtr.Zero;
     EnumWindows(delegate(IntPtr h, IntPtr lp) {
       var sb = new StringBuilder(256);
       GetClassNameW(h, sb, 256);
-      if (sb.ToString() == cls) { found = h; return false; }
-      return true;
+      if (sb.ToString() != cls) { return true; }
+      uint owner;
+      GetWindowThreadProcessId(h, out owner);
+      if (owner != pid) { return true; }
+      found = h;
+      return false;
     }, IntPtr.Zero);
     return found;
   }
@@ -75,7 +84,7 @@ function Wait-Class([string]$cls, [int]$tries = 40) {
     $found = [IntPtr]::Zero
     for ($i = 0; $i -lt $tries -and $found -eq [IntPtr]::Zero; $i++) {
         Start-Sleep -Milliseconds 100
-        $found = [MenuCheck]::FindByClass($cls)
+        $found = [MenuCheck]::FindByClass($cls, [uint32]$script:proc.Id)
     }
     return $found
 }
@@ -91,7 +100,15 @@ $proc = Start-Process -FilePath $exe -PassThru -WorkingDirectory $root `
 
 try {
     $hwnd = Wait-Class 'AgaveShellWindow'
-    if ($hwnd -eq [IntPtr]::Zero) { throw 'AgaveShellWindow not found' }
+    if ($hwnd -eq [IntPtr]::Zero) {
+        # A window of *our* process is required; if the instance never created
+        # one, say why instead of driving somebody else's browser.
+        if ($proc.HasExited) {
+            throw ("agave_shell exited (code=$($proc.ExitCode)) without a window - " +
+                   "a shell already running on the same profile? see $errFile")
+        }
+        throw 'AgaveShellWindow not found (of our own pid)'
+    }
     Start-Sleep -Milliseconds 700
 
     $cr = New-Object MenuCheck+RECT
@@ -135,7 +152,7 @@ try {
     $gone = $false
     for ($i = 0; $i -lt 30 -and -not $gone; $i++) {
         Start-Sleep -Milliseconds 100
-        $gone = ([MenuCheck]::FindByClass('AgaveShellMenuPopup') -eq [IntPtr]::Zero)
+        $gone = ([MenuCheck]::FindByClass('AgaveShellMenuPopup', [uint32]$proc.Id) -eq [IntPtr]::Zero)
     }
     Check 'app-menu-click-closes' $gone
     Start-Sleep -Milliseconds 250
@@ -158,17 +175,41 @@ try {
     Check 'context-menu-popup' ($popup2 -ne [IntPtr]::Zero)
     if ($popup2 -eq [IntPtr]::Zero) { throw 'context menu popup not found' }
 
-    [void][MenuCheck]::PostMessage($popup2, 0x0100, [IntPtr]0x1B, [IntPtr]::Zero) # VK_ESCAPE
-    $gone2 = $false
-    for ($i = 0; $i -lt 30 -and -not $gone2; $i++) {
-        Start-Sleep -Milliseconds 100
-        $gone2 = ([MenuCheck]::FindByClass('AgaveShellMenuPopup') -eq [IntPtr]::Zero)
-    }
-    Check 'context-menu-esc-dismiss' $gone2
-    Start-Sleep -Milliseconds 250
+    # A second right click must put the menu away *and* re-open it where the
+    # pointer is: the popup owned the capture, so the shell replays the click on
+    # the page instead of swallowing it ("show + hide" was the old behaviour).
+    [void][MenuCheck]::PostMessage($popup2, 0x0204, [IntPtr]2, (Lp 200 240))      # WM_RBUTTONDOWN
+    [void][MenuCheck]::PostMessage($popup2, 0x0205, [IntPtr]::Zero, (Lp 200 240)) # WM_RBUTTONUP
+    Start-Sleep -Milliseconds 800
 
     $log = if (Test-Path $errFile) { Get-Content $errFile -Raw } else { '' }
-    Check 'context-menu-logged' ($log -match 'context menu at 120,200 .* choice=0')
+    Check 'context-menu-reopen-logged' ($log -match 'context menu re-open at')
+    Check 'context-menu-first-dismissed' ($log -match 'context menu at 120,200 .* choice=-1')
+
+    $popup3 = Wait-Class 'AgaveShellMenuPopup' 80
+    Check 'context-menu-reopened' ($popup3 -ne [IntPtr]::Zero)
+
+    if ($popup3 -ne [IntPtr]::Zero) {
+        [void][MenuCheck]::PostMessage($popup3, 0x0100, [IntPtr]0x1B, [IntPtr]::Zero) # VK_ESCAPE
+        $gone2 = $false
+        for ($i = 0; $i -lt 30 -and -not $gone2; $i++) {
+            Start-Sleep -Milliseconds 100
+            $gone2 = ([MenuCheck]::FindByClass('AgaveShellMenuPopup', [uint32]$proc.Id) -eq [IntPtr]::Zero)
+        }
+        Check 'context-menu-esc-dismiss' $gone2
+        Start-Sleep -Milliseconds 250
+    }
+
+    $log = if (Test-Path $errFile) { Get-Content $errFile -Raw } else { '' }
+    ($log -split "`n" | Where-Object { $_ -match 'context menu' } |
+        ForEach-Object { Write-Host ("      " + $_.Trim()) })
+
+    # The replayed click has to land on the very point the right click reported
+    # (the popup hands it back; nobody asks the cursor where it is later).
+    $again = [regex]::Match($log, 'context menu re-open at (-?\d+),(-?\d+)')
+    Check 'context-menu-reopened-at-pointer' ($again.Success -and
+        ($log -match ('context menu at ' + $again.Groups[1].Value + ',' +
+                      $again.Groups[2].Value + ' .* choice=0')))
 
     # The shell must still answer after both modal loops.
     [void][MenuCheck]::PostMessage($hwnd, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) # WM_CLOSE

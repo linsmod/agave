@@ -52,16 +52,24 @@ public static class W {
   [DllImport("user32.dll")] public static extern int GetWindowRgn(IntPtr h, IntPtr rgn);
   [DllImport("gdi32.dll")] public static extern IntPtr CreateRectRgn(int l, int t, int r, int b);
   [DllImport("gdi32.dll")] public static extern bool DeleteObject(IntPtr h);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
   public struct RECT { public int left, top, right, bottom; }
   public struct POINT { public int x, y; }
 
-  public static IntPtr FindByClass(string cls) {
+  /* Only windows of the instance this script started: this check clicks
+   * maximize / minimize / close, and a developer's own shell has the same class
+   * name. */
+  public static IntPtr FindByClass(string cls, uint pid) {
     IntPtr found = IntPtr.Zero;
     EnumWindows(delegate(IntPtr h, IntPtr lp) {
       var sb = new StringBuilder(256);
       GetClassNameA(h, sb, 256);
-      if (sb.ToString() == cls) { found = h; return false; }
-      return true;
+      if (sb.ToString() != cls) { return true; }
+      uint owner;
+      GetWindowThreadProcessId(h, out owner);
+      if (owner != pid) { return true; }
+      found = h;
+      return false;
     }, IntPtr.Zero);
     return found;
   }
@@ -86,9 +94,9 @@ try {
     $hwnd = [IntPtr]::Zero
     for ($i = 0; $i -lt 50 -and $hwnd -eq [IntPtr]::Zero; $i++) {
         Start-Sleep -Milliseconds 100
-        $hwnd = [W]::FindByClass('AgaveShellWindow')
+        $hwnd = [W]::FindByClass('AgaveShellWindow', [uint32]$proc.Id)
     }
-    if ($hwnd -eq [IntPtr]::Zero) { throw 'AgaveShellWindow not found' }
+    if ($hwnd -eq [IntPtr]::Zero) { throw 'AgaveShellWindow not found (of our own pid)' }
     Start-Sleep -Milliseconds 500
 
     # The frame path must have run: DwmExtendFrameIntoClientArea(1,1,1,1)
@@ -191,7 +199,7 @@ try {
     $hwnd = [IntPtr]::Zero
     for ($i = 0; $i -lt 50 -and $hwnd -eq [IntPtr]::Zero; $i++) {
         Start-Sleep -Milliseconds 100
-        $hwnd = [W]::FindByClass('AgaveShellWindow')
+        $hwnd = [W]::FindByClass('AgaveShellWindow', [uint32]$proc.Id)
     }
     if ($hwnd -eq [IntPtr]::Zero) { throw 'AgaveShellWindow not found (close case)' }
     Start-Sleep -Milliseconds 500

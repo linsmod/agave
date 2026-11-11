@@ -94,9 +94,9 @@ UI 侧的具体症状：
 | 组件 | 边界 | 关键交互 |
 |---|---|---|
 | `UiButton` | 32×32@96，圆形 hover 底（Chrome 工具栏），图标盒按按钮尺寸算（上限 16px），`enabled/toggled/pressed` | 命中 → `id` |
-| `UiTabStrip` | 标签条 + `+`；活动标签削底与工具栏融合，非活动标签 hover/press 是**内缩 pill**；每 tab 默认带关闭 chip（20px 圆 + 16px glyph，压到不足一半宽度才隐藏）；tab 之间常驻分隔线；中键关闭 | 命中标签/关闭/新标签 |
+| `UiTabStrip` | 标签条 + `+`；活动标签削底与工具栏融合，非活动标签 hover/press 是**内缩 pill**；每 tab 默认带关闭 chip（20px 圆 + 16px glyph；背景标签压到不足一半宽度才隐藏，活动标签始终保留）；tab 之间常驻分隔线；中键关闭 | 命中标签/关闭/新标签 |
 | `UiToolbar` | 后退/前进/刷新-停止/地址胶囊/Go/菜单 | 命令 ID 与旧按钮完全一致 |
-| `UiFindBar` | 右对齐浮条：搜索图标 + 输入 + 上/下/关闭 | `ID_FIND_*` |
+| `UiFindBar` | 右对齐浮条：搜索图标 + 输入 + 上/下/关闭 | `ID_FIND_*`；Ctrl+F 打开并全选、Esc 从任何焦点处关闭 |
 | `UiStatusBar` | 24px 状态栏 + 进度线 + 缩放胶囊 | 纯绘制 |
 | `UiChrome` | 组合上述 + 内容区矩形 + 原生 EDIT 位置 | `uiChromeLayout/Paint/Mouse` |
 | `UiMenu` | Chrome 风格圆角面板：30px 行、可选图标列、右对齐快捷键、子菜单、禁用/分隔行 | hover/键盘/点击；`uiMenuSessionMove/Key/Click` |
@@ -120,9 +120,10 @@ border），`WM_NCHITTEST` 把标签条空白处当 `HTCAPTION`（拖动、双�
 
 标签宽度随窗口自适应：`slot = (W - pad*2 - plusW - windowButtons)/n`，上限 220px，
 **没有最小宽度下限**——不够时继续压缩，但**只压标题**：favicon 永远在（Chrome 同），
-关闭 chip 按 `w * 2 < tab_max_w`（不足一半自然宽度）隐藏——隐藏时 `close[i]` 是零矩形，
-于是"看不见"和"点不到"由同一个数据决定。`+` 永远排在最后一个 tab 与窗口按钮之间，
-不会压到按钮下面。
+关闭 chip 按 `w * 2 < tab_max_w`（不足一半自然宽度）隐藏——**活动标签例外，任何宽度
+都留着它**（关闭"正在看的这个 tab"不该被迫走菜单）。隐藏时 `close[i]` 是零矩形，
+于是"看不见"和"点不到"由同一个数据决定；唯一仍为零矩形的活动标签是比 chip 本身还窄
+（`w <= 24+2`）的退化情况。`+` 永远排在最后一个 tab 与窗口按钮之间，不会压到按钮下面。
 
 ### 5.1 窗口按钮：Chromium 的 CUSTOM_DRAWN 做法
 
@@ -205,9 +206,14 @@ chrome 自身的亮暗 token 不受影响。
   是那次重画里最贵的一项；面板用 1px 边框把边界交代清楚。要恢复就先给阴影做
   位图缓存，别回到"每次 paint 都重新叠 10 层"。
 - **模态语义**：进入时 `SetCapture` + `SetFocus`，跑自己的 `GetMessage` 循环
-  （和 `TrackPopupMenu` 一样），Esc 关、点行选、点外关、滚轮/右键关、Alt-Tab 关；
+  （和 `TrackPopupMenu` 一样），Esc 关、点行选、点外关、滚轮/中键关、Alt-Tab 关；
   结束后把焦点还给打开前的控件。`WM_KILLFOCUS` **不**作为关闭条件：弹窗是
   `SW_SHOWNOACTIVATE`，隐藏窗口的测试里也拿不到焦点，靠 capture 已经足够。
+- **右键 = 关掉并在点击处重开**（页面菜单）：popup 有 capture，第二个右键根本到不了
+  页面，早先只是把菜单关掉，体验是 "show + hide"。现在宿主把这次点击的屏幕坐标
+  交回（`uiMenuHostRun(..., POINT* reopen_at)`，返回值 `UI_MENU_REOPEN`），调用方把
+  `WM_RBUTTONDOWN/UP` 按该坐标重放给 webview，由引擎重新判定 link/image/selection。
+  应用菜单没有这个语义（Chrome 同），右键只关。
 - **行模型**：分隔行、禁用行不参与 hover/键盘选择；子菜单在 hover 父项时立即
   打开（无需延时），键盘 Right/Left 进出；面板有图标时整列缩进（Chrome 的 Lens
   行就是这个效果）。应用菜单锚在 `☰` 按钮正下方、右边缘对齐；页面右键锚在
@@ -304,19 +310,19 @@ build-zig-native\agave_shell.exe --ui-shot build-zig-native\ui-focus.png --ui-th
    按下 = `tab_pressed`、press 整窗脏、关闭 chip 20px 圆与 16px glyph（对角线像素）、
    `IDC_IBEAM` 的两个 part；
 6. 标签条（5）：每个 tab 默认有 chip（按"w 是否过半"的规则断言，任意窗口尺寸都成立）、
-   tab 间分隔线 = `tab_sep`、活动标签两侧与 hover 标签两侧的分隔线 = strip 色、
-   压缩后 chip 为零矩形且 favicon 仍在；
+   **活动标签任何宽度都有 chip**、tab 间分隔线 = `tab_sep`、活动标签两侧与 hover
+   标签两侧的分隔线 = strip 色、压缩后背景标签 chip 为零矩形且 favicon 仍在；
 7. 150% DPI：tabstrip 60 / toolbar 66 / content top = 126，菜单仍在窗口内；
 8. 暗色层次：strip < toolbar、胶囊 < toolbar、hover > 活动标签、焦点环 =
    `#A8C7FA`；
-9. `--ui-menu`（80 项）：菜单宽度/锚定、子菜单打开与反向翻转、行/分隔行命中、
+9. `--ui-menu`（82 项）：菜单宽度/锚定、子菜单打开与反向翻转、行/分隔行命中、
    Down 跳过分隔行与禁用行、Right/Left 进出子菜单、点击选中/点外取消、
    hover/背景像素、圆形工具栏 hover；
-10. `--ui-focus`（62 项）：焦点字段、胶囊填充色、焦点环左右/上边像素与 token。
+10. `--ui-focus`（64 项）：焦点字段、胶囊填充色、焦点环左右/上边像素与 token。
 
-各项计数（2026-11-11）：亮 53 / 暗 57 / 亮-150% 53 / 暗-菜单 80 / 暗-焦点 62。
-窄窗口（如 `--ui-size 700x460`，tab 不足一半）会跳过 4 条"关闭 chip"断言：那里
-chip 本来就不该存在。
+各项计数（2026-11-11）：亮 55 / 暗 59 / 亮-150% 55 / 暗-菜单 82 / 暗-焦点 64。
+窄窗口（如 `--ui-size 700x460`，背景标签不足一半宽度）会少 2 条 chip 像素断言：
+那里背景标签本来就没有 chip（活动标签的 chip 仍在，命中/点击断言照常跑）。
 
 回归 `tools/run_shell_ui_tests.ps1`：亮/暗/亮-150%/暗-菜单/暗-焦点五份并行，
 实测约 **1.5 s**（单份 ~1.2–1.5 s，含进程启动）。
