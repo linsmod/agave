@@ -418,6 +418,15 @@ void FrameView::layout(bool allowSubtree)
 
     // Always ensure our style info is up-to-date.  This can happen in situations where
     // the layout beats any sort of style recalc update that needs to occur.
+    /* A stylesheet that appears (or is edited) after the first layout only sets
+     * Document::m_pendingStyleSelectorUpdate - no child changed - so the guard
+     * below let the layout (and every paint built on it) keep the previous
+     * RenderStyle while getComputedStyle answered from the fresh selector: a page
+     * whose component CSS loads by script then "read right but painted stale"
+     * (github.com rendered as a white page with default link blue). Updating the
+     * style first also covers the selector rebuild, which recalcStyle() alone
+     * does not do. */
+    document->updateStyleIfNeeded();
     if (document->hasChangedChild())
         document->recalcStyle();
     

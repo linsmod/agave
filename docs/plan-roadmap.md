@@ -910,3 +910,15 @@
 - 下一步：①补 `crypto.subtle.importKey` 的 `spki`/`pkcs8`（至少 RSA/EC 公钥解析，或返回可用的空实现并打日志）；
   ②用 `debug/ds_index.html` 里的那段脚本单独跑，定位 `undefined is not a function` 具体缺的 API；
   ③把结论写回 `arch-capability-gaps.md`。
+
+### G2 真实站点视觉正确：GitHub 首页（进行中）
+
+- [x] 后到样式表触发重算（`FrameView::layout` → `updateStyleIfNeeded`）
+- [x] 重算后整体重绘（`Document::updateStyleIfNeeded` → `renderer()->repaint()`）
+- [x] 片段解析的 `<style>` 建表（`HTMLStyleElement::insertedIntoDocument`）
+- [x] `--shot` 抓最终帧而不是第一帧（探针把页面标可见）
+- [ ] GitHub 首页截图复测（R187 修复后）
+- [ ] shadow DOM：`::part()`/`::slotted()`/shadow 内样式作用域
+- [ ] `slot` 分发 + `slotchange`
+- [ ] `createTreeWalker`、`requestFullscreen`
+- [ ] 像素级回归：把"后到样式表"场景加进 `run_layout_tests`

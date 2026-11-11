@@ -553,6 +553,28 @@
     /* Values the gap table used to list: attachShadow was already implemented
      * (phase C) - the report came from the instance-hook fall-through before the
      * prototype lookup, so the entry was stale. These four are new. */
+    /* Stylesheets that appear after the first layout must restyle *and* repaint:
+     * a page whose component CSS loads by script used to read right (computed
+     * style) but paint the old frame (github.com's white page). Geometry is the
+     * witness here: offsetHeight only changes if the render tree restyled. */
+    ok('late and fragment stylesheets apply', (function () {
+      var host = document.createElement('div');
+      document.body.appendChild(host);
+      host.innerHTML = '<style>.frag-probe{height:40px;width:50px}</style>' +
+                       '<div class="frag-probe">x</div>';
+      var frag = host.querySelector('.frag-probe');
+      var fragOk = frag.offsetHeight === 40 && frag.offsetWidth === 50;
+      var late = document.createElement('style');
+      late.textContent = '.late-probe{height:24px}';
+      document.head.appendChild(late);
+      var l = document.createElement('div');
+      l.className = 'late-probe';
+      document.body.appendChild(l);
+      var lateOk = l.offsetHeight === 24;
+      host.parentNode.removeChild(host);
+      l.parentNode.removeChild(l);
+      return fragOk && lateOk;
+    })());
     ok('attribute node / NS / client rects', (function () {
       var el = document.createElement('div');
       el.setAttribute('data-a', 'v');

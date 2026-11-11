@@ -60,8 +60,20 @@ void HTMLStyleElement::insertedIntoDocument()
 {
     HTMLElement::insertedIntoDocument();
 
-    if (!m_createdByParser)
+    if (!m_createdByParser) {
         StyleElement::insertedIntoDocument(document(), this);
+        return;
+    }
+
+    /* A <style> the fragment parser built (innerHTML/setInnerHTML) is marked
+     * createdByParser, but finishedParsing() - the hook that turns a
+     * parser-created style into a sheet - never runs for a fragment, so
+     * `host.innerHTML = '<style>.x{…}</style>'` left the rule unapplied while the
+     * text sat in the tree. It is already there at insertion time; process now.
+     * The document parser is unaffected: its style element is inserted with no
+     * children yet and finishedParsing() still does the (single) parse. */
+    if (firstChild())
+        StyleElement::process(this);
 }
 
 void HTMLStyleElement::removedFromDocument()

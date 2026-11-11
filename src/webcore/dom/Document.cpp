@@ -2099,6 +2099,16 @@ void Document::updateStyleIfNeeded()
 
     recalcStyleSelector();
     recalcStyle(Force);
+
+    /* A stylesheet that arrives after the first paint can change every box on the
+     * page. Restyling the renderers is not enough by itself: the pixels already on
+     * screen were drawn with the old style and nothing invalidated them, so the
+     * view kept painting (and the mirror kept showing) the unstyled frame - this
+     * is what github.com did after its component CSS loaded, while a geometry or
+     * getComputedStyle read answered from the new selector. Repaint the document
+     * once per applied selector update; the pending flag coalesces them. */
+    if (renderer())
+        renderer()->repaint();
 }
 
 /* The frame's viewport changed: the @media rules that made it into the current
