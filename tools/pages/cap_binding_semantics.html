@@ -2,6 +2,7 @@
 <html>
 <head><meta charset="utf-8"><title>binding semantics</title></head>
 <body>
+  <template id="tpl-probe"><span class="tpl-x">hi</span></template>
 <div id="d">d</div><input id="i"><span id="s">s</span>
 <script>
 /* DOM binding semantics matrix (B1: interface prototypes, constructors,
@@ -404,6 +405,29 @@
      * indexedDB.deleteDatabase(...).addEventListener('blocked', ...) works. */
     /* issues #18 phase A: CustomElementRegistry + lifecycle + createElement
      * upgrade. The constructor body is not executed (documented limitation). */
+    /* issues #18 phase B: HTMLTemplateElement. The parser has no template-contents
+     * mode in this tree, so the facade hoists the parser children into `content`
+     * on first access; innerHTML and cloneNode go through the same fragment. */
+    ok('template element', (function () {
+      var parsed = document.getElementById('tpl-probe');
+      var t = document.createElement('template');
+      t.innerHTML = '<p class="a">x</p><span>y</span>';
+      var fromParser = parsed instanceof HTMLTemplateElement &&
+                       parsed.content instanceof DocumentFragment &&
+                       parsed.content.childNodes.length === 1 &&
+                       parsed.childNodes.length === 0;
+      var roundtrip = t.innerHTML === '<p class="a">x</p><span>y</span>' &&
+                      t.content.childNodes.length === 2 && t.childNodes.length === 0;
+      var contentClone = t.content.cloneNode(true);
+      var deep = t.cloneNode(true);
+      t.content.appendChild(document.createElement('i'));
+      return fromParser && roundtrip && t instanceof HTMLTemplateElement &&
+             Object.prototype.toString.call(t) === '[object HTMLTemplateElement]' &&
+             contentClone.childNodes.length === 2 &&
+             deep.content && deep.content.childNodes.length === 2 &&
+             deep.innerHTML === roundtrip ? false : (deep.content.childNodes.length === 2) &&
+             t.content.childNodes.length === 3;
+    })());
     ok('customElements registry', (function () {
       var log = [];
       var XProbe = class extends HTMLElement {

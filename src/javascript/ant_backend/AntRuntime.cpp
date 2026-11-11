@@ -237,6 +237,9 @@ struct RuntimeState {
      * Both belong to the document's realm and die with it. */
     std::map<std::string, AntbValue*>* customDefs;
     std::set<WebCore::Node*>*          upgradedCustom;
+    /* HTMLTemplateElement.content (issues #18 phase B): one fragment per template,
+     * created lazily and owned by the document, so it dies with it. */
+    std::map<WebCore::Node*, WebCore::DocumentFragment*>* templateContents;
     AntbValue*         docObj;          /* the JS document object (rooted) */
     bool               documentBound;
     void*              listeners;       /* std::vector<Listener>* (see below) */
@@ -371,6 +374,9 @@ struct DocumentRuntime {
      * Both belong to the document's realm and die with it. */
     std::map<std::string, AntbValue*>* customDefs;
     std::set<WebCore::Node*>*          upgradedCustom;
+    /* HTMLTemplateElement.content (issues #18 phase B): one fragment per template,
+     * created lazily and owned by the document, so it dies with it. */
+    std::map<WebCore::Node*, WebCore::DocumentFragment*>* templateContents;
     /* DOM Selection API: one live DOMSelection per document (a view over the
      * frame's selection) and the Range objects handed to JS. Ranges are ref'd
      * when wrapped and released with the document (see selectionReleaseRefs);
@@ -950,6 +956,17 @@ static void releaseDocumentRuntime(DocumentRuntime* document, bool releaseValues
     }
     delete document->upgradedCustom;
     document->upgradedCustom = NULL;
+
+    if (document->templateContents) {
+        for (std::map<WebCore::Node*, WebCore::DocumentFragment*>::iterator it =
+                 document->templateContents->begin();
+             it != document->templateContents->end(); ++it) {
+            if (it->second)
+                it->second->deref();
+        }
+        delete document->templateContents;
+        document->templateContents = NULL;
+    }
 
     if (documents) {
         for (size_t i = 0; i < documents->size(); ++i) {
@@ -8925,6 +8942,187 @@ int nodeReplaceWith(AntbEngine*, AntbValue* self, AntbValue** args, int argc,
     return mixinInsert(self, args, argc, 4);
 }
 
+/* ---- HTMLTemplateElement (issues #18 phase B) --------------------------- *
+ * This tree has no template-contents mode in the parser and no
+ * HTMLNames::templateTag, so a <template>'s children are ordinary children until
+ * `content` is asked for; at that point they move into the fragment Chrome would
+ * have parsed them into. The fragment is per document (templateContents). */
+static bool isTemplateElement(WebCore::Element* element)
+{
+    WebCore::String tag;
+
+    if (!element || !element->isHTMLElement())
+        return false;
+
+    tag = element->tagName();
+    {
+        const char* text = tag.utf8().data();
+        static const char kTemplate[] = "template";
+        size_t i;
+
+        if (!text)
+            return false;
+        for (i = 0; kTemplate[i]; ++i) {
+            char c = text[i];
+
+            if (c >= 'A' && c <= 'Z')
+                c = (char)(c - 'A' + 'a');
+            if (c != kTemplate[i])
+                return false;
+        }
+        return text[i] == 0;
+    }
+}
+
+static WebCore::DocumentFragment* templateContents(WebCore::Element* element, bool create)
+{
+    DocumentRuntime* runtime;
+    std::map<WebCore::Node*, WebCore::DocumentFragment*>::iterator it;
+
+    if (!element || !g_currentState || !element->document())
+        return NULL;
+
+    runtime = documentRuntimeFor(g_currentState, element->document());
+    if (!runtime || !create)
+        return NULL;
+
+    if (!runtime->templateContents)
+        runtime->templateContents =
+            new std::map<WebCore::Node*, WebCore::DocumentFragment*>();
+
+    it = runtime->templateContents->find(element);
+    if (it != runtime->templateContents->end())
+        return it->second;
+
+    {
+        RefPtr<WebCore::DocumentFragment> fragment = element->document()->createDocumentFragment();
+        WebCore::ExceptionCode ec = 0;
+
+        if (!fragment)
+            return NULL;
+        fragment->ref();                    /* owned by the map, deref'd on teardown */
+
+        /* Whatever the parser left inside the element moves into the content. */
+        while (element->firstChild()) {
+            RefPtr<WebCore::Node> child = element->firstChild();
+
+            element->removeChild(child.get(), ec);
+            ec = 0;
+            fragment->appendChild(child.release(), ec);
+            ec = 0;
+        }
+
+        (*runtime->templateContents)[element] = fragment.get();
+        return fragment.get();
+    }
+}
+
+/* DocumentFragment has no innerHTML in this tree: serialize by moving the children
+ * into a scratch element of the same document and reading that. */
+static std::string templateInnerHTML(WebCore::Element* element)
+{
+    RefPtr<WebCore::DocumentFragment> fragment;
+    RefPtr<WebCore::Element> scratch;
+    WebCore::ExceptionCode ec = 0;
+    std::string result;
+
+    if (!element || !element->document())
+        return result;
+
+    fragment = templateContents(element, true);
+    if (!fragment)
+        return result;
+
+    scratch = element->document()->createElement("div", ec);
+    if (!scratch)
+        return result;
+
+    while (fragment->firstChild()) {
+        RefPtr<WebCore::Node> child = fragment->firstChild();
+
+        fragment->removeChild(child.get(), ec);
+        ec = 0;
+        scratch->appendChild(child.release(), ec);
+        ec = 0;
+    }
+
+    if (scratch->isHTMLElement())
+        result = static_cast<WebCore::HTMLElement*>(scratch.get())->innerHTML().utf8().data();
+
+    while (scratch->firstChild()) {
+        RefPtr<WebCore::Node> child = scratch->firstChild();
+
+        scratch->removeChild(child.get(), ec);
+        ec = 0;
+        fragment->appendChild(child.release(), ec);
+        ec = 0;
+    }
+    return result;
+}
+
+/* `template.innerHTML = html`: parse into a scratch element, then move the result
+ * into the content fragment. */
+static void setTemplateInnerHTML(WebCore::Element* element, const char* html)
+{
+    RefPtr<WebCore::DocumentFragment> fragment;
+    RefPtr<WebCore::Element> scratch;
+    WebCore::ExceptionCode ec = 0;
+
+    if (!element || !element->document())
+        return;
+
+    fragment = templateContents(element, true);
+    if (!fragment)
+        return;
+
+    scratch = element->document()->createElement("div", ec);
+    if (!scratch)
+        return;
+
+    if (scratch->isHTMLElement())
+        static_cast<WebCore::HTMLElement*>(scratch.get())->setInnerHTML(
+            html ? WebCore::String::fromUTF8(html) : WebCore::String(), ec);
+
+    while (scratch->firstChild()) {
+        RefPtr<WebCore::Node> child = scratch->firstChild();
+
+        scratch->removeChild(child.get(), ec);
+        ec = 0;
+        fragment->appendChild(child.release(), ec);
+        ec = 0;
+    }
+}
+
+/* Deep-copies the content of one template into another (cloneNode on a template
+ * does not copy the external fragment by itself). */
+static void copyTemplateContents(WebCore::Element* from, WebCore::Element* to)
+{
+    RefPtr<WebCore::DocumentFragment> source;
+    RefPtr<WebCore::DocumentFragment> target;
+    WebCore::ExceptionCode ec = 0;
+
+    if (!isTemplateElement(from) || !isTemplateElement(to))
+        return;
+
+    source = templateContents(from, true);
+    target = templateContents(to, true);
+    if (!source || !target)
+        return;
+
+    source = static_cast<WebCore::DocumentFragment*>(source->cloneNode(true).get());
+    if (!source)
+        return;
+
+    while (source->firstChild()) {
+        RefPtr<WebCore::Node> child = source->firstChild();
+
+        source->removeChild(child.get(), ec);
+        ec = 0;
+        target->appendChild(child.release(), ec);
+        ec = 0;
+    }
+}
+
 /* ---- custom elements (issues #18 phase A) ------------------------------- *
  * The registry is per document (per realm): tag -> constructor. An element is
  * upgraded by replacing its wrapper's [[Prototype]] with the registered
@@ -10889,6 +11087,15 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
         } else {
             return 0;
         }
+    } else if (!strcmp(name, "content") && n->isElementNode()
+               && isTemplateElement(static_cast<WebCore::Element*>(n))) {
+        /* HTMLTemplateElement.content: the lazily created fragment. */
+        WebCore::DocumentFragment* fragment =
+            templateContents(static_cast<WebCore::Element*>(n), true);
+
+        if (!fragment)
+            return assignNull(engine, out);
+        v = wrapNode(engine, fragment);
     } else if (!strcmp(name, "innerHTML")) {
         if (!n->isElementNode())
             return 0;
@@ -10896,8 +11103,14 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
             WebCore::Element* element = static_cast<WebCore::Element*>(n);
             if (!element->isHTMLElement())
                 return 0;
-            WebCore::String html = static_cast<WebCore::HTMLElement*>(element)->innerHTML();
-            v = antb_make_string(engine, html.utf8().data());
+            if (isTemplateElement(element)) {
+                std::string html = templateInnerHTML(element);
+
+                v = antb_make_string(engine, html.c_str());
+            } else {
+                WebCore::String html = static_cast<WebCore::HTMLElement*>(element)->innerHTML();
+                v = antb_make_string(engine, html.utf8().data());
+            }
         }
     } else if (!strcmp(name, "outerHTML")) {
         if (!n->isElementNode())
@@ -11499,6 +11712,11 @@ int nodeSetter(AntbEngine* engine, AntbValue* self, const char* name, const Antb
         if (!element->isHTMLElement() || !text) {
             antb_free(text);
             return 0;
+        }
+        if (isTemplateElement(element)) {
+            setTemplateInnerHTML(element, text);
+            antb_free(text);
+            return 1;
         }
         {
             WebCore::ExceptionCode ec = 0;
@@ -12765,6 +12983,13 @@ int nodeCloneNode(AntbEngine* engine, AntbValue* self, AntbValue** args, int arg
     copy = n->cloneNode(deep);
     if (!copy)
         return 1;
+
+    /* cloneNode() copies the element tree, not the template's external content
+     * fragment: copy that explicitly (issues #18 phase B). */
+    if (deep && n->isElementNode() && copy->isElementNode() &&
+        isTemplateElement(static_cast<WebCore::Element*>(n)))
+        copyTemplateContents(static_cast<WebCore::Element*>(n),
+                             static_cast<WebCore::Element*>(copy.get()));
 
     {
         AntbValue* wrapped = wrapNode(engine, copy.get());
@@ -16196,6 +16421,7 @@ static const DomIfaceDef kDomIfaces[] = {
     { "Document",               "Node" },
     { "HTMLDocument",           "Document" },
     { "NamedNodeMap",           NULL },
+    { "HTMLTemplateElement",    "HTMLElement" },
     { "Attr",                   "Node" },
     { "Element",                "Node" },
     { "SVGElement",             "Element" },

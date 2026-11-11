@@ -114,8 +114,13 @@ qsChild=3 qsDesc=3 qsAdj=1 qsSib=2 qsNth=1 qsOdd=2 qsNot=2 qsFirst=1 qsList2=4 q
 `AudioContext`/`speechSynthesis`、`devicePixelRatio`、`print`、`Temporal`、`WebGL`。
 
 **Web Components 单列（P0，issues #18）**：`customElements`（`typeof` 为 `undefined`）、`attachShadow`/`ShadowRoot`、
-`HTMLTemplateElement`（prelude 只给了占位构造器，`typeof` 是 function 但 `new` 返回 null——feature detect 会被骗）、
+`HTMLTemplateElement`（**已支持**，见下方 G1/`#18 phase B` 说明，prelude 的占位构造器已被真接口取代）、
 `adoptedStyleSheets` 全缺；这也是 GitHub 首页 `core-*`/`marketing-*`/`landing-pages-*` 模块 `ReferenceError: 'customElements' is not defined` 的原因。
+
+**`HTMLTemplateElement` 已支持（2026-11-11，issues #18 phase B）**：真接口类（IDL 表 + `tag→class` 映射），
+`content` 是懒创建的 `DocumentFragment`（解析器塞进元素的子节点在首次访问时搬进 content，和 Chrome 的模板内容一致），
+`innerHTML` 读写走 content，`cloneNode(true)` 深拷 content。⚠ 这是 facade 层实现：WebCore 没有 `templateTag`/模板内容模式，
+`template.appendChild()` 之后仍在元素上（Chrome 同）。
 
 **`indexedDB` 是桩**（见 §1 `indexedDB.open` 行）：请求对象没有 `addEventListener`，deepseek 的
 `n=indexedDB.deleteDatabase(t); n.addEventListener("blocked",…)` 会抛 `undefined is not a function`（issues #20）。
