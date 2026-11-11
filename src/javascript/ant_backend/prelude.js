@@ -1006,6 +1006,16 @@
     }
     install('NodeList', true);
     install('HTMLCollection', false);
+    /* The CSSOM lists are array-likes too (length + indexed answered in C). GitHub's
+     * core bundle spreads document.styleSheets / sheet.cssRules and died with
+     * "not iterable" (issues #22). */
+    install('StyleSheetList', false);
+    install('CSSRuleList', false);
+    install('MediaList', false);
+    install('FileList', true);
+    install('DOMTokenList', true);
+    install('RadioNodeList', false);
+    install('NamedNodeMap', true);
   })();
   g.__agbMakeClassList = function (el) {
     return {

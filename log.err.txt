@@ -1,0 +1,330 @@
+[      0.0ms] [shell] argv url=https://github.com probe=0 zoom=0 resize=0x0 offline=0 eval=64 bytes keys=0
+[     22.9ms] [shell] window ready hwnd=00000000009509C8
+[     46.0ms] [shell] history loaded: 200 entries from E:\mybrowsers\agave\build-zig-native\AgaveShellData\history.txt
+[    109.5ms] [shell] startup url from argv: https://github.com
+[    128.6ms] [ui] resize 800x400
+[    141.5ms] [flag] set js=00000242B6009F20 on=1 -> 1
+[    154.8ms] [shell] tab create index=0 url=https://github.com
+[    181.0ms] [evt] realm start gen=2 engine=0000024280046A70 (view context)
+[    203.7ms] [shell] download dir=C:\Users\linswin\Downloads
+[    239.6ms] [dl] directory C:\Users\linswin\Downloads
+[    254.7ms] [ui] resize 1084x677
+[    279.7ms] [ui] focus
+[    280.3ms] [shell] entering message loop
+[    289.9ms] [nav] open url=https://github.com
+[    291.4ms] [nav] request main type=other method=GET url=https://github.com/
+[    292.6ms] [cache] http miss url=https://github.com/
+[   1471.3ms] [ui] blur
+[   1546.2ms] [evt] commit https://github.com/
+[   1548.5ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/light-0011b1fed09cb294.css
+[   1549.5ms] [cache] http miss url=https://github.githubassets.com/assets/light-0011b1fed09cb294.css
+[   1550.0ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/light_high_contrast-267ab2e12d3b7ade.css
+[   1550.7ms] [cache] http miss url=https://github.githubassets.com/assets/light_high_contrast-267ab2e12d3b7ade.css
+[   1551.2ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/dark-37b5e41810563d82.css
+[   1552.0ms] [cache] http miss url=https://github.githubassets.com/assets/dark-37b5e41810563d82.css
+[   1552.4ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/dark_high_contrast-d69295870cb5f203.css
+[   1553.2ms] [cache] http miss url=https://github.githubassets.com/assets/dark_high_contrast-d69295870cb5f203.css
+[   1553.7ms] [cache] mem miss type=css url=https://github.com/
+[   1554.6ms] [cache] http miss url=https://github.com/
+[   1555.2ms] [cache] mem hit type=css url=https://github.com/
+[   1555.6ms] [cache] mem hit type=css url=https://github.com/
+[   1556.1ms] [cache] mem hit type=css url=https://github.com/
+[   1556.5ms] [cache] mem hit type=css url=https://github.com/
+[   1556.8ms] [cache] mem hit type=css url=https://github.com/
+[   1557.1ms] [cache] mem hit type=css url=https://github.com/
+[   1557.4ms] [cache] mem hit type=css url=https://github.com/
+[   1557.9ms] [cache] mem hit type=css url=https://github.com/
+[   1558.3ms] [cache] mem hit type=css url=https://github.com/
+[   1558.7ms] [cache] mem hit type=css url=https://github.com/
+[   1559.0ms] [cache] mem hit type=css url=https://github.com/
+[   1559.4ms] [cache] mem hit type=css url=https://github.com/
+[   1559.7ms] [cache] mem hit type=css url=https://github.com/
+[   1560.3ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/primer-primitives-bd624c4ec96b42e9.css
+[   1561.1ms] [cache] http miss url=https://github.githubassets.com/assets/primer-primitives-bd624c4ec96b42e9.css
+[   1561.7ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/primer-2aeb1babdc762f70.css
+[   1562.5ms] [cache] http miss url=https://github.githubassets.com/assets/primer-2aeb1babdc762f70.css
+[   1563.0ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/global-747fc17113063fdc.css
+[   1563.8ms] [cache] http miss url=https://github.githubassets.com/assets/global-747fc17113063fdc.css
+[   1564.2ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/github-d4a7053a1b3b1731.css
+[   1565.0ms] [cache] http miss url=https://github.githubassets.com/assets/github-d4a7053a1b3b1731.css
+[   1565.4ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/marketing-d7adf5c7af320655.css
+[   1566.2ms] [cache] http miss url=https://github.githubassets.com/assets/marketing-d7adf5c7af320655.css
+[   1566.6ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/home-df64966d2549e9a4.css
+[   1567.6ms] [cache] http miss url=https://github.githubassets.com/assets/home-df64966d2549e9a4.css
+[   1622.1ms] [evt] bindDocument 000002428138DD20 (realm-bound=0 prev=0000000000000000) url=https://github.com/
+[   1625.7ms] [evt] main binding gen=2 doc=000002428138DD20 realm=00000242800B22E0
+[   2750.1ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/app-runtime.0cb71910f854d01a.module.css
+[   2751.1ms] [cache] http miss url=https://github.githubassets.com/assets/app-runtime.0cb71910f854d01a.module.css
+[   2751.5ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/react-core.8f5cf887bee405a6.module.css
+[   2752.1ms] [cache] http miss url=https://github.githubassets.com/assets/react-core.8f5cf887bee405a6.module.css
+[   5565.2ms] [evt] window event load doc=000002428138DD20 listeners=0
+[   5567.8ms] [evt] window event pageshow doc=000002428138DD20 listeners=0
+[   5943.0ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/primer-react-css.4af22a99b464e505.module.css
+[   5944.3ms] [cache] http miss url=https://github.githubassets.com/assets/primer-react-css.4af22a99b464e505.module.css
+[   5944.8ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/primer-react-brand-css.97609ed1d71c6231.module.css
+[   5945.6ms] [cache] http miss url=https://github.githubassets.com/assets/primer-react-brand-css.97609ed1d71c6231.module.css
+[   5946.0ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/landing-pages.4d978bf23603b8a8.module.css
+[   5946.7ms] [cache] http miss url=https://github.githubassets.com/assets/landing-pages.4d978bf23603b8a8.module.css
+[   5949.9ms] [cache] mem hit type=css url=https://github.githubassets.com/assets/primer-react-css.4af22a99b464e505.module.css
+[   5950.2ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/keyboard-shortcuts-dialog.f9563906455eccc6.module.css
+[   5951.0ms] [cache] http miss url=https://github.githubassets.com/assets/keyboard-shortcuts-dialog.f9563906455eccc6.module.css
+[   5951.7ms] [cache] mem hit type=css url=https://github.githubassets.com/assets/primer-react-css.4af22a99b464e505.module.css
+[   5952.0ms] [cache] mem hit type=css url=https://github.githubassets.com/assets/primer-react-brand-css.97609ed1d71c6231.module.css
+[   5952.3ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/marketing-global-banner.521f599666794779.module.css
+[   5953.1ms] [cache] http miss url=https://github.githubassets.com/assets/marketing-global-banner.521f599666794779.module.css
+[  10304.7ms] [cache] mem hit type=css url=https://github.githubassets.com/assets/primer-react-css.4af22a99b464e505.module.css
+[  10572.4ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/app-install-banner-partial.c8fa25d06e0203b8.module.css
+[  10573.5ms] [cache] http miss url=https://github.githubassets.com/assets/app-install-banner-partial.c8fa25d06e0203b8.module.css
+[  10574.5ms] [cache] mem hit type=css url=https://github.githubassets.com/assets/primer-react-css.4af22a99b464e505.module.css
+[  10844.2ms] [cache] mem hit type=css url=https://github.githubassets.com/assets/primer-react-brand-css.97609ed1d71c6231.module.css
+[  12463.5ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/marketing-header.a9efd8c31b210c86.module.css
+[  12464.7ms] [cache] http miss url=https://github.githubassets.com/assets/marketing-header.a9efd8c31b210c86.module.css
+[  12467.1ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/platform-4ce65ae0bf273ce2.png
+[  12467.9ms] [cache] http miss url=https://github.githubassets.com/assets/platform-4ce65ae0bf273ce2.png
+[  12468.4ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/platform-dark-ac89fbf373737ed3.png
+[  12469.1ms] [cache] http miss url=https://github.githubassets.com/assets/platform-dark-ac89fbf373737ed3.png
+[  12470.0ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/copilot-e2b89335a66dba00.png
+[  12471.0ms] [cache] http miss url=https://github.githubassets.com/assets/copilot-e2b89335a66dba00.png
+[  12471.4ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/copilot-dark-2b28403b6080e898.png
+[  12472.1ms] [cache] http miss url=https://github.githubassets.com/assets/copilot-dark-2b28403b6080e898.png
+[  12476.5ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/changelog-fd687bff072883b0.png
+[  12477.2ms] [cache] http miss url=https://github.githubassets.com/assets/changelog-fd687bff072883b0.png
+[  12477.6ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/changelog-dark-b1c25ae971bd641b.png
+[  12478.4ms] [cache] http miss url=https://github.githubassets.com/assets/changelog-dark-b1c25ae971bd641b.png
+[  12484.3ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/universe-a98cd54821b27569.png
+[  12485.0ms] [cache] http miss url=https://github.githubassets.com/assets/universe-a98cd54821b27569.png
+[  12485.7ms] [cache] mem hit type=image url=https://github.githubassets.com/assets/universe-a98cd54821b27569.png
+[  12497.4ms] [cache] mem miss type=image url=https://images.ctfassets.net/8aevphvgewt8/home2026-9ccb55275227c79b036824fc/b44aaf40a80735ae613a6db469af23c1/ducky-shadows.png
+[  12519.8ms] [cache] http miss url=https://images.ctfassets.net/8aevphvgewt8/home2026-9ccb55275227c79b036824fc/b44aaf40a80735ae613a6db469af23c1/ducky-shadows.png
+[  12553.4ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/features-platform-1-light-d1af443446caafe7.webp
+[  12555.7ms] [cache] http miss url=https://github.githubassets.com/assets/features-platform-1-light-d1af443446caafe7.webp
+[  12556.9ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/features-platform-2-light-deba569ff3c98363.webp
+[  12557.6ms] [cache] http miss url=https://github.githubassets.com/assets/features-platform-2-light-deba569ff3c98363.webp
+[  12559.0ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/features-ways-1-light-3a999d15192f9ed9.webp
+[  12560.1ms] [cache] http miss url=https://github.githubassets.com/assets/features-ways-1-light-3a999d15192f9ed9.webp
+[  12561.2ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/features-ways-2-light-bb0bc31df1d658b8.webp
+[  12562.0ms] [cache] http miss url=https://github.githubassets.com/assets/features-ways-2-light-bb0bc31df1d658b8.webp
+[  12562.9ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/features-ways-3-light-e2458d99331b9f87.webp
+[  12563.6ms] [cache] http miss url=https://github.githubassets.com/assets/features-ways-3-light-e2458d99331b9f87.webp
+[  12564.5ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/features-ways-4-light-c6d08e31ba77efdd.webp
+[  12565.2ms] [cache] http miss url=https://github.githubassets.com/assets/features-ways-4-light-c6d08e31ba77efdd.webp
+[  12566.1ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/features-ways-5-light-51976df09d6ae707.webp
+[  12566.8ms] [cache] http miss url=https://github.githubassets.com/assets/features-ways-5-light-51976df09d6ae707.webp
+[  12583.0ms] [cache] mem miss type=image url=https://images.ctfassets.net/8aevphvgewt8/home2026-f899e02bc1ad1a5df31a307f/6acd0742069d2c9591b307f87e903a69/avatar-5.webp
+[  12594.6ms] [cache] http miss url=https://images.ctfassets.net/8aevphvgewt8/home2026-f899e02bc1ad1a5df31a307f/6acd0742069d2c9591b307f87e903a69/avatar-5.webp
+[  12595.6ms] [cache] mem miss type=image url=https://images.ctfassets.net/8aevphvgewt8/home2026-01ac80921a7a68bb3d4ce527/b8f43648b9c0fa6cdb8946ed2be492cf/avatar-1.webp
+[  12596.2ms] [cache] http miss url=https://images.ctfassets.net/8aevphvgewt8/home2026-01ac80921a7a68bb3d4ce527/b8f43648b9c0fa6cdb8946ed2be492cf/avatar-1.webp
+[  12597.1ms] [cache] mem miss type=image url=https://images.ctfassets.net/8aevphvgewt8/home2026-1bdfd19a362a9b42660488c1/dd6db8061a69e8cd6f3611e6b495b3dd/avatar-2.webp
+[  12597.8ms] [cache] http miss url=https://images.ctfassets.net/8aevphvgewt8/home2026-1bdfd19a362a9b42660488c1/dd6db8061a69e8cd6f3611e6b495b3dd/avatar-2.webp
+[  12598.6ms] [cache] mem miss type=image url=https://images.ctfassets.net/8aevphvgewt8/home2026-f6d013dea6d5575cba3b8294/41503e0438e56c6ebb8827c41e3c6fa8/avatar-3.webp
+[  12599.3ms] [cache] http miss url=https://images.ctfassets.net/8aevphvgewt8/home2026-f6d013dea6d5575cba3b8294/41503e0438e56c6ebb8827c41e3c6fa8/avatar-3.webp
+[  12600.1ms] [cache] mem miss type=image url=https://images.ctfassets.net/8aevphvgewt8/home2026-5de180004bab10ed7bf6174a/6609dfc82864ffad130f96c32866ca62/avatar-4.webp
+[  12600.8ms] [cache] http miss url=https://images.ctfassets.net/8aevphvgewt8/home2026-5de180004bab10ed7bf6174a/6609dfc82864ffad130f96c32866ca62/avatar-4.webp
+[  12605.4ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/ducky-c9ab74b64c4d1e8d.webp
+[  12606.3ms] [cache] http miss url=https://github.githubassets.com/assets/ducky-c9ab74b64c4d1e8d.webp
+[  12617.2ms] [cache] mem hit type=css url=https://github.githubassets.com/assets/primer-react-css.4af22a99b464e505.module.css
+[  12910.8ms] [cache] mem hit type=css url=https://github.githubassets.com/assets/primer-react-brand-css.97609ed1d71c6231.module.css
+[  14551.9ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/marketing-footer.a657ada7bbdfbe96.module.css
+[  14553.2ms] [cache] http miss url=https://github.githubassets.com/assets/marketing-footer.a657ada7bbdfbe96.module.css
+[  15242.9ms] [con-error] Uncaught (in promise) TypeError: not iterable
+    at $4 (https://github.githubassets.com/assets/core-60d24ddabf3ad2c5.js:136:134028)
+    at rL (https://github.githubassets.com/assets/core-60d24ddabf3ad2c5.js:27:10853)
+    at <anonymous> (https://github.githubassets.com/assets/core-60d24ddabf3ad2c5.js:27:10955)
+[antjs] https://github.githubassets.com/assets/core-60d24ddabf3ad2c5.js: module evaluation failed: TypeError: Cannot read properties of null (reading 'requestErrored') | TypeError: Cannot read properties of null (reading 'requestErrored')
+    at y (https://github.githubassets.com/assets/core-60d24ddabf3ad2c5.js:27:17537)
+    at n (https://github.githubassets.com/assets/wp-runtime-339a71ec7951cfa6.js:2:153)
+    at <module> (https://github.githubassets.com/assets/core-60d24ddabf3ad2c5.js:144:4985)
+    at <module> (https://github.githubassets.com/assets/core-60d24ddabf3ad2c5.js:14
+[antjs] https://github.githubassets.com/assets/marketing-essentials-1eb1c8f549a98e41.js: module evaluation failed: TypeError: Cannot read properties of null (reading 'requestErrored') | TypeError: Cannot read properties of null (reading 'requestErrored')
+    at y (https://github.githubassets.com/assets/core-60d24ddabf3ad2c5.js:27:17537)
+    at n (https://github.githubassets.com/assets/wp-runtime-339a71ec7951cfa6.js:2:153)
+    at <module> (https://github.githubassets.com/assets/core-60d24ddabf3ad2c5.js:144:4985)
+    at <module> (https://github.githubassets.com/assets/core-60d24ddabf3ad2c5.js:14
+[antjs] https://github.githubassets.com/assets/landing-pages-7849908911130d88.js: module evaluation failed: TypeError: Cannot read properties of null (reading 'requestErrored') | TypeError: Cannot read properties of null (reading 'requestErrored')
+    at y (https://github.githubassets.com/assets/core-60d24ddabf3ad2c5.js:27:17537)
+    at n (https://github.githubassets.com/assets/wp-runtime-339a71ec7951cfa6.js:2:153)
+    at <module> (https://github.githubassets.com/assets/core-60d24ddabf3ad2c5.js:144:4985)
+    at <module> (https://github.githubassets.com/assets/core-60d24ddabf3ad2c5.js:14
+[  17492.8ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/kq9.fe1d3ed6827ca69b.module.css
+[  17493.9ms] [cache] http miss url=https://github.githubassets.com/assets/kq9.fe1d3ed6827ca69b.module.css
+[  17700.3ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/u2l.0c500f555cd81ce4.module.css
+[  17701.3ms] [cache] http miss url=https://github.githubassets.com/assets/u2l.0c500f555cd81ce4.module.css
+[  18158.4ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/7gn.7507d38d20e4dfb2.module.css
+[  18159.4ms] [cache] http miss url=https://github.githubassets.com/assets/7gn.7507d38d20e4dfb2.module.css
+[  18373.2ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/xy4.a8f51d907bf04870.module.css
+[  18374.4ms] [cache] http miss url=https://github.githubassets.com/assets/xy4.a8f51d907bf04870.module.css
+[  18818.3ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/jdp.e5850a4dc814890e.module.css
+[  18819.3ms] [cache] http miss url=https://github.githubassets.com/assets/jdp.e5850a4dc814890e.module.css
+[  18910.7ms] [con-error] Uncaught (in promise) NotSupportedError: the name "toggle-switch" has already been used
+    at domError (agave://page.js:320:21)
+    at define (agave://page.js:341:19)
+    at <anonymous> (https://github.githubassets.com/assets/pb-f24056aed715c435.js:136:145516)
+    at new C (https://github.githubassets.com/assets/pb-f24056aed715c435.js:136:145433)
+    at <anonymous> (https://github.githubassets.com/assets/pb-f24056aed715c435.js:136:146934)
+    at Cg (https://github.githubassets.com/assets/pb-f24056aed715c435.js:364:10171)
+    at aAi (https://github.githubassets.com/assets/chunk-lazy-element-toggle-switch-813ece539250acd5.js:2:622)
+    at n (https://github.githubassets.com/assets/wp-runtime-339a71ec7951cfa6.js:2:153)
+[  19033.4ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/tile-gradient-1-67516fb57f624345.webp
+[  19034.6ms] [cache] http miss url=https://github.githubassets.com/assets/tile-gradient-1-67516fb57f624345.webp
+[  19035.9ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/tile-gradient-2-bd0a28f700770812.webp
+[  19036.7ms] [cache] http miss url=https://github.githubassets.com/assets/tile-gradient-2-bd0a28f700770812.webp
+[  19213.9ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/tile-gradient-2-032af4e10b4f5dad.webp
+[  19214.9ms] [cache] http miss url=https://github.githubassets.com/assets/tile-gradient-2-032af4e10b4f5dad.webp
+[  19218.2ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/tile-gradient-1-655dba6cdcef3c96.webp
+[  19218.9ms] [cache] http miss url=https://github.githubassets.com/assets/tile-gradient-1-655dba6cdcef3c96.webp
+[  19361.6ms] [cache] img data url=https://github.githubassets.com/assets/universe-a98cd54821b27569.png bytes=16384 all=0 sizeAvail=1 null=0
+[  19362.1ms] [cache] img notify url=https://github.githubassets.com/assets/universe-a98cd54821b27569.png observers=4 bytes=16384 all=0
+[  19362.4ms] [cache] img data url=https://github.githubassets.com/assets/platform-dark-ac89fbf373737ed3.png bytes=16384 all=0 sizeAvail=1 null=0
+[  19362.6ms] [cache] img notify url=https://github.githubassets.com/assets/platform-dark-ac89fbf373737ed3.png observers=2 bytes=16384 all=0
+[  19362.9ms] [cache] img data url=https://github.githubassets.com/assets/universe-a98cd54821b27569.png bytes=29704 all=0 sizeAvail=1 null=0
+[  19363.2ms] [cache] img notify url=https://github.githubassets.com/assets/universe-a98cd54821b27569.png observers=4 bytes=29704 all=0
+[  19363.9ms] [cache] img data url=https://github.githubassets.com/assets/universe-a98cd54821b27569.png bytes=29704 all=1 sizeAvail=1 null=0
+[  19364.1ms] [cache] img notify url=https://github.githubassets.com/assets/universe-a98cd54821b27569.png observers=4 bytes=29704 all=0
+[  19364.4ms] [cache] img data url=https://github.githubassets.com/assets/platform-dark-ac89fbf373737ed3.png bytes=25995 all=0 sizeAvail=1 null=0
+[  19364.6ms] [cache] img notify url=https://github.githubassets.com/assets/platform-dark-ac89fbf373737ed3.png observers=2 bytes=25995 all=0
+[  19365.3ms] [cache] img data url=https://github.githubassets.com/assets/platform-dark-ac89fbf373737ed3.png bytes=25995 all=1 sizeAvail=1 null=0
+[  19365.5ms] [cache] img notify url=https://github.githubassets.com/assets/platform-dark-ac89fbf373737ed3.png observers=2 bytes=25995 all=0
+[  19367.4ms] [cache] img data url=https://github.githubassets.com/assets/changelog-dark-b1c25ae971bd641b.png bytes=16384 all=0 sizeAvail=1 null=0
+[  19367.7ms] [cache] img notify url=https://github.githubassets.com/assets/changelog-dark-b1c25ae971bd641b.png observers=2 bytes=16384 all=0
+[  19368.3ms] [cache] img data url=https://github.githubassets.com/assets/changelog-dark-b1c25ae971bd641b.png bytes=32768 all=0 sizeAvail=1 null=0
+[  19368.6ms] [cache] img notify url=https://github.githubassets.com/assets/changelog-dark-b1c25ae971bd641b.png observers=2 bytes=32768 all=0
+[  19368.8ms] [cache] img data url=https://github.githubassets.com/assets/changelog-fd687bff072883b0.png bytes=16384 all=0 sizeAvail=1 null=0
+[  19369.1ms] [cache] img notify url=https://github.githubassets.com/assets/changelog-fd687bff072883b0.png observers=2 bytes=16384 all=0
+[  19369.3ms] [cache] img data url=https://github.githubassets.com/assets/changelog-fd687bff072883b0.png bytes=32768 all=0 sizeAvail=1 null=0
+[  19369.6ms] [cache] img notify url=https://github.githubassets.com/assets/changelog-fd687bff072883b0.png observers=2 bytes=32768 all=0
+[  19369.8ms] [cache] img data url=https://github.githubassets.com/assets/changelog-dark-b1c25ae971bd641b.png bytes=49152 all=0 sizeAvail=1 null=0
+[  19370.1ms] [cache] img notify url=https://github.githubassets.com/assets/changelog-dark-b1c25ae971bd641b.png observers=2 bytes=49152 all=0
+[  19370.3ms] [cache] img data url=https://github.githubassets.com/assets/changelog-fd687bff072883b0.png bytes=49152 all=0 sizeAvail=1 null=0
+[  19370.6ms] [cache] img notify url=https://github.githubassets.com/assets/changelog-fd687bff072883b0.png observers=2 bytes=49152 all=0
+[  19370.9ms] [cache] img data url=https://github.githubassets.com/assets/changelog-dark-b1c25ae971bd641b.png bytes=62851 all=0 sizeAvail=1 null=0
+[  19371.1ms] [cache] img notify url=https://github.githubassets.com/assets/changelog-dark-b1c25ae971bd641b.png observers=2 bytes=62851 all=0
+[  19371.3ms] [cache] img data url=https://github.githubassets.com/assets/copilot-dark-2b28403b6080e898.png bytes=16384 all=0 sizeAvail=1 null=0
+[  19371.6ms] [cache] img notify url=https://github.githubassets.com/assets/copilot-dark-2b28403b6080e898.png observers=2 bytes=16384 all=0
+[  19371.9ms] [cache] img data url=https://github.githubassets.com/assets/changelog-fd687bff072883b0.png bytes=56292 all=0 sizeAvail=1 null=0
+[  19372.1ms] [cache] img notify url=https://github.githubassets.com/assets/changelog-fd687bff072883b0.png observers=2 bytes=56292 all=0
+[  19372.3ms] [cache] img data url=https://github.githubassets.com/assets/copilot-dark-2b28403b6080e898.png bytes=25246 all=0 sizeAvail=1 null=0
+[  19372.6ms] [cache] img notify url=https://github.githubassets.com/assets/copilot-dark-2b28403b6080e898.png observers=2 bytes=25246 all=0
+[  19373.2ms] [cache] img data url=https://github.githubassets.com/assets/changelog-dark-b1c25ae971bd641b.png bytes=62851 all=1 sizeAvail=1 null=0
+[  19373.4ms] [cache] img notify url=https://github.githubassets.com/assets/changelog-dark-b1c25ae971bd641b.png observers=2 bytes=62851 all=0
+[  19374.1ms] [cache] img data url=https://github.githubassets.com/assets/changelog-fd687bff072883b0.png bytes=56292 all=1 sizeAvail=1 null=0
+[  19374.4ms] [cache] img notify url=https://github.githubassets.com/assets/changelog-fd687bff072883b0.png observers=2 bytes=56292 all=0
+[  19375.3ms] [cache] img data url=https://github.githubassets.com/assets/copilot-dark-2b28403b6080e898.png bytes=25246 all=1 sizeAvail=1 null=0
+[  19375.9ms] [cache] img notify url=https://github.githubassets.com/assets/copilot-dark-2b28403b6080e898.png observers=2 bytes=25246 all=0
+[  19377.5ms] [cache] img data url=https://github.githubassets.com/assets/copilot-e2b89335a66dba00.png bytes=16384 all=0 sizeAvail=1 null=0
+[  19377.9ms] [cache] img notify url=https://github.githubassets.com/assets/copilot-e2b89335a66dba00.png observers=2 bytes=16384 all=0
+[  19378.2ms] [cache] img data url=https://github.githubassets.com/assets/platform-4ce65ae0bf273ce2.png bytes=16384 all=0 sizeAvail=1 null=0
+[  19378.6ms] [cache] img notify url=https://github.githubassets.com/assets/platform-4ce65ae0bf273ce2.png observers=2 bytes=16384 all=0
+[  19378.9ms] [cache] img data url=https://github.githubassets.com/assets/platform-4ce65ae0bf273ce2.png bytes=26674 all=0 sizeAvail=1 null=0
+[  19379.1ms] [cache] img notify url=https://github.githubassets.com/assets/platform-4ce65ae0bf273ce2.png observers=2 bytes=26674 all=0
+[  19379.4ms] [cache] img data url=https://github.githubassets.com/assets/copilot-e2b89335a66dba00.png bytes=32768 all=0 sizeAvail=1 null=0
+[  19379.7ms] [cache] img notify url=https://github.githubassets.com/assets/copilot-e2b89335a66dba00.png observers=2 bytes=32768 all=0
+[  19380.4ms] [cache] img data url=https://github.githubassets.com/assets/platform-4ce65ae0bf273ce2.png bytes=26674 all=1 sizeAvail=1 null=0
+[  19380.7ms] [cache] img notify url=https://github.githubassets.com/assets/platform-4ce65ae0bf273ce2.png observers=2 bytes=26674 all=0
+[  19381.0ms] [cache] img data url=https://github.githubassets.com/assets/copilot-e2b89335a66dba00.png bytes=33776 all=0 sizeAvail=1 null=0
+[  19381.3ms] [cache] img notify url=https://github.githubassets.com/assets/copilot-e2b89335a66dba00.png observers=2 bytes=33776 all=0
+[  19382.0ms] [cache] img data url=https://github.githubassets.com/assets/copilot-e2b89335a66dba00.png bytes=33776 all=1 sizeAvail=1 null=0
+[  19382.3ms] [cache] img notify url=https://github.githubassets.com/assets/copilot-e2b89335a66dba00.png observers=2 bytes=33776 all=0
+[  19385.4ms] [cache] img data url=https://github.githubassets.com/assets/features-platform-2-light-deba569ff3c98363.webp bytes=16384 all=0 sizeAvail=1 null=0
+[  19385.6ms] [cache] img notify url=https://github.githubassets.com/assets/features-platform-2-light-deba569ff3c98363.webp observers=2 bytes=16384 all=0
+[  19385.9ms] [cache] img data url=https://github.githubassets.com/assets/features-platform-1-light-d1af443446caafe7.webp bytes=16384 all=0 sizeAvail=1 null=0
+[  19386.2ms] [cache] img notify url=https://github.githubassets.com/assets/features-platform-1-light-d1af443446caafe7.webp observers=2 bytes=16384 all=0
+[  19386.5ms] [cache] img data url=https://github.githubassets.com/assets/features-ways-2-light-bb0bc31df1d658b8.webp bytes=16384 all=0 sizeAvail=1 null=0
+[  19386.8ms] [cache] img notify url=https://github.githubassets.com/assets/features-ways-2-light-bb0bc31df1d658b8.webp observers=2 bytes=16384 all=0
+[  19387.1ms] [cache] img data url=https://github.githubassets.com/assets/features-ways-2-light-bb0bc31df1d658b8.webp bytes=24162 all=0 sizeAvail=1 null=0
+[  19387.3ms] [cache] img notify url=https://github.githubassets.com/assets/features-ways-2-light-bb0bc31df1d658b8.webp observers=2 bytes=24162 all=0
+[  19387.6ms] [cache] img data url=https://github.githubassets.com/assets/features-platform-2-light-deba569ff3c98363.webp bytes=32768 all=0 sizeAvail=1 null=0
+[  19387.9ms] [cache] img notify url=https://github.githubassets.com/assets/features-platform-2-light-deba569ff3c98363.webp observers=2 bytes=32768 all=0
+[  19388.2ms] [cache] img data url=https://github.githubassets.com/assets/features-platform-1-light-d1af443446caafe7.webp bytes=32768 all=0 sizeAvail=1 null=0
+[  19388.4ms] [cache] img notify url=https://github.githubassets.com/assets/features-platform-1-light-d1af443446caafe7.webp observers=2 bytes=32768 all=0
+[  19389.0ms] [cache] img data url=https://github.githubassets.com/assets/features-ways-2-light-bb0bc31df1d658b8.webp bytes=24162 all=1 sizeAvail=1 null=0
+[  19389.3ms] [cache] img notify url=https://github.githubassets.com/assets/features-ways-2-light-bb0bc31df1d658b8.webp observers=2 bytes=24162 all=0
+[  19400.9ms] [cache] img data url=https://github.githubassets.com/assets/features-platform-2-light-deba569ff3c98363.webp bytes=49152 all=0 sizeAvail=1 null=0
+[  19413.4ms] [cache] img notify url=https://github.githubassets.com/assets/features-platform-2-light-deba569ff3c98363.webp observers=2 bytes=49152 all=0
+[  19413.8ms] [cache] img data url=https://github.githubassets.com/assets/features-platform-1-light-d1af443446caafe7.webp bytes=48278 all=0 sizeAvail=1 null=0
+[  19414.1ms] [cache] img notify url=https://github.githubassets.com/assets/features-platform-1-light-d1af443446caafe7.webp observers=2 bytes=48278 all=0
+[  19414.4ms] [cache] img data url=https://github.githubassets.com/assets/features-platform-2-light-deba569ff3c98363.webp bytes=51862 all=0 sizeAvail=1 null=0
+[  19414.7ms] [cache] img notify url=https://github.githubassets.com/assets/features-platform-2-light-deba569ff3c98363.webp observers=2 bytes=51862 all=0
+[  19415.7ms] [cache] img data url=https://github.githubassets.com/assets/features-platform-1-light-d1af443446caafe7.webp bytes=48278 all=1 sizeAvail=1 null=0
+[  19415.9ms] [cache] img notify url=https://github.githubassets.com/assets/features-platform-1-light-d1af443446caafe7.webp observers=2 bytes=48278 all=0
+[  19416.8ms] [cache] img data url=https://github.githubassets.com/assets/features-platform-2-light-deba569ff3c98363.webp bytes=51862 all=1 sizeAvail=1 null=0
+[  19417.1ms] [cache] img notify url=https://github.githubassets.com/assets/features-platform-2-light-deba569ff3c98363.webp observers=2 bytes=51862 all=0
+[  19418.0ms] [cache] img data url=https://github.githubassets.com/assets/features-ways-5-light-51976df09d6ae707.webp bytes=13158 all=0 sizeAvail=1 null=0
+[  19418.3ms] [cache] img notify url=https://github.githubassets.com/assets/features-ways-5-light-51976df09d6ae707.webp observers=2 bytes=13158 all=0
+[  19419.7ms] [cache] img data url=https://github.githubassets.com/assets/features-ways-5-light-51976df09d6ae707.webp bytes=13158 all=1 sizeAvail=1 null=0
+[  19420.0ms] [cache] img notify url=https://github.githubassets.com/assets/features-ways-5-light-51976df09d6ae707.webp observers=2 bytes=13158 all=0
+[  19420.3ms] [cache] img data url=https://github.githubassets.com/assets/features-ways-3-light-e2458d99331b9f87.webp bytes=16384 all=0 sizeAvail=1 null=0
+[  19420.6ms] [cache] img notify url=https://github.githubassets.com/assets/features-ways-3-light-e2458d99331b9f87.webp observers=2 bytes=16384 all=0
+[  19421.4ms] [cache] img data url=https://github.githubassets.com/assets/features-ways-3-light-e2458d99331b9f87.webp bytes=27858 all=0 sizeAvail=1 null=0
+[  19421.7ms] [cache] img notify url=https://github.githubassets.com/assets/features-ways-3-light-e2458d99331b9f87.webp observers=2 bytes=27858 all=0
+[  19422.5ms] [cache] img data url=https://github.githubassets.com/assets/features-ways-3-light-e2458d99331b9f87.webp bytes=27858 all=1 sizeAvail=1 null=0
+[  19422.8ms] [cache] img notify url=https://github.githubassets.com/assets/features-ways-3-light-e2458d99331b9f87.webp observers=2 bytes=27858 all=0
+[  19423.2ms] [cache] img data url=https://github.githubassets.com/assets/features-ways-4-light-c6d08e31ba77efdd.webp bytes=16384 all=0 sizeAvail=1 null=0
+[  19423.5ms] [cache] img notify url=https://github.githubassets.com/assets/features-ways-4-light-c6d08e31ba77efdd.webp observers=2 bytes=16384 all=0
+[  19423.8ms] [cache] img data url=https://github.githubassets.com/assets/features-ways-4-light-c6d08e31ba77efdd.webp bytes=25594 all=0 sizeAvail=1 null=0
+[  19424.0ms] [cache] img notify url=https://github.githubassets.com/assets/features-ways-4-light-c6d08e31ba77efdd.webp observers=2 bytes=25594 all=0
+[  19425.3ms] [cache] img data url=https://github.githubassets.com/assets/features-ways-4-light-c6d08e31ba77efdd.webp bytes=25594 all=1 sizeAvail=1 null=0
+[  19425.7ms] [cache] img notify url=https://github.githubassets.com/assets/features-ways-4-light-c6d08e31ba77efdd.webp observers=2 bytes=25594 all=0
+[  19426.6ms] [cache] img data url=https://github.githubassets.com/assets/features-ways-1-light-3a999d15192f9ed9.webp bytes=16384 all=0 sizeAvail=1 null=0
+[  19426.9ms] [cache] img notify url=https://github.githubassets.com/assets/features-ways-1-light-3a999d15192f9ed9.webp observers=2 bytes=16384 all=0
+[  19427.2ms] [cache] img data url=https://github.githubassets.com/assets/ducky-c9ab74b64c4d1e8d.webp bytes=2738 all=0 sizeAvail=1 null=0
+[  19427.6ms] [cache] img notify url=https://github.githubassets.com/assets/ducky-c9ab74b64c4d1e8d.webp observers=2 bytes=2738 all=0
+[  19427.9ms] [cache] img data url=https://github.githubassets.com/assets/features-ways-1-light-3a999d15192f9ed9.webp bytes=21772 all=0 sizeAvail=1 null=0
+[  19428.9ms] [cache] img notify url=https://github.githubassets.com/assets/features-ways-1-light-3a999d15192f9ed9.webp observers=2 bytes=21772 all=0
+[  19429.5ms] [cache] img data url=https://github.githubassets.com/assets/ducky-c9ab74b64c4d1e8d.webp bytes=2738 all=1 sizeAvail=1 null=0
+[  19429.7ms] [cache] img notify url=https://github.githubassets.com/assets/ducky-c9ab74b64c4d1e8d.webp observers=2 bytes=2738 all=0
+[  19430.3ms] [cache] img data url=https://github.githubassets.com/assets/features-ways-1-light-3a999d15192f9ed9.webp bytes=21772 all=1 sizeAvail=1 null=0
+[  19430.6ms] [cache] img notify url=https://github.githubassets.com/assets/features-ways-1-light-3a999d15192f9ed9.webp observers=2 bytes=21772 all=0
+[  19431.1ms] [cache] img data url=https://images.ctfassets.net/8aevphvgewt8/home2026-5de180004bab10ed7bf6174a/6609dfc82864ffad130f96c32866ca62/avatar-4.webp bytes=1234 all=0 sizeAvail=1 null=0
+[  19431.3ms] [cache] img notify url=https://images.ctfassets.net/8aevphvgewt8/home2026-5de180004bab10ed7bf6174a/6609dfc82864ffad130f96c32866ca62/avatar-4.webp observers=2 bytes=1234 all=0
+[  19431.9ms] [cache] img data url=https://images.ctfassets.net/8aevphvgewt8/home2026-5de180004bab10ed7bf6174a/6609dfc82864ffad130f96c32866ca62/avatar-4.webp bytes=1234 all=1 sizeAvail=1 null=0
+[  19432.2ms] [cache] img notify url=https://images.ctfassets.net/8aevphvgewt8/home2026-5de180004bab10ed7bf6174a/6609dfc82864ffad130f96c32866ca62/avatar-4.webp observers=2 bytes=1234 all=0
+[  19432.6ms] [cache] img data url=https://images.ctfassets.net/8aevphvgewt8/home2026-f6d013dea6d5575cba3b8294/41503e0438e56c6ebb8827c41e3c6fa8/avatar-3.webp bytes=1258 all=0 sizeAvail=1 null=0
+[  19432.9ms] [cache] img notify url=https://images.ctfassets.net/8aevphvgewt8/home2026-f6d013dea6d5575cba3b8294/41503e0438e56c6ebb8827c41e3c6fa8/avatar-3.webp observers=2 bytes=1258 all=0
+[  19433.5ms] [cache] img data url=https://images.ctfassets.net/8aevphvgewt8/home2026-f6d013dea6d5575cba3b8294/41503e0438e56c6ebb8827c41e3c6fa8/avatar-3.webp bytes=1258 all=1 sizeAvail=1 null=0
+[  19433.7ms] [cache] img notify url=https://images.ctfassets.net/8aevphvgewt8/home2026-f6d013dea6d5575cba3b8294/41503e0438e56c6ebb8827c41e3c6fa8/avatar-3.webp observers=2 bytes=1258 all=0
+[  19434.2ms] [cache] img data url=https://images.ctfassets.net/8aevphvgewt8/home2026-01ac80921a7a68bb3d4ce527/b8f43648b9c0fa6cdb8946ed2be492cf/avatar-1.webp bytes=2060 all=0 sizeAvail=1 null=0
+[  19434.5ms] [cache] img notify url=https://images.ctfassets.net/8aevphvgewt8/home2026-01ac80921a7a68bb3d4ce527/b8f43648b9c0fa6cdb8946ed2be492cf/avatar-1.webp observers=2 bytes=2060 all=0
+[  19435.1ms] [cache] img data url=https://images.ctfassets.net/8aevphvgewt8/home2026-01ac80921a7a68bb3d4ce527/b8f43648b9c0fa6cdb8946ed2be492cf/avatar-1.webp bytes=2060 all=1 sizeAvail=1 null=0
+[  19435.3ms] [cache] img notify url=https://images.ctfassets.net/8aevphvgewt8/home2026-01ac80921a7a68bb3d4ce527/b8f43648b9c0fa6cdb8946ed2be492cf/avatar-1.webp observers=2 bytes=2060 all=0
+[  19435.9ms] [cache] img data url=https://images.ctfassets.net/8aevphvgewt8/home2026-9ccb55275227c79b036824fc/b44aaf40a80735ae613a6db469af23c1/ducky-shadows.png bytes=15850 all=0 sizeAvail=1 null=0
+[  19436.1ms] [cache] img notify url=https://images.ctfassets.net/8aevphvgewt8/home2026-9ccb55275227c79b036824fc/b44aaf40a80735ae613a6db469af23c1/ducky-shadows.png observers=2 bytes=15850 all=0
+[  19436.7ms] [cache] img data url=https://images.ctfassets.net/8aevphvgewt8/home2026-9ccb55275227c79b036824fc/b44aaf40a80735ae613a6db469af23c1/ducky-shadows.png bytes=15850 all=1 sizeAvail=1 null=0
+[  19436.9ms] [cache] img notify url=https://images.ctfassets.net/8aevphvgewt8/home2026-9ccb55275227c79b036824fc/b44aaf40a80735ae613a6db469af23c1/ducky-shadows.png observers=2 bytes=15850 all=0
+[  19437.5ms] [cache] img data url=https://images.ctfassets.net/8aevphvgewt8/home2026-1bdfd19a362a9b42660488c1/dd6db8061a69e8cd6f3611e6b495b3dd/avatar-2.webp bytes=3746 all=0 sizeAvail=1 null=0
+[  19437.8ms] [cache] img notify url=https://images.ctfassets.net/8aevphvgewt8/home2026-1bdfd19a362a9b42660488c1/dd6db8061a69e8cd6f3611e6b495b3dd/avatar-2.webp observers=2 bytes=3746 all=0
+[  19438.3ms] [cache] img data url=https://images.ctfassets.net/8aevphvgewt8/home2026-1bdfd19a362a9b42660488c1/dd6db8061a69e8cd6f3611e6b495b3dd/avatar-2.webp bytes=3746 all=1 sizeAvail=1 null=0
+[  19438.6ms] [cache] img notify url=https://images.ctfassets.net/8aevphvgewt8/home2026-1bdfd19a362a9b42660488c1/dd6db8061a69e8cd6f3611e6b495b3dd/avatar-2.webp observers=2 bytes=3746 all=0
+[  19439.1ms] [cache] img data url=https://images.ctfassets.net/8aevphvgewt8/home2026-f899e02bc1ad1a5df31a307f/6acd0742069d2c9591b307f87e903a69/avatar-5.webp bytes=2112 all=0 sizeAvail=1 null=0
+[  19439.3ms] [cache] img notify url=https://images.ctfassets.net/8aevphvgewt8/home2026-f899e02bc1ad1a5df31a307f/6acd0742069d2c9591b307f87e903a69/avatar-5.webp observers=2 bytes=2112 all=0
+[  19439.9ms] [cache] img data url=https://images.ctfassets.net/8aevphvgewt8/home2026-f899e02bc1ad1a5df31a307f/6acd0742069d2c9591b307f87e903a69/avatar-5.webp bytes=2112 all=1 sizeAvail=1 null=0
+[  19440.1ms] [cache] img notify url=https://images.ctfassets.net/8aevphvgewt8/home2026-f899e02bc1ad1a5df31a307f/6acd0742069d2c9591b307f87e903a69/avatar-5.webp observers=2 bytes=2112 all=0
+[  19474.1ms] [cache] img data url=https://github.githubassets.com/assets/tile-gradient-2-bd0a28f700770812.webp bytes=3426 all=0 sizeAvail=1 null=0
+[  19474.6ms] [cache] img notify url=https://github.githubassets.com/assets/tile-gradient-2-bd0a28f700770812.webp observers=33 bytes=3426 all=0
+[  19475.0ms] [cache] img data url=https://github.githubassets.com/assets/tile-gradient-1-67516fb57f624345.webp bytes=3974 all=0 sizeAvail=1 null=0
+[  19475.3ms] [cache] img notify url=https://github.githubassets.com/assets/tile-gradient-1-67516fb57f624345.webp observers=33 bytes=3974 all=0
+[  19476.3ms] [cache] img data url=https://github.githubassets.com/assets/tile-gradient-2-bd0a28f700770812.webp bytes=3426 all=1 sizeAvail=1 null=0
+[  19476.7ms] [cache] img notify url=https://github.githubassets.com/assets/tile-gradient-2-bd0a28f700770812.webp observers=33 bytes=3426 all=0
+[  19477.3ms] [cache] img data url=https://github.githubassets.com/assets/tile-gradient-1-67516fb57f624345.webp bytes=3974 all=1 sizeAvail=1 null=0
+[  19477.6ms] [cache] img notify url=https://github.githubassets.com/assets/tile-gradient-1-67516fb57f624345.webp observers=33 bytes=3974 all=0
+[  19478.2ms] [cache] img data url=https://github.githubassets.com/assets/tile-gradient-2-032af4e10b4f5dad.webp bytes=16384 all=0 sizeAvail=1 null=0
+[  19478.5ms] [cache] img notify url=https://github.githubassets.com/assets/tile-gradient-2-032af4e10b4f5dad.webp observers=6 bytes=16384 all=0
+[  19478.9ms] [cache] img data url=https://github.githubassets.com/assets/tile-gradient-2-032af4e10b4f5dad.webp bytes=30628 all=0 sizeAvail=1 null=0
+[  19479.2ms] [cache] img notify url=https://github.githubassets.com/assets/tile-gradient-2-032af4e10b4f5dad.webp observers=6 bytes=30628 all=0
+[  19479.8ms] [cache] img data url=https://github.githubassets.com/assets/tile-gradient-2-032af4e10b4f5dad.webp bytes=30628 all=1 sizeAvail=1 null=0
+[  19480.1ms] [cache] img notify url=https://github.githubassets.com/assets/tile-gradient-2-032af4e10b4f5dad.webp observers=6 bytes=30628 all=0
+[  19480.7ms] [cache] img data url=https://github.githubassets.com/assets/tile-gradient-1-655dba6cdcef3c96.webp bytes=16384 all=0 sizeAvail=1 null=0
+[  19481.0ms] [cache] img notify url=https://github.githubassets.com/assets/tile-gradient-1-655dba6cdcef3c96.webp observers=9 bytes=16384 all=0
+[  19481.3ms] [cache] img data url=https://github.githubassets.com/assets/tile-gradient-1-655dba6cdcef3c96.webp bytes=32768 all=0 sizeAvail=1 null=0
+[  19481.7ms] [cache] img notify url=https://github.githubassets.com/assets/tile-gradient-1-655dba6cdcef3c96.webp observers=9 bytes=32768 all=0
+[  19481.9ms] [cache] img data url=https://github.githubassets.com/assets/tile-gradient-1-655dba6cdcef3c96.webp bytes=41020 all=0 sizeAvail=1 null=0
+[  19482.2ms] [cache] img notify url=https://github.githubassets.com/assets/tile-gradient-1-655dba6cdcef3c96.webp observers=9 bytes=41020 all=0
+[  19482.7ms] [cache] img data url=https://github.githubassets.com/assets/tile-gradient-1-655dba6cdcef3c96.webp bytes=41020 all=1 sizeAvail=1 null=0
+[  19483.0ms] [cache] img notify url=https://github.githubassets.com/assets/tile-gradient-1-655dba6cdcef3c96.webp observers=9 bytes=41020 all=0
+[  19637.3ms] [cache] mem hit type=image url=https://github.githubassets.com/assets/tile-gradient-1-67516fb57f624345.webp
+[  19638.5ms] [cache] mem hit type=image url=https://github.githubassets.com/assets/tile-gradient-2-bd0a28f700770812.webp
+[  19825.9ms] [cache] mem hit type=image url=https://github.githubassets.com/assets/tile-gradient-2-032af4e10b4f5dad.webp
+[  19830.2ms] [cache] mem hit type=image url=https://github.githubassets.com/assets/tile-gradient-1-655dba6cdcef3c96.webp
+LEAK: 2821 Node
+LEAK: 1 Frame
+LEAK: 1 Page
+LEAK: 3240 RenderObject

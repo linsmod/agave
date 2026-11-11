@@ -43,7 +43,7 @@ if ($Probe) {
     $log = Join-Path $root 'debug\shell_err.txt'
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $log) | Out-Null
 
-    & $exe --probe $Url --eval $Eval --wait $Wait --settle $Settle --timeout 90000 2> $log
+    & $exe --probe $Url --eval $Eval --wait $Wait --settle $Settle --timeout 90000 > $log
     "exit=$LASTEXITCODE  stderr -> $log"
 
     $hits = Select-String -Path $log -Pattern '\[snippet' -ErrorAction SilentlyContinue
@@ -54,7 +54,14 @@ if ($Probe) {
         'no [snippet] lines (nothing engine-thrown matched, or no error at all)'
     }
 } else {
-    # GUI: stderr stays on this console, so [snippet] lines show up as they happen.
-    & $exe $Url
-    "exit=$LASTEXITCODE"
+    $outLog = Join-Path $root 'launch.txt'
+    $errLog = Join-Path $root 'launch.err.txt'
+    $p = Start-Process -FilePath $exe -ArgumentList $Url `
+         -RedirectStandardOutput $outLog `
+         -RedirectStandardError  $errLog `
+         -NoNewWindow -PassThru
+    $p.WaitForExit()
+    "exit=$($p.ExitCode)"
+    "stdout -> $outLog"
+    "stderr -> $errLog"
 }
