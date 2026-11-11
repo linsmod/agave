@@ -497,23 +497,48 @@
     if (!g || g.indexedDB)
         return;
 
-    function failRequest(request) {
-        g.setTimeout(function () {
-            var event = { type: 'error', target: request, currentTarget: request };
+    /* The stub requests are EventTargets, not bags of on* properties: site code
+     * calls indexedDB.deleteDatabase(name).addEventListener('blocked', ...) and
+     * threw "undefined is not a function" when only onblocked existed (issues
+     * #20). addEventListener is the same shape the rest of the prelude uses. */
+    function makeTarget(request) {
+        var listeners = {};
 
-            request.error = {
-                name: 'NotSupportedError',
-                message: 'IndexedDB is not supported in this browser'
-            };
-            request.readyState = 'done';
-
-            if (typeof request.onerror === 'function')
-                request.onerror(event);
-        }, 0);
+        request.addEventListener = function (type, fn) {
+            if (typeof fn !== 'function') return;
+            type = String(type);
+            (listeners[type] || (listeners[type] = [])).push(fn);
+        };
+        request.removeEventListener = function (type, fn) {
+            var list = listeners[String(type)];
+            if (!list) return;
+            for (var i = list.length - 1; i >= 0; --i) if (list[i] === fn) list.splice(i, 1);
+        };
+        request.dispatchEvent = function (event) {
+            var type = String(event && event.type), list, i;
+            event = event || {};
+            event.target = request;
+            event.currentTarget = request;
+            if (!event.preventDefault) event.preventDefault = function () {};
+            if (!event.stopPropagation) event.stopPropagation = function () {};
+            var handler = request['on' + type];
+            if (typeof handler === 'function') {
+                try { handler.call(request, event); } catch (e) { /* host handler */ }
+            }
+            list = listeners[type];
+            if (list) {
+                list = list.slice();
+                for (i = 0; i < list.length; ++i) {
+                    try { list[i].call(request, event); } catch (e) { /* host listener */ }
+                }
+            }
+            return true;
+        };
+        return request;
     }
 
     function makeRequest() {
-        var request = {
+        var request = makeTarget({
             result: null,
             error: null,
             readyState: 'pending',
@@ -521,18 +546,43 @@
             onerror: null,
             onupgradeneeded: null,
             onblocked: null
-        };
+        });
 
         failRequest(request);
         return request;
+    }
+
+    function failRequest(request) {
+        g.setTimeout(function () {
+            request.error = {
+                name: 'NotSupportedError',
+                message: 'IndexedDB is not supported in this browser'
+            };
+            request.readyState = 'done';
+            request.dispatchEvent({ type: 'error' });
+        }, 0);
+    }
+
+    /* databases() reports "no databases" instead of failing: wrappers use it to
+     * feature-detect the API, and an empty list is the documented answer. */
+    function succeedRequest(request, result) {
+        g.setTimeout(function () {
+            request.result = result;
+            request.readyState = 'done';
+            request.dispatchEvent({ type: 'success' });
+        }, 0);
     }
 
     g.indexedDB = {
         open: function () { return makeRequest(); },
         deleteDatabase: function () { return makeRequest(); },
         databases: function () {
-            var request = makeRequest();
-            request.result = [];
+            var request = makeTarget({
+                result: null, error: null, readyState: 'pending',
+                onsuccess: null, onerror: null, onupgradeneeded: null, onblocked: null
+            });
+
+            succeedRequest(request, []);
             return request;
         }
     };

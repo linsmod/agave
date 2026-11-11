@@ -400,6 +400,18 @@
     })());
     ok('document/window interfaces', document instanceof HTMLDocument &&
        document instanceof Document && window instanceof Window);
+    /* issues #20: the IndexedDB stub returns EventTarget requests, so
+     * indexedDB.deleteDatabase(...).addEventListener('blocked', ...) works. */
+    ok('indexedDB stub requests are EventTargets', (function () {
+      var d = indexedDB.deleteDatabase('x');
+      var o = indexedDB.open('y');
+      var l = indexedDB.databases();
+      return typeof d.addEventListener === 'function' &&
+             typeof d.removeEventListener === 'function' &&
+             typeof d.dispatchEvent === 'function' &&
+             typeof o.addEventListener === 'function' &&
+             typeof l.addEventListener === 'function';
+    })());
     /* G1-2: el.attributes is a live NamedNodeMap of Attr nodes. */
     ok('attributes is a NamedNodeMap', (function () {
       var el = document.createElement('div');
