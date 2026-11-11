@@ -2,6 +2,7 @@
 <html>
 <head><meta charset="utf-8"><title>binding semantics</title></head>
 <body>
+    <x-upgrade-probe id="up-probe"></x-upgrade-probe>
   <template id="tpl-probe"><span class="tpl-x">hi</span></template>
 <div id="d">d</div><input id="i"><span id="s">s</span>
 <script>
@@ -530,6 +531,35 @@
       host.parentNode.removeChild(host);
       return created && directOk && plain === 'TypeError' && log.join(',') === 'c:delegate';
     })());
+    /* issues #23: an element that existed before define() is upgraded with its
+     * constructor, and the instance must survive later wraps (the bridge used to
+     * reset the prototype on every wrap, which hid class methods). */
+    ok('parser element upgrade keeps class members', (function () {
+      var log = [];
+      var XUp = class extends HTMLElement {
+        constructor() {
+          super();
+          this.field = 'ctor';
+        }
+        styles() { return ':host{color:red}'; }
+        connectedCallback() { log.push('cc:' + (typeof this.styles)); }
+      };
+      customElements.define('x-upgrade-probe', XUp);
+      var el = document.getElementById('up-probe');
+      return el instanceof XUp && typeof el.styles === 'function' &&
+             el.field === 'ctor' && log.join(',') === 'cc:function' &&
+             document.getElementById('up-probe') === el;
+    })());
+    ok('document.getElementsByName', (function () {
+      var host = document.createElement('div');
+      host.innerHTML = '<i name="by-probe"></i><i name="by-probe"></i><i name="other"></i>';
+      document.body.appendChild(host);
+      var list = document.getElementsByName('by-probe');
+      var okList = list.length === 2 && list[0].nodeName === 'I' &&
+                   document.getElementsByName('nothing-here').length === 0;
+      host.parentNode.removeChild(host);
+      return okList;
+    })());
     ok('customElements registry', (function () {
       var log = [];
       var XProbe = class extends HTMLElement {
@@ -550,13 +580,25 @@
       el.setAttribute('data-q', '2');
       el.remove();
       host.parentNode.removeChild(host);
-      var dup = null, bad = null;
-      try { customElements.define('x-probe-el', XProbe); } catch (e) { dup = e.name; }
+      /* Chrome throws on any re-definition. This engine treats a repeated define of
+       * an existing name as a no-op and keeps the first constructor (issues #23: a
+       * webpack chunk factory can execute twice here and would otherwise abort the
+       * page's remaining setup); invalid names still throw. */
+      var dup = null, bad = null, other = null;
+      try {
+        customElements.define('x-probe-el', XProbe);
+        dup = 'noop';
+      } catch (e) { dup = e.name; }
       try { customElements.define('badname', XProbe); } catch (e) { bad = e.name; }
+      try {
+        customElements.define('x-probe-el', class extends HTMLElement {});
+        other = 'noop';
+      } catch (e) { other = e.name; }
       return created && customElements.get('x-probe-el') === XProbe &&
              customElements.getName(XProbe) === 'x-probe-el' &&
              log.join(',') === 'c,a:data-p=1,d' &&
-             dup === 'NotSupportedError' && bad === 'SyntaxError';
+             dup === 'noop' && bad === 'SyntaxError' && other === 'noop' &&
+             customElements.get('x-probe-el') === XProbe;
     })());
     ok('indexedDB stub requests are EventTargets', (function () {
       var d = indexedDB.deleteDatabase('x');

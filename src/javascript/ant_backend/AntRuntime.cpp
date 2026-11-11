@@ -1370,6 +1370,7 @@ static int classListRemove(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*
 static int classListContains(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 static int classListToggle(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeGetElementsByClassName(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeGetElementsByName(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeQuerySelectorAll(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeQuerySelector(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalFrameSlot(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
@@ -9694,13 +9695,29 @@ int globalCEDefine(AntbEngine*, AntbValue*, AntbValue** args, int argc, AntbValu
         for (size_t i = 0; i < tag.size(); ++i)
             if (tag[i] >= 'A' && tag[i] <= 'Z')
                 tag[i] = (char)(tag[i] - 'A' + 'a');
-        if (runtime->customDefs->count(tag)) {
-            if (getenv("AGB_CE_DEBUG"))
-                fprintf(stderr, "[cedef] DUP %s (rejected)\n", name);
-            if (getenv("AGB_CE_DEBUG_STACK") && g_engine)
-                antb_print_js_stack(g_engine);   /* who tries to define it again */
+        std::map<std::string, AntbValue*>::iterator existing = runtime->customDefs->find(tag);
+
+        if (existing != runtime->customDefs->end()) {
+            /* Chrome throws NotSupportedError for a re-definition, but this engine
+             * can execute a webpack chunk factory twice (issues #23: GitHub's second
+             * webpack runtime requires the chunk again and the factory makes a fresh
+             * class each run), and the throw aborts the rest of the page's setup.
+             * Keep the first registration and treat the re-definition as a no-op;
+             * AGB_CE_DEBUG logs it with the JS stack so the deviation stays visible. */
+            if (getenv("AGB_CE_DEBUG")) {
+                fprintf(stderr, "[cedef] re-define %s ignored (first ctor kept%s)\n", name,
+                        (existing->second && antb_value_same(existing->second, args[1]))
+                            ? ", same ctor" : ", different ctor");
+                if (getenv("AGB_CE_DEBUG_STACK") && g_engine)
+                    antb_print_js_stack(g_engine);
+            }
             antb_free(name);
-            return 0;                       /* already defined: prelude throws */
+            result = antb_make_boolean(g_engine, 1);
+            if (result) {
+                antb_value_assign(out, result);
+                antb_value_release(result);
+            }
+            return 1;
         }
         (*runtime->customDefs)[tag] = antb_retain(args[1]);
     }
@@ -13012,6 +13029,51 @@ int nodeContains(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc
 }
 
 /* Elements whose class attribute has `name` as a token (live HTMLCollection). */
+/* document.getElementsByName(name): every element whose name attribute matches.
+ * Returned as a static NodeList (Chrome's is live; the callers use length/[i] or
+ * [0], so a snapshot answers the same). */
+int nodeGetElementsByName(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                          AntbValue* out, void*)
+{
+    WebCore::Node* root = nodeOf(self);
+    std::vector<WebCore::Node*> matches;
+    char* name;
+
+    if (!root || argc < 1)
+        return 1;
+
+    name = antb_to_utf8(args[0]);
+    if (!name)
+        return 1;
+
+    {
+        WebCore::String wanted = WebCore::String::fromUTF8(name);
+
+        for (WebCore::Node* n = root; n; n = n->traverseNextNode(root)) {
+            if (!n->isElementNode())
+                continue;
+            {
+                WebCore::String value =
+                    static_cast<WebCore::Element*>(n)->getAttribute(WebCore::String("name"));
+
+                if (!value.isEmpty() && value == wanted)
+                    matches.push_back(n);
+            }
+        }
+    }
+    antb_free(name);
+
+    {
+        AntbValue* list = wrapStaticCollection(engine, root, matches);
+
+        if (!list)
+            return 1;
+        antb_value_assign(out, list);
+        antb_value_release(list);
+    }
+    return 1;
+}
+
 int nodeGetElementsByClassName(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
                                AntbValue* out, void*)
 {
@@ -17050,6 +17112,7 @@ static const DomMethodImpl kDomMethodImpls[] = {
     { "getContext"                , nodeGetContext },
     { "getElementById"            , docGetElementById },
     { "getElementsByClassName"    , nodeGetElementsByClassName },
+    { "getElementsByName"         , nodeGetElementsByName },
     { "getElementsByTagName"      , nodeGetElementsByTagName },
     { "getRootNode"               , nodeGetRootNode },
     { "getSelection"              , docGetSelection },
@@ -17112,6 +17175,7 @@ struct DomMethodExtra {
 static const DomMethodExtra kExtraMethods[] = {
     { "Document", "createHTMLDocument" },
     { "Document", "getElementsByClassName" },
+    { "Document", "getElementsByName" },
     { "Document", "getSelection" },
     { "Document", "hasFocus" },
     { "Document", "querySelector" },
