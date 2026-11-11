@@ -4949,8 +4949,8 @@ bool CSSParser::parseBackgroundShorthand(bool important)
     const int properties[] = { CSS_PROP_BACKGROUND_IMAGE, CSS_PROP_BACKGROUND_REPEAT,
         CSS_PROP_BACKGROUND_ATTACHMENT, CSS_PROP_BACKGROUND_POSITION,
         CSS_PROP__WEBKIT_BACKGROUND_SIZE,
-        CSS_PROP__WEBKIT_BACKGROUND_CLIP,
-        CSS_PROP__WEBKIT_BACKGROUND_ORIGIN, CSS_PROP_BACKGROUND_COLOR };
+        CSS_PROP__WEBKIT_BACKGROUND_ORIGIN,
+        CSS_PROP__WEBKIT_BACKGROUND_CLIP, CSS_PROP_BACKGROUND_COLOR };
     const int numProperties = sizeof(properties) / sizeof(properties[0]);
     
     ShorthandScope scope(this, CSS_PROP_BACKGROUND);
@@ -5014,6 +5014,57 @@ bool CSSParser::parseBackgroundShorthand(bool important)
             addBackgroundValue(values[i], new CSSInitialValue(true));
             if (properties[i] == CSS_PROP_BACKGROUND_POSITION)
                 addBackgroundValue(positionYValue, new CSSInitialValue(true));
+        }
+    }
+
+    /* One <box> value in the `background` shorthand sets BOTH origin and clip
+     * (the first of two sets origin, the second clip - hence ORIGIN is parsed
+     * before CLIP above). A layer that specified only one box therefore has a
+     * real origin/clip and an implicit initial for the other; copy the real
+     * one so `background: linear-gradient(...) border-box` clips and positions
+     * in the border box, like Chrome. */
+    {
+        int originIndex = -1, clipIndex = -1;
+        for (i = 0; i < numProperties; ++i) {
+            if (properties[i] == CSS_PROP__WEBKIT_BACKGROUND_ORIGIN)
+                originIndex = i;
+            else if (properties[i] == CSS_PROP__WEBKIT_BACKGROUND_CLIP)
+                clipIndex = i;
+        }
+        if (originIndex >= 0 && clipIndex >= 0 && values[originIndex] && values[clipIndex]) {
+            CSSValueList* originList = 0;
+            CSSValueList* clipList = 0;
+            if (values[originIndex]->isValueList())
+                originList = static_cast<CSSValueList*>(values[originIndex]);
+            else {
+                originList = new CSSValueList;
+                originList->append(values[originIndex]);
+                values[originIndex] = originList;
+            }
+            if (values[clipIndex]->isValueList())
+                clipList = static_cast<CSSValueList*>(values[clipIndex]);
+            else {
+                clipList = new CSSValueList;
+                clipList->append(values[clipIndex]);
+                values[clipIndex] = clipList;
+            }
+
+            if (originList->length() == clipList->length()) {
+                CSSValueList* rebuiltClip = new CSSValueList;
+                for (unsigned j = 0; j < clipList->length(); ++j) {
+                    CSSValue* originValue = originList->item(j);
+                    CSSValue* clipValue = clipList->item(j);
+                    if (originValue && clipValue
+                        && originValue->cssValueType() != CSSValue::CSS_INITIAL
+                        && clipValue->cssValueType() == CSSValue::CSS_INITIAL
+                        && originValue->isPrimitiveValue())
+                        rebuiltClip->append(new CSSPrimitiveValue(static_cast<CSSPrimitiveValue*>(originValue)->getIdent()));
+                    else
+                        rebuiltClip->append(clipValue);
+                }
+                delete values[clipIndex];
+                values[clipIndex] = rebuiltClip;
+            }
         }
     }
     
@@ -6627,27 +6678,27 @@ bool CSSParser::parseColorFromValue(Value* value, RGBA32& c, bool svg)
 // without the allowBreak bit being set, then it will clean up all of the objects and destroy them.
 struct ShadowParseContext {
     ShadowParseContext()
-    :values(0), x(0), y(0), blur(0), color(0),
-     allowX(true), allowY(false), allowBlur(false), allowColor(true),
+    :values(0), x(0), y(0), blur(0), spread(0), color(0),
+     allowX(true), allowY(false), allowBlur(false), allowSpread(false), allowColor(true),
      allowBreak(true)
     {}
 
-    bool allowLength() { return allowX || allowY || allowBlur; }
+    bool allowLength() { return allowX || allowY || allowBlur || allowSpread; }
 
     void commitValue() {
         // Handle the ,, case gracefully by doing nothing.
-        if (x || y || blur || color) {
+        if (x || y || blur || spread || color) {
             if (!values)
                 values = new CSSValueList();
             
             // Construct the current shadow value and add it to the list.
-            values->append(new ShadowValue(x.release(), y.release(), blur.release(), color.release()));
+            values->append(new ShadowValue(x.release(), y.release(), blur.release(), spread.release(), color.release()));
         }
         
         // Now reset for the next shadow value.
-        x = y = blur = color = 0;
+        x = y = blur = spread = color = 0;
         allowX = allowColor = allowBreak = true;
-        allowY = allowBlur = false;  
+        allowY = allowBlur = allowSpread = false;
     }
 
     void commitLength(Value* v) {
@@ -6663,7 +6714,11 @@ struct ShadowParseContext {
         }
         else if (allowBlur) {
             blur = val.release();
-            allowBlur = false;
+            allowBlur = false; allowSpread = true;
+        }
+        else if (allowSpread) {
+            spread = val.release();
+            allowSpread = false;
         }
     }
 
@@ -6673,18 +6728,20 @@ struct ShadowParseContext {
         if (allowX)
             allowBreak = false;
         else
-            allowBlur = false;
+            allowBlur = allowSpread = false;
     }
     
     RefPtr<CSSValueList> values;
     RefPtr<CSSPrimitiveValue> x;
     RefPtr<CSSPrimitiveValue> y;
     RefPtr<CSSPrimitiveValue> blur;
+    RefPtr<CSSPrimitiveValue> spread;
     RefPtr<CSSPrimitiveValue> color;
 
     bool allowX;
     bool allowY;
     bool allowBlur;
+    bool allowSpread;
     bool allowColor;
     bool allowBreak;
 };

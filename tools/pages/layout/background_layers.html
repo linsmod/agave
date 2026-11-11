@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>multi-layer gradients / shadow spread / textarea placeholder</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #ffffff; }
+  /* Baidu's AI input: the white layer is clipped to the padding box, the
+     gradient layer to the border box, so only the 4px transparent border
+     shows the gradient. */
+  #gl {
+    position: absolute; left: 20px; top: 20px; width: 300px; height: 80px;
+    border: 4px solid transparent; border-radius: 24px;
+    background: linear-gradient(#ffffff, #ffffff) padding-box,
+                linear-gradient(90deg, #ff0000, #0000ff) border-box;
+  }
+  /* Outer shadow with a spread but no blur: the ring outside the box is the
+     shadow colour. */
+  #shadow {
+    position: absolute; left: 20px; top: 140px; width: 120px; height: 60px;
+    background: #ffffff; box-shadow: 0 0 0 6px #00ff00;
+  }
+  /* The placeholder is painted by RenderTextControl for textareas too. */
+  #ta {
+    position: absolute; left: 20px; top: 240px; width: 300px; height: 60px;
+    margin: 0; padding: 4px; border: 0; background: #ffffff;
+    font-size: 28px; line-height: 32px;
+  }
+</style>
+</head>
+<body>
+<div id="gl"></div>
+<div id="shadow"></div>
+<textarea id="ta" placeholder="MMMMMM"></textarea>
+</body>
+</html>

@@ -291,7 +291,11 @@ void RenderTextControl::updatePlaceholder()
     bool oldPlaceholderVisible = m_placeholderVisible;
 
     String placeholder;
-    if (!m_multiLine) {
+    if (m_multiLine) {
+        HTMLTextAreaElement* textArea = static_cast<HTMLTextAreaElement*>(node());
+        if (textArea->value().isEmpty())
+            placeholder = textArea->getAttribute(placeholderAttr);
+    } else {
         HTMLInputElement* input = static_cast<HTMLInputElement*>(node());
         /* Keep the placeholder visible while the field is focused: modern
          * browsers only hide it once there is a value (the 2008 code dropped it
@@ -823,14 +827,20 @@ void RenderTextControl::paint(PaintInfo& paintInfo, int tx, int ty)
 {
     /* Paint the placeholder before the block contents so the caret, the
      * selection and the value text all stay above it. */
-    if (paintInfo.phase == PaintPhaseForeground && m_innerText && m_innerText->renderer() && !m_multiLine) {
+    if (paintInfo.phase == PaintPhaseForeground && m_innerText && m_innerText->renderer()) {
         /* Decide from the DOM, not from m_placeholderVisible: typing edits the
          * inner text directly and does not always run updatePlaceholder(), so a
          * cached flag would keep painting the placeholder over the value. */
-        HTMLInputElement* input = static_cast<HTMLInputElement*>(node());
         String placeholder;
-        if (input->value().isEmpty())
-            placeholder = input->getAttribute(placeholderAttr);
+        if (m_multiLine) {
+            HTMLTextAreaElement* textArea = static_cast<HTMLTextAreaElement*>(node());
+            if (textArea->value().isEmpty())
+                placeholder = textArea->getAttribute(placeholderAttr);
+        } else {
+            HTMLInputElement* input = static_cast<HTMLInputElement*>(node());
+            if (input->value().isEmpty())
+                placeholder = input->getAttribute(placeholderAttr);
+        }
 
         if (!placeholder.isEmpty()) {
             RenderBlock* inner = static_cast<RenderBlock*>(m_innerText->renderer());

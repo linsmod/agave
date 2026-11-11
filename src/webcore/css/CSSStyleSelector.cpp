@@ -2917,7 +2917,7 @@ void CSSStyleSelector::applyProperty(int id, CSSValue *value)
                 value ? value->cssValueType() : 0, value ? (value->isGradientValue() ? 1 : 0) : -1,
                 (value && value->isValueList()) ? 1 : 0);
         if (value && value->isGradientValue()) {
-            style->setBackgroundGradient(static_cast<CSSGradientValue*>(value));
+            style->accessBackgroundLayers()->setBackgroundGradient(static_cast<CSSGradientValue*>(value));
             return;
         }
         HANDLE_BACKGROUND_VALUE(backgroundImage, BackgroundImage, value)
@@ -4224,10 +4224,12 @@ void CSSStyleSelector::applyProperty(int id, CSSValue *value)
             int x = item->x->computeLengthInt(style, zoomFactor);
             int y = item->y->computeLengthInt(style, zoomFactor);
             int blur = item->blur ? item->blur->computeLengthInt(style, zoomFactor) : 0;
+            int spread = item->spread ? item->spread->computeLengthInt(style, zoomFactor) : 0;
             Color color;
             if (item->color)
                 color = getColorFromPrimitiveValue(item->color.get());
-            ShadowData* shadowData = new ShadowData(x, y, blur, color.isValid() ? color : Color::transparent);
+            ShadowData* shadowData = new ShadowData(x, y, blur, id == CSS_PROP_TEXT_SHADOW ? 0 : spread,
+                                                    color.isValid() ? color : Color::transparent);
             if (id == CSS_PROP_TEXT_SHADOW)
                 style->setTextShadow(shadowData, i != 0);
             else
@@ -5188,7 +5190,8 @@ void CSSStyleSelector::mapBackgroundImage(BackgroundLayer* layer, CSSValue* valu
      * test: gradients are CSS_CUSTOM values, so a primitive-only guard would
      * drop them from the `background` shorthand as well. */
     if (value->isGradientValue()) {
-        style->setBackgroundGradient(static_cast<CSSGradientValue*>(value));
+        layer->setBackgroundGradient(static_cast<CSSGradientValue*>(value));
+        /* The layer is an image layer, but it has no CachedImage. */
         layer->setBackgroundImage(RenderStyle::initialBackgroundImage());
         return;
     }

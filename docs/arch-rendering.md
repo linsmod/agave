@@ -269,6 +269,15 @@ DOM attach（Element::attach / Text::attach）
 - **平铺背景只画可见带**：`RenderBox::paintBackgroundExtended()` 把
   `calculateBackgroundImageGeometry()` 算出的 destRect 与 `(tx, clipY, w, clipH)` 求交，
   再按偏移修正 phase —— Picasso 的 pattern 填充按 destRect 面积走，不按 clip。
+- **背景层先尾后头、渐变随层**：`BackgroundLayer` 是链表（`next()`），
+  `paintBackgrounds()` 递归到尾部先画、再画头部，所以 CSS 的第一层在最上。每层各自持有
+  `CachedImage` 或 `CSSGradientValue`（R189），背景色只在最底层画一次；渐变先按该层
+  `background-origin` 算几何、再按 `background-clip` 取填充盒。⚠ Picasso 的渐变画刷
+  **忽略 clip path**，所以渐变层用 `fillRoundedRect(..., const CanvasGradient*)` 按圆角
+  路径填充（否则圆角背景的渐变会溢出到四角），见 `GraphicsContextPS.cpp`。
+- **`box-shadow` 的 spread**：`ShadowData` 有 `spread`；`paintBoxShadow()` 把绘制形状
+  外扩并同步收放四个圆角半径。Picasso 的 `clipOut` 是 no-op，内层靠“背景色随后覆盖”
+  隐藏，因此扩散环直接填 `boxShadow()->color` 而不是黑色（R189）。
 - **样式变化 ≠ 布局**：`FrameView::needsLayout()` 不再把 `document()->hasChangedChild()`
   当布局请求；`layoutIfNeededRecursive()` 先 `recalcStyle()`，之后只有真的
   `needsLayout()` 才布局。内联样式写入按 `InlineStyleChange` 标记（不是 `FullStyleChange`），

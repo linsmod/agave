@@ -925,6 +925,20 @@ void GraphicsContext::fillRoundedRect(const IntRect& rc, const IntSize& topLeft,
 	}
 }
 
+void GraphicsContext::fillRoundedRect(const IntRect& rc, const IntSize& topLeft, const IntSize& topRight,
+								const IntSize& bottomLeft, const IntSize& bottomRight, const CanvasGradient* gradient)
+{
+    if (paintingDisabled() || !gradient)
+        return;
+
+    ps_rect r = {rc.x(), rc.y(), rc.width(), rc.height()};
+    ps_rounded_rect(m_data->context, &r, topLeft.width(), topLeft.height(), topRight.width(),
+                                topRight.height(), bottomLeft.width(), bottomLeft.height(),
+                                bottomRight.width(), bottomRight.height());
+    ps_set_source_gradient(m_data->context, gradient->getGradient());
+    ps_fill(m_data->context);
+}
+
 void GraphicsContext::clearRect(const FloatRect& r)
 {
     if (paintingDisabled())

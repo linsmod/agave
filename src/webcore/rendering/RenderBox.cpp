@@ -742,13 +742,37 @@ void RenderBox::paintBackgroundExtended(GraphicsContext* context, const Color& c
 
         if (bgColor.isValid() && bgColor.alpha() > 0)
             context->fillRect(rect, bgColor);
+    }
 
-        /* Gradients: over the background color, under the image. */
-        if (style()->backgroundGradient()) {
-            const CSSGradientValue* gradient = style()->backgroundGradient();
-            const Vector<CSSGradientValue::Stop>& stops = gradient->stops();
+    /* Gradients: over the background colour, under this layer's image. Each
+     * background layer owns its gradient; painting only the bottom layer's
+     * style-level gradient made every comma-separated background collapse to
+     * one layer (Baidu's gradient border: white padding-box + gradient
+     * border-box). */
+    if (const CSSGradientValue* gradient = bgLayer->backgroundGradient()) {
+        const Vector<CSSGradientValue::Stop>& stops = gradient->stops();
 
-            if (stops.size() >= 2) {
+        if (stops.size() >= 2) {
+            /* The background positioning area: the layer's origin box. For
+             * `border-box` this is the full border box (Baidu's ring), for
+             * `padding-box` the padding box. */
+            IntRect rect(tx, ty, w, h);
+            EBackgroundBox origin = bgLayer->backgroundOrigin();
+            if (origin != BGBORDER) {
+                int x = tx + borderLeft();
+                int y = ty + borderTop();
+                int gw = w - borderLeft() - borderRight();
+                int gh = h - borderTop() - borderBottom();
+                if (origin == BGCONTENT) {
+                    x += paddingLeft();
+                    y += paddingTop();
+                    gw -= paddingLeft() + paddingRight();
+                    gh -= paddingTop() + paddingBottom();
+                }
+                rect = IntRect(x, y, gw, gh);
+            }
+
+            if (!rect.isEmpty()) {
                 RefPtr<CanvasGradient> canvasGradient;
 
                 if (gradient->isRadial()) {
@@ -772,7 +796,48 @@ void RenderBox::paintBackgroundExtended(GraphicsContext* context, const Color& c
                 for (unsigned i = 0; i < stops.size(); ++i)
                     canvasGradient->addColorStop(stops[i].offset, stops[i].color.name());
 
-                context->fillRect(FloatRect(rect), canvasGradient.get());
+                /* The gradient brush ignores the clip path in picasso, so fill
+                 * the layer's clip box as a rounded path. The radii shrink
+                 * with the box inset (border, then padding). */
+                EBackgroundBox clipBox = bgLayer->backgroundClip();
+                IntRect shape(tx, ty, w, h);
+                IntSize shapeTopLeft = style()->borderTopLeftRadius();
+                IntSize shapeTopRight = style()->borderTopRightRadius();
+                IntSize shapeBottomLeft = style()->borderBottomLeftRadius();
+                IntSize shapeBottomRight = style()->borderBottomRightRadius();
+                if (style()->hasBorderRadius())
+                    style()->scaledBorderRadii(w, h, shapeTopLeft, shapeTopRight, shapeBottomLeft, shapeBottomRight);
+
+                if (clipBox != BGBORDER) {
+                    int insetLeft = borderLeft();
+                    int insetTop = borderTop();
+                    int insetRight = borderRight();
+                    int insetBottom = borderBottom();
+                    if (clipBox == BGCONTENT) {
+                        insetLeft += paddingLeft();
+                        insetTop += paddingTop();
+                        insetRight += paddingRight();
+                        insetBottom += paddingBottom();
+                    }
+                    shape = IntRect(tx + insetLeft, ty + insetTop,
+                                    w - insetLeft - insetRight, h - insetTop - insetBottom);
+                    shapeTopLeft = IntSize(max(0, shapeTopLeft.width() - insetLeft),
+                                           max(0, shapeTopLeft.height() - insetTop));
+                    shapeTopRight = IntSize(max(0, shapeTopRight.width() - insetRight),
+                                            max(0, shapeTopRight.height() - insetTop));
+                    shapeBottomLeft = IntSize(max(0, shapeBottomLeft.width() - insetLeft),
+                                              max(0, shapeBottomLeft.height() - insetBottom));
+                    shapeBottomRight = IntSize(max(0, shapeBottomRight.width() - insetRight),
+                                               max(0, shapeBottomRight.height() - insetBottom));
+                }
+
+                if (!shape.isEmpty()) {
+                    if (style()->hasBorderRadius())
+                        context->fillRoundedRect(shape, shapeTopLeft, shapeTopRight, shapeBottomLeft, shapeBottomRight,
+                                                 canvasGradient.get());
+                    else
+                        context->fillRect(FloatRect(shape), canvasGradient.get());
+                }
             }
         }
     }

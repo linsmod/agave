@@ -135,6 +135,7 @@ BackgroundLayer::BackgroundLayer()
 
 BackgroundLayer::BackgroundLayer(const BackgroundLayer& o)
     : m_image(o.m_image)
+    , m_gradient(o.m_gradient)
     , m_xPosition(o.m_xPosition)
     , m_yPosition(o.m_yPosition)
     , m_bgAttachment(o.m_bgAttachment)
@@ -169,6 +170,7 @@ BackgroundLayer& BackgroundLayer::operator=(const BackgroundLayer& o)
     }
 
     m_image = o.m_image;
+    m_gradient = o.m_gradient;
     m_xPosition = o.m_xPosition;
     m_yPosition = o.m_yPosition;
     m_bgAttachment = o.m_bgAttachment;
@@ -195,7 +197,8 @@ bool BackgroundLayer::operator==(const BackgroundLayer& o) const
 {
     // We do not check the "isSet" booleans for each property, since those are only used during initial construction
     // to propagate patterns into layers.  All layer comparisons happen after values have all been filled in anyway.
-    return m_image == o.m_image && m_xPosition == o.m_xPosition && m_yPosition == o.m_yPosition &&
+    return m_image == o.m_image && m_gradient == o.m_gradient &&
+           m_xPosition == o.m_xPosition && m_yPosition == o.m_yPosition &&
            m_bgAttachment == o.m_bgAttachment && m_bgClip == o.m_bgClip && 
            m_bgComposite == o.m_bgComposite && m_bgOrigin == o.m_bgOrigin && m_bgRepeat == o.m_bgRepeat &&
            m_backgroundSize.width == o.m_backgroundSize.width && m_backgroundSize.height == o.m_backgroundSize.height && 
@@ -210,6 +213,7 @@ void BackgroundLayer::fillUnsetProperties()
         // We need to fill in the remaining values with the pattern specified.
         for (BackgroundLayer* pattern = this; curr; curr = curr->next()) {
             curr->m_image = pattern->m_image;
+            curr->m_gradient = pattern->m_gradient;
             pattern = pattern->next();
             if (pattern == curr || !pattern)
                 pattern = this;
@@ -852,7 +856,6 @@ RenderStyle::RenderStyle()
     : box(initDefaultStyle()->box)
     , visual(defaultStyle->visual)
     , background(defaultStyle->background)
-    , m_backgroundGradient(0)
     , surround(defaultStyle->surround)
     , rareNonInheritedData(defaultStyle->rareNonInheritedData)
     , rareInheritedData(defaultStyle->rareInheritedData)
@@ -908,7 +911,6 @@ RenderStyle::RenderStyle(const RenderStyle& o)
     , box(o.box)
     , visual(o.visual)
     , background(o.background)
-    , m_backgroundGradient(o.m_backgroundGradient)
     , surround(o.surround)
     , rareNonInheritedData(o.rareNonInheritedData)
     , rareInheritedData(o.rareInheritedData)
@@ -1561,7 +1563,7 @@ void RenderStyle::setBoxShadow(ShadowData* val, bool add)
 }
 
 ShadowData::ShadowData(const ShadowData& o)
-:x(o.x), y(o.y), blur(o.blur), color(o.color)
+:x(o.x), y(o.y), blur(o.blur), spread(o.spread), color(o.color)
 {
     next = o.next ? new ShadowData(*o.next) : 0;
 }
@@ -1572,7 +1574,7 @@ bool ShadowData::operator==(const ShadowData& o) const
         (next && o.next && *next != *o.next))
         return false;
     
-    return x == o.x && y == o.y && blur == o.blur && color == o.color;
+    return x == o.x && y == o.y && blur == o.blur && spread == o.spread && color == o.color;
 }
 
 bool operator==(const CounterDirectives& a, const CounterDirectives& b)

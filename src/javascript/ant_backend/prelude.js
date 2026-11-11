@@ -676,6 +676,16 @@
     defineViewport('outerHeight', innerH);
 
   }
+  if (typeof g.devicePixelRatio === 'undefined') {
+    /* The engine does not expose a DPR to the page (the window binding is not
+     * installed on the global). 1 is correct for 100% zoom / 96 DPI, which is
+     * what the probe uses; a real DPR getter can replace this later. */
+    try {
+      Object.defineProperty(g, 'devicePixelRatio', { get: function () { return 1; }, configurable: true });
+    } catch (e) {
+      g.devicePixelRatio = 1;
+    }
+  }
   g.__agbSafe = function (fn, label) {
     return function () {
       try { return fn.apply(this, arguments); }

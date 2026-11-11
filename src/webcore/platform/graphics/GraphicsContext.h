@@ -108,6 +108,10 @@ namespace WebCore {
         void fillRect(const FloatRect&, const CanvasPattern *);
 
         void fillRoundedRect(const IntRect&, const IntSize& topLeft, const IntSize& topRight, const IntSize& bottomLeft, const IntSize& bottomRight, const Color&);
+        /* Gradient brush variant: picasso's brush renderer ignores the clip
+         * path, so a gradient background on a rounded box has to be filled as
+         * a rounded path instead of a rectangle. */
+        void fillRoundedRect(const IntRect&, const IntSize& topLeft, const IntSize& topRight, const IntSize& bottomLeft, const IntSize& bottomRight, const CanvasGradient*);
         void clearRect(const FloatRect&);
         void strokeRect(const FloatRect&, float lineWidth);
 

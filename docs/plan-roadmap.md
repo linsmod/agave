@@ -113,6 +113,27 @@
 - 动作：改成"图就绪回调触发执行"，或把等待移出 engine 线程。
 - 验收：154 模块图的 `load` 事件不再被推迟几十秒；解析不被网络阻塞。
 
+### P0-n 百度文心输入框：多背景层渐变描边 / textarea 占位符（2026-11-12 已修，R189）
+
+- 现象：百度首页 `#chat-input-main` 的渐变描边圆角输入框整块不画（只剩“百度一下”按钮）；
+  `wrapper-border` 的 `background: linear-gradient(white,white) padding-box,
+  linear-gradient(...) border-box` 在 computed 里只剩一个渐变、clip 只剩一层。
+  同时 jQuery 1.x 的 `attributes[eventName].expando` 探测拿到 `undefined` → `$ is not defined`
+  → 页面不设置 textarea 的 `placeholder`；即使设了，`RenderTextControl::paint()` 也只画 input 的占位符。
+- 根因：①渐变存在 `RenderStyle::m_backgroundGradient`（单值），`mapBackgroundImage()` 每层都覆盖它，
+  绘制只在最底层按 style 级渐变铺满；②`ShadowData` 没有 spread，`0 10px 40px -8px` 这种 4 长度值整条被丢；
+  ③`namedMapGetter()` 只认 `length` 和数字下标，不认命名属性；④textarea 走 `m_multiLine` 分支时不画 placeholder；
+  ⑤`window.devicePixelRatio` 未安装到全局（裸标识符 ReferenceError）。
+- 设计/子集：[design-css-background-layers.md](design-css-background-layers.md)。
+- **已完成**：BackgroundLayer 持有逐层渐变 + 逐层绘制 + computed 列表；`background` 简写单 `<box>`
+  同时设 origin/clip（两个时第一个 origin、第二个 clip）；Picasso 渐变按圆角路径填充；box-shadow spread；
+  textarea placeholder；NamedNodeMap 命名属性；devicePixelRatio 兜底。
+  验收：`tools/pages/layout/background_layers.html` + `check_background_layers.js`（接进 `run_layout_tests`，
+  **LAYOUT=PASS** 约 8 s）、`run_binding_semantics_tests` 205/205、`run_typing_tests` 10/10；
+  百度 1920×915 截图输入框与 Chrome 一致（白底 + 圆角渐变描边 + 按钮），jQuery 恢复。
+- 残留：百度仍没设置 `data-normal-placeholder`（框内暂无占位文案，数据路径另查）；多层
+  `background-position/size/repeat` 的 computed 仍只报第一层；`inset: 0` 仍无属性 id（见 capability-gaps）。
+
 ### P0-c DOMContentLoaded 双发（**已完成**）
 
 - 现状：`Document::finishedParsing()` 派发一次（进 ant 监听表），`FrameLoaderClientMC::dispatchDidFinishDocumentLoad()`

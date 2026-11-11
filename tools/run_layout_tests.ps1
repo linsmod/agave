@@ -116,6 +116,10 @@ try {
     $url = & $pageUrl 'tools/pages/layout/background_paint.html'
     Start-ShotCase 'background_paint' $url 1200 200 @() 'background.bmp'
 
+    $url = & $pageUrl 'tools/pages/layout/background_layers.html'
+    Start-ShotCase 'background_layers' $url 800 200 @() 'background_layers.png'
+    Start-EvalCase 'background_layers_computed' $url (Join-Path $root 'tools/pages/layout/check_background_layers.js') 600 200
+
     $url = & $pageUrl 'tools/pages/layout/border_radius.html'
     Start-ShotCase 'border_radius' $url 1000 100 @() 'radius.bmp'
 
@@ -238,6 +242,11 @@ try {
         '205,5,ff0000', '235,35,ff0000', '5,125,ff0000', '95,215,ff0000',
         '125,125,ff0000', '215,215,ff0000', '250,130,ff0000', '50,300,ffffff')
 
+    Pixel-Check 'background layers' $shots['background_layers'] @(
+        '22,60,ff0000', '324,60,0000ff', '170,22,7f0080', '170,60,ffffff',
+        '80,137,00ff00', '80,130,ffffff', '80,170,ffffff',
+        '26,246,200,290,a9a9a9,15')
+
     Pixel-Check 'border radius' $shots['border_radius'] @(
         '21,21,ffffff', '120,44,f9fafb', '21,89,ffffff', '120,111,f9fafb',
         '20,111,d0d5dd', '20,180,000000', '120,180,3964fe')
@@ -354,6 +363,11 @@ try {
         'named.missing=ok', 'named.minWidth=ok',
         'named.webkitAppearance=ok', 'named.length=ok',
         'named.item=ok', 'spelling.camelEmpty=ok')
+
+    Needles 'background layers computed' $res['background_layers_computed'] @(
+        'bg.image=2', 'bg.clip=padding-box, border-box',
+        'bg.origin=padding-box, border-box', 'bg.shadowSpread=ok',
+        'bg.placeholderAttr=ok', 'bg.dpr=ok')
 
     Needles 'flex computed' $res['flexom'] @(
         'a.flex=2 3 40px', 'a.grow=2', 'a.shrink=3',

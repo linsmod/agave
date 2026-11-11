@@ -1632,17 +1632,38 @@ void RenderObject::paintBoxShadow(GraphicsContext* context, int tx, int ty, int 
     context->setShadow(IntSize(s->boxShadow()->x, s->boxShadow()->y),
                                s->boxShadow()->blur, s->boxShadow()->color);
     IntRect rect(tx, ty, w, h);
+    /* The spread radius grows (or shrinks) the shadow shape before the blur
+     * is applied; the box itself is still cut out of the result. */
+    int spread = s->boxShadow()->spread;
+    IntRect shadowRect(rect);
+    if (spread)
+        shadowRect.inflate(spread);
     if (s->hasBorderRadius()) {
         IntSize topLeft = begin ? s->borderTopLeftRadius() : IntSize();
         IntSize topRight = end ? s->borderTopRightRadius() : IntSize();
         IntSize bottomLeft = begin ? s->borderBottomLeftRadius() : IntSize();
         IntSize bottomRight = end ? s->borderBottomRightRadius() : IntSize();
         s->scaledBorderRadii(w, h, topLeft, topRight, bottomLeft, bottomRight);
+        IntSize shadowTopLeft(topLeft.width() + spread, topLeft.height() + spread);
+        IntSize shadowTopRight(topRight.width() + spread, topRight.height() + spread);
+        IntSize shadowBottomLeft(bottomLeft.width() + spread, bottomLeft.height() + spread);
+        IntSize shadowBottomRight(bottomRight.width() + spread, bottomRight.height() + spread);
+        if (spread) {
+            shadowTopLeft = IntSize(max(0, shadowTopLeft.width()), max(0, shadowTopLeft.height()));
+            shadowTopRight = IntSize(max(0, shadowTopRight.width()), max(0, shadowTopRight.height()));
+            shadowBottomLeft = IntSize(max(0, shadowBottomLeft.width()), max(0, shadowBottomLeft.height()));
+            shadowBottomRight = IntSize(max(0, shadowBottomRight.width()), max(0, shadowBottomRight.height()));
+        }
         context->clipOutRoundedRect(rect, topLeft, topRight, bottomLeft, bottomRight);
-        context->fillRoundedRect(rect, topLeft, topRight, bottomLeft, bottomRight, Color::black);
+        /* A positive spread leaves a ring outside the box before the box's own
+         * background covers the interior. Fill that ring with the shadow's
+         * colour (picasso's clipOut is a no-op); with spread <= 0 the fill is
+         * inside the box and the old black marker is invisible anyway. */
+        context->fillRoundedRect(shadowRect, shadowTopLeft, shadowTopRight, shadowBottomLeft, shadowBottomRight,
+                                 spread > 0 ? s->boxShadow()->color : Color::black);
     } else {
         context->clipOut(rect);
-        context->fillRect(IntRect(tx, ty, w, h), Color::black);
+        context->fillRect(shadowRect, spread > 0 ? s->boxShadow()->color : Color::black);
     }
     context->restore();
 }

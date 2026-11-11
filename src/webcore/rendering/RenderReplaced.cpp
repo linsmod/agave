@@ -244,7 +244,7 @@ void RenderReplaced::adjustOverflowForBoxShadow()
 
         IntRect shadow = borderBox();
         shadow.move(boxShadow->x, boxShadow->y);
-        shadow.inflate(boxShadow->blur);
+        shadow.inflate(boxShadow->blur + max(0, boxShadow->spread));
         shadow.unite(borderBox());
 
         gOverflowRectMap->set(this, shadow);

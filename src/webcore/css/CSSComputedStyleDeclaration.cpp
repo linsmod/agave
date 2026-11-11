@@ -438,6 +438,22 @@ static PassRefPtr<CSSValue> valueForMarginCollapse(EMarginCollapse collapse)
     return 0;
 }
 
+static PassRefPtr<CSSValue> valueForBackgroundBox(EBackgroundBox box)
+{
+    /* Chrome reports the `-box` keywords; "border"/"padding"/"content" is the
+     * old parser vocabulary and is not a valid CSS value. */
+    switch (box) {
+        case BGBORDER:
+            return new CSSPrimitiveValue(String("border-box"), CSSPrimitiveValue::CSS_IDENT_TEXT);
+        case BGPADDING:
+            return new CSSPrimitiveValue(String("padding-box"), CSSPrimitiveValue::CSS_IDENT_TEXT);
+        case BGCONTENT:
+            return new CSSPrimitiveValue(String("content-box"), CSSPrimitiveValue::CSS_IDENT_TEXT);
+    }
+    ASSERT_NOT_REACHED();
+    return 0;
+}
+
 static PassRefPtr<CSSValue> valueForShadow(const ShadowData* shadow)
 {
     if (!shadow)
@@ -448,8 +464,9 @@ static PassRefPtr<CSSValue> valueForShadow(const ShadowData* shadow)
         RefPtr<CSSPrimitiveValue> x = new CSSPrimitiveValue(s->x, CSSPrimitiveValue::CSS_PX);
         RefPtr<CSSPrimitiveValue> y = new CSSPrimitiveValue(s->y, CSSPrimitiveValue::CSS_PX);
         RefPtr<CSSPrimitiveValue> blur = new CSSPrimitiveValue(s->blur, CSSPrimitiveValue::CSS_PX);
+        RefPtr<CSSPrimitiveValue> spread = new CSSPrimitiveValue(s->spread, CSSPrimitiveValue::CSS_PX);
         RefPtr<CSSPrimitiveValue> color = new CSSPrimitiveValue(s->color.rgb());
-        list->append(new ShadowValue(x.release(), y.release(), blur.release(), color.release()));
+        list->append(new ShadowValue(x.release(), y.release(), blur.release(), spread.release(), color.release()));
     }
     return list.release();
 }
@@ -725,18 +742,24 @@ PassRefPtr<CSSValue> CSSComputedStyleDeclaration::getPropertyCSSValue(int proper
 
         case CSS_PROP_BACKGROUND_COLOR:
             return new CSSPrimitiveValue(style->backgroundColor().rgb());
-        case CSS_PROP_BACKGROUND_IMAGE:
-            /* A gradient is a background image the engine paints (RenderBox
-             * fills the gradient over the background colour) but it is not a
-             * CSSImageValue, so reporting only backgroundImage() answered
-             * `none` for every linear-gradient page. */
-            if (const CSSGradientValue* gradient = style->backgroundGradient()) {
-                RefPtr<CSSValue> value = const_cast<CSSGradientValue*>(gradient);
-                return value.release();
+        case CSS_PROP_BACKGROUND_IMAGE: {
+            /* One comma-separated value per background layer; gradients are
+             * not CSSImageValues but still occupy their layer. */
+            RefPtr<CSSValueList> list = new CSSValueList;
+            for (const BackgroundLayer* layer = style->backgroundLayers(); layer; layer = layer->next()) {
+                if (const CSSGradientValue* gradient = layer->backgroundGradient())
+                    list->append(const_cast<CSSGradientValue*>(gradient));
+                else if (layer->backgroundImage())
+                    list->append(new CSSPrimitiveValue(layer->backgroundImage()->url(), CSSPrimitiveValue::CSS_URI));
+                else
+                    list->append(new CSSPrimitiveValue(CSS_VAL_NONE));
             }
-            if (style->backgroundImage())
-                return new CSSPrimitiveValue(style->backgroundImage()->url(), CSSPrimitiveValue::CSS_URI);
-            return new CSSPrimitiveValue(CSS_VAL_NONE);
+            if (list->length() == 1) {
+                RefPtr<CSSValue> only = list->item(0);
+                return only.release();
+            }
+            return list.release();
+        }
         case CSS_PROP__WEBKIT_BACKGROUND_SIZE: {
             /* cover/contain are stored as the sentinel lengths -1/-2 (see
              * CSSParser::parseBackgroundSize); report them back as keywords. */
@@ -810,19 +833,15 @@ PassRefPtr<CSSValue> CSSComputedStyleDeclaration::getPropertyCSSValue(int proper
             return new CSSPrimitiveValue(CSS_VAL_FIXED);
         case CSS_PROP__WEBKIT_BACKGROUND_CLIP:
         case CSS_PROP__WEBKIT_BACKGROUND_ORIGIN: {
-            /* Chrome reports the `-box` keywords; "border"/"padding"/"content"
-             * is the old parser vocabulary and is not a valid CSS value. */
-            EBackgroundBox box = (propertyID == CSS_PROP__WEBKIT_BACKGROUND_CLIP ? style->backgroundClip() : style->backgroundOrigin());
-            switch (box) {
-                case BGBORDER:
-                    return new CSSPrimitiveValue(String("border-box"), CSSPrimitiveValue::CSS_IDENT_TEXT);
-                case BGPADDING:
-                    return new CSSPrimitiveValue(String("padding-box"), CSSPrimitiveValue::CSS_IDENT_TEXT);
-                case BGCONTENT:
-                    return new CSSPrimitiveValue(String("content-box"), CSSPrimitiveValue::CSS_IDENT_TEXT);
+            bool isClip = propertyID == CSS_PROP__WEBKIT_BACKGROUND_CLIP;
+            RefPtr<CSSValueList> list = new CSSValueList;
+            for (const BackgroundLayer* layer = style->backgroundLayers(); layer; layer = layer->next())
+                list->append(valueForBackgroundBox(isClip ? layer->backgroundClip() : layer->backgroundOrigin()));
+            if (list->length() == 1) {
+                RefPtr<CSSValue> only = list->item(0);
+                return only.release();
             }
-            ASSERT_NOT_REACHED();
-            return 0;
+            return list.release();
         }
         case CSS_PROP_BACKGROUND_POSITION: {
             RefPtr<CSSValueList> list = new CSSValueList(true);

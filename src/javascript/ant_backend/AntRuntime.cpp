@@ -11629,7 +11629,25 @@ static int namedMapGetter(AntbEngine* engine, AntbValue* self, const char* name,
         return 1;
     }
 
-    return 0;
+    /* Named properties: `element.attributes["onclick"]` is an Attr, exactly
+     * like the indices. jQuery 1.x feature-detects event bubbling with
+     * `div.attributes[eventName].expando`; without this it throws and every
+     * script after it (Baidu's placeholder setup included) dies. */
+    {
+        RefPtr<WebCore::Node> attr = map->getNamedItem(WebCore::String::fromUTF8(name));
+
+        if (!attr)
+            return 0;
+        {
+            AntbValue* v = wrapNode(engine, attr.get());
+
+            if (!v)
+                return 0;
+            antb_value_assign(out, v);
+            antb_value_release(v);
+        }
+        return 1;
+    }
 }
 
 static AntbValue* collectionWrapItem(AntbEngine* engine, AgbCollection* c, unsigned index)

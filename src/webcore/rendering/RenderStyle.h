@@ -466,6 +466,7 @@ public:
     ~BackgroundLayer();
 
     CachedImage* backgroundImage() const { return m_image; }
+    CSSGradientValue* backgroundGradient() const { return m_gradient.get(); }
     Length backgroundXPosition() const { return m_xPosition; }
     Length backgroundYPosition() const { return m_yPosition; }
     bool backgroundAttachment() const { return m_bgAttachment; }
@@ -489,6 +490,10 @@ public:
     bool isBackgroundSizeSet() const { return m_backgroundSizeSet; }
     
     void setBackgroundImage(CachedImage* i) { m_image = i; m_imageSet = true; }
+    /* CSS gradients are not CachedImages, but they are one background image
+     * layer: keep them on the layer so comma-separated backgrounds keep one
+     * gradient per layer (setBackgroundImage also marks the layer as set). */
+    void setBackgroundGradient(PassRefPtr<CSSGradientValue> g) { m_gradient = g; m_imageSet = true; }
     void setBackgroundXPosition(const Length& l) { m_xPosition = l; m_xPosSet = true; }
     void setBackgroundYPosition(const Length& l) { m_yPosition = l; m_yPosSet = true; }
     void setBackgroundAttachment(bool b) { m_bgAttachment = b; m_attachmentSet = true; }
@@ -498,7 +503,7 @@ public:
     void setBackgroundComposite(CompositeOperator c) { m_bgComposite = c; m_compositeSet = true; }
     void setBackgroundSize(const LengthSize& b) { m_backgroundSize = b; m_backgroundSizeSet = true; }
     
-    void clearBackgroundImage() { m_imageSet = false; }
+    void clearBackgroundImage() { m_imageSet = false; m_gradient = 0; }
     void clearBackgroundXPosition() { m_xPosSet = false; }
     void clearBackgroundYPosition() { m_yPosSet = false; }
     void clearBackgroundAttachment() { m_attachmentSet = false; }
@@ -521,7 +526,7 @@ public:
     bool containsImage(CachedImage* c) const { if (c == m_image) return true; if (m_next) return m_next->containsImage(c); return false; }
     
     bool hasImage() const {
-        if (m_image)
+        if (m_image || m_gradient)
             return true;
         return m_next ? m_next->hasImage() : false;
     }
@@ -535,6 +540,7 @@ public:
     void cullEmptyLayers();
 
     CachedImage* m_image;
+    RefPtr<CSSGradientValue> m_gradient;
 
     Length m_xPosition;
     Length m_yPosition;
@@ -764,8 +770,8 @@ public:
 
 // This struct holds information about shadows for the text-shadow and box-shadow properties.
 struct ShadowData {
-    ShadowData(int _x, int _y, int _blur, const Color& _color)
-    :x(_x), y(_y), blur(_blur), color(_color), next(0) {}
+    ShadowData(int _x, int _y, int _blur, int _spread, const Color& _color)
+    :x(_x), y(_y), blur(_blur), spread(_spread), color(_color), next(0) {}
     ShadowData(const ShadowData& o);
     
     ~ShadowData() { delete next; }
@@ -778,6 +784,7 @@ struct ShadowData {
     int x;
     int y;
     int blur;
+    int spread;
     Color color;
     ShadowData* next;
 };
@@ -1255,7 +1262,6 @@ protected:
     DataRef<StyleBoxData> box;
     DataRef<StyleVisualData> visual;
     DataRef<StyleBackgroundData> background;
-    RefPtr<CSSGradientValue> m_backgroundGradient;
     DataRef<StyleSurroundData> surround;
     DataRef<StyleRareNonInheritedData> rareNonInheritedData;
 
@@ -1369,8 +1375,6 @@ public:
     bool        hasOffset() const { return surround->offset.nonZero(); }
 
     bool hasBackground() const { if (backgroundColor().isValid() && backgroundColor().alpha() > 0)
-                                    return true;
-                                 if (m_backgroundGradient)
                                     return true;
                                  return background->m_background.hasImage(); }
     bool hasFixedBackgroundImage() const { return background->m_background.hasFixedImage(); }
@@ -1720,8 +1724,7 @@ void setMinWidthIsAuto(bool v) { SET_VAR(box,minWidthAuto,v) }
 
     /* linear-gradient() is not part of this engine's CSS model; the shim keeps
      * the parsed value on the style and RenderBox paints it as a background. */
-    CSSGradientValue* backgroundGradient() const { return m_backgroundGradient.get(); }
-    void setBackgroundGradient(PassRefPtr<CSSGradientValue> value) { m_backgroundGradient = value; }
+    /* Background gradients live on BackgroundLayer (one per layer). */
 
     void setBorderImage(const BorderImage& b)   { SET_VAR(surround, border.image, b) }
 

@@ -1949,7 +1949,7 @@ void RenderLayer::calculateRects(const RenderLayer* rootLayer, const IntRect& pa
         if (ShadowData* boxShadow = renderer()->style()->boxShadow()) {
             IntRect shadowRect = layerBounds;
             shadowRect.move(boxShadow->x, boxShadow->y);
-            shadowRect.inflate(boxShadow->blur);
+            shadowRect.inflate(boxShadow->blur + max(0, boxShadow->spread));
             shadowRect.unite(layerBounds);
             backgroundRect.intersect(shadowRect);
         } else

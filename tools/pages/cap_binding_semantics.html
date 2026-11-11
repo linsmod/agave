@@ -680,6 +680,19 @@
       return afterWrite === 'y' && grown === 2 && a.length === 1 &&
              el.hasAttribute('extra') === false && a[0].name === 'id';
     })());
+    /* Named properties: `attributes[name]` is the Attr, not just `item()` and
+     * `getNamedItem()`. jQuery 1.x feature-detects with
+     * `div.attributes[eventName].expando`; Baidu's whole script chain (and its
+     * textarea placeholder) died on the TypeError when this returned undefined. */
+    ok('NamedNodeMap named properties', (function () {
+      var el = document.createElement('div');
+      el.setAttribute('onclick', 't');
+      el.setAttribute('data-x', '1');
+      var a = el.attributes;
+      return !!a['onclick'] && a['onclick'].name === 'onclick' &&
+             !!a['data-x'] && a['data-x'].value === '1' &&
+             a['missing'] === undefined;
+    })());
     /* G1-3: ParentNode/ChildNode are C++ extra methods on the mixin's interfaces
      * (Chrome's ownership), not JS polyfills on Node.prototype. */
     ok('ParentNode/ChildNode ownership', (function () {
