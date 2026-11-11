@@ -69,8 +69,13 @@ $sourceJob = Start-TestProbe -Run $run -Name 'source' -Url (Join-Path $pages 'ca
 $stateJob = $null
 if (-not $SkipState) {
     Write-Host '== transport (play -> timeupdate -> ended)'
+    # Settle is only the failure bound (a passing run exits via probeExit as
+    # soon as the page reports). Under a full parallel batch (24 probes + other
+    # suites) the real decoder can start slowly enough that 3 s expired before
+    # the page called probeExit, so give it room instead of reporting a timeout
+    # as a media defect.
     $stateJob = Start-TestProbe -Run $run -Name 'state' -Url (Join-Path $pages 'cap_media_state.html') `
-        -EvalFile (Join-Path $pages 'cap_media_state.js') -Wait 900 -Settle 3000 -Timeout 30000
+        -EvalFile (Join-Path $pages 'cap_media_state.js') -Wait 900 -Settle 8000 -Timeout 30000
 }
 
 $surface = Complete-TestProbe -Job $surfaceJob
