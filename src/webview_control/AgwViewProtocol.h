@@ -71,6 +71,9 @@ typedef enum {
                                      * host answers by building the menu (the
                                      * engine cannot: no windows in this process) */
     AGW_VIEW_EVENT_DOCUMENT,        /* a = new document epoch (a document committed) */
+    AGW_VIEW_EVENT_CONTEXT,         /* text = diagnostic identity of the view's JS:
+                                     * "view=… pid=… gen=… docgen=… engine=0x… realm=0x… doc=0x… slot=… main=… hidden=…"
+                                     * (the same values as window.__agbInfo()) */
     AGW_VIEW_EVENT_SERVICE_REQUEST, /* a = service kind, text = args (B4) */
     AGW_VIEW_EVENT_UNRESPONSIVE,    /* a = busy ms */
     AGW_VIEW_EVENT_COMMAND_DROPPED, /* a = AgwViewCommandKind, b = expected epoch,

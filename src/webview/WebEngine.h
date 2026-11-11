@@ -21,6 +21,7 @@ struct _mc_view {
 	WebView * view;
 	void    * data;
 	void    * jscontext;   /* per-view Ant VM (AntRuntime::createContext) */
+	int       hostId;      /* host view/tab id (window.__agbInfo().view) */
 	char      lastTitle[256]; /* last reported document title */
 };
 

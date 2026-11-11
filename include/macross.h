@@ -768,6 +768,47 @@ MACROSS_API MC_BOOL macross_view_exec_editor_command(MaCrossView* view, const ch
  * \return The current epoch; 0 when the view has no document yet.
  */
 MACROSS_API unsigned macross_view_document_epoch(MaCrossView* view);
+
+/**
+ * \brief Diagnostic identity of what the view's JS is running in.
+ *
+ * Every field is the value the [evt] timeline prints (or the host's own view
+ * id), so a page (window.__agbInfo()), the host logs and the render backend's
+ * context report can be cross-referenced. Pointer fields are passed as
+ * integers; on 64-bit Windows user addresses fit exactly in a JS number.
+ */
+typedef struct _mc_context_info {
+    int                view_id;             /* host-assigned view/tab id, 0 = unknown */
+    unsigned long      pid;                 /* process hosting the engine */
+    unsigned long      realm_generation;    /* the `gen=` in [evt] lines */
+    unsigned long      document_generation; /* per-document id (S2) */
+    unsigned long long engine;              /* Ant engine handle */
+    unsigned long long realm;               /* JS realm */
+    unsigned long long document;            /* WebCore::Document* */
+    int                slot;                /* realm/frame slot (0 = main frame) */
+    int                main_frame;
+    int                hidden;
+} MC_CONTEXT_INFO;
+
+/**
+ * \fn MC_BOOL macross_view_context_info(MaCrossView* view, MC_CONTEXT_INFO* out)
+ * \brief Fills `out` with the view's current context identity.
+ *
+ * Call on the engine thread (same rule as the other view accessors). Returns
+ * FALSE for a NULL view; before the first document is bound the document and
+ * realm fields are 0 and the rest is still filled.
+ */
+MACROSS_API MC_BOOL macross_view_context_info(MaCrossView* view, MC_CONTEXT_INFO* out);
+
+/**
+ * \fn void macross_view_set_host_id(MaCrossView* view, int host_id)
+ * \brief Tells the engine the host's view/tab id (window.__agbInfo().view).
+ *
+ * The control calls it right after creating the view; the process backend
+ * passes the id to the renderer on its command line, so a page and the host
+ * report the same number. 0 means "not told".
+ */
+MACROSS_API void macross_view_set_host_id(MaCrossView* view, int host_id);
 /** @} end of view*/
 
 

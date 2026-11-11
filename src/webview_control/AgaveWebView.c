@@ -1837,6 +1837,30 @@ static int agwSubmitText(AgaveWebView* item, int kind, const char* text,
  * epoch of the document it was told about, not the one before it. The control
  * used to read the epoch only when a command drained, so the first command
  * after any navigation was always one epoch stale and got dropped. */
+/* Identity of this control's view, for the engine's window.__agbInfo() and the
+ * renderer command line. 0 once destroyed (queued commands must not touch it). */
+int agwHostViewId(void* owner)
+{
+    AgaveWebView* view = (AgaveWebView*)owner;
+
+    return (view && !view->destroyed) ? view->id : 0;
+}
+
+/* The backend's context report uses the same field order as the renderer's
+ * AGW_VIEW_EVENT_CONTEXT text, so both backends log one greppable line whose
+ * numbers a page also sees in window.__agbInfo(). */
+static void agwLogContext(const MC_CONTEXT_INFO* info)
+{
+    if (!info)
+        return;
+
+    agbLog(AGB_LOG_UI,
+           "context view=%d pid=%lu gen=%lu docgen=%lu engine=0x%llx realm=0x%llx doc=0x%llx slot=%d main=%d hidden=%d backend=local",
+           info->view_id, info->pid, info->realm_generation, info->document_generation,
+           info->engine, info->realm, info->document, info->slot, info->main_frame,
+           info->hidden);
+}
+
 static void agwRefreshDocumentEpochs(void)
 {
     int i;
@@ -1845,8 +1869,24 @@ static void agwRefreshDocumentEpochs(void)
     for (i = 0; i < g_viewCount; ++i) {
         AgaveWebView* v = g_views[i];
 
-        if (v && !v->destroyed && v->backend && v->backend->documentEpoch && v->backendView)
-            v->docEpoch = (LONG)v->backend->documentEpoch(v->backendView);
+        if (!v || v->destroyed || !v->backend || !v->backend->documentEpoch || !v->backendView)
+            continue;
+
+        {
+            LONG now = (LONG)v->backend->documentEpoch(v->backendView);
+
+            /* A commit is the lifecycle point where the context report is
+             * useful: log the engine-side identity once per new document (the
+             * process backend sends the same text as an event instead). */
+            if (now != v->docEpoch && v->backend->contextInfo) {
+                MC_CONTEXT_INFO info;
+
+                if (v->backend->contextInfo(v->backendView, &info))
+                    agwLogContext(&info);
+            }
+
+            v->docEpoch = now;
+        }
     }
     agwUnlock();
 }
@@ -2147,6 +2187,13 @@ static void agwDispatchBackendEvent(AgaveWebView* item, const AgwViewEvent* ev)
         agwQueueState(item, AGW_STATE_PROGRESS);
         break;
     }
+
+    case AGW_VIEW_EVENT_CONTEXT:
+        /* The renderer's lifecycle report: the same numbers as the page's
+         * window.__agbInfo() and the renderer's own [evt] lines, so one grep
+         * joins the host log, the page and the renderer process. */
+        agbLog(AGB_LOG_UI, "context %s", ev->text ? ev->text : "(none)");
+        break;
 
     case AGW_VIEW_EVENT_MESSAGE:
         if (item->callbacks.on_message)

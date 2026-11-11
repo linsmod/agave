@@ -89,10 +89,21 @@ struct AgwViewBackend {
      * nothing new to copy - local always returns NULL and paints in place. */
     const MC_BYTE* (*frame)(void* view, int* width, int* height, int* pitch,
                             uint32_t* seq);
+
+    /* Diagnostic identity of the view's JS (window.__agbInfo()): local reads it
+     * from the engine straight away; a backend with its own process returns 0
+     * and reports the same fields as an AGW_VIEW_EVENT_CONTEXT text event
+     * instead. */
+    int (*contextInfo)(void* view, MC_CONTEXT_INFO* out);
 };
 
 /* The in-process engine. */
 const AgwViewBackend* agwBackendLocal(void);
+
+/* Host view/tab id of an AgaveWebView (the `owner` passed to create), 0 when
+ * unknown. Backends hand it to the engine so window.__agbInfo().view and the
+ * host logs agree; the process backend passes it on the renderer command line. */
+int agwHostViewId(void* owner);
 
 /* One agave_render_host.exe per view (B2). */
 const AgwViewBackend* agwBackendProcess(void);

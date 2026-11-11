@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>agb info frame</title>
+</head>
+<body>
+<!-- Parent/child identity check for window.__agbInfo(): the child realm must
+     report its own realm/document/slot while the parent reports the main frame. -->
+<iframe id="f" src="blank.html" width="200" height="120"></iframe>
+<p id="p">info frame</p>
+</body>
+</html>

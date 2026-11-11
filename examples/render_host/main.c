@@ -125,6 +125,26 @@ static void pushEvent(int kind, int a, int b, int c, int d,
     }
 }
 
+/* Lifecycle context report: the numbers a page sees in window.__agbInfo(), in
+ * the same field order the local backend logs. Sent once at READY and again
+ * after every document commit, which is what lets the control's log line and
+ * the page's own log line name the same realm/document/engine. */
+static void pushContextEvent(void)
+{
+    MC_CONTEXT_INFO info;
+    char text[512];
+
+    if (!g_view || !macross_view_context_info(g_view, &info))
+        return;
+
+    snprintf(text, sizeof(text),
+             "view=%d pid=%lu gen=%lu docgen=%lu engine=0x%llx realm=0x%llx doc=0x%llx slot=%d main=%d hidden=%d backend=process",
+             info.view_id, info.pid, info.realm_generation, info.document_generation,
+             info.engine, info.realm, info.document, info.slot, info.main_frame,
+             info.hidden);
+    pushEvent(AGW_VIEW_EVENT_CONTEXT, 0, 0, 0, 0, text, (int)strlen(text));
+}
+
 /* Microseconds from QueryPerformanceCounter: both sides run on one machine and
  * share the counter, so a frame event's stamp is comparable in the control
  * (the M1 measurement of the design). */
@@ -642,6 +662,7 @@ int main(int argc, char** argv)
 {
     const char* ipcName = NULL;
     int width = 1100, height = 800;
+    int viewId = 0;
     int crashAfterMs = 0;
     int crashAvAfterMs = 0;
     const char* crashAvEnv;
@@ -652,6 +673,8 @@ int main(int argc, char** argv)
     for (int i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "--ipc") && i + 1 < argc)
             ipcName = argv[++i];
+        else if (!strcmp(argv[i], "--view-id") && i + 1 < argc)
+            viewId = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--crash-after") && i + 1 < argc)
             crashAfterMs = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--crash-av") && i + 1 < argc)
@@ -766,12 +789,17 @@ int main(int argc, char** argv)
         return 4;
     }
 
+    /* The control's view/tab id: window.__agbInfo().view and the host log then
+     * name the same tab, in this process or in the controller. */
+    macross_view_set_host_id(g_view, viewId);
+
     g_visible = g_hdr->visible ? 1 : 0;
     macross_view_set_visible(g_view, g_visible);
 
     InterlockedExchange(&g_hdr->running, 1);
     pushEvent(AGW_VIEW_EVENT_READY, AGW_VIEW_PROTOCOL_VERSION,
               AGW_VIEW_CAP_DAMAGE, 0, 0, NULL, 0);
+    pushContextEvent();
 
     if (g_intEvent)
         CreateThread(NULL, 0, watchdogThread, NULL, 0, NULL);
@@ -797,6 +825,7 @@ int main(int argc, char** argv)
             if (now != lastEpoch) {
                 lastEpoch = now;
                 pushEvent(AGW_VIEW_EVENT_DOCUMENT, (int)now, 0, 0, 0, NULL, 0);
+                pushContextEvent();
             }
         }
 

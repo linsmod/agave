@@ -119,6 +119,7 @@ RVVM 后端用 guest 内存 + `virtpass_browser` 的 ecall；local 后端只是�
 | `FRAME` | `buffer_id, seq, damage[4n], format, stride` | **主路径**：BGRA 画布 + 脏矩形；每帧 ack 后才回收 buffer |
 | `TITLE` / `PROGRESS` / `URL` | `utf8` / `pct` | 与现有回调一致 |
 | `DOCUMENT` | `epoch` | 主 frame 提交了新文档（`Page::documentEpoch`）；宿主据此给后续命令盖章。**静态页面提交后可能没有任何其他事件**，缺了它宿主的代数会停在上一代 |
+| `CONTEXT` | `utf8`：`view=… pid=… gen=… docgen=… engine=0x… realm=0x… doc=0x… slot=… main=… hidden=… backend=process` | 生命周期/状态报告用的**诊断身份**：渲染进程在 READY 和每次 `DOCUMENT` 之后各发一条。控件把它原样打进 `[ui] context …`，和页面里的 `window.__agbInfo()`（同名字段、同一组地址，另有 args/AGB_* env）以及渲染进程自己的 `[evt] realm start/bindDocument` 行可以互相 grep。本地后端的等价信息由 `macross_view_context_info()` 直接读，控件打同一格式 |
 | `COMMAND_DROPPED` | `kind, expected_epoch, current_epoch, reason` | 后端没能执行某条命令（文档已换 / 没有可用文档）。宿主转成 `on_command_dropped`；本地后端用 `submit` 返回 0 表达同一件事 |
 | `CONTEXT_MENU` | `x,y, link 长度, image 长度, text` | 引擎要弹右键菜单（`cb_context_menu`）；渲染进程没有窗口，只能把 link/image/选区文本交给宿主去建菜单（R161） |
 | `CLIPBOARD` / `CURSOR` / `HISTORY` | `utf8` / `MC_CURSOR` / `back,forward` | 宿主拥有的三件事，单向下发：页面发起复制（`cb_clipboard_set_data`，含 inspector 的 Copy element info）、鼠标光标（`cb_set_cursor`）、前进/后退计数（`cb_history_status`）。不走服务通道是因为都不需要应答（R171）；**粘贴**（`cb_clipboard_data_len/get_data`）需要同步应答，仍待 B4 |

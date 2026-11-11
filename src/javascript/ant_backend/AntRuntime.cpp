@@ -265,6 +265,10 @@ struct RuntimeState {
     int                docSlotCount;
     int                currentSlot;
     unsigned long      generation;      /* id of the realm (see nextGeneration) */
+    /* Host-assigned view/tab id (0 = not told). Exposed to JS by
+     * window.__agbInfo() so a page and the host logs name the same view; the
+     * process backend passes it on the renderer command line. */
+    int                hostViewId;
     /* The generation whose pinned nodes the *next* teardown of this state
      * releases. Per state, not process wide: one view's teardown must never
      * release the nodes another live view still uses (R141). */
@@ -1461,6 +1465,7 @@ int nodeGetElementsByName(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*,
 int nodeQuerySelectorAll(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeQuerySelector(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalFrameSlot(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int globalInfo(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalOpenWindow(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalPostMessage(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalClipboardSetText(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
@@ -4925,10 +4930,59 @@ void* createContext()
     }
 }
 
+void setContextHostId(void* context, int viewId)
+{
+    RuntimeState* state = (RuntimeState*)context;
+
+    if (state && state != &g_emptyState)
+        state->hostViewId = viewId;
+}
+
+bool contextInfo(void* context, ContextInfo* out)
+{
+    RuntimeState* state = (RuntimeState*)context;
+    DocumentRuntime* doc;
+
+    if (!out)
+        return false;
+
+    memset(out, 0, sizeof(*out));
+
+    if (!state || state == &g_emptyState)
+        return false;
+
+    /* activeDocument is what activateState() restores for this view, so this is
+     * right even while the engine thread is acting for a different view. */
+    doc = state->activeDocument ? state->activeDocument : &g_emptyDocument;
+
+    out->viewId = state->hostViewId;
+    out->pid = (unsigned long)GetCurrentProcessId();
+    out->realmGeneration = state->generation;
+    out->documentGeneration = doc->generation;
+    out->engine = (unsigned long long)(size_t)state->engine;
+    out->realm = (unsigned long long)(size_t)(doc->realm ? doc->realm : state->mainRealm);
+    out->document = (unsigned long long)(size_t)doc->document;
+    /* Same numbering as __agbFrameSlot(): 0 = main frame, 1..N = frame realms
+     * (realmSlot stores 0-based frame slots, -1 for the main document). */
+    out->slot = doc->realmSlot >= 0 ? doc->realmSlot + 1 : 0;
+
+    /* mainFrame from the engine's own frame tree, not from the realm bookkeeping:
+     * in the shared-realm fallback a frame document shares the main realm, so
+     * "realmSlot < 0" would call every frame the main frame. */
+    {
+        WebCore::Frame* frame = doc->document ? doc->document->frame() : 0;
+        WebCore::Page* page = frame ? frame->page() : 0;
+
+        out->mainFrame = (frame && page && page->mainFrame() == frame) ? 1 : 0;
+    }
+
+    out->hidden = state->hidden ? 1 : 0;
+    return true;
+}
+
 /* Defined next to stopRealm(); declared early because destroyContext() (view
  * teardown) has to run the same realm cleanup. */
 static void teardownRealm(RuntimeState* state);
-
 void destroyContext(void* context)
 {
     RuntimeState* state = (RuntimeState*)context;
@@ -6581,6 +6635,7 @@ static void installGlobalApi(AntbEngine* engine, AntbValue* global)
         antb_define_method(g_engine, global, "__agbHttpAbort", globalHttpAbort, NULL);
         antb_define_method(g_engine, global, "__agbClassOp", globalClassOp, NULL);
         antb_define_method(g_engine, global, "__agbFrameSlot", globalFrameSlot, NULL);
+        antb_define_method(g_engine, global, "__agbInfo", globalInfo, NULL);
         antb_define_method(g_engine, global, "__agbActivateSlot", globalActivateSlot, NULL);
         antb_define_method(g_engine, global, "__agbOpenWindow", globalOpenWindow, NULL);
         antb_define_method(g_engine, global, "__agbPostMessage", globalPostMessage, NULL);
@@ -15036,6 +15091,174 @@ static void setNumberProp(AntbEngine* engine, AntbValue* object, const char* nam
 
     antb_set_prop(engine, object, name, v);
     antb_value_release(v);
+}
+
+/* args/env for window.__agbInfo(): the process the JS actually runs in (the
+ * shell for the local backend, agave_render_host.exe for the process backend).
+ * Exposed as data, like the rest of this diagnostic API; env is limited to the
+ * AGB_* switches on purpose - the rest is the host's private environment. */
+static void addInfoArgs(AntbEngine* engine, AntbValue* object, int* hasIpc)
+{
+    const char* raw = GetCommandLineA();
+    AntbValue* array = antb_make_array(engine);
+    char* copy;
+    char* p;
+
+    if (hasIpc)
+        *hasIpc = 0;
+
+    if (!array)
+        return;
+
+    copy = raw ? (char*)malloc(strlen(raw) + 1) : NULL;
+
+    if (copy) {
+        strcpy(copy, raw);
+        p = copy;
+
+        while (*p) {
+            char* start;
+
+            while (*p == ' ' || *p == '\t')
+                ++p;
+            if (!*p)
+                break;
+
+            if (*p == '"') {
+                start = ++p;
+                while (*p && *p != '"')
+                    ++p;
+            } else {
+                start = p;
+                while (*p && *p != ' ' && *p != '\t')
+                    ++p;
+            }
+
+            if (*p)
+                *p++ = 0;
+
+            if (*start) {
+                AntbValue* v;
+
+                if (hasIpc && !strcmp(start, "--ipc"))
+                    *hasIpc = 1;
+
+                v = antb_make_string(engine, start);
+                if (v) {
+                    antb_array_push(engine, array, v);
+                    antb_value_release(v);
+                }
+            }
+        }
+
+        free(copy);
+    }
+
+    antb_set_prop(engine, object, "args", array);
+    antb_value_release(array);
+}
+
+/* The CRT environment (what getenv() sees), not GetEnvironmentStringsA(): the
+ * shell/probe putenv the switches like AGB_USERDATA into the CRT copy, and those
+ * are exactly the values a page needs for correlation. Only AGB_* is exposed -
+ * the rest is the host's private environment. */
+extern "C" char** _environ;
+
+static void addInfoEnv(AntbEngine* engine, AntbValue* object)
+{
+    AntbValue* env = antb_make_object(engine);
+    char** entry;
+
+    if (!env)
+        return;
+
+    for (entry = _environ; entry && *entry; ++entry) {
+        const char* text = *entry;
+        const char* eq = strchr(text, '=');
+        char name[128];
+        size_t nameLen;
+
+        if (!eq || eq == text)
+            continue;
+
+        nameLen = (size_t)(eq - text);
+
+        if (nameLen < 4 || nameLen >= sizeof(name))
+            continue;
+
+        if (_strnicmp(text, "AGB_", 4) != 0)
+            continue;
+
+        memcpy(name, text, nameLen);
+        name[nameLen] = 0;
+
+        {
+            AntbValue* v = antb_make_string(engine, eq + 1);
+
+            if (v) {
+                antb_set_prop(engine, env, name, v);
+                antb_value_release(v);
+            }
+        }
+    }
+
+    antb_set_prop(engine, object, "env", env);
+    antb_value_release(env);
+}
+
+/* window.__agbInfo(): the identity the [evt] timeline prints (pid, gen, realm,
+ * doc, engine) plus the host's view/tab id and the realm slot. This is what
+ * lets a page's own log line, the host log and the render backend's context
+ * report name the same objects - a page can print `__agbInfo().realm` and grep
+ * it in the [evt] lines. Values are numbers; pointers stay exact in a JS number
+ * for 64-bit user addresses. A function (not a static object) on purpose: the
+ * document/realm change on navigation. */
+int globalInfo(AntbEngine* engine, AntbValue*, AntbValue**, int, AntbValue* out, void*)
+{
+    AntbValue* object;
+    AntRuntime::ContextInfo info;
+    int hasIpc = 0;
+
+    if (!engine || !out)
+        return 0;
+
+    object = antb_make_object(engine);
+
+    if (!object)
+        return 0;
+
+    if (!AntRuntime::contextInfo(g_currentState, &info)) {
+        antb_value_release(object);
+        return 0;
+    }
+
+    setNumberProp(engine, object, "pid", (double)info.pid);
+    setNumberProp(engine, object, "view", (double)info.viewId);
+    setNumberProp(engine, object, "engine", (double)info.engine);
+    setNumberProp(engine, object, "realm", (double)info.realm);
+    setNumberProp(engine, object, "document", (double)info.document);
+    setNumberProp(engine, object, "realmGeneration", (double)info.realmGeneration);
+    setNumberProp(engine, object, "documentGeneration", (double)info.documentGeneration);
+    setNumberProp(engine, object, "slot", (double)info.slot);
+    setNumberProp(engine, object, "mainFrame", info.mainFrame ? 1.0 : 0.0);
+    setNumberProp(engine, object, "hidden", info.hidden ? 1.0 : 0.0);
+
+    addInfoArgs(engine, object, &hasIpc);
+    addInfoEnv(engine, object);
+    {
+        /* The process backend's renderer carries --ipc; a local engine runs
+         * inside whatever process the host started. */
+        AntbValue* backend = antb_make_string(engine, hasIpc ? "process" : "local");
+
+        if (backend) {
+            antb_set_prop(engine, object, "backend", backend);
+            antb_value_release(backend);
+        }
+    }
+
+    antb_value_assign(out, object);
+    antb_value_release(object);
+    return 1;
 }
 
 static void setStringProp(AntbEngine* engine, AntbValue* object, const char* name, const WebCore::String& value)

@@ -26,6 +26,10 @@
 #  10. browser shims (R176): URLSearchParams iteration + frame realm web globals.
 #  11. probe lifecycle: --wait-dcl arms --eval at DOMContentLoaded (marker from
 #      prelude.js), and stays invisible/opt-in for a normal load-armed probe.
+#  12. window.__agbInfo(): the identity the [evt]/[ui] logs print, plus the host
+#      view id, realm slot, process args, AGB_* env and backend; child frames
+#      report their own realm/document; the process backend's CONTEXT event
+#      carries the same document address as the page.
 #
 # All probes run at once (own profiles); the bench keeps a clean retry if its
 # per-iteration budget is exceeded while the batch is loading the machine.
@@ -136,6 +140,30 @@ $jobs.dcl = Start-TestProbe -Run $run -Name 'wait-dcl' -Url $dclUrl `
     -Eval $dclEval -Extra @('--wait-dcl') -Wait 0 -Settle 300
 $jobs.nodcl = Start-TestProbe -Run $run -Name 'wait-load' -Url $dclUrl `
     -Eval $dclEval -Wait 500 -Settle 300
+
+# 12. window.__agbInfo(): the identity the [evt]/[ui] logs print (pid, gen,
+#     realm/doc addresses) plus the host view id and the realm slot. The child
+#     frame must report its own realm/document/slot; the process backend must
+#     report the same numbers through its CONTEXT event.
+$infoUrl = 'file:///' + ((Join-Path $root 'tools/pages/dcl_probe.html') -replace '\\', '/')
+$infoEval = 'var i=__agbInfo(); probeExit([i.pid>0?1:0,i.view>0?1:0,i.engine>0?1:0,i.realm>0?1:0,' +
+            'i.document>0?1:0,i.realmGeneration>0?1:0,i.mainFrame,i.slot,' +
+            'i.args.length>0?1:0,(typeof i.env.AGB_USERDATA==="string")?1:0,i.backend]' +
+            '.join(String.fromCharCode(124)))'
+$jobs.agbinfo = Start-TestProbe -Run $run -Name 'agbinfo' -Url $infoUrl `
+    -Eval $infoEval -Wait 500 -Settle 300
+
+$frameUrl = 'file:///' + ((Join-Path $root 'tools/pages/agbinfo_frame.html') -replace '\\', '/')
+$frameEval = 'var f=document.getElementById(String.fromCharCode(102));' +
+             'var a=__agbInfo(), b=f.contentWindow.__agbInfo();' +
+             'probeExit([a.mainFrame,b.mainFrame,a.realm===b.realm?0:1,' +
+             'a.document===b.document?0:1,b.slot].join(String.fromCharCode(124)))'
+$jobs.agbinfoFrame = Start-TestProbe -Run $run -Name 'agbinfo-frame' -Url $frameUrl `
+    -Eval $frameEval -Wait 1500 -Settle 300
+
+$procEval = 'var i=__agbInfo(); probeExit(i.backend + String.fromCharCode(124) + i.document.toString(16))'
+$jobs.agbinfoProcess = Start-TestProbe -Run $run -Name 'agbinfo-process' -Url $infoUrl `
+    -Eval $procEval -Wait 500 -Settle 300 -Backend 'process'
 
 $res = @{}
 foreach ($name in @($jobs.Keys)) { $res[$name] = Complete-TestProbe -Job $jobs[$name] }
@@ -289,6 +317,41 @@ if ($res.nodcl.Code -ne 0 -or $res.nodcl.Text -match 'domcontentloaded' -or $res
     Write-Host (($res.nodcl.Text + $res.nodcl.Stderr) -split "`n" | Select-Object -Last 8 | Out-String)
 } else {
     Write-Host 'PASS  without --wait-dcl the eval still starts at load and no DCL marker leaks'
+}
+
+# 12. __agbInfo(): values a page can grep in the host's own log lines.
+if ($res.agbinfo.Code -ne 0 -or $res.agbinfo.Text -notmatch '1\|1\|1\|1\|1\|1\|1\|0\|1\|1\|local') {
+    $failures++
+    Write-Host ("FAIL  __agbInfo(): exit {0}" -f $res.agbinfo.Code)
+    Write-Host (($res.agbinfo.Text + $res.agbinfo.Stderr) -split "`n" | Select-Object -Last 8 | Out-String)
+} else {
+    Write-Host 'PASS  __agbInfo(): ids, args/env, backend, main frame slot 0'
+}
+
+if ($res.agbinfoFrame.Code -ne 0 -or $res.agbinfoFrame.Text -notmatch '1\|0\|1\|1\|[1-9]\d*') {
+    $failures++
+    Write-Host ("FAIL  __agbInfo() per frame: exit {0}" -f $res.agbinfoFrame.Code)
+    Write-Host (($res.agbinfoFrame.Text + $res.agbinfoFrame.Stderr) -split "`n" | Select-Object -Last 8 | Out-String)
+} else {
+    Write-Host 'PASS  __agbInfo() in a child frame: own realm/document, mainFrame=0, slot>=1'
+}
+
+# The renderer's CONTEXT event and the page must name the same document address;
+# the page must also see that it runs in the process backend.
+$procPayload = if ($res.agbinfoProcess.Code -eq 0) { ($res.agbinfoProcess.Payload -replace '\s', '') } else { '' }
+$procParts = $procPayload -split '\|'
+$procDocHex = if ($procParts.Count -eq 2) { $procParts[1] } else { '' }
+$procLogs = [regex]::Matches($res.agbinfoProcess.Text, '\[ui\] context .*doc=0x([0-9a-f]+)')
+$procLog = if ($procLogs.Count -gt 0) { $procLogs[$procLogs.Count - 1] } else { $null }
+if ($res.agbinfoProcess.Code -ne 0 -or $procParts.Count -ne 2 -or $procParts[0] -ne 'process' -or
+    -not $procLog -or -not $procDocHex -or $procLog.Groups[1].Value -ne $procDocHex.ToLowerInvariant()) {
+    $failures++
+    Write-Host ("FAIL  process backend context report: exit {0} payload={1} log={2}" -f
+        $res.agbinfoProcess.Code, $procPayload,
+        $(if ($procLog) { $procLog.Groups[1].Value } else { '(none)' }))
+    Write-Host (($res.agbinfoProcess.Text + $res.agbinfoProcess.Stderr) -split "`n" | Select-Object -Last 8 | Out-String)
+} else {
+    Write-Host 'PASS  process backend reports the same document address as the page (backend=process)'
 }
 
 Remove-TestRun $run $failures

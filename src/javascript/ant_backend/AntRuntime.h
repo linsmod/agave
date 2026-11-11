@@ -47,6 +47,33 @@ void* contextForPage(void* page);
 /* Destroys the engine. */
 void stop();
 
+/* Diagnostic identity of what the JS currently runs in. The pointer values are
+ * the same addresses the [evt] timeline prints, so a page (window.__agbInfo()),
+ * the host logs and the render backend's context event can be correlated. */
+struct ContextInfo {
+    int                viewId;      /* host view/tab id, 0 when unknown */
+    unsigned long      pid;         /* process hosting this engine */
+    unsigned long      realmGeneration;
+    unsigned long      documentGeneration;
+    unsigned long long engine;      /* AntbEngine* */
+    unsigned long long realm;       /* AntbRealm* */
+    unsigned long long document;    /* WebCore::Document* */
+    int                slot;
+    int                mainFrame;
+    int                hidden;
+};
+
+/* Fills `out` for `context` (an opaque handle from createContext()); returns
+ * false for NULL. Uses that context's active document, so it is correct while
+ * the engine thread is switched to another view (same threading rules as the
+ * rest of this API: engine thread). */
+bool contextInfo(void* context, ContextInfo* out);
+
+/* Host view/tab id this context belongs to (0 when unknown). The control sets
+ * it right after creating the view; the process backend passes it on the
+ * renderer command line, so JS sees the same number the host logs. */
+void setContextHostId(void* context, int viewId);
+
 /* True once start() succeeded. */
 bool isRunning();
 

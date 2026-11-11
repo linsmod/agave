@@ -671,6 +671,46 @@ unsigned macross_view_document_epoch(MaCrossView* view)
     return view ? view->view->documentEpoch() : 0;
 }
 
+void macross_view_set_host_id(MaCrossView* view, int host_id)
+{
+    if (!view)
+        return;
+
+    view->hostId = host_id;
+#if ENABLE(ANTJS)
+    AntRuntime::setContextHostId(view->jscontext, host_id);
+#endif
+}
+
+MC_BOOL macross_view_context_info(MaCrossView* view, MC_CONTEXT_INFO* out)
+{
+    if (!view || !out)
+        return FALSE;
+
+    memset(out, 0, sizeof(*out));
+    out->view_id = view->hostId;
+    out->pid = (unsigned long)GetCurrentProcessId();
+
+#if ENABLE(ANTJS)
+    {
+        AntRuntime::ContextInfo info;
+
+        if (AntRuntime::contextInfo(view->jscontext, &info)) {
+            out->realm_generation = info.realmGeneration;
+            out->document_generation = info.documentGeneration;
+            out->engine = info.engine;
+            out->realm = info.realm;
+            out->document = info.document;
+            out->slot = info.slot;
+            out->main_frame = info.mainFrame;
+            out->hidden = info.hidden;
+        }
+    }
+#endif
+
+    return TRUE;
+}
+
 MC_STATUS macross_menu_resize(MC_POPUP_MENU* menu, int width, int height)
 {
 	if (!menu || width <= 0 || height <= 0)

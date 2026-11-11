@@ -36,7 +36,12 @@ static void localProcessShutdown(void)
 
 static void* localCreate(void* owner, MC_BYTE* buffer, int width, int height, int pitch)
 {
-    return macross_view_create(buffer, width, height, pitch, owner);
+    MaCrossView* view = macross_view_create(buffer, width, height, pitch, owner);
+
+    if (view)
+        macross_view_set_host_id(view, agwHostViewId(owner));
+
+    return view;
 }
 
 static void localDestroy(void* view)
@@ -222,6 +227,11 @@ static unsigned localDocumentEpoch(void* view)
     return view ? macross_view_document_epoch((MaCrossView*)view) : 0;
 }
 
+static int localContextInfo(void* view, MC_CONTEXT_INFO* out)
+{
+    return (view && out) ? (macross_view_context_info((MaCrossView*)view, out) ? 1 : 0) : 0;
+}
+
 static const AgwViewBackend g_localBackend = {
     "local",
     localProcessInit,
@@ -240,7 +250,8 @@ static const AgwViewBackend g_localBackend = {
     localJsContext,
     localCrashReport,
     localDocumentEpoch,
-    NULL   /* frame: local paints into the host's own buffer */
+    NULL,  /* frame: local paints into the host's own buffer */
+    localContextInfo
 };
 
 const AgwViewBackend* agwBackendLocal(void)

@@ -214,7 +214,7 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
 |---|---|---|---|
 | `[evt]` 生命周期 | commit → realm start/stop → bindDocument → pagehide/unload → DOMContentLoaded → load | `AGB_EVT_LOG=0` | `AGB_EVT_DEBUG=1`（evaluate 深度、listener 记账、JS `dispatchEvent`） |
 | `[nav]` 导航动作 | 宿主 `open`/`back`/`forward`/`reload`/`stop`；`request`（type=link/form/back-forward/reload/other + method + URL）；`submit`；`new-window`/`popup create`；`context menu at x,y link=…`（右键，控件侧，**引擎线程**）；`client-redirect`（meta refresh、JS 定时跳转）；`fail provisional`/`fail load`（主资源失败，带 `_mc_error` 码）/`fail resource`（子资源失败）/`cannot implement`（引擎拒绝显示）/`blocked` | `AGB_NAV_LOG=0` | 无（每条只有一行） |
-| `[ui]` 界面事件 | resize / focus / blur / mouse down/up / wheel / key down/up / char | `AGB_UI_LOG=0` | `AGB_UI_DEBUG=1` 连 `mouse move` 也打（默认不打，太吵） |
+| `[ui]` 界面事件 | resize / focus / blur / mouse down/up / wheel / key down/up / char；**`context …`**（每次文档提交一行，见下） | `AGB_UI_LOG=0` | `AGB_UI_DEBUG=1` 连 `mouse move` 也打（默认不打，太吵） |
 | `[shell]` 宿主 | window ready / 进入与退出消息循环 / `CreateWindowEx` 失败 / `atexit` 模块基址；**用户操作**：`argv …`（启动参数汇总）、`reload (button\|F5\|ctrl+r\|menu\|context menu)`、`back/forward (…) can=0/1`、`stop (…)`、`tab create/activate/close/reopen/switch`（含无空槽、view 创建失败）、`find bar on/off`、`find text='…' forward=N`、`zoom 110% -> 135% (ctrl+plus)`、`alert/confirm/prompt`（含答复）、`bookmark add/duplicate`、`bookmarks loaded: N`、`history loaded: N`、`session restored/saved tabs=N`、`download dir=…`、`context menu … choice=N`（右键，**UI 线程**，菜单关掉后才打）、`clipboard copy link ok=0/1` | — | — |
 | `[probe]` 探针 | userdata、headless 状态、加载错误、对话框、退出码 | — | — |
 | `[flag]` 引擎开关 | 桥接开关（`uncaught_nonfatal` 等），来自 antjsb.dll | — | — |
@@ -263,6 +263,39 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
 - 可选调试通道（`[netlog]`、`[modfetch]`、`[snippet]`、`[call]`、`[ctx]`、`[loop]` …）**没有**走这个
   收口：它们各自有开关，`[netlog]` 还有自己的文件 sink 和时间原点。要拼总时间线时以 `[evt]`/`[nav]`
   为准。
+
+### 2.1 页面与日志对得上：`window.__agbInfo()`
+
+`[evt]` 的时间线打的是**地址和代数**（`realm start gen=… engine=…`、`main binding … doc=… realm=…`），
+页面侧可以用 `window.__agbInfo()` 拿到同一组值，于是"页面里打的日志"和宿主/引擎日志能按地址 join：
+
+| 字段 | 含义 | 对应日志 |
+|---|---|---|
+| `pid` | 跑 JS 的进程（process 后端 = `agave_render_host.exe`） | `[ipc] … pid=…`、`[shell] handoff …` |
+| `view` | 宿主控件视图/tab id（`agave_webview` 的 id；0 = 未知） | `[ui] context view=…`、`[ui] key/mouse` 的归属 |
+| `engine` / `realm` / `document` | Ant 引擎、JS realm、`WebCore::Document*` 的地址（十进制数字，JS 里 `toString(16)` 即日志里的十六进制） | `[evt] realm start … engine=…`、`main binding … doc=… realm=…` |
+| `realmGeneration` / `documentGeneration` | realm 生命周期 id / 文档 id（S2） | `gen=…`（`realm start`）、`docgen=…`（`[ui] context`） |
+| `slot` / `mainFrame` | realm/frame 槽号（0 = 主 frame）/ 是否主 frame | `__agbFrameSlot()` 同值 |
+| `hidden` | 当前 Page Visibility | `[ui]` visibility 行为 |
+| `backend` | `"local"`（引擎在宿主进程）或 `"process"`（`agave_render_host.exe`） | 启动命令行/`AGB_VIEW_BACKEND` |
+| `args` | 引擎进程的 argv 数组（local = 宿主壳的；process = renderer 的 `--ipc/--view-id/--tag …`） | `[shell] argv …`、renderer 命令行 |
+| `env` | **只含 `AGB_*`** 的进程环境（CRT 的，`putenv` 之后的；如 `AGB_USERDATA`、`AGB_VIEW_BACKEND`） | 同一进程的 `getenv` |
+
+- 文档/realm 随导航变化，**每次调用现取**（不是缓存对象）。
+- 子 frame 里调用返回**该 frame 自己的** realm/document/slot（`mainFrame=0`、`slot>=1`），跨 frame
+  调 `childWindow.__agbInfo()` 也能比较身份。
+- 每次文档提交，控件打一行 `[ui] context view=… pid=… gen=… docgen=… engine=0x… realm=0x… doc=0x… slot=… main=… hidden=… backend=…`：
+  local 由 `macross_view_context_info()` 直接读，process 后端由渲染进程的 `CONTEXT` 事件送来
+  （`design-render-backend.md` §4.2），字段与页面完全一致。
+- ⚠ `args`/`env` 是**调试信息**：页面脚本能读到本进程的参数与 `AGB_*` 开关（含 userdata 路径）。
+  非 `AGB_` 的环境变量**不会**暴露，避免把宿主的私密环境带进网页。
+
+```js
+var i = __agbInfo();
+console.log('realm=' + i.realm.toString(16) + ' doc=' + i.document.toString(16) +
+            ' view=' + i.view + ' backend=' + i.backend);
+// 宿主侧：grep '\[ui\] context' 或 '\[evt\].*realm=0x<上面那个值>'
+```
 
 ## 3. 环境变量全表
 

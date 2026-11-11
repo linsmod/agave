@@ -227,10 +227,9 @@ static void* processCreate(void* owner, MC_BYTE* buffer, int width, int height, 
     int size;
     STARTUPINFOA si;
     PROCESS_INFORMATION pi;
-    char cmdline[512];
+    char cmdline[640];
     int waited = 0;
 
-    (void)owner;
     (void)buffer;
     (void)pitch;
 
@@ -338,20 +337,20 @@ static void* processCreate(void* owner, MC_BYTE* buffer, int width, int height, 
                  * (the one that shows the crashed page) has to stay alive. */
                 crashAvUsed = 1;
                 snprintf(cmdline, sizeof(cmdline),
-                         "\"%s\" --ipc \"%s\" --owner %lu%s%s --crash-av %s",
+                         "\"%s\" --ipc \"%s\" --owner %lu%s%s --view-id %d --crash-av %s",
                          pv->exePath, pv->ipcName, (unsigned long)GetCurrentProcessId(),
-                         tag[0] ? " --tag " : "", tag, crashAv);
+                         tag[0] ? " --tag " : "", tag, agwHostViewId(owner), crashAv);
             } else if (crash && atoi(crash) > 0) {
                 crashUsed = 1;
                 snprintf(cmdline, sizeof(cmdline),
-                         "\"%s\" --ipc \"%s\" --owner %lu%s%s --crash-after %s",
+                         "\"%s\" --ipc \"%s\" --owner %lu%s%s --view-id %d --crash-after %s",
                          pv->exePath, pv->ipcName, (unsigned long)GetCurrentProcessId(),
-                         tag[0] ? " --tag " : "", tag, crash);
+                         tag[0] ? " --tag " : "", tag, agwHostViewId(owner), crash);
             } else {
                 snprintf(cmdline, sizeof(cmdline),
-                         "\"%s\" --ipc \"%s\" --owner %lu%s%s",
+                         "\"%s\" --ipc \"%s\" --owner %lu%s%s --view-id %d",
                          pv->exePath, pv->ipcName, (unsigned long)GetCurrentProcessId(),
-                         tag[0] ? " --tag " : "", tag);
+                         tag[0] ? " --tag " : "", tag, agwHostViewId(owner));
             }
         }
     }
@@ -937,7 +936,8 @@ static const AgwViewBackend g_processBackend = {
     processJsContext,
     processCrashReport,
     processDocumentEpoch,
-    processFrame
+    processFrame,
+    NULL   /* contextInfo: reported through AGW_VIEW_EVENT_CONTEXT text */
 };
 
 const AgwViewBackend* agwBackendProcess(void)
