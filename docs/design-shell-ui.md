@@ -79,7 +79,7 @@ UI 侧的具体症状：
 | `system_is_dark` | `HKCU\…\Themes\Personalize\AppsUseLightTheme==0` | chrome 暗色主题 |
 | `dpi_for_window` | `GetDpiForWindow`（动态解析；回退 `GetDeviceCaps`） | 每窗口 DPI |
 | `enable_dpi_awareness` | `SetProcessDpiAwarenessContext(PER_MONITOR_AWARE_V2)`（回退 `SetProcessDPIAware`） | 启动时一次性 |
-| `prepare_frame` | `DwmExtendFrameIntoClientArea`（1,1,1,1）+ `DWMWA_WINDOW_CORNER_PREFERENCE=ROUND` + `DWMWA_BORDER_COLOR=NONE`（后两个 Win11 22000+，动态） | 保留阴影/缩放/Snap，同时让客户区盖满窗口、去掉白边 |
+| `prepare_frame` | `DwmExtendFrameIntoClientArea`（1,1,1,1）+ `DWMWA_WINDOW_CORNER_PREFERENCE=ROUND` + `DWMWA_BORDER_COLOR=NONE`（后两个 Win11 22000+，动态）+ `DWMWA_TRANSITIONS_FORCEDISABLED=TRUE` | 保留阴影/缩放/Snap，让客户区盖满窗口、去掉白边；关掉最大/还原过渡以免动画中露出经典 frame |
 | `message_box` | `MessageBoxA` + flags 映射 | `alert/confirm` |
 | `tick_ms` | `GetTickCount64` | 看门狗提示/测量 |
 
@@ -94,7 +94,7 @@ UI 侧的具体症状：
 | 组件 | 边界 | 关键交互 |
 |---|---|---|
 | `UiButton` | 32×32@96，圆形 hover 底（Chrome 工具栏），图标盒按按钮尺寸算（上限 16px），`enabled/toggled/pressed` | 命中 → `id` |
-| `UiTabStrip` | 标签条 + `+`；活动标签削底与工具栏融合，非活动标签 hover/press 是**内缩 pill**；每 tab 默认带关闭 chip（20px 圆 + 16px glyph；背景标签压到不足一半宽度才隐藏，活动标签始终保留）；tab 之间常驻分隔线；中键关闭 | 命中标签/关闭/新标签 |
+| `UiTabStrip` | 标签条 + `+`；活动标签上角 8px 圆角、**底部两角向外张开**（与工具栏相切的 8px 圆弧），非活动标签 hover/press 是**内缩 pill**；每 tab 默认带关闭 chip（20px 圆 + 16px glyph；背景标签压到不足一半宽度才隐藏，活动标签始终保留）；tab 之间常驻 2px 分隔线；**按下即切换**；中键关闭 | 命中标签/关闭/新标签 |
 | `UiToolbar` | 后退/前进/刷新-停止/地址胶囊/Go/菜单 | 命令 ID 与旧按钮完全一致 |
 | `UiFindBar` | **内容区右上角的浮层卡片**（搜索图标 + 输入 + 上/下/关闭），页面不重排 | `ID_FIND_*`；Ctrl+F 打开并全选、Esc 从任何焦点处关闭 |
 | `UiStatusBar` | 24px 状态栏 + 进度线 + 缩放胶囊 | 纯绘制 |
@@ -107,7 +107,8 @@ UI 侧的具体症状：
 
 ```
 tabStripH 40   toolbarH 44   statusH 24
-tab: maxW 220   h 32   gap 2   radius 8
+tab: minW 84  maxW 220   h 32   gap 2   radius 8   base flare 8
+     （超出可用宽度就溢出，clipped 到 caption 按钮之前；没有横向滚动）
 window buttons: 46 x tabStripH, right-aligned
 address: h 32  radius 16  go 28×28
 content: y = tabStripH + toolbarH          （查找栏是浮层，不加高度）
@@ -165,7 +166,7 @@ WM_NCMOUSEMOVE/LEAVE  → 只更新 hover
 **窗口外框：让 DWM 保留框架，但客户区盖满窗口**。只把 `WM_NCCALCSIZE` 做成
 “顶部 0、左右下减边框”会留下非客户区的 1px 白边；正确的组合是：
 
-- `WS_THICKFRAME | WS_CAPTION` 保持不变（否则 DWM 不画阴影/系统动效，Snap 也退化）；
+- `WS_THICKFRAME | WS_CAPTION` 保持不变（否则 DWM 不画阴影，Snap 也退化）；
 - `DwmExtendFrameIntoClientArea(hwnd, {1,1,1,1})`：把 frame 往客户区extend 1px，
   阴影保留；
 - `WM_NCCALCSIZE` 让客户区覆盖**整个 window rect**（最大化时用 monitor work area，
@@ -180,6 +181,10 @@ WM_NCMOUSEMOVE/LEAVE  → 只更新 hover
 - 最大化时再 `SetWindowRgn` 把窗口区域裁到 monitor work area（Chromium 的
   `ResetWindowRegion`），把 invisible frame overscan 完全挡在可见表面外；还原时
   清空 region。`WM_SIZE` / `WM_DPICHANGED` 各更新一次。
+- `DWMWA_TRANSITIONS_FORCEDISABLED = TRUE`：最大化/还原的过渡动画会把自绘窗口带过
+  "DWM 自己画 frame" 的中间状态，表现为动画过程中边缘闪出 classic 玻璃边框。
+  `WM_NCCALCSIZE` 在那个时刻无能为力，所以让窗口退出该过渡；代价是该窗口不再有
+  平滑的最大化/还原动画。
 
 这套只在 `shell_ops_t::prepare_frame` 里做 OS 调用；**不再强制 caption 的暗色**
 （`DWMWA_USE_IMMERSIVE_DARK_MODE` 已移除），边框色也不再取 `theme->chrome/border`，
@@ -203,6 +208,9 @@ chrome 自身的亮暗 token 不受影响。
   圆角、文字抗锯齿的 alpha 都保留，面板之间是真正的透明。面板以外填
   alpha=1 的黑，不改变观感但让整块弹窗接住鼠标——点外面只会关菜单，不会穿透
   到页面。窗口是 `WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST`。
+- **没有禁用行**：菜单项要么能用，要么不出现（`Back`/`Forward`/`Copy` 视上下文才加）。
+  `uiMenuAddSeparator()` 在空菜单或已以分隔线结尾时是 no-op，`uiMenuTrim()` 去掉尾部
+  分隔线——菜单由若干可选块拼起来，不能靠调用方自己保证不出现两条线挨着。
 - **没有投影**：整块 surface 每次 hover 变化都要重画，10 层嵌套圆角填充的阴影
   是那次重画里最贵的一项；面板用 1px 边框把边界交代清楚。要恢复就先给阴影做
   位图缓存，别回到"每次 paint 都重新叠 10 层"。
@@ -215,12 +223,13 @@ chrome 自身的亮暗 token 不受影响。
   交回（`uiMenuHostRun(..., POINT* reopen_at)`，返回值 `UI_MENU_REOPEN`），调用方把
   `WM_RBUTTONDOWN/UP` 按该坐标重放给 webview，由引擎重新判定 link/image/selection。
   应用菜单没有这个语义（Chrome 同），右键只关。
-- **行模型**：分隔行、禁用行不参与 hover/键盘选择；子菜单在 hover 父项时立即
-  打开（无需延时），键盘 Right/Left 进出；面板有图标时整列缩进（Chrome 的 Lens
-  行就是这个效果）。应用菜单锚在 `☰` 按钮正下方、右边缘对齐；页面右键锚在
-  指针处，靠近屏幕边缘时向左/上翻转，并夹在显示器 work area 内。
-- **不做假的可用性**：引擎没有的能力（Lens、查看源代码、打印/另存）保持禁用并
-  在标签里写 `(not implemented)`，与 R75 的“死项要说明”约定一致。
+- **行模型**：分隔行不参与 hover/键盘选择（禁用行 API 仍支持，但当前菜单不添加）；
+  子菜单在 hover 父项时立即打开（无需延时），键盘 Right/Left 进出；面板有图标时
+  整列缩进。应用菜单锚在 `☰` 按钮正下方、右边缘对齐；页面右键锚在指针处，
+  靠近屏幕边缘时向左/上翻转，并夹在显示器 work area 内。
+- **不做假的可用性**：引擎没有的能力（Lens、查看源代码、打印/另存）**不出现在菜单里**，
+  也不留灰色占位行；能做的事按上下文添加（Back/Forward/Copy）。R75 的"死项要说明"
+  在这里改成"死项不出现"——菜单是临时读的，一屏里三分之一不能点没有意义。
 
 ### 5.3 交互状态、脏矩形与光标
 
@@ -238,11 +247,30 @@ chrome 全部落在 `HTCLIENT` 里（只有标签条空白处是 `HTCAPTION`）�
   `button_pressed`、`window_close_hover`。活动标签按下不额外变色（Chrome 同）。
 - 光标：`IDC_IBEAM` 只给地址胶囊与查找框，其余 part 一律 `IDC_ARROW`——chrome 不是
   网页，工具栏按钮不该出现手型。
-- **tab 分隔线**（`paintTabSeparators`）：相邻两个 tab 之间画 1px 竖线（高 16px 居中），
-  位置在布局 gap 的中间，所以它**始终有自己的一份空间**，不会吃 tab 宽度。两侧任一
-  tab 处于"与 strip 融合"状态（活动 / hover / 按下）时整条不画——这就是"活动标签两侧
-  不显示、hover 的 tab 两侧不显示"。颜色 `tab_sep`：暗色深灰 `#3C4043`、亮色浅白
-  `#F4F6F8`（对 `#DEE1E6` 的 strip 是提亮而不是压暗）。
+- **原生 EDIT 的背景等于胶囊当前的填充**：唯一判定是 `uiChromeFieldState(chrome, field)`
+  （0 normal / 1 hover / 2 focus），`paintAddress` / `paintFindBar` 和
+  `WM_CTLCOLOREDIT` 都问它，所以不会出现"胶囊变色、文字下面还是旧色"。注意 hover 的
+  判定包含 Go 按钮（它在胶囊里，`go.hover` 也算胶囊 hover），否则 hover Go 时文字区
+  会重新出现一块矩形。两态切换时 shell 会把 EDIT 一起失效重画；鼠标停在文字上时走
+  EDIT 子类化（`pillEditProc`）把移动换算回 shell 客户区喂给 `uiChromeMouse`，否则
+  胶囊在文字区上永远不亮。
+- **胶囊 hover 填充 = 它的边框色**（`field_hover` 直接取 `border_strong` 的值），
+  hover 时整个胶囊是一个平色块。
+- **tab 分隔线**（`paintTabSeparators`）：相邻两个 tab 之间画竖线
+  （`uiTabStripSeparatorWidth()` = 2px@96，高 16px 居中），位置在布局 gap 的中间，
+  所以它**始终有自己的一份空间**，不会吃 tab 宽度。两侧任一 tab 处于"与 strip 融合"
+  状态（活动 / hover / 按下）时整条不画——这就是"活动标签两侧不显示、hover 的 tab
+  两侧不显示"；脏矩形也要跟着外扩 `tab_gap + 分隔线宽`，否则 hover 时那两条线因为
+  没被重画而留在屏幕上。颜色 `tab_sep`：暗色深灰 `#3C4043`、亮色浅白 `#F4F6F8`
+  （对 `#DEE1E6` 的 strip 是提亮而不是压暗）。
+- **按下即切换**：tab 主体的 `UI_MOUSE_DOWN` 直接 `activate_tab`，`UI_MOUSE_UP` 只
+  处理关闭 chip / `+`（否则会切两次）。关闭 chip 仍等抬起，避免拖一下就关页。
+- **活动标签的轮廓**（`uiFillTabShape` 画身体、`paintTabBaseFlare` 画底部外张）：
+  上角 8px 圆弧；底部与工具栏交界处**向外张开**——侧边收到一个与工具栏顶边相切的
+  1/4 圆弧（半径 8@96），所以底座比标签身体宽。圆弧 = 角方块 − 以方块外角为圆心的
+  1/4 圆（先填 tab 色再盖 strip 色），而且**必须在所有 tab 之前画**：角方块伸进相邻
+  tab 的矩形里，画在别人的 hover pill 之后会把 pill 啃出一个缺口。
+  别用"整块圆角 + 削底"（下角是直角）或"内切圆角"（方向反了，看着像挖了个豁口）。
 
 ### 5.4 查找栏浮层
 
@@ -267,12 +295,13 @@ Win32 下页面是 shell 的子窗口，想让它"浮在页面上"只能是**另
 
 浅色（Chrome 2023 风格）：tab strip `#DEE1E6`、toolbar `#FFFFFF`、
 活动标签 `#FFFFFF`、非活动标签 hover `#D3D6DB` / 按下 `#C2C6CC`、tab 分隔线 `#F4F6F8`、
-地址胶囊 `#F1F3F4`（focus 时
+地址胶囊 `#F1F3F4`（hover 时 = 边框色 `#BDC1C6`，focus 时
 `#FFFFFF` + 2px `#1A73E8` 焦点环）、工具栏图标 hover `#F1F3F4`、文字 `#202124`、
 次要 `#5F6368`、边框 `#DADCE0`、强调 `#1A73E8`、窗口关闭 hover `#E81123`。
 
 暗色（对齐 Chrome 无痕窗口的实际截图，2026-11-11）：frame/tab strip `#1F2020`、
-toolbar/活动标签/content `#3C3C3C`、地址胶囊 `#282828`（focus 时 `#3C3C3C`）、
+toolbar/活动标签/content `#3C3C3C`、地址胶囊 `#282828`（hover 时 = 边框色 `#5A5A5A`，
+focus 时 `#3C3C3C`）、
 非活动标签 hover `#474747` / 按下 `#505050`、tab 分隔线 `#3C4043`、
 工具栏图标 hover `#505050`、焦点环 `#A8C7FA`、
 文字 `#E8EAED`、次要 `#9AA0A6`、图标 `#C4C7C5`、边框 `#373737`、状态栏 `#1F1F1F`、
@@ -325,25 +354,30 @@ build-zig-native\agave_shell.exe --ui-shot build-zig-native\ui-focus.png --ui-th
 2. 事件：DOWN+UP 触发 `ID_BACK`、切换/关闭/新标签、最大化/关闭窗口回调、hover 更新；
 3. 布局：按钮在客户区内、地址胶囊宽度 > 120、内容区高度 > 80、标签不重叠；
 4. 像素：活动标签 = surface、工具栏 = toolbar、状态栏 = surface_alt、内容区 = window；
-5. 交互状态（5.3）：hover 到非活动标签产生的脏矩形落在标签条内且覆盖该标签、
-   同一 part 内移动**不产生**脏矩形、hover pill 与底部透出的 strip 像素、
+5. 交互状态（5.3）：hover 到非活动标签产生的脏矩形落在标签条内、覆盖该标签**和两侧
+   的分隔线**、同一 part 内移动**不产生**脏矩形、hover pill 与底部透出的 strip 像素、
    按下 = `tab_pressed`、press 整窗脏、关闭 chip 20px 圆与 16px glyph（对角线像素）、
-   `IDC_IBEAM` 的两个 part；
+   `IDC_IBEAM` 的两个 part、按下即切 / 抬起不切、胶囊 hover 填充 = 边框色、
+   **hover Go 按钮时胶囊与 EDIT 同色**（`uiChromeFieldState`）、**重排后 hover 仍在**、
+   活动标签底部外张（tab 左边界外的像素是 tab 色、更上方仍是 strip）、
+   相邻 tab 的 hover pill 不被外张圆弧啃出缺口；
 6. 标签条（5）：每个 tab 默认有 chip（按"w 是否过半"的规则断言，任意窗口尺寸都成立）、
    **活动标签任何宽度都有 chip**、tab 间分隔线 = `tab_sep`、活动标签两侧与 hover
-   标签两侧的分隔线 = strip 色、压缩后背景标签 chip 为零矩形且 favicon 仍在；
+   标签两侧的分隔线 = strip 色、压缩后背景标签 chip 为零矩形且 favicon 仍在、
+   再压到 `tab_min_w` 以下时槽位不再缩小（溢出）且 `+` 仍在标签条内；
 7. 150% DPI：tabstrip 60 / toolbar 66 / content top = **126**（查找栏不再占一行），
    菜单仍在窗口内；
 8. 暗色层次：strip < toolbar、胶囊 < toolbar、hover > 活动标签、焦点环 =
    `#A8C7FA`；
 9. 查找栏浮层（5.4）：卡片在内容区内、右上角对齐、EDIT 在卡片内、卡片在工具栏下方，
    并把卡片画进独立 DIB 校验底色；
-10. `--ui-menu`（87 项）：菜单宽度/锚定、子菜单打开与反向翻转、行/分隔行命中、
-    Down 跳过分隔行与禁用行、Right/Left 进出子菜单、点击选中/点外取消、
-    hover/背景像素、圆形工具栏 hover；
-11. `--ui-focus`（69 项）：焦点字段、胶囊填充色、焦点环左右/上边像素与 token。
+10. `--ui-menu`（99 项）：菜单宽度/锚定、子菜单打开与反向翻转、行/分隔行命中、
+    Down 跳过分隔行、Right/Left 进出子菜单、点击选中/点外取消、hover/背景像素、
+    圆形工具栏 hover；样例行与真实应用菜单一致（含 Downloads 图标行与末尾 Settings，
+    没有禁用行）；
+11. `--ui-focus`（81 项）：焦点字段、胶囊填充色、焦点环左右/上边像素与 token。
 
-各项计数（2026-11-11）：亮 60 / 暗 64 / 亮-150% 60 / 暗-菜单 87 / 暗-焦点 69。
+各项计数（2026-11-11）：亮 72 / 暗 76 / 亮-150% 72 / 暗-菜单 99 / 暗-焦点 81。
 窄窗口（如 `--ui-size 700x460`，背景标签不足一半宽度）会少 2 条 chip 像素断言：
 那里背景标签本来就没有 chip（活动标签的 chip 仍在，命中/点击断言照常跑）。
 
@@ -379,7 +413,7 @@ shell 不会被脚本动。
 - `run_all_tests.ps1` 全绿（新增 case 计入并计时）；
 - 手工 GUI：125%/150% DPI 下标签/地址栏不重叠，hover/点击正常，
   `AGB_SHELL_THEME=dark` 标题栏与 chrome 一起变暗；点 `☰` / 页面右键看到的
-  是自绘菜单（圆角/阴影/快捷键/子菜单），点外面和 Esc 都能关；
+  是自绘菜单（圆角/无投影/快捷键/子菜单/无禁用行），点外面和 Esc 都能关；
 - 窗口框架：`pwsh -File tools/check_shell_frame.ps1`（`AGB_SHELL_HIDDEN=1`，不显示窗口）
   → `FRAME=PASS`：client origin y=0、`WM_NCHITTEST` min=8/max=9/close=20、
   tab=1、空白=2，`WM_NCLBUTTONDOWN + WM_LBUTTONUP` 触发最大化/还原、最小化、关闭；

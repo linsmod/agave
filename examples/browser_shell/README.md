@@ -26,12 +26,14 @@ shell 不直接调用任何 `macross_*` 接口 —— 它和第三方宿主用�
 预留三个窗口按钮的位置，`_ □ X` 由 chrome 自绘。拖动空白区移动窗口、双击最大化、
 右键系统菜单走 `HTCAPTION`；按钮区给系统 `HTMINBUTTON/HTMAXBUTTON/HTCLOSE`，
 但 `WM_NCLBUTTONDOWN` 被拦截成客户区按下（Chromium `CUSTOM_DRAWN` 同路径），
-避免系统再画一套 classic 按下态按钮。标签宽度不足时自动压缩（上限 220px，
-无最小宽度；标题省略、favicon/关闭按宽度隐藏），永远排不进右侧按钮区。
+避免系统再画一套 classic 按下态按钮。标签宽度在上限 220px 与下限 84px 之间自适应；
+超过可用宽度就溢出（多出来的标签被裁在窗口按钮之前），标题省略、favicon 始终保留、
+背景标签在不足一半宽度时才隐藏关闭 ×，活动标签一直保留。
 
-窗口框架保留 `WS_THICKFRAME | WS_CAPTION`（DWM 阴影/缩放/Snap 语义），
+窗口框架保留 `WS_THICKFRAME | WS_CAPTION`（DWM 阴影/Snap 语义），
 `WM_NCCALCSIZE` 让客户区覆盖**整个 window rect**，`DwmExtendFrameIntoClientArea`
-只扩 1px 进客户区保阴影；Win11 用 `DWMWC_ROUND` 圆角 + `DWMWA_BORDER_COLOR=NONE`，
+只扩 1px 进客户区保阴影；`DWMWA_TRANSITIONS_FORCEDISABLED=TRUE` 让最大/还原不走
+系统过渡动画（过渡中会露出 classic 玻璃框）；Win11 用 `DWMWC_ROUND` 圆角 + `DWMWA_BORDER_COLOR=NONE`，
 最大化走系统默认 overscan（frame 在屏幕外），客户区在 `WM_NCCALCSIZE` 里取
 monitor work area，并用 `SetWindowRgn` 把窗口区域裁到 work area（避免最大化
 顶部 1px 白边）。不再强制 caption 的暗色，也不把 DWM 边框染成主题色。
@@ -85,6 +87,8 @@ pwsh -File tools\run_shell_ui_tests.ps1
 pwsh -File tools\check_shell_frame.ps1   # 手动：隐藏窗口 + 真实 WM_NCCALCSIZE/WM_NCHITTEST/NC 点击
 pwsh -File tools\check_shell_menu.ps1    # 手动：真实弹出菜单（Esc/右键重开/点行选中）
 pwsh -File tools\check_shell_findbar.ps1 # 手动：查找栏浮层（不占页面空间、z-order、Esc）
+pwsh -File tools\crop_png.ps1 -In ui-dark.png -Rect 150,0,250,80 -Scale 8
+                                         # 把截图局部放大，看 5px 级别的细节
 ```
 
 ## 功能
@@ -100,7 +104,7 @@ pwsh -File tools\check_shell_findbar.ps1 # 手动：查找栏浮层（不占页�
 | `_` `□` `X`（标签条右侧） | 最小化 / 最大化-还原 / 关闭窗口；按 Chromium 的 CUSTOM_DRAWN 命中方式交给自己的按钮状态机 |
 | Ctrl+L / F6 | 聚焦地址栏 |
 | Ctrl+F | 打开查找栏（**浮在页面右上角，页面不重排**）并全选已有关键字；回车执行 `macross_view_search_text`；**Esc 从任何焦点处关闭**（`AGB_SHELL_FIND=1` 启动即打开，供自动化用） |
-| 右键菜单 | **自绘** Chrome 风格菜单（圆角/阴影/右对齐快捷键/禁用行）：后退/前进/刷新、链接操作、复制/全选、书签、注入调试脚本；靠近屏幕边缘会自动翻转 |
+| 右键菜单 | **自绘** Chrome 风格菜单（圆角/右对齐快捷键/**无投影、无禁用行**）：后退/前进（能退才出现）、刷新、链接操作、复制（有选中才出现）/全选、书签、注入调试脚本；靠近屏幕边缘会自动翻转 |
 | 滚轮、点击、键盘 | 全部转发给页面（中文经 `WM_CHAR` 转 UTF-8） |
 | 下载 | 引擎 DownloadManager 写盘，状态栏显示进度/结果；保存到 `%USERPROFILE%\Downloads` |
 | Ctrl+D | 加书签（存 `<数据目录>\bookmarks.txt`） |
