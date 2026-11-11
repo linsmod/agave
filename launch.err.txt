@@ -1,919 +1,384 @@
 [      0.0ms] [shell] argv url=https://github.com probe=0 zoom=0 resize=0x0 offline=0 eval=64 bytes keys=0
-[      4.9ms] [shell] window ready hwnd=0000000003003C8A
-[      5.8ms] [shell] history loaded: 200 entries from E:\mybrowsers\agave\build-zig-native\AgaveShellData\history.txt
-[     48.4ms] [shell] startup url from argv: https://github.com
-[     49.3ms] [ui] resize 800x400
-[     50.4ms] [shell] tab create index=0 url=https://github.com
-[     51.0ms] [shell] download dir=C:\Users\linswin\Downloads
-[     52.3ms] [ui] resize 1084x677
-[     54.2ms] [ui] focus
-[     54.9ms] [shell] entering message loop
-[     64.9ms] [flag] set js=000002446B6C5D80 on=1 -> 1
-[     87.6ms] [dl] directory C:\Users\linswin\Downloads
-[     91.7ms] [evt] realm start gen=2 engine=000002446FC16040 (view context)
-[     95.4ms] [nav] open url=https://github.com
-[     96.6ms] [nav] request main type=other method=GET url=https://github.com/
-[     97.6ms] [cache] http miss url=https://github.com/
-[   1272.9ms] [evt] commit https://github.com/
-[importmap] parse 844 bytes
-[   1275.4ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/light-0011b1fed09cb294.css
-[   1276.2ms] [cache] http miss url=https://github.githubassets.com/assets/light-0011b1fed09cb294.css
-[   1276.6ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/light_high_contrast-267ab2e12d3b7ade.css
-[   1277.2ms] [cache] http miss url=https://github.githubassets.com/assets/light_high_contrast-267ab2e12d3b7ade.css
-[   1277.6ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/dark-37b5e41810563d82.css
-[   1278.1ms] [cache] http miss url=https://github.githubassets.com/assets/dark-37b5e41810563d82.css
-[   1278.5ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/dark_high_contrast-d69295870cb5f203.css
-[   1279.1ms] [cache] http miss url=https://github.githubassets.com/assets/dark_high_contrast-d69295870cb5f203.css
-[   1279.5ms] [cache] mem miss type=css url=https://github.com/
-[   1280.1ms] [cache] http miss url=https://github.com/
-[   1280.5ms] [cache] mem hit type=css url=https://github.com/
-[   1280.8ms] [cache] mem hit type=css url=https://github.com/
-[   1281.1ms] [cache] mem hit type=css url=https://github.com/
-[   1281.4ms] [cache] mem hit type=css url=https://github.com/
-[   1281.7ms] [cache] mem hit type=css url=https://github.com/
-[   1282.0ms] [cache] mem hit type=css url=https://github.com/
-[   1282.3ms] [cache] mem hit type=css url=https://github.com/
-[   1282.6ms] [cache] mem hit type=css url=https://github.com/
-[   1282.9ms] [cache] mem hit type=css url=https://github.com/
-[   1283.3ms] [cache] mem hit type=css url=https://github.com/
-[   1283.6ms] [cache] mem hit type=css url=https://github.com/
-[   1283.9ms] [cache] mem hit type=css url=https://github.com/
-[   1284.4ms] [cache] mem hit type=css url=https://github.com/
-[   1285.1ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/primer-primitives-bd624c4ec96b42e9.css
-[   1286.1ms] [cache] http miss url=https://github.githubassets.com/assets/primer-primitives-bd624c4ec96b42e9.css
-[   1286.6ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/primer-2aeb1babdc762f70.css
-[   1287.3ms] [cache] http miss url=https://github.githubassets.com/assets/primer-2aeb1babdc762f70.css
-[   1287.9ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/global-747fc17113063fdc.css
-[   1288.6ms] [cache] http miss url=https://github.githubassets.com/assets/global-747fc17113063fdc.css
-[   1289.0ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/github-d4a7053a1b3b1731.css
-[   1289.7ms] [cache] http miss url=https://github.githubassets.com/assets/github-d4a7053a1b3b1731.css
-[   1290.1ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/marketing-d7adf5c7af320655.css
-[   1290.7ms] [cache] http miss url=https://github.githubassets.com/assets/marketing-d7adf5c7af320655.css
-[   1291.1ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/home-df64966d2549e9a4.css
-[   1291.9ms] [cache] http miss url=https://github.githubassets.com/assets/home-df64966d2549e9a4.css
-[modstart] https://github.githubassets.com/assets/high-contrast-cookie-19546c435025711b.js in-flight=1
-[   1317.2ms] [evt] bindDocument 00000244010232C0 (realm-bound=0 prev=0000000000000000) url=https://github.com/
-[   1331.9ms] [evt] main binding gen=2 doc=00000244010232C0 realm=0000024400EA0290
-[modcache] store https://github.githubassets.com/assets/high-contrast-cookie-19546c435025711b.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\e23def99.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/high-contrast-cookie-19546c435025711b.js found=0 in-flight=0
-[modentry] arrived https://github.githubassets.com/assets/high-contrast-cookie-19546c435025711b.js gen=2 docgen=0 failed=0
-[modprefetch] https://github.githubassets.com/assets/high-contrast-cookie-19546c435025711b.js found=0 in-flight=0
-[queue] doc=00000244010232C0 state=0000024400EA10E0 gen=2 docgen=3
-[modprefetch] https://github.githubassets.com/assets/high-contrast-cookie-19546c435025711b.js found=0 in-flight=0
-[modstart] https://github.githubassets.com/assets/core-9d6a36432bb53a7c.js in-flight=1
-[modcache] store https://github.githubassets.com/assets/core-9d6a36432bb53a7c.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\f35b3013.mjs (FAILED, err=5)
-[modstart] https://github.githubassets.com/assets/wp-runtime-5a729e03b370f3b9.js in-flight=1
-[modstart] https://github.githubassets.com/assets/app-runtime-445d965f204dd5cb.js in-flight=2
-[modstart] https://github.githubassets.com/assets/react-core-0c396d1eab868c2f.js in-flight=3
-[modstart] https://github.githubassets.com/assets/pb-f24056aed715c435.js in-flight=4
-[modprefetch] https://github.githubassets.com/assets/core-9d6a36432bb53a7c.js found=5 in-flight=4
-[modentry] arrived https://github.githubassets.com/assets/core-9d6a36432bb53a7c.js gen=2 docgen=3 failed=0
-[modprefetch] https://github.githubassets.com/assets/core-9d6a36432bb53a7c.js found=5 in-flight=4
-[queue] doc=00000244010232C0 state=0000024400EA10E0 gen=2 docgen=3
-[modprefetch] https://github.githubassets.com/assets/core-9d6a36432bb53a7c.js found=5 in-flight=4
-[   2047.9ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/app-runtime.0cb71910f854d01a.module.css
-[   2048.7ms] [cache] http miss url=https://github.githubassets.com/assets/app-runtime.0cb71910f854d01a.module.css
-[   2049.1ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/react-core.8f5cf887bee405a6.module.css
-[   2049.6ms] [cache] http miss url=https://github.githubassets.com/assets/react-core.8f5cf887bee405a6.module.css
-[modstart] https://github.githubassets.com/assets/marketing-essentials-bfdc6e3303ade6d4.js in-flight=5
-[modcache] store https://github.githubassets.com/assets/app-runtime-445d965f204dd5cb.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\e4730526.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/app-runtime-445d965f204dd5cb.js found=0 in-flight=4
-[modcache] store https://github.githubassets.com/assets/wp-runtime-5a729e03b370f3b9.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\abc31925.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/wp-runtime-5a729e03b370f3b9.js found=0 in-flight=3
-[modcache] store https://github.githubassets.com/assets/pb-f24056aed715c435.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\9ddf8264.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/pb-f24056aed715c435.js found=0 in-flight=2
-[modcache] store https://github.githubassets.com/assets/marketing-essentials-bfdc6e3303ade6d4.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\c7b98d48.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/marketing-essentials-bfdc6e3303ade6d4.js found=6 in-flight=1
-[modentry] arrived https://github.githubassets.com/assets/marketing-essentials-bfdc6e3303ade6d4.js gen=2 docgen=3 failed=0
-[modcache] store https://github.githubassets.com/assets/react-core-0c396d1eab868c2f.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\8fc0ed93.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/react-core-0c396d1eab868c2f.js found=0 in-flight=0
-[modprefetch] https://github.githubassets.com/assets/marketing-essentials-bfdc6e3303ade6d4.js found=6 in-flight=0
-[queue] doc=00000244010232C0 state=0000024400EA10E0 gen=2 docgen=3
-[modprefetch] https://github.githubassets.com/assets/marketing-essentials-bfdc6e3303ade6d4.js found=6 in-flight=0
-[modstart] https://github.githubassets.com/assets/landing-pages-8ee3aeacb1903e49.js in-flight=1
-[   5479.1ms] [evt] window event load doc=00000244010232C0 listeners=0
-[   5479.5ms] [evt] window event pageshow doc=00000244010232C0 listeners=0
-[modcache] store https://github.githubassets.com/assets/landing-pages-8ee3aeacb1903e49.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\ad72c7d7.mjs (FAILED, err=5)
-[modstart] https://github.githubassets.com/assets/primer-react-9ee791437767e925.js in-flight=1
-[modstart] https://github.githubassets.com/assets/ncx-6706f20793d34656.js in-flight=2
-[modstart] https://github.githubassets.com/assets/t7l-8213ea7f1bea9e80.js in-flight=3
-[modstart] https://github.githubassets.com/assets/4u-239741f82c1b95c5.js in-flight=4
-[modstart] https://github.githubassets.com/assets/a3-1ee4aa02b48a7f29.js in-flight=5
-[modstart] https://github.githubassets.com/assets/k0-e993cfed22be4fad.js in-flight=6
-[modstart] https://github.githubassets.com/assets/97-560ce6c49a1d19d6.js in-flight=7
-[modstart] https://github.githubassets.com/assets/fz-4625459279202f71.js in-flight=8
-[modstart] https://github.githubassets.com/assets/23-905aca4afd4b8552.js in-flight=9
-[modstart] https://github.githubassets.com/assets/b3-0724594d5487f3bb.js in-flight=10
-[modstart] https://github.githubassets.com/assets/8d-58a3820948740eec.js in-flight=11
-[modstart] https://github.githubassets.com/assets/rxr-38b355443d709292.js in-flight=12
-[modpending] https://github.githubassets.com/assets/25-6ba186def1fd5e5f.js gen=2 docgen=3
-[modpending] https://github.githubassets.com/assets/55-2bede70ae6f95a9f.js gen=2 docgen=3
-[modpending] https://github.githubassets.com/assets/1oj-a04f56ba4409bb97.js gen=2 docgen=3
-[modpending] https://github.githubassets.com/assets/9o-1420a5620d01eec0.js gen=2 docgen=3
-[modpending] https://github.githubassets.com/assets/5n-52944159c6652d31.js gen=2 docgen=3
-[modpending] https://github.githubassets.com/assets/wgy-2c95d46fe4dfb244.js gen=2 docgen=3
-[modprefetch] https://github.githubassets.com/assets/landing-pages-8ee3aeacb1903e49.js found=24 in-flight=12
-[modentry] arrived https://github.githubassets.com/assets/landing-pages-8ee3aeacb1903e49.js gen=2 docgen=3 failed=0
-[modprefetch] https://github.githubassets.com/assets/landing-pages-8ee3aeacb1903e49.js found=24 in-flight=12
-[queue] doc=00000244010232C0 state=0000024400EA10E0 gen=2 docgen=3
-[modprefetch] https://github.githubassets.com/assets/landing-pages-8ee3aeacb1903e49.js found=24 in-flight=12
-[   5802.7ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/primer-react-css.4af22a99b464e505.module.css
-[   5803.7ms] [cache] http miss url=https://github.githubassets.com/assets/primer-react-css.4af22a99b464e505.module.css
-[   5804.8ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/primer-react-brand-css.97609ed1d71c6231.module.css
-[   5805.6ms] [cache] http miss url=https://github.githubassets.com/assets/primer-react-brand-css.97609ed1d71c6231.module.css
-[   5806.0ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/landing-pages.51e9680af4a75e8c.module.css
-[   5806.7ms] [cache] http miss url=https://github.githubassets.com/assets/landing-pages.51e9680af4a75e8c.module.css
-[   5809.8ms] [cache] mem hit type=css url=https://github.githubassets.com/assets/primer-react-css.4af22a99b464e505.module.css
-[   5810.2ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/keyboard-shortcuts-dialog.a292b37e7d62fa75.module.css
-[   5811.0ms] [cache] http miss url=https://github.githubassets.com/assets/keyboard-shortcuts-dialog.a292b37e7d62fa75.module.css
-[   5811.7ms] [cache] mem hit type=css url=https://github.githubassets.com/assets/primer-react-css.4af22a99b464e505.module.css
-[   5812.0ms] [cache] mem hit type=css url=https://github.githubassets.com/assets/primer-react-brand-css.97609ed1d71c6231.module.css
-[   5812.4ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/marketing-global-banner.fd3cd2c4f2abbd6a.module.css
-[   5813.1ms] [cache] http miss url=https://github.githubassets.com/assets/marketing-global-banner.fd3cd2c4f2abbd6a.module.css
-[modpending] https://github.githubassets.com/assets/global-banner-disable-92a64558879ee38b.js gen=2 docgen=3
-[modcache] store https://github.githubassets.com/assets/ncx-6706f20793d34656.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\623e62ba.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/ncx-6706f20793d34656.js found=0 in-flight=11
-[modstart] https://github.githubassets.com/assets/25-6ba186def1fd5e5f.js in-flight=12
-[modcache] store https://github.githubassets.com/assets/t7l-8213ea7f1bea9e80.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\263c350e.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/t7l-8213ea7f1bea9e80.js found=0 in-flight=11
-[modstart] https://github.githubassets.com/assets/55-2bede70ae6f95a9f.js in-flight=12
-[modcache] store https://github.githubassets.com/assets/4u-239741f82c1b95c5.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\be7bbae2.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/4u-239741f82c1b95c5.js found=0 in-flight=11
-[modstart] https://github.githubassets.com/assets/1oj-a04f56ba4409bb97.js in-flight=12
-[modcache] store https://github.githubassets.com/assets/a3-1ee4aa02b48a7f29.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\66547a57.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/a3-1ee4aa02b48a7f29.js found=0 in-flight=11
-[modstart] https://github.githubassets.com/assets/9o-1420a5620d01eec0.js in-flight=12
-[modcache] store https://github.githubassets.com/assets/primer-react-9ee791437767e925.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\0985fd11.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/primer-react-9ee791437767e925.js found=0 in-flight=11
-[modstart] https://github.githubassets.com/assets/5n-52944159c6652d31.js in-flight=12
-[modcache] store https://github.githubassets.com/assets/fz-4625459279202f71.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\cd248e2a.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/fz-4625459279202f71.js found=0 in-flight=11
-[modstart] https://github.githubassets.com/assets/wgy-2c95d46fe4dfb244.js in-flight=12
-[modcache] store https://github.githubassets.com/assets/97-560ce6c49a1d19d6.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\9bdf85ae.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/97-560ce6c49a1d19d6.js found=0 in-flight=11
-[modstart] https://github.githubassets.com/assets/global-banner-disable-92a64558879ee38b.js in-flight=12
-[modcache] store https://github.githubassets.com/assets/k0-e993cfed22be4fad.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\4918c96e.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/k0-e993cfed22be4fad.js found=0 in-flight=11
-[modcache] store https://github.githubassets.com/assets/rxr-38b355443d709292.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\a69a4fb1.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/rxr-38b355443d709292.js found=0 in-flight=10
-[modcache] store https://github.githubassets.com/assets/b3-0724594d5487f3bb.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\3d392824.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/b3-0724594d5487f3bb.js found=0 in-flight=9
-[modcache] store https://github.githubassets.com/assets/8d-58a3820948740eec.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\227dbfc1.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/8d-58a3820948740eec.js found=0 in-flight=8
-[modcache] store https://github.githubassets.com/assets/23-905aca4afd4b8552.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\88bc60f6.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/23-905aca4afd4b8552.js found=0 in-flight=7
-[modcache] store https://github.githubassets.com/assets/25-6ba186def1fd5e5f.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\6e6bdc5f.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/25-6ba186def1fd5e5f.js found=0 in-flight=6
-[modcache] store https://github.githubassets.com/assets/9o-1420a5620d01eec0.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\95217dfc.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/9o-1420a5620d01eec0.js found=0 in-flight=5
-[modcache] store https://github.githubassets.com/assets/5n-52944159c6652d31.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\e31c036d.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/5n-52944159c6652d31.js found=0 in-flight=4
-[modcache] store https://github.githubassets.com/assets/55-2bede70ae6f95a9f.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\c8025dd4.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/55-2bede70ae6f95a9f.js found=0 in-flight=3
-[modcache] store https://github.githubassets.com/assets/1oj-a04f56ba4409bb97.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\b2ac4293.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/1oj-a04f56ba4409bb97.js found=0 in-flight=2
-[modcache] store https://github.githubassets.com/assets/global-banner-disable-92a64558879ee38b.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\68e5540f.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/global-banner-disable-92a64558879ee38b.js found=0 in-flight=1
-[modentry] arrived https://github.githubassets.com/assets/global-banner-disable-92a64558879ee38b.js gen=2 docgen=3 failed=0
-[modcache] store https://github.githubassets.com/assets/wgy-2c95d46fe4dfb244.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\1a90c57c.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/wgy-2c95d46fe4dfb244.js found=0 in-flight=0
-[modprefetch] https://github.githubassets.com/assets/global-banner-disable-92a64558879ee38b.js found=0 in-flight=0
-[queue] doc=00000244010232C0 state=0000024400EA10E0 gen=2 docgen=3
-[modprefetch] https://github.githubassets.com/assets/global-banner-disable-92a64558879ee38b.js found=0 in-flight=0
-[  10356.3ms] [cache] mem hit type=css url=https://github.githubassets.com/assets/primer-react-css.4af22a99b464e505.module.css
-[  10626.3ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/app-install-banner-partial.7c40ae188680a846.module.css
-[  10627.3ms] [cache] http miss url=https://github.githubassets.com/assets/app-install-banner-partial.7c40ae188680a846.module.css
-[  10628.1ms] [cache] mem hit type=css url=https://github.githubassets.com/assets/primer-react-css.4af22a99b464e505.module.css
-[  10899.4ms] [cache] mem hit type=css url=https://github.githubassets.com/assets/primer-react-brand-css.97609ed1d71c6231.module.css
-[  12551.7ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/marketing-header.ca0f33527e594ad0.module.css
-[  12552.9ms] [cache] http miss url=https://github.githubassets.com/assets/marketing-header.ca0f33527e594ad0.module.css
-[  12555.3ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/platform-4ce65ae0bf273ce2.png
-[  12556.1ms] [cache] http miss url=https://github.githubassets.com/assets/platform-4ce65ae0bf273ce2.png
-[  12556.7ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/platform-dark-ac89fbf373737ed3.png
-[  12557.3ms] [cache] http miss url=https://github.githubassets.com/assets/platform-dark-ac89fbf373737ed3.png
-[  12558.0ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/copilot-e2b89335a66dba00.png
-[  12558.6ms] [cache] http miss url=https://github.githubassets.com/assets/copilot-e2b89335a66dba00.png
-[  12559.0ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/copilot-dark-2b28403b6080e898.png
-[  12559.5ms] [cache] http miss url=https://github.githubassets.com/assets/copilot-dark-2b28403b6080e898.png
-[  12563.7ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/changelog-fd687bff072883b0.png
-[  12564.3ms] [cache] http miss url=https://github.githubassets.com/assets/changelog-fd687bff072883b0.png
-[  12564.6ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/changelog-dark-b1c25ae971bd641b.png
-[  12565.1ms] [cache] http miss url=https://github.githubassets.com/assets/changelog-dark-b1c25ae971bd641b.png
-[  12571.0ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/universe-a98cd54821b27569.png
-[  12579.8ms] [cache] http miss url=https://github.githubassets.com/assets/universe-a98cd54821b27569.png
-[  12580.2ms] [cache] mem hit type=image url=https://github.githubassets.com/assets/universe-a98cd54821b27569.png
-[  12591.2ms] [cache] mem miss type=image url=https://images.ctfassets.net/8aevphvgewt8/home2026-9ccb55275227c79b036824fc/b44aaf40a80735ae613a6db469af23c1/ducky-shadows.png
-[  12612.4ms] [cache] http miss url=https://images.ctfassets.net/8aevphvgewt8/home2026-9ccb55275227c79b036824fc/b44aaf40a80735ae613a6db469af23c1/ducky-shadows.png
-[  12649.4ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/features-platform-1-light-d1af443446caafe7.webp
-[  12650.3ms] [cache] http miss url=https://github.githubassets.com/assets/features-platform-1-light-d1af443446caafe7.webp
-[  12651.3ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/features-platform-2-light-deba569ff3c98363.webp
-[  12651.9ms] [cache] http miss url=https://github.githubassets.com/assets/features-platform-2-light-deba569ff3c98363.webp
-[  12653.7ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/features-ways-1-light-3a999d15192f9ed9.webp
-[  12654.7ms] [cache] http miss url=https://github.githubassets.com/assets/features-ways-1-light-3a999d15192f9ed9.webp
-[  12655.5ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/features-ways-2-light-bb0bc31df1d658b8.webp
-[  12656.4ms] [cache] http miss url=https://github.githubassets.com/assets/features-ways-2-light-bb0bc31df1d658b8.webp
-[  12657.3ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/features-ways-3-light-e2458d99331b9f87.webp
-[  12658.0ms] [cache] http miss url=https://github.githubassets.com/assets/features-ways-3-light-e2458d99331b9f87.webp
-[  12658.8ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/features-ways-4-light-c6d08e31ba77efdd.webp
-[  12659.3ms] [cache] http miss url=https://github.githubassets.com/assets/features-ways-4-light-c6d08e31ba77efdd.webp
-[  12660.1ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/features-ways-5-light-51976df09d6ae707.webp
-[  12660.7ms] [cache] http miss url=https://github.githubassets.com/assets/features-ways-5-light-51976df09d6ae707.webp
-[  12676.2ms] [cache] mem miss type=image url=https://images.ctfassets.net/8aevphvgewt8/home2026-f899e02bc1ad1a5df31a307f/6acd0742069d2c9591b307f87e903a69/avatar-5.webp
-[  12679.0ms] [cache] http miss url=https://images.ctfassets.net/8aevphvgewt8/home2026-f899e02bc1ad1a5df31a307f/6acd0742069d2c9591b307f87e903a69/avatar-5.webp
-[  12679.8ms] [cache] mem miss type=image url=https://images.ctfassets.net/8aevphvgewt8/home2026-01ac80921a7a68bb3d4ce527/b8f43648b9c0fa6cdb8946ed2be492cf/avatar-1.webp
-[  12680.4ms] [cache] http miss url=https://images.ctfassets.net/8aevphvgewt8/home2026-01ac80921a7a68bb3d4ce527/b8f43648b9c0fa6cdb8946ed2be492cf/avatar-1.webp
-[  12681.0ms] [cache] mem miss type=image url=https://images.ctfassets.net/8aevphvgewt8/home2026-1bdfd19a362a9b42660488c1/dd6db8061a69e8cd6f3611e6b495b3dd/avatar-2.webp
-[  12681.8ms] [cache] http miss url=https://images.ctfassets.net/8aevphvgewt8/home2026-1bdfd19a362a9b42660488c1/dd6db8061a69e8cd6f3611e6b495b3dd/avatar-2.webp
-[  12682.4ms] [cache] mem miss type=image url=https://images.ctfassets.net/8aevphvgewt8/home2026-f6d013dea6d5575cba3b8294/41503e0438e56c6ebb8827c41e3c6fa8/avatar-3.webp
-[  12683.0ms] [cache] http miss url=https://images.ctfassets.net/8aevphvgewt8/home2026-f6d013dea6d5575cba3b8294/41503e0438e56c6ebb8827c41e3c6fa8/avatar-3.webp
-[  12683.7ms] [cache] mem miss type=image url=https://images.ctfassets.net/8aevphvgewt8/home2026-5de180004bab10ed7bf6174a/6609dfc82864ffad130f96c32866ca62/avatar-4.webp
-[  12684.3ms] [cache] http miss url=https://images.ctfassets.net/8aevphvgewt8/home2026-5de180004bab10ed7bf6174a/6609dfc82864ffad130f96c32866ca62/avatar-4.webp
-[  12688.4ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/ducky-c9ab74b64c4d1e8d.webp
-[  12689.4ms] [cache] http miss url=https://github.githubassets.com/assets/ducky-c9ab74b64c4d1e8d.webp
-[  12698.8ms] [cache] mem hit type=css url=https://github.githubassets.com/assets/primer-react-css.4af22a99b464e505.module.css
-[  12966.5ms] [cache] mem hit type=css url=https://github.githubassets.com/assets/primer-react-brand-css.97609ed1d71c6231.module.css
-[  14634.5ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/marketing-footer.be3c624614264dd3.module.css
-[  14635.9ms] [cache] http miss url=https://github.githubassets.com/assets/marketing-footer.be3c624614264dd3.module.css
-[flush] doc=00000244010232C0 body=1 queued=5 gen=2 docgen=3
-[modeval] https://github.githubassets.com/assets/high-contrast-cookie-19546c435025711b.js 1097 bytes ok in 0 ms
-[esmkey] https://github.githubassets.com/assets/react-fa5e2e82e6e0ecc0.js new
-[esmeval] https://github.githubassets.com/assets/react-fa5e2e82e6e0ecc0.js loaded=0 loading=0
-[modstart] https://github.githubassets.com/assets/react-fa5e2e82e6e0ecc0.js in-flight=1
-[modcache] store https://github.githubassets.com/assets/react-fa5e2e82e6e0ecc0.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\a17efe73.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/react-fa5e2e82e6e0ecc0.js found=0 in-flight=0
-[modprefetch] https://github.githubassets.com/assets/react-fa5e2e82e6e0ecc0.js found=0 in-flight=0
-[modfetch] t=885303906 https://github.githubassets.com/assets/react-fa5e2e82e6e0ecc0.js 10195 bytes | in-flight=0
-[esmkey] https://github.githubassets.com/assets/react-dom-c7f52540bb6b77ed.js new
-[esmeval] https://github.githubassets.com/assets/react-dom-c7f52540bb6b77ed.js loaded=0 loading=0
-[modstart] https://github.githubassets.com/assets/react-dom-c7f52540bb6b77ed.js in-flight=1
-[modcache] store https://github.githubassets.com/assets/react-dom-c7f52540bb6b77ed.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\660346fa.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/react-dom-c7f52540bb6b77ed.js found=0 in-flight=0
-[modprefetch] https://github.githubassets.com/assets/react-dom-c7f52540bb6b77ed.js found=0 in-flight=0
-[modfetch] t=885304015 https://github.githubassets.com/assets/react-dom-c7f52540bb6b77ed.js 5006 bytes | in-flight=0
-[esmeval] https://github.githubassets.com/assets/react-fa5e2e82e6e0ecc0.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/react-fa5e2e82e6e0ecc0.js loaded=1 loading=0
-[esmkey] https://github.githubassets.com/assets/react-compiler-runtime-4610bd6d3de9c049.js new
-[esmeval] https://github.githubassets.com/assets/react-compiler-runtime-4610bd6d3de9c049.js loaded=0 loading=0
-[modstart] https://github.githubassets.com/assets/react-compiler-runtime-4610bd6d3de9c049.js in-flight=1
-[modcache] store https://github.githubassets.com/assets/react-compiler-runtime-4610bd6d3de9c049.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\d86a6a65.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/react-compiler-runtime-4610bd6d3de9c049.js found=0 in-flight=0
-[modprefetch] https://github.githubassets.com/assets/react-compiler-runtime-4610bd6d3de9c049.js found=0 in-flight=0
-[modfetch] t=885304093 https://github.githubassets.com/assets/react-compiler-runtime-4610bd6d3de9c049.js 644 bytes | in-flight=0
-[esmeval] https://github.githubassets.com/assets/react-fa5e2e82e6e0ecc0.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/react-fa5e2e82e6e0ecc0.js loaded=1 loading=0
-[esmkey] https://github.githubassets.com/assets/react-jsx-runtime-4915cb0f5b3aff04.js new
-[esmeval] https://github.githubassets.com/assets/react-jsx-runtime-4915cb0f5b3aff04.js loaded=0 loading=0
-[modstart] https://github.githubassets.com/assets/react-jsx-runtime-4915cb0f5b3aff04.js in-flight=1
-[modcache] store https://github.githubassets.com/assets/react-jsx-runtime-4915cb0f5b3aff04.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\368a1cd6.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/react-jsx-runtime-4915cb0f5b3aff04.js found=0 in-flight=0
-[modprefetch] https://github.githubassets.com/assets/react-jsx-runtime-4915cb0f5b3aff04.js found=0 in-flight=0
-[modfetch] t=885304187 https://github.githubassets.com/assets/react-jsx-runtime-4915cb0f5b3aff04.js 865 bytes | in-flight=0
-[esmkey] https://github.githubassets.com/assets/wp-runtime-5a729e03b370f3b9.js new
-[esmeval] https://github.githubassets.com/assets/wp-runtime-5a729e03b370f3b9.js loaded=0 loading=0
-[modprefetch] https://github.githubassets.com/assets/wp-runtime-5a729e03b370f3b9.js found=0 in-flight=0
-[modfetch] t=885304187 https://github.githubassets.com/assets/wp-runtime-5a729e03b370f3b9.js 82423 bytes | in-flight=0
-[esmkey] https://github.githubassets.com/assets/app-runtime-445d965f204dd5cb.js new
-[esmeval] https://github.githubassets.com/assets/app-runtime-445d965f204dd5cb.js loaded=0 loading=0
-[modprefetch] https://github.githubassets.com/assets/app-runtime-445d965f204dd5cb.js found=0 in-flight=0
-[modfetch] t=885304218 https://github.githubassets.com/assets/app-runtime-445d965f204dd5cb.js 103826 bytes | in-flight=0
-[esmkey] https://github.githubassets.com/assets/react-core-0c396d1eab868c2f.js new
-[esmeval] https://github.githubassets.com/assets/react-core-0c396d1eab868c2f.js loaded=0 loading=0
-[modprefetch] https://github.githubassets.com/assets/react-core-0c396d1eab868c2f.js found=0 in-flight=0
-[modfetch] t=885304234 https://github.githubassets.com/assets/react-core-0c396d1eab868c2f.js 275566 bytes | in-flight=0
-[esmkey] https://github.githubassets.com/assets/pb-f24056aed715c435.js new
-[esmeval] https://github.githubassets.com/assets/pb-f24056aed715c435.js loaded=0 loading=0
-[modprefetch] https://github.githubassets.com/assets/pb-f24056aed715c435.js found=0 in-flight=0
-[modfetch] t=885304265 https://github.githubassets.com/assets/pb-f24056aed715c435.js 456026 bytes | in-flight=0
-[esmkey] https://github.githubassets.com/assets/core-9d6a36432bb53a7c.js new
-[esmeval] https://github.githubassets.com/assets/core-9d6a36432bb53a7c.js loaded=0 loading=0
-[modprefetch] https://github.githubassets.com/assets/core-9d6a36432bb53a7c.js found=5 in-flight=0
-[modfetch] t=885304312 https://github.githubassets.com/assets/core-9d6a36432bb53a7c.js 432283 bytes | in-flight=0
-[esmeval] https://github.githubassets.com/assets/react-fa5e2e82e6e0ecc0.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/react-dom-c7f52540bb6b77ed.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/react-compiler-runtime-4610bd6d3de9c049.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/react-jsx-runtime-4915cb0f5b3aff04.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/wp-runtime-5a729e03b370f3b9.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/app-runtime-445d965f204dd5cb.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/react-core-0c396d1eab868c2f.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/pb-f24056aed715c435.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/core-9d6a36432bb53a7c.js loaded=0 loading=1
-[esmeval] https://github.githubassets.com/assets/react-fa5e2e82e6e0ecc0.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/react-dom-c7f52540bb6b77ed.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/react-compiler-runtime-4610bd6d3de9c049.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/react-jsx-runtime-4915cb0f5b3aff04.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/wp-runtime-5a729e03b370f3b9.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/app-runtime-445d965f204dd5cb.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/react-core-0c396d1eab868c2f.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/pb-f24056aed715c435.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/core-9d6a36432bb53a7c.js loaded=0 loading=1
-[cedef] #1 live-region-8c8593c2-5ec8-475d-abea-ff5c37a8d5f1 doc=00000244010232C0
-[cedef] #2 include-fragment doc=00000244010232C0
-[cedef] #3 remote-input doc=00000244010232C0
-[cedef] #4 action-list doc=00000244010232C0
-[cedef] #5 action-bar doc=00000244010232C0
-[cedef] #6 details-menu doc=00000244010232C0
-[cedef] #7 anchored-position doc=00000244010232C0
-[cedef] #8 dialog-helper doc=00000244010232C0
-[cedef] #9 focus-group doc=00000244010232C0
-[cedef] #10 scrollable-region doc=00000244010232C0
-[cedef] #11 modal-dialog doc=00000244010232C0
-[cedef] #12 nav-list doc=00000244010232C0
-[cedef] #13 nav-list-group doc=00000244010232C0
-[cedef] #14 segmented-control doc=00000244010232C0
-[cedef] #15 toggle-switch doc=00000244010232C0
-[cedef] #16 tool-tip doc=00000244010232C0
-[  15344.8ms] [gap-jsdom] name=tool-tip#tooltip-4749ca29-d2c5-48d5-901a-0eaf73ee344b.attachShadow area=dom effect="undefined; no shadow DOM"
-[snippet] line=136 col=779 msg=undefined is not a function | pendChild(document.createElement("style")).textContent=this.styles(),e.appendChild(document.createElement("slot"))}b(this,r,"m",h)
-[cedef] #17 x-banner doc=00000244010232C0
-[cedef] #18 auto-complete doc=00000244010232C0
-[cedef] #19 clipboard-copy doc=00000244010232C0
-[cedef] #20 relative-time doc=00000244010232C0
-[cedef] #21 tab-container doc=00000244010232C0
-[cedef] #22 primer-multi-input doc=00000244010232C0
-[cedef] #23 auto-check doc=00000244010232C0
-[cedef] #24 primer-text-field doc=00000244010232C0
-[cedef] #25 primer-text-area doc=00000244010232C0
-[cedef] #26 toggle-switch-input doc=00000244010232C0
-[cedef] #27 action-menu doc=00000244010232C0
-[cedef] #28 live-region doc=00000244010232C0
-[cedef] #29 select-panel doc=00000244010232C0
-[cedef] #30 details-toggle doc=00000244010232C0
-[cedef] #31 tree-view doc=00000244010232C0
-[cedef] #32 tree-view-icon-pair doc=00000244010232C0
-[cedef] #33 tree-view-sub-tree-node doc=00000244010232C0
-[cedef] #34 tree-view-include-fragment doc=00000244010232C0
-[cedef] #35 details-dialog doc=00000244010232C0
-[cedef] #36 file-attachment doc=00000244010232C0
-[cedef] #37 filter-input doc=00000244010232C0
-[cedef] #38 g-emoji doc=00000244010232C0
-[cedef] #39 md-header doc=00000244010232C0
-[cedef] #40 md-bold doc=00000244010232C0
-[cedef] #41 md-italic doc=00000244010232C0
-[cedef] #42 md-quote doc=00000244010232C0
-[cedef] #43 md-code doc=00000244010232C0
-[cedef] #44 md-link doc=00000244010232C0
-[cedef] #45 md-image doc=00000244010232C0
-[cedef] #46 md-unordered-list doc=00000244010232C0
-[cedef] #47 md-ordered-list doc=00000244010232C0
-[cedef] #48 md-task-list doc=00000244010232C0
-[cedef] #49 md-mention doc=00000244010232C0
-[cedef] #50 md-ref doc=00000244010232C0
-[cedef] #51 md-strikethrough doc=00000244010232C0
-[cedef] #52 markdown-toolbar doc=00000244010232C0
-[cedef] #53 task-lists doc=00000244010232C0
-[cedef] #54 text-expander doc=00000244010232C0
-[cedef] #55 typing-effect doc=00000244010232C0
-[cedef] #56 image-crop doc=00000244010232C0
-[cedef] #57 batch-deferred-content doc=00000244010232C0
-[cedef] #58 turbo-frame doc=00000244010232C0
-[cedef] #59 turbo-stream doc=00000244010232C0
-[cedef] #60 turbo-stream-source doc=00000244010232C0
-[cedef] #61 webauthn-get doc=00000244010232C0
-[cedef] #62 sudo-credential-options doc=00000244010232C0
-[cedef] #63 collapsible-sidebar-widget doc=00000244010232C0
-[cedef] #64 sidebar-memex-input doc=00000244010232C0
-[esmkey] https://github.githubassets.com/assets/wu-b53c57368e3176b4.js new
-[esmeval] https://github.githubassets.com/assets/wu-b53c57368e3176b4.js loaded=0 loading=0
-[modstart] https://github.githubassets.com/assets/wu-b53c57368e3176b4.js in-flight=1
-[modcache] store https://github.githubassets.com/assets/wu-b53c57368e3176b4.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\076be797.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/wu-b53c57368e3176b4.js found=0 in-flight=0
-[modprefetch] https://github.githubassets.com/assets/wu-b53c57368e3176b4.js found=0 in-flight=0
-[modfetch] t=885304765 https://github.githubassets.com/assets/wu-b53c57368e3176b4.js 21067 bytes | in-flight=0
-[esmkey] https://github.githubassets.com/assets/chunk-1y-0074d9ed8ad7dbce.js new
-[esmeval] https://github.githubassets.com/assets/chunk-1y-0074d9ed8ad7dbce.js loaded=0 loading=0
-[modstart] https://github.githubassets.com/assets/chunk-1y-0074d9ed8ad7dbce.js in-flight=1
-[modcache] store https://github.githubassets.com/assets/chunk-1y-0074d9ed8ad7dbce.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\51241c54.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/chunk-1y-0074d9ed8ad7dbce.js found=0 in-flight=0
-[modprefetch] https://github.githubassets.com/assets/chunk-1y-0074d9ed8ad7dbce.js found=0 in-flight=0
-[modfetch] t=885304875 https://github.githubassets.com/assets/chunk-1y-0074d9ed8ad7dbce.js 63027 bytes | in-flight=0
-[modeval] https://github.githubassets.com/assets/core-9d6a36432bb53a7c.js 432283 bytes ok in 1156 ms
-[esmeval] https://github.githubassets.com/assets/wp-runtime-5a729e03b370f3b9.js loaded=1 loading=0
-[esmkey] https://github.githubassets.com/assets/marketing-essentials-bfdc6e3303ade6d4.js new
-[esmeval] https://github.githubassets.com/assets/marketing-essentials-bfdc6e3303ade6d4.js loaded=0 loading=0
-[modprefetch] https://github.githubassets.com/assets/marketing-essentials-bfdc6e3303ade6d4.js found=6 in-flight=0
-[modfetch] t=885304906 https://github.githubassets.com/assets/marketing-essentials-bfdc6e3303ade6d4.js 5226 bytes | in-flight=0
-[esmeval] https://github.githubassets.com/assets/wp-runtime-5a729e03b370f3b9.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/marketing-essentials-bfdc6e3303ade6d4.js loaded=0 loading=1
-[esmeval] https://github.githubassets.com/assets/app-runtime-445d965f204dd5cb.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/react-core-0c396d1eab868c2f.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/pb-f24056aed715c435.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/core-9d6a36432bb53a7c.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/wp-runtime-5a729e03b370f3b9.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/marketing-essentials-bfdc6e3303ade6d4.js loaded=0 loading=1
-[esmeval] https://github.githubassets.com/assets/app-runtime-445d965f204dd5cb.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/react-core-0c396d1eab868c2f.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/pb-f24056aed715c435.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/core-9d6a36432bb53a7c.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/app-runtime-445d965f204dd5cb.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/react-core-0c396d1eab868c2f.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/pb-f24056aed715c435.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/core-9d6a36432bb53a7c.js loaded=1 loading=0
-[modeval] https://github.githubassets.com/assets/marketing-essentials-bfdc6e3303ade6d4.js 5226 bytes ok in 0 ms
-[esmkey] https://github.githubassets.com/assets/react-dom-client-35b308126995de85.js new
-[esmeval] https://github.githubassets.com/assets/react-dom-client-35b308126995de85.js loaded=0 loading=0
-[modstart] https://github.githubassets.com/assets/react-dom-client-35b308126995de85.js in-flight=1
-[modcache] store https://github.githubassets.com/assets/react-dom-client-35b308126995de85.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\1f77e9ba.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/react-dom-client-35b308126995de85.js found=0 in-flight=0
-[modprefetch] https://github.githubassets.com/assets/react-dom-client-35b308126995de85.js found=0 in-flight=0
-[modfetch] t=885305156 https://github.githubassets.com/assets/react-dom-client-35b308126995de85.js 204064 bytes | in-flight=0
-[esmeval] https://github.githubassets.com/assets/react-fa5e2e82e6e0ecc0.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/react-dom-c7f52540bb6b77ed.js loaded=1 loading=0
-[esmkey] https://github.githubassets.com/assets/scheduler-58b860b049ca307c.js new
-[esmeval] https://github.githubassets.com/assets/scheduler-58b860b049ca307c.js loaded=0 loading=0
-[modstart] https://github.githubassets.com/assets/scheduler-58b860b049ca307c.js in-flight=1
-[modcache] store https://github.githubassets.com/assets/scheduler-58b860b049ca307c.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\d3239d59.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/scheduler-58b860b049ca307c.js found=0 in-flight=0
-[modprefetch] https://github.githubassets.com/assets/scheduler-58b860b049ca307c.js found=0 in-flight=0
-[modfetch] t=885305265 https://github.githubassets.com/assets/scheduler-58b860b049ca307c.js 4925 bytes | in-flight=0
-[esmeval] https://github.githubassets.com/assets/react-fa5e2e82e6e0ecc0.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/react-dom-c7f52540bb6b77ed.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/scheduler-58b860b049ca307c.js loaded=1 loading=0
-[esmkey] https://github.githubassets.com/assets/react-is-e0b593954b4706d8.js new
-[esmeval] https://github.githubassets.com/assets/react-is-e0b593954b4706d8.js loaded=0 loading=0
-[modstart] https://github.githubassets.com/assets/react-is-e0b593954b4706d8.js in-flight=1
-[modcache] store https://github.githubassets.com/assets/react-is-e0b593954b4706d8.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\0c17487a.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/react-is-e0b593954b4706d8.js found=0 in-flight=0
-[modprefetch] https://github.githubassets.com/assets/react-is-e0b593954b4706d8.js found=0 in-flight=0
-[modfetch] t=885305656 https://github.githubassets.com/assets/react-is-e0b593954b4706d8.js 3257 bytes | in-flight=0
-[esmeval] https://github.githubassets.com/assets/wp-runtime-5a729e03b370f3b9.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/app-runtime-445d965f204dd5cb.js loaded=1 loading=0
-[esmkey] https://github.githubassets.com/assets/primer-react-9ee791437767e925.js new
-[esmeval] https://github.githubassets.com/assets/primer-react-9ee791437767e925.js loaded=0 loading=0
-[modprefetch] https://github.githubassets.com/assets/primer-react-9ee791437767e925.js found=0 in-flight=0
-[modfetch] t=885305656 https://github.githubassets.com/assets/primer-react-9ee791437767e925.js 436302 bytes | in-flight=0
-[esmeval] https://github.githubassets.com/assets/react-core-0c396d1eab868c2f.js loaded=1 loading=0
-[esmkey] https://github.githubassets.com/assets/ncx-6706f20793d34656.js new
-[esmeval] https://github.githubassets.com/assets/ncx-6706f20793d34656.js loaded=0 loading=0
-[modprefetch] https://github.githubassets.com/assets/ncx-6706f20793d34656.js found=0 in-flight=0
-[modfetch] t=885305718 https://github.githubassets.com/assets/ncx-6706f20793d34656.js 26372 bytes | in-flight=0
-[esmkey] https://github.githubassets.com/assets/t7l-8213ea7f1bea9e80.js new
-[esmeval] https://github.githubassets.com/assets/t7l-8213ea7f1bea9e80.js loaded=0 loading=0
-[modprefetch] https://github.githubassets.com/assets/t7l-8213ea7f1bea9e80.js found=0 in-flight=0
-[modfetch] t=885305718 https://github.githubassets.com/assets/t7l-8213ea7f1bea9e80.js 17098 bytes | in-flight=0
-[esmkey] https://github.githubassets.com/assets/4u-239741f82c1b95c5.js new
-[esmeval] https://github.githubassets.com/assets/4u-239741f82c1b95c5.js loaded=0 loading=0
-[modprefetch] https://github.githubassets.com/assets/4u-239741f82c1b95c5.js found=0 in-flight=0
-[modfetch] t=885305718 https://github.githubassets.com/assets/4u-239741f82c1b95c5.js 67333 bytes | in-flight=0
-[esmkey] https://github.githubassets.com/assets/a3-1ee4aa02b48a7f29.js new
-[esmeval] https://github.githubassets.com/assets/a3-1ee4aa02b48a7f29.js loaded=0 loading=0
-[modprefetch] https://github.githubassets.com/assets/a3-1ee4aa02b48a7f29.js found=0 in-flight=0
-[modfetch] t=885305734 https://github.githubassets.com/assets/a3-1ee4aa02b48a7f29.js 69741 bytes | in-flight=0
-[esmkey] https://github.githubassets.com/assets/k0-e993cfed22be4fad.js new
-[esmeval] https://github.githubassets.com/assets/k0-e993cfed22be4fad.js loaded=0 loading=0
-[modprefetch] https://github.githubassets.com/assets/k0-e993cfed22be4fad.js found=0 in-flight=0
-[modfetch] t=885305750 https://github.githubassets.com/assets/k0-e993cfed22be4fad.js 538202 bytes | in-flight=0
-[esmkey] https://github.githubassets.com/assets/97-560ce6c49a1d19d6.js new
-[esmeval] https://github.githubassets.com/assets/97-560ce6c49a1d19d6.js loaded=0 loading=0
-[modprefetch] https://github.githubassets.com/assets/97-560ce6c49a1d19d6.js found=0 in-flight=0
-[modfetch] t=885305781 https://github.githubassets.com/assets/97-560ce6c49a1d19d6.js 100407 bytes | in-flight=0
-[esmkey] https://github.githubassets.com/assets/fz-4625459279202f71.js new
-[esmeval] https://github.githubassets.com/assets/fz-4625459279202f71.js loaded=0 loading=0
-[modprefetch] https://github.githubassets.com/assets/fz-4625459279202f71.js found=0 in-flight=0
-[modfetch] t=885305812 https://github.githubassets.com/assets/fz-4625459279202f71.js 11362 bytes | in-flight=0
-[esmkey] https://github.githubassets.com/assets/23-905aca4afd4b8552.js new
-[esmeval] https://github.githubassets.com/assets/23-905aca4afd4b8552.js loaded=0 loading=0
-[modprefetch] https://github.githubassets.com/assets/23-905aca4afd4b8552.js found=0 in-flight=0
-[modfetch] t=885305812 https://github.githubassets.com/assets/23-905aca4afd4b8552.js 509143 bytes | in-flight=0
-[esmkey] https://github.githubassets.com/assets/b3-0724594d5487f3bb.js new
-[esmeval] https://github.githubassets.com/assets/b3-0724594d5487f3bb.js loaded=0 loading=0
-[modprefetch] https://github.githubassets.com/assets/b3-0724594d5487f3bb.js found=0 in-flight=0
-[modfetch] t=885305859 https://github.githubassets.com/assets/b3-0724594d5487f3bb.js 22945 bytes | in-flight=0
-[esmkey] https://github.githubassets.com/assets/8d-58a3820948740eec.js new
-[esmeval] https://github.githubassets.com/assets/8d-58a3820948740eec.js loaded=0 loading=0
-[modprefetch] https://github.githubassets.com/assets/8d-58a3820948740eec.js found=0 in-flight=0
-[modfetch] t=885305859 https://github.githubassets.com/assets/8d-58a3820948740eec.js 125393 bytes | in-flight=0
-[esmkey] https://github.githubassets.com/assets/rxr-38b355443d709292.js new
-[esmeval] https://github.githubassets.com/assets/rxr-38b355443d709292.js loaded=0 loading=0
-[modprefetch] https://github.githubassets.com/assets/rxr-38b355443d709292.js found=0 in-flight=0
-[modfetch] t=885305875 https://github.githubassets.com/assets/rxr-38b355443d709292.js 3819 bytes | in-flight=0
-[esmkey] https://github.githubassets.com/assets/25-6ba186def1fd5e5f.js new
-[esmeval] https://github.githubassets.com/assets/25-6ba186def1fd5e5f.js loaded=0 loading=0
-[modprefetch] https://github.githubassets.com/assets/25-6ba186def1fd5e5f.js found=0 in-flight=0
-[modfetch] t=885305875 https://github.githubassets.com/assets/25-6ba186def1fd5e5f.js 9694 bytes | in-flight=0
-[esmkey] https://github.githubassets.com/assets/55-2bede70ae6f95a9f.js new
-[esmeval] https://github.githubassets.com/assets/55-2bede70ae6f95a9f.js loaded=0 loading=0
-[modprefetch] https://github.githubassets.com/assets/55-2bede70ae6f95a9f.js found=0 in-flight=0
-[modfetch] t=885305875 https://github.githubassets.com/assets/55-2bede70ae6f95a9f.js 25742 bytes | in-flight=0
-[esmkey] https://github.githubassets.com/assets/1oj-a04f56ba4409bb97.js new
-[esmeval] https://github.githubassets.com/assets/1oj-a04f56ba4409bb97.js loaded=0 loading=0
-[modprefetch] https://github.githubassets.com/assets/1oj-a04f56ba4409bb97.js found=0 in-flight=0
-[modfetch] t=885305875 https://github.githubassets.com/assets/1oj-a04f56ba4409bb97.js 138382 bytes | in-flight=0
-[esmkey] https://github.githubassets.com/assets/9o-1420a5620d01eec0.js new
-[esmeval] https://github.githubassets.com/assets/9o-1420a5620d01eec0.js loaded=0 loading=0
-[modprefetch] https://github.githubassets.com/assets/9o-1420a5620d01eec0.js found=0 in-flight=0
-[modfetch] t=885305875 https://github.githubassets.com/assets/9o-1420a5620d01eec0.js 69829 bytes | in-flight=0
-[esmkey] https://github.githubassets.com/assets/5n-52944159c6652d31.js new
-[esmeval] https://github.githubassets.com/assets/5n-52944159c6652d31.js loaded=0 loading=0
-[modprefetch] https://github.githubassets.com/assets/5n-52944159c6652d31.js found=0 in-flight=0
-[modfetch] t=885305906 https://github.githubassets.com/assets/5n-52944159c6652d31.js 28911 bytes | in-flight=0
-[esmkey] https://github.githubassets.com/assets/wgy-2c95d46fe4dfb244.js new
-[esmeval] https://github.githubassets.com/assets/wgy-2c95d46fe4dfb244.js loaded=0 loading=0
-[modprefetch] https://github.githubassets.com/assets/wgy-2c95d46fe4dfb244.js found=0 in-flight=0
-[modfetch] t=885305906 https://github.githubassets.com/assets/wgy-2c95d46fe4dfb244.js 179451 bytes | in-flight=0
-[esmkey] https://github.githubassets.com/assets/landing-pages-8ee3aeacb1903e49.js new
-[esmeval] https://github.githubassets.com/assets/landing-pages-8ee3aeacb1903e49.js loaded=0 loading=0
-[modprefetch] https://github.githubassets.com/assets/landing-pages-8ee3aeacb1903e49.js found=24 in-flight=0
-[modfetch] t=885305937 https://github.githubassets.com/assets/landing-pages-8ee3aeacb1903e49.js 2425271 bytes | in-flight=0
-[esmeval] https://github.githubassets.com/assets/react-dom-client-35b308126995de85.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/react-is-e0b593954b4706d8.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/wp-runtime-5a729e03b370f3b9.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/app-runtime-445d965f204dd5cb.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/primer-react-9ee791437767e925.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/react-core-0c396d1eab868c2f.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/ncx-6706f20793d34656.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/t7l-8213ea7f1bea9e80.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/4u-239741f82c1b95c5.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/a3-1ee4aa02b48a7f29.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/k0-e993cfed22be4fad.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/97-560ce6c49a1d19d6.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/fz-4625459279202f71.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/23-905aca4afd4b8552.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/b3-0724594d5487f3bb.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/8d-58a3820948740eec.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/rxr-38b355443d709292.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/25-6ba186def1fd5e5f.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/55-2bede70ae6f95a9f.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/1oj-a04f56ba4409bb97.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/9o-1420a5620d01eec0.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/5n-52944159c6652d31.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/wgy-2c95d46fe4dfb244.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/landing-pages-8ee3aeacb1903e49.js loaded=0 loading=1
-[esmeval] https://github.githubassets.com/assets/pb-f24056aed715c435.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/core-9d6a36432bb53a7c.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/react-dom-client-35b308126995de85.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/react-is-e0b593954b4706d8.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/wp-runtime-5a729e03b370f3b9.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/app-runtime-445d965f204dd5cb.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/primer-react-9ee791437767e925.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/react-core-0c396d1eab868c2f.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/ncx-6706f20793d34656.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/t7l-8213ea7f1bea9e80.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/4u-239741f82c1b95c5.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/a3-1ee4aa02b48a7f29.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/k0-e993cfed22be4fad.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/97-560ce6c49a1d19d6.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/fz-4625459279202f71.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/23-905aca4afd4b8552.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/b3-0724594d5487f3bb.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/8d-58a3820948740eec.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/rxr-38b355443d709292.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/25-6ba186def1fd5e5f.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/55-2bede70ae6f95a9f.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/1oj-a04f56ba4409bb97.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/9o-1420a5620d01eec0.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/5n-52944159c6652d31.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/wgy-2c95d46fe4dfb244.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/landing-pages-8ee3aeacb1903e49.js loaded=0 loading=1
-[esmeval] https://github.githubassets.com/assets/pb-f24056aed715c435.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/core-9d6a36432bb53a7c.js loaded=1 loading=0
-[cedef] #65 react-app doc=00000244010232C0
-[esmeval] https://github.githubassets.com/assets/pb-f24056aed715c435.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/core-9d6a36432bb53a7c.js loaded=1 loading=0
-[modeval] https://github.githubassets.com/assets/landing-pages-8ee3aeacb1903e49.js 2425271 bytes ok in 2015 ms
-[modeval] https://github.githubassets.com/assets/global-banner-disable-92a64558879ee38b.js 596 bytes ok in 0 ms
-[snippet] line=136 col=3529 msg=undefined is not a function | n){function r(e,t){return""===t?null:e.getElementById(t)||e.getElementsByName(t)[0]}function i(e){try{return decodeURIComponent(e.
-[  17867.9ms] [con-error] Uncaught (in promise) TypeError: undefined is not a function
-    at r (https://github.githubassets.com/assets/core-9d6a36432bb53a7c.js:136:3529)
-    at id (https://github.githubassets.com/assets/core-9d6a36432bb53a7c.js:27:35358)
-    at <anonymous> (https://github.githubassets.com/assets/core-9d6a36432bb53a7c.js:27:35892)
-[esmkey] https://github.githubassets.com/assets/chunk-lazy-element-select-panel-048b5f95eca65b4a.js new
-[esmeval] https://github.githubassets.com/assets/chunk-lazy-element-select-panel-048b5f95eca65b4a.js loaded=0 loading=0
-[modstart] https://github.githubassets.com/assets/chunk-lazy-element-select-panel-048b5f95eca65b4a.js in-flight=1
-[modcache] store https://github.githubassets.com/assets/chunk-lazy-element-select-panel-048b5f95eca65b4a.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\1333690e.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/chunk-lazy-element-select-panel-048b5f95eca65b4a.js found=0 in-flight=0
-[modprefetch] https://github.githubassets.com/assets/chunk-lazy-element-select-panel-048b5f95eca65b4a.js found=0 in-flight=0
-[modfetch] t=885307156 https://github.githubassets.com/assets/chunk-lazy-element-select-panel-048b5f95eca65b4a.js 16138 bytes | in-flight=0
-[esmkey] https://github.githubassets.com/assets/chunk-lazy-element-toggle-switch-813ece539250acd5.js new
-[esmeval] https://github.githubassets.com/assets/chunk-lazy-element-toggle-switch-813ece539250acd5.js loaded=0 loading=0
-[modstart] https://github.githubassets.com/assets/chunk-lazy-element-toggle-switch-813ece539250acd5.js in-flight=1
-[modcache] store https://github.githubassets.com/assets/chunk-lazy-element-toggle-switch-813ece539250acd5.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\fb5a656a.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/chunk-lazy-element-toggle-switch-813ece539250acd5.js found=0 in-flight=0
-[modprefetch] https://github.githubassets.com/assets/chunk-lazy-element-toggle-switch-813ece539250acd5.js found=0 in-flight=0
-[modfetch] t=885307250 https://github.githubassets.com/assets/chunk-lazy-element-toggle-switch-813ece539250acd5.js 880 bytes | in-flight=0
-[esmkey] https://github.githubassets.com/assets/chunk-lazy-element-cookie-consent-link-8c251bfe27bbbbfc.js new
-[esmeval] https://github.githubassets.com/assets/chunk-lazy-element-cookie-consent-link-8c251bfe27bbbbfc.js loaded=0 loading=0
-[modstart] https://github.githubassets.com/assets/chunk-lazy-element-cookie-consent-link-8c251bfe27bbbbfc.js in-flight=1
-[modcache] store https://github.githubassets.com/assets/chunk-lazy-element-cookie-consent-link-8c251bfe27bbbbfc.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\573266d9.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/chunk-lazy-element-cookie-consent-link-8c251bfe27bbbbfc.js found=0 in-flight=0
-[modprefetch] https://github.githubassets.com/assets/chunk-lazy-element-cookie-consent-link-8c251bfe27bbbbfc.js found=0 in-flight=0
-[modfetch] t=885307359 https://github.githubassets.com/assets/chunk-lazy-element-cookie-consent-link-8c251bfe27bbbbfc.js 31535 bytes | in-flight=0
-[esmkey] https://github.githubassets.com/assets/chunk-lazy-element-fullstory-capture-1018158c84f1b81c.js new
-[esmeval] https://github.githubassets.com/assets/chunk-lazy-element-fullstory-capture-1018158c84f1b81c.js loaded=0 loading=0
-[modstart] https://github.githubassets.com/assets/chunk-lazy-element-fullstory-capture-1018158c84f1b81c.js in-flight=1
-[modcache] store https://github.githubassets.com/assets/chunk-lazy-element-fullstory-capture-1018158c84f1b81c.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\841900c2.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/chunk-lazy-element-fullstory-capture-1018158c84f1b81c.js found=0 in-flight=0
-[modprefetch] https://github.githubassets.com/assets/chunk-lazy-element-fullstory-capture-1018158c84f1b81c.js found=0 in-flight=0
-[modfetch] t=885307453 https://github.githubassets.com/assets/chunk-lazy-element-fullstory-capture-1018158c84f1b81c.js 38860 bytes | in-flight=0
-[esmkey] https://github.githubassets.com/assets/chunk-lazy-element-ghcc-consent-eb69adcb4cf60e6f.js new
-[esmeval] https://github.githubassets.com/assets/chunk-lazy-element-ghcc-consent-eb69adcb4cf60e6f.js loaded=0 loading=0
-[modstart] https://github.githubassets.com/assets/chunk-lazy-element-ghcc-consent-eb69adcb4cf60e6f.js in-flight=1
-[modcache] store https://github.githubassets.com/assets/chunk-lazy-element-ghcc-consent-eb69adcb4cf60e6f.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\c554efbf.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/chunk-lazy-element-ghcc-consent-eb69adcb4cf60e6f.js found=0 in-flight=0
-[modprefetch] https://github.githubassets.com/assets/chunk-lazy-element-ghcc-consent-eb69adcb4cf60e6f.js found=0 in-flight=0
-[modfetch] t=885307562 https://github.githubassets.com/assets/chunk-lazy-element-ghcc-consent-eb69adcb4cf60e6f.js 31826 bytes | in-flight=0
-[esmkey] https://github.githubassets.com/assets/chunk-lazy-element-webauthn-get-d00a096379455b3b.js new
-[esmeval] https://github.githubassets.com/assets/chunk-lazy-element-webauthn-get-d00a096379455b3b.js loaded=0 loading=0
-[modstart] https://github.githubassets.com/assets/chunk-lazy-element-webauthn-get-d00a096379455b3b.js in-flight=1
-[modcache] store https://github.githubassets.com/assets/chunk-lazy-element-webauthn-get-d00a096379455b3b.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\282cf088.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/chunk-lazy-element-webauthn-get-d00a096379455b3b.js found=0 in-flight=0
-[modprefetch] https://github.githubassets.com/assets/chunk-lazy-element-webauthn-get-d00a096379455b3b.js found=0 in-flight=0
-[modfetch] t=885307656 https://github.githubassets.com/assets/chunk-lazy-element-webauthn-get-d00a096379455b3b.js 186 bytes | in-flight=0
-[esmkey] https://github.githubassets.com/assets/om-cc69bdd2856387a1.js new
-[esmeval] https://github.githubassets.com/assets/om-cc69bdd2856387a1.js loaded=0 loading=0
-[modstart] https://github.githubassets.com/assets/om-cc69bdd2856387a1.js in-flight=1
-[modcache] store https://github.githubassets.com/assets/om-cc69bdd2856387a1.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\fde90ba5.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/om-cc69bdd2856387a1.js found=0 in-flight=0
-[modprefetch] https://github.githubassets.com/assets/om-cc69bdd2856387a1.js found=0 in-flight=0
-[modfetch] t=885307781 https://github.githubassets.com/assets/om-cc69bdd2856387a1.js 19717 bytes | in-flight=0
-[  18733.1ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/kq9.fe1d3ed6827ca69b.module.css
-[  18734.1ms] [cache] http miss url=https://github.githubassets.com/assets/kq9.fe1d3ed6827ca69b.module.css
-[esmkey] https://github.githubassets.com/assets/chunk-lazy-react-partial-app-install-banner-partial-6d2a3ed004f02acf.js new
-[esmeval] https://github.githubassets.com/assets/chunk-lazy-react-partial-app-install-banner-partial-6d2a3ed004f02acf.js loaded=0 loading=0
-[modstart] https://github.githubassets.com/assets/chunk-lazy-react-partial-app-install-banner-partial-6d2a3ed004f02acf.js in-flight=1
-[modcache] store https://github.githubassets.com/assets/chunk-lazy-react-partial-app-install-banner-partial-6d2a3ed004f02acf.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\35049495.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/chunk-lazy-react-partial-app-install-banner-partial-6d2a3ed004f02acf.js found=0 in-flight=0
-[modprefetch] https://github.githubassets.com/assets/chunk-lazy-react-partial-app-install-banner-partial-6d2a3ed004f02acf.js found=0 in-flight=0
-[modfetch] t=885307906 https://github.githubassets.com/assets/chunk-lazy-react-partial-app-install-banner-partial-6d2a3ed004f02acf.js 432 bytes | in-flight=0
-[esmeval] https://github.githubassets.com/assets/react-dom-client-35b308126995de85.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/react-is-e0b593954b4706d8.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/react-dom-client-35b308126995de85.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/react-is-e0b593954b4706d8.js loaded=1 loading=0
-[esmkey] https://github.githubassets.com/assets/36-446ba8f1d834f9f4.js new
-[esmeval] https://github.githubassets.com/assets/36-446ba8f1d834f9f4.js loaded=0 loading=0
-[modstart] https://github.githubassets.com/assets/36-446ba8f1d834f9f4.js in-flight=1
-[modcache] store https://github.githubassets.com/assets/36-446ba8f1d834f9f4.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\c644cf68.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/36-446ba8f1d834f9f4.js found=0 in-flight=0
-[modprefetch] https://github.githubassets.com/assets/36-446ba8f1d834f9f4.js found=0 in-flight=0
-[modfetch] t=885308312 https://github.githubassets.com/assets/36-446ba8f1d834f9f4.js 45550 bytes | in-flight=0
-[  19273.6ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/u2l.0c500f555cd81ce4.module.css
-[  19274.4ms] [cache] http miss url=https://github.githubassets.com/assets/u2l.0c500f555cd81ce4.module.css
-[esmkey] https://github.githubassets.com/assets/chunk-lazy-react-partial-keyboard-shortcuts-dialog-8d30853a5440e65f.js new
-[esmeval] https://github.githubassets.com/assets/chunk-lazy-react-partial-keyboard-shortcuts-dialog-8d30853a5440e65f.js loaded=0 loading=0
-[modstart] https://github.githubassets.com/assets/chunk-lazy-react-partial-keyboard-shortcuts-dialog-8d30853a5440e65f.js in-flight=1
-[modcache] store https://github.githubassets.com/assets/chunk-lazy-react-partial-keyboard-shortcuts-dialog-8d30853a5440e65f.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\64078009.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/chunk-lazy-react-partial-keyboard-shortcuts-dialog-8d30853a5440e65f.js found=0 in-flight=0
-[modprefetch] https://github.githubassets.com/assets/chunk-lazy-react-partial-keyboard-shortcuts-dialog-8d30853a5440e65f.js found=0 in-flight=0
-[modfetch] t=885308828 https://github.githubassets.com/assets/chunk-lazy-react-partial-keyboard-shortcuts-dialog-8d30853a5440e65f.js 16549 bytes | in-flight=0
-[esmeval] https://github.githubassets.com/assets/react-dom-client-35b308126995de85.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/react-is-e0b593954b4706d8.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/react-dom-client-35b308126995de85.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/react-is-e0b593954b4706d8.js loaded=1 loading=0
-[esmkey] https://github.githubassets.com/assets/aul-64c583613290811e.js new
-[esmeval] https://github.githubassets.com/assets/aul-64c583613290811e.js loaded=0 loading=0
-[modstart] https://github.githubassets.com/assets/aul-64c583613290811e.js in-flight=1
-[modcache] store https://github.githubassets.com/assets/aul-64c583613290811e.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\f0426bc4.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/aul-64c583613290811e.js found=0 in-flight=0
-[modprefetch] https://github.githubassets.com/assets/aul-64c583613290811e.js found=0 in-flight=0
-[modfetch] t=885308953 https://github.githubassets.com/assets/aul-64c583613290811e.js 27044 bytes | in-flight=0
-[  19898.1ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/7gn.7507d38d20e4dfb2.module.css
-[  19900.2ms] [cache] http miss url=https://github.githubassets.com/assets/7gn.7507d38d20e4dfb2.module.css
-[esmkey] https://github.githubassets.com/assets/chunk-lazy-react-partial-marketing-footer-7d3992ec19cb0ef4.js new
-[esmeval] https://github.githubassets.com/assets/chunk-lazy-react-partial-marketing-footer-7d3992ec19cb0ef4.js loaded=0 loading=0
-[modstart] https://github.githubassets.com/assets/chunk-lazy-react-partial-marketing-footer-7d3992ec19cb0ef4.js in-flight=1
-[modcache] store https://github.githubassets.com/assets/chunk-lazy-react-partial-marketing-footer-7d3992ec19cb0ef4.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\8000fa8a.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/chunk-lazy-react-partial-marketing-footer-7d3992ec19cb0ef4.js found=0 in-flight=0
-[modprefetch] https://github.githubassets.com/assets/chunk-lazy-react-partial-marketing-footer-7d3992ec19cb0ef4.js found=0 in-flight=0
-[modfetch] t=885309062 https://github.githubassets.com/assets/chunk-lazy-react-partial-marketing-footer-7d3992ec19cb0ef4.js 1166 bytes | in-flight=0
-[esmeval] https://github.githubassets.com/assets/react-dom-client-35b308126995de85.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/react-dom-client-35b308126995de85.js loaded=1 loading=0
-[esmkey] https://github.githubassets.com/assets/hw7-05872b6768bb61c9.js new
-[esmeval] https://github.githubassets.com/assets/hw7-05872b6768bb61c9.js loaded=0 loading=0
-[modstart] https://github.githubassets.com/assets/hw7-05872b6768bb61c9.js in-flight=1
-[modcache] store https://github.githubassets.com/assets/hw7-05872b6768bb61c9.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\b527818f.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/hw7-05872b6768bb61c9.js found=0 in-flight=0
-[modprefetch] https://github.githubassets.com/assets/hw7-05872b6768bb61c9.js found=0 in-flight=0
-[modfetch] t=885309171 https://github.githubassets.com/assets/hw7-05872b6768bb61c9.js 36480 bytes | in-flight=0
-[  20122.9ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/xy4.a8f51d907bf04870.module.css
-[  20128.5ms] [cache] http miss url=https://github.githubassets.com/assets/xy4.a8f51d907bf04870.module.css
-[esmkey] https://github.githubassets.com/assets/chunk-lazy-react-partial-marketing-global-banner-f6296c85bea7223a.js new
-[esmeval] https://github.githubassets.com/assets/chunk-lazy-react-partial-marketing-global-banner-f6296c85bea7223a.js loaded=0 loading=0
-[modstart] https://github.githubassets.com/assets/chunk-lazy-react-partial-marketing-global-banner-f6296c85bea7223a.js in-flight=1
-[modcache] store https://github.githubassets.com/assets/chunk-lazy-react-partial-marketing-global-banner-f6296c85bea7223a.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\c3944461.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/chunk-lazy-react-partial-marketing-global-banner-f6296c85bea7223a.js found=0 in-flight=0
-[modprefetch] https://github.githubassets.com/assets/chunk-lazy-react-partial-marketing-global-banner-f6296c85bea7223a.js found=0 in-flight=0
-[modfetch] t=885309296 https://github.githubassets.com/assets/chunk-lazy-react-partial-marketing-global-banner-f6296c85bea7223a.js 1254 bytes | in-flight=0
-[esmeval] https://github.githubassets.com/assets/react-dom-client-35b308126995de85.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/react-dom-client-35b308126995de85.js loaded=1 loading=0
-[esmkey] https://github.githubassets.com/assets/0dc-53ca0efddcf3617a.js new
-[esmeval] https://github.githubassets.com/assets/0dc-53ca0efddcf3617a.js loaded=0 loading=0
-[modstart] https://github.githubassets.com/assets/0dc-53ca0efddcf3617a.js in-flight=1
-[modcache] store https://github.githubassets.com/assets/0dc-53ca0efddcf3617a.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\bd828d14.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/0dc-53ca0efddcf3617a.js found=0 in-flight=0
-[modprefetch] https://github.githubassets.com/assets/0dc-53ca0efddcf3617a.js found=0 in-flight=0
-[modfetch] t=885309390 https://github.githubassets.com/assets/0dc-53ca0efddcf3617a.js 25966 bytes | in-flight=0
-[esmkey] https://github.githubassets.com/assets/36d-ee8504f7a9e52211.js new
-[esmeval] https://github.githubassets.com/assets/36d-ee8504f7a9e52211.js loaded=0 loading=0
-[modstart] https://github.githubassets.com/assets/36d-ee8504f7a9e52211.js in-flight=1
-[modcache] store https://github.githubassets.com/assets/36d-ee8504f7a9e52211.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\6a348808.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/36d-ee8504f7a9e52211.js found=0 in-flight=0
-[modprefetch] https://github.githubassets.com/assets/36d-ee8504f7a9e52211.js found=0 in-flight=0
-[modfetch] t=885309500 https://github.githubassets.com/assets/36d-ee8504f7a9e52211.js 16791 bytes | in-flight=0
-[esmkey] https://github.githubassets.com/assets/ix9-b8eb6e6a49d28fbc.js new
-[esmeval] https://github.githubassets.com/assets/ix9-b8eb6e6a49d28fbc.js loaded=0 loading=0
-[modstart] https://github.githubassets.com/assets/ix9-b8eb6e6a49d28fbc.js in-flight=1
-[modcache] store https://github.githubassets.com/assets/ix9-b8eb6e6a49d28fbc.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\478df360.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/ix9-b8eb6e6a49d28fbc.js found=0 in-flight=0
-[modprefetch] https://github.githubassets.com/assets/ix9-b8eb6e6a49d28fbc.js found=0 in-flight=0
-[modfetch] t=885309593 https://github.githubassets.com/assets/ix9-b8eb6e6a49d28fbc.js 24251 bytes | in-flight=0
-[  20597.9ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/jdp.e5850a4dc814890e.module.css
-[  20598.9ms] [cache] http miss url=https://github.githubassets.com/assets/jdp.e5850a4dc814890e.module.css
-[esmkey] https://github.githubassets.com/assets/chunk-lazy-react-partial-marketing-header-e420f59073ebceab.js new
-[esmeval] https://github.githubassets.com/assets/chunk-lazy-react-partial-marketing-header-e420f59073ebceab.js loaded=0 loading=0
-[modstart] https://github.githubassets.com/assets/chunk-lazy-react-partial-marketing-header-e420f59073ebceab.js in-flight=1
-[modcache] store https://github.githubassets.com/assets/chunk-lazy-react-partial-marketing-header-e420f59073ebceab.js -> C:\Users\linswin\AppData\Roaming\Agave\module-cache\4b512175.mjs (FAILED, err=5)
-[modprefetch] https://github.githubassets.com/assets/chunk-lazy-react-partial-marketing-header-e420f59073ebceab.js found=0 in-flight=0
-[modprefetch] https://github.githubassets.com/assets/chunk-lazy-react-partial-marketing-header-e420f59073ebceab.js found=0 in-flight=0
-[modfetch] t=885309781 https://github.githubassets.com/assets/chunk-lazy-react-partial-marketing-header-e420f59073ebceab.js 2067 bytes | in-flight=0
-[esmeval] https://github.githubassets.com/assets/react-dom-client-35b308126995de85.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/react-is-e0b593954b4706d8.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/react-dom-client-35b308126995de85.js loaded=1 loading=0
-[esmeval] https://github.githubassets.com/assets/react-is-e0b593954b4706d8.js loaded=1 loading=0
-[cedef] #66 select-panel-experimental doc=00000244010232C0
-[cedef] #67 toggle-switch doc=00000244010232C0
-[cedef] DUP toggle-switch (rejected)
-  [2mat[0m define [2m([36m[2magave://[0m[36mpage.js[0m[2m:[0m[33m342[0m[2m:[33m18[0m[2m)[0m
-  [2mat[0m <anonymous> [2m([36m[2mhttps://github.githubassets.com/assets/[0m[36mpb-f24056aed715c435.js[0m[2m:[0m[33m136[0m[2m:[33m145516[0m[2m)[0m
-  [2mat[0m new C [2m([36m[2mhttps://github.githubassets.com/assets/[0m[36mpb-f24056aed715c435.js[0m[2m:[0m[33m136[0m[2m:[33m145433[0m[2m)[0m
-  [2mat[0m <anonymous> [2m([36m[2mhttps://github.githubassets.com/assets/[0m[36mpb-f24056aed715c435.js[0m[2m:[0m[33m136[0m[2m:[33m146934[0m[2m)[0m
-  [2mat[0m Cg [2m([36m[2mhttps://github.githubassets.com/assets/[0m[36mpb-f24056aed715c435.js[0m[2m:[0m[33m364[0m[2m:[33m10171[0m[2m)[0m
-  [2mat[0m aAi [2m([36m[2mhttps://github.githubassets.com/assets/[0m[36mchunk-lazy-element-toggle-switch-813ece539250acd5.js[0m[2m:[0m[33m2[0m[2m:[33m622[0m[2m)[0m
-  [2mat[0m n [2m([36m[2mhttps://github.githubassets.com/assets/[0m[36mwp-runtime-5a729e03b370f3b9.js[0m[2m:[0m[33m2[0m[2m:[33m153[0m[2m)[0m
-[cedef] #68 cookie-consent-link doc=00000244010232C0
-[cedef] #69 fullstory-capture doc=00000244010232C0
-[cedef] #70 ghcc-consent doc=00000244010232C0
-[  20722.7ms] [con-error] Uncaught (in promise) NotSupportedError: the name "toggle-switch" has already been used
-    at domError (agave://page.js:320:21)
-    at define (agave://page.js:343:19)
-    at <anonymous> (https://github.githubassets.com/assets/pb-f24056aed715c435.js:136:145516)
-    at new C (https://github.githubassets.com/assets/pb-f24056aed715c435.js:136:145433)
-    at <anonymous> (https://github.githubassets.com/assets/pb-f24056aed715c435.js:136:146934)
-    at Cg (https://github.githubassets.com/assets/pb-f24056aed715c435.js:364:10171)
-    at aAi (https://github.githubassets.com/assets/chunk-lazy-element-toggle-switch-813ece539250acd5.js:2:622)
-    at n (https://github.githubassets.com/assets/wp-runtime-5a729e03b370f3b9.js:2:153)
-[  20868.1ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/tile-gradient-1-67516fb57f624345.webp
-[  20869.1ms] [cache] http miss url=https://github.githubassets.com/assets/tile-gradient-1-67516fb57f624345.webp
-[  20870.8ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/tile-gradient-2-bd0a28f700770812.webp
-[  20871.9ms] [cache] http miss url=https://github.githubassets.com/assets/tile-gradient-2-bd0a28f700770812.webp
-[  21057.4ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/tile-gradient-2-032af4e10b4f5dad.webp
-[  21058.3ms] [cache] http miss url=https://github.githubassets.com/assets/tile-gradient-2-032af4e10b4f5dad.webp
-[  21061.3ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/tile-gradient-1-655dba6cdcef3c96.webp
-[  21062.1ms] [cache] http miss url=https://github.githubassets.com/assets/tile-gradient-1-655dba6cdcef3c96.webp
-[  21233.7ms] [cache] img data url=https://github.githubassets.com/assets/copilot-e2b89335a66dba00.png bytes=16384 all=0 sizeAvail=1 null=0
-[  21244.9ms] [cache] img notify url=https://github.githubassets.com/assets/copilot-e2b89335a66dba00.png observers=2 bytes=16384 all=0
-[  21245.2ms] [cache] img data url=https://github.githubassets.com/assets/platform-dark-ac89fbf373737ed3.png bytes=16384 all=0 sizeAvail=1 null=0
-[  21245.5ms] [cache] img notify url=https://github.githubassets.com/assets/platform-dark-ac89fbf373737ed3.png observers=2 bytes=16384 all=0
-[  21245.9ms] [cache] img data url=https://github.githubassets.com/assets/platform-dark-ac89fbf373737ed3.png bytes=25995 all=0 sizeAvail=1 null=0
-[  21246.1ms] [cache] img notify url=https://github.githubassets.com/assets/platform-dark-ac89fbf373737ed3.png observers=2 bytes=25995 all=0
-[  21246.9ms] [cache] img data url=https://github.githubassets.com/assets/platform-dark-ac89fbf373737ed3.png bytes=25995 all=1 sizeAvail=1 null=0
-[  21247.1ms] [cache] img notify url=https://github.githubassets.com/assets/platform-dark-ac89fbf373737ed3.png observers=2 bytes=25995 all=0
-[  21247.4ms] [cache] img data url=https://github.githubassets.com/assets/copilot-dark-2b28403b6080e898.png bytes=16384 all=0 sizeAvail=1 null=0
-[  21247.7ms] [cache] img notify url=https://github.githubassets.com/assets/copilot-dark-2b28403b6080e898.png observers=2 bytes=16384 all=0
-[  21247.9ms] [cache] img data url=https://github.githubassets.com/assets/copilot-e2b89335a66dba00.png bytes=32768 all=0 sizeAvail=1 null=0
-[  21248.2ms] [cache] img notify url=https://github.githubassets.com/assets/copilot-e2b89335a66dba00.png observers=2 bytes=32768 all=0
-[  21248.4ms] [cache] img data url=https://github.githubassets.com/assets/copilot-dark-2b28403b6080e898.png bytes=25246 all=0 sizeAvail=1 null=0
-[  21248.6ms] [cache] img notify url=https://github.githubassets.com/assets/copilot-dark-2b28403b6080e898.png observers=2 bytes=25246 all=0
-[  21248.9ms] [cache] img data url=https://github.githubassets.com/assets/copilot-e2b89335a66dba00.png bytes=33776 all=0 sizeAvail=1 null=0
-[  21249.1ms] [cache] img notify url=https://github.githubassets.com/assets/copilot-e2b89335a66dba00.png observers=2 bytes=33776 all=0
-[  21249.7ms] [cache] img data url=https://github.githubassets.com/assets/copilot-dark-2b28403b6080e898.png bytes=25246 all=1 sizeAvail=1 null=0
-[  21249.9ms] [cache] img notify url=https://github.githubassets.com/assets/copilot-dark-2b28403b6080e898.png observers=2 bytes=25246 all=0
-[  21250.2ms] [cache] img data url=https://github.githubassets.com/assets/platform-4ce65ae0bf273ce2.png bytes=16384 all=0 sizeAvail=1 null=0
-[  21250.4ms] [cache] img notify url=https://github.githubassets.com/assets/platform-4ce65ae0bf273ce2.png observers=2 bytes=16384 all=0
-[  21251.0ms] [cache] img data url=https://github.githubassets.com/assets/copilot-e2b89335a66dba00.png bytes=33776 all=1 sizeAvail=1 null=0
-[  21251.2ms] [cache] img notify url=https://github.githubassets.com/assets/copilot-e2b89335a66dba00.png observers=2 bytes=33776 all=0
-[  21251.5ms] [cache] img data url=https://github.githubassets.com/assets/platform-4ce65ae0bf273ce2.png bytes=26674 all=0 sizeAvail=1 null=0
-[  21251.9ms] [cache] img notify url=https://github.githubassets.com/assets/platform-4ce65ae0bf273ce2.png observers=2 bytes=26674 all=0
-[  21252.8ms] [cache] img data url=https://github.githubassets.com/assets/platform-4ce65ae0bf273ce2.png bytes=26674 all=1 sizeAvail=1 null=0
-[  21253.2ms] [cache] img notify url=https://github.githubassets.com/assets/platform-4ce65ae0bf273ce2.png observers=2 bytes=26674 all=0
-[  21257.4ms] [cache] img data url=https://github.githubassets.com/assets/changelog-dark-b1c25ae971bd641b.png bytes=16384 all=0 sizeAvail=1 null=0
-[  21257.7ms] [cache] img notify url=https://github.githubassets.com/assets/changelog-dark-b1c25ae971bd641b.png observers=2 bytes=16384 all=0
-[  21258.0ms] [cache] img data url=https://github.githubassets.com/assets/changelog-fd687bff072883b0.png bytes=16384 all=0 sizeAvail=1 null=0
-[  21258.2ms] [cache] img notify url=https://github.githubassets.com/assets/changelog-fd687bff072883b0.png observers=2 bytes=16384 all=0
-[  21258.5ms] [cache] img data url=https://github.githubassets.com/assets/changelog-dark-b1c25ae971bd641b.png bytes=32768 all=0 sizeAvail=1 null=0
-[  21258.7ms] [cache] img notify url=https://github.githubassets.com/assets/changelog-dark-b1c25ae971bd641b.png observers=2 bytes=32768 all=0
-[  21259.1ms] [cache] img data url=https://github.githubassets.com/assets/changelog-fd687bff072883b0.png bytes=32768 all=0 sizeAvail=1 null=0
-[  21259.4ms] [cache] img notify url=https://github.githubassets.com/assets/changelog-fd687bff072883b0.png observers=2 bytes=32768 all=0
-[  21259.6ms] [cache] img data url=https://github.githubassets.com/assets/changelog-dark-b1c25ae971bd641b.png bytes=49152 all=0 sizeAvail=1 null=0
-[  21259.9ms] [cache] img notify url=https://github.githubassets.com/assets/changelog-dark-b1c25ae971bd641b.png observers=2 bytes=49152 all=0
-[  21260.2ms] [cache] img data url=https://github.githubassets.com/assets/changelog-dark-b1c25ae971bd641b.png bytes=62851 all=0 sizeAvail=1 null=0
-[  21260.5ms] [cache] img notify url=https://github.githubassets.com/assets/changelog-dark-b1c25ae971bd641b.png observers=2 bytes=62851 all=0
-[  21260.8ms] [cache] img data url=https://github.githubassets.com/assets/changelog-fd687bff072883b0.png bytes=49152 all=0 sizeAvail=1 null=0
-[  21261.0ms] [cache] img notify url=https://github.githubassets.com/assets/changelog-fd687bff072883b0.png observers=2 bytes=49152 all=0
-[  21261.6ms] [cache] img data url=https://github.githubassets.com/assets/changelog-dark-b1c25ae971bd641b.png bytes=62851 all=1 sizeAvail=1 null=0
-[  21261.8ms] [cache] img notify url=https://github.githubassets.com/assets/changelog-dark-b1c25ae971bd641b.png observers=2 bytes=62851 all=0
-[  21262.1ms] [cache] img data url=https://github.githubassets.com/assets/changelog-fd687bff072883b0.png bytes=56292 all=0 sizeAvail=1 null=0
-[  21262.3ms] [cache] img notify url=https://github.githubassets.com/assets/changelog-fd687bff072883b0.png observers=2 bytes=56292 all=0
-[  21262.9ms] [cache] img data url=https://github.githubassets.com/assets/changelog-fd687bff072883b0.png bytes=56292 all=1 sizeAvail=1 null=0
-[  21263.1ms] [cache] img notify url=https://github.githubassets.com/assets/changelog-fd687bff072883b0.png observers=2 bytes=56292 all=0
-[  21263.8ms] [cache] img data url=https://github.githubassets.com/assets/universe-a98cd54821b27569.png bytes=16384 all=0 sizeAvail=1 null=0
-[  21264.1ms] [cache] img notify url=https://github.githubassets.com/assets/universe-a98cd54821b27569.png observers=4 bytes=16384 all=0
-[  21264.3ms] [cache] img data url=https://github.githubassets.com/assets/universe-a98cd54821b27569.png bytes=29704 all=0 sizeAvail=1 null=0
-[  21264.5ms] [cache] img notify url=https://github.githubassets.com/assets/universe-a98cd54821b27569.png observers=4 bytes=29704 all=0
-[  21265.1ms] [cache] img data url=https://github.githubassets.com/assets/universe-a98cd54821b27569.png bytes=29704 all=1 sizeAvail=1 null=0
-[  21265.3ms] [cache] img notify url=https://github.githubassets.com/assets/universe-a98cd54821b27569.png observers=4 bytes=29704 all=0
-[  21265.9ms] [cache] img data url=https://github.githubassets.com/assets/features-platform-1-light-d1af443446caafe7.webp bytes=16384 all=0 sizeAvail=1 null=0
-[  21266.1ms] [cache] img notify url=https://github.githubassets.com/assets/features-platform-1-light-d1af443446caafe7.webp observers=2 bytes=16384 all=0
-[  21266.4ms] [cache] img data url=https://github.githubassets.com/assets/features-platform-1-light-d1af443446caafe7.webp bytes=32768 all=0 sizeAvail=1 null=0
-[  21266.6ms] [cache] img notify url=https://github.githubassets.com/assets/features-platform-1-light-d1af443446caafe7.webp observers=2 bytes=32768 all=0
-[  21266.8ms] [cache] img data url=https://github.githubassets.com/assets/features-platform-1-light-d1af443446caafe7.webp bytes=48278 all=0 sizeAvail=1 null=0
-[  21267.0ms] [cache] img notify url=https://github.githubassets.com/assets/features-platform-1-light-d1af443446caafe7.webp observers=2 bytes=48278 all=0
-[  21267.7ms] [cache] img data url=https://github.githubassets.com/assets/features-platform-1-light-d1af443446caafe7.webp bytes=48278 all=1 sizeAvail=1 null=0
-[  21268.0ms] [cache] img notify url=https://github.githubassets.com/assets/features-platform-1-light-d1af443446caafe7.webp observers=2 bytes=48278 all=0
-[  21268.6ms] [cache] img data url=https://github.githubassets.com/assets/features-platform-2-light-deba569ff3c98363.webp bytes=16384 all=0 sizeAvail=1 null=0
-[  21268.8ms] [cache] img notify url=https://github.githubassets.com/assets/features-platform-2-light-deba569ff3c98363.webp observers=2 bytes=16384 all=0
-[  21269.2ms] [cache] img data url=https://github.githubassets.com/assets/features-platform-2-light-deba569ff3c98363.webp bytes=32768 all=0 sizeAvail=1 null=0
-[  21269.5ms] [cache] img notify url=https://github.githubassets.com/assets/features-platform-2-light-deba569ff3c98363.webp observers=2 bytes=32768 all=0
-[  21269.8ms] [cache] img data url=https://github.githubassets.com/assets/features-platform-2-light-deba569ff3c98363.webp bytes=49152 all=0 sizeAvail=1 null=0
-[  21270.0ms] [cache] img notify url=https://github.githubassets.com/assets/features-platform-2-light-deba569ff3c98363.webp observers=2 bytes=49152 all=0
-[  21270.3ms] [cache] img data url=https://github.githubassets.com/assets/features-platform-2-light-deba569ff3c98363.webp bytes=51862 all=0 sizeAvail=1 null=0
-[  21270.7ms] [cache] img notify url=https://github.githubassets.com/assets/features-platform-2-light-deba569ff3c98363.webp observers=2 bytes=51862 all=0
-[  21272.4ms] [cache] img data url=https://github.githubassets.com/assets/features-platform-2-light-deba569ff3c98363.webp bytes=51862 all=1 sizeAvail=1 null=0
-[  21272.6ms] [cache] img notify url=https://github.githubassets.com/assets/features-platform-2-light-deba569ff3c98363.webp observers=2 bytes=51862 all=0
-[  21272.9ms] [cache] img data url=https://github.githubassets.com/assets/features-ways-5-light-51976df09d6ae707.webp bytes=13158 all=0 sizeAvail=1 null=0
-[  21273.1ms] [cache] img notify url=https://github.githubassets.com/assets/features-ways-5-light-51976df09d6ae707.webp observers=2 bytes=13158 all=0
-[  21273.7ms] [cache] img data url=https://github.githubassets.com/assets/features-ways-5-light-51976df09d6ae707.webp bytes=13158 all=1 sizeAvail=1 null=0
-[  21274.0ms] [cache] img notify url=https://github.githubassets.com/assets/features-ways-5-light-51976df09d6ae707.webp observers=2 bytes=13158 all=0
-[  21274.9ms] [cache] img data url=https://github.githubassets.com/assets/features-ways-1-light-3a999d15192f9ed9.webp bytes=16384 all=0 sizeAvail=1 null=0
-[  21275.2ms] [cache] img notify url=https://github.githubassets.com/assets/features-ways-1-light-3a999d15192f9ed9.webp observers=2 bytes=16384 all=0
-[  21275.5ms] [cache] img data url=https://github.githubassets.com/assets/features-ways-1-light-3a999d15192f9ed9.webp bytes=21772 all=0 sizeAvail=1 null=0
-[  21275.7ms] [cache] img notify url=https://github.githubassets.com/assets/features-ways-1-light-3a999d15192f9ed9.webp observers=2 bytes=21772 all=0
-[  21276.4ms] [cache] img data url=https://github.githubassets.com/assets/features-ways-1-light-3a999d15192f9ed9.webp bytes=21772 all=1 sizeAvail=1 null=0
-[  21276.6ms] [cache] img notify url=https://github.githubassets.com/assets/features-ways-1-light-3a999d15192f9ed9.webp observers=2 bytes=21772 all=0
-[  21276.8ms] [cache] img data url=https://github.githubassets.com/assets/features-ways-3-light-e2458d99331b9f87.webp bytes=16384 all=0 sizeAvail=1 null=0
-[  21277.1ms] [cache] img notify url=https://github.githubassets.com/assets/features-ways-3-light-e2458d99331b9f87.webp observers=2 bytes=16384 all=0
-[  21277.3ms] [cache] img data url=https://github.githubassets.com/assets/features-ways-4-light-c6d08e31ba77efdd.webp bytes=16384 all=0 sizeAvail=1 null=0
-[  21277.5ms] [cache] img notify url=https://github.githubassets.com/assets/features-ways-4-light-c6d08e31ba77efdd.webp observers=2 bytes=16384 all=0
-[  21277.7ms] [cache] img data url=https://github.githubassets.com/assets/features-ways-3-light-e2458d99331b9f87.webp bytes=27858 all=0 sizeAvail=1 null=0
-[  21277.9ms] [cache] img notify url=https://github.githubassets.com/assets/features-ways-3-light-e2458d99331b9f87.webp observers=2 bytes=27858 all=0
-[  21278.5ms] [cache] img data url=https://github.githubassets.com/assets/features-ways-4-light-c6d08e31ba77efdd.webp bytes=25594 all=0 sizeAvail=1 null=0
-[  21278.7ms] [cache] img notify url=https://github.githubassets.com/assets/features-ways-4-light-c6d08e31ba77efdd.webp observers=2 bytes=25594 all=0
-[  21279.2ms] [cache] img data url=https://github.githubassets.com/assets/features-ways-3-light-e2458d99331b9f87.webp bytes=27858 all=1 sizeAvail=1 null=0
-[  21279.5ms] [cache] img notify url=https://github.githubassets.com/assets/features-ways-3-light-e2458d99331b9f87.webp observers=2 bytes=27858 all=0
-[  21279.7ms] [cache] img data url=https://github.githubassets.com/assets/features-ways-2-light-bb0bc31df1d658b8.webp bytes=16384 all=0 sizeAvail=1 null=0
-[  21279.9ms] [cache] img notify url=https://github.githubassets.com/assets/features-ways-2-light-bb0bc31df1d658b8.webp observers=2 bytes=16384 all=0
-[  21280.5ms] [cache] img data url=https://github.githubassets.com/assets/features-ways-4-light-c6d08e31ba77efdd.webp bytes=25594 all=1 sizeAvail=1 null=0
-[  21280.7ms] [cache] img notify url=https://github.githubassets.com/assets/features-ways-4-light-c6d08e31ba77efdd.webp observers=2 bytes=25594 all=0
-[  21280.9ms] [cache] img data url=https://github.githubassets.com/assets/features-ways-2-light-bb0bc31df1d658b8.webp bytes=24162 all=0 sizeAvail=1 null=0
-[  21281.1ms] [cache] img notify url=https://github.githubassets.com/assets/features-ways-2-light-bb0bc31df1d658b8.webp observers=2 bytes=24162 all=0
-[  21281.7ms] [cache] img data url=https://github.githubassets.com/assets/features-ways-2-light-bb0bc31df1d658b8.webp bytes=24162 all=1 sizeAvail=1 null=0
-[  21281.9ms] [cache] img notify url=https://github.githubassets.com/assets/features-ways-2-light-bb0bc31df1d658b8.webp observers=2 bytes=24162 all=0
-[  21282.5ms] [cache] img data url=https://github.githubassets.com/assets/ducky-c9ab74b64c4d1e8d.webp bytes=2738 all=0 sizeAvail=1 null=0
-[  21282.7ms] [cache] img notify url=https://github.githubassets.com/assets/ducky-c9ab74b64c4d1e8d.webp observers=2 bytes=2738 all=0
-[  21283.2ms] [cache] img data url=https://github.githubassets.com/assets/ducky-c9ab74b64c4d1e8d.webp bytes=2738 all=1 sizeAvail=1 null=0
-[  21283.4ms] [cache] img notify url=https://github.githubassets.com/assets/ducky-c9ab74b64c4d1e8d.webp observers=2 bytes=2738 all=0
-[  21283.9ms] [cache] img data url=https://images.ctfassets.net/8aevphvgewt8/home2026-01ac80921a7a68bb3d4ce527/b8f43648b9c0fa6cdb8946ed2be492cf/avatar-1.webp bytes=2060 all=0 sizeAvail=1 null=0
-[  21284.2ms] [cache] img notify url=https://images.ctfassets.net/8aevphvgewt8/home2026-01ac80921a7a68bb3d4ce527/b8f43648b9c0fa6cdb8946ed2be492cf/avatar-1.webp observers=2 bytes=2060 all=0
-[  21284.8ms] [cache] img data url=https://images.ctfassets.net/8aevphvgewt8/home2026-01ac80921a7a68bb3d4ce527/b8f43648b9c0fa6cdb8946ed2be492cf/avatar-1.webp bytes=2060 all=1 sizeAvail=1 null=0
-[  21285.2ms] [cache] img notify url=https://images.ctfassets.net/8aevphvgewt8/home2026-01ac80921a7a68bb3d4ce527/b8f43648b9c0fa6cdb8946ed2be492cf/avatar-1.webp observers=2 bytes=2060 all=0
-[  21285.6ms] [cache] img data url=https://images.ctfassets.net/8aevphvgewt8/home2026-5de180004bab10ed7bf6174a/6609dfc82864ffad130f96c32866ca62/avatar-4.webp bytes=1234 all=0 sizeAvail=1 null=0
-[  21286.1ms] [cache] img notify url=https://images.ctfassets.net/8aevphvgewt8/home2026-5de180004bab10ed7bf6174a/6609dfc82864ffad130f96c32866ca62/avatar-4.webp observers=2 bytes=1234 all=0
-[  21287.1ms] [cache] img data url=https://images.ctfassets.net/8aevphvgewt8/home2026-5de180004bab10ed7bf6174a/6609dfc82864ffad130f96c32866ca62/avatar-4.webp bytes=1234 all=1 sizeAvail=1 null=0
-[  21287.4ms] [cache] img notify url=https://images.ctfassets.net/8aevphvgewt8/home2026-5de180004bab10ed7bf6174a/6609dfc82864ffad130f96c32866ca62/avatar-4.webp observers=2 bytes=1234 all=0
-[  21288.0ms] [cache] img data url=https://images.ctfassets.net/8aevphvgewt8/home2026-f899e02bc1ad1a5df31a307f/6acd0742069d2c9591b307f87e903a69/avatar-5.webp bytes=2112 all=0 sizeAvail=1 null=0
-[  21288.3ms] [cache] img notify url=https://images.ctfassets.net/8aevphvgewt8/home2026-f899e02bc1ad1a5df31a307f/6acd0742069d2c9591b307f87e903a69/avatar-5.webp observers=2 bytes=2112 all=0
-[  21288.9ms] [cache] img data url=https://images.ctfassets.net/8aevphvgewt8/home2026-f6d013dea6d5575cba3b8294/41503e0438e56c6ebb8827c41e3c6fa8/avatar-3.webp bytes=1258 all=0 sizeAvail=1 null=0
-[  21289.2ms] [cache] img notify url=https://images.ctfassets.net/8aevphvgewt8/home2026-f6d013dea6d5575cba3b8294/41503e0438e56c6ebb8827c41e3c6fa8/avatar-3.webp observers=2 bytes=1258 all=0
-[  21289.8ms] [cache] img data url=https://images.ctfassets.net/8aevphvgewt8/home2026-f899e02bc1ad1a5df31a307f/6acd0742069d2c9591b307f87e903a69/avatar-5.webp bytes=2112 all=1 sizeAvail=1 null=0
-[  21290.1ms] [cache] img notify url=https://images.ctfassets.net/8aevphvgewt8/home2026-f899e02bc1ad1a5df31a307f/6acd0742069d2c9591b307f87e903a69/avatar-5.webp observers=2 bytes=2112 all=0
-[  21290.6ms] [cache] img data url=https://images.ctfassets.net/8aevphvgewt8/home2026-f6d013dea6d5575cba3b8294/41503e0438e56c6ebb8827c41e3c6fa8/avatar-3.webp bytes=1258 all=1 sizeAvail=1 null=0
-[  21290.9ms] [cache] img notify url=https://images.ctfassets.net/8aevphvgewt8/home2026-f6d013dea6d5575cba3b8294/41503e0438e56c6ebb8827c41e3c6fa8/avatar-3.webp observers=2 bytes=1258 all=0
-[  21291.4ms] [cache] img data url=https://images.ctfassets.net/8aevphvgewt8/home2026-1bdfd19a362a9b42660488c1/dd6db8061a69e8cd6f3611e6b495b3dd/avatar-2.webp bytes=3746 all=0 sizeAvail=1 null=0
-[  21291.6ms] [cache] img notify url=https://images.ctfassets.net/8aevphvgewt8/home2026-1bdfd19a362a9b42660488c1/dd6db8061a69e8cd6f3611e6b495b3dd/avatar-2.webp observers=2 bytes=3746 all=0
-[  21292.2ms] [cache] img data url=https://images.ctfassets.net/8aevphvgewt8/home2026-1bdfd19a362a9b42660488c1/dd6db8061a69e8cd6f3611e6b495b3dd/avatar-2.webp bytes=3746 all=1 sizeAvail=1 null=0
-[  21292.4ms] [cache] img notify url=https://images.ctfassets.net/8aevphvgewt8/home2026-1bdfd19a362a9b42660488c1/dd6db8061a69e8cd6f3611e6b495b3dd/avatar-2.webp observers=2 bytes=3746 all=0
-[  21293.0ms] [cache] img data url=https://images.ctfassets.net/8aevphvgewt8/home2026-9ccb55275227c79b036824fc/b44aaf40a80735ae613a6db469af23c1/ducky-shadows.png bytes=15850 all=0 sizeAvail=1 null=0
-[  21293.2ms] [cache] img notify url=https://images.ctfassets.net/8aevphvgewt8/home2026-9ccb55275227c79b036824fc/b44aaf40a80735ae613a6db469af23c1/ducky-shadows.png observers=2 bytes=15850 all=0
-[  21293.8ms] [cache] img data url=https://images.ctfassets.net/8aevphvgewt8/home2026-9ccb55275227c79b036824fc/b44aaf40a80735ae613a6db469af23c1/ducky-shadows.png bytes=15850 all=1 sizeAvail=1 null=0
-[  21294.0ms] [cache] img notify url=https://images.ctfassets.net/8aevphvgewt8/home2026-9ccb55275227c79b036824fc/b44aaf40a80735ae613a6db469af23c1/ducky-shadows.png observers=2 bytes=15850 all=0
-[  21322.4ms] [cache] img data url=https://github.githubassets.com/assets/tile-gradient-1-67516fb57f624345.webp bytes=3974 all=0 sizeAvail=1 null=0
-[  21322.9ms] [cache] img notify url=https://github.githubassets.com/assets/tile-gradient-1-67516fb57f624345.webp observers=33 bytes=3974 all=0
-[  21323.3ms] [cache] img data url=https://github.githubassets.com/assets/tile-gradient-2-bd0a28f700770812.webp bytes=3426 all=0 sizeAvail=1 null=0
-[  21323.7ms] [cache] img notify url=https://github.githubassets.com/assets/tile-gradient-2-bd0a28f700770812.webp observers=33 bytes=3426 all=0
-[  21324.5ms] [cache] img data url=https://github.githubassets.com/assets/tile-gradient-1-67516fb57f624345.webp bytes=3974 all=1 sizeAvail=1 null=0
-[  21324.8ms] [cache] img notify url=https://github.githubassets.com/assets/tile-gradient-1-67516fb57f624345.webp observers=33 bytes=3974 all=0
-[  21325.4ms] [cache] img data url=https://github.githubassets.com/assets/tile-gradient-2-bd0a28f700770812.webp bytes=3426 all=1 sizeAvail=1 null=0
-[  21325.7ms] [cache] img notify url=https://github.githubassets.com/assets/tile-gradient-2-bd0a28f700770812.webp observers=33 bytes=3426 all=0
-[  21326.3ms] [cache] img data url=https://github.githubassets.com/assets/tile-gradient-2-032af4e10b4f5dad.webp bytes=16384 all=0 sizeAvail=1 null=0
-[  21326.5ms] [cache] img notify url=https://github.githubassets.com/assets/tile-gradient-2-032af4e10b4f5dad.webp observers=6 bytes=16384 all=0
-[  21326.8ms] [cache] img data url=https://github.githubassets.com/assets/tile-gradient-2-032af4e10b4f5dad.webp bytes=30628 all=0 sizeAvail=1 null=0
-[  21327.0ms] [cache] img notify url=https://github.githubassets.com/assets/tile-gradient-2-032af4e10b4f5dad.webp observers=6 bytes=30628 all=0
-[  21327.5ms] [cache] img data url=https://github.githubassets.com/assets/tile-gradient-2-032af4e10b4f5dad.webp bytes=30628 all=1 sizeAvail=1 null=0
-[  21327.7ms] [cache] img notify url=https://github.githubassets.com/assets/tile-gradient-2-032af4e10b4f5dad.webp observers=6 bytes=30628 all=0
-[  21328.3ms] [cache] img data url=https://github.githubassets.com/assets/tile-gradient-1-655dba6cdcef3c96.webp bytes=16384 all=0 sizeAvail=1 null=0
-[  21328.6ms] [cache] img notify url=https://github.githubassets.com/assets/tile-gradient-1-655dba6cdcef3c96.webp observers=9 bytes=16384 all=0
-[  21328.8ms] [cache] img data url=https://github.githubassets.com/assets/tile-gradient-1-655dba6cdcef3c96.webp bytes=32768 all=0 sizeAvail=1 null=0
-[  21329.0ms] [cache] img notify url=https://github.githubassets.com/assets/tile-gradient-1-655dba6cdcef3c96.webp observers=9 bytes=32768 all=0
-[  21329.2ms] [cache] img data url=https://github.githubassets.com/assets/tile-gradient-1-655dba6cdcef3c96.webp bytes=41020 all=0 sizeAvail=1 null=0
-[  21329.5ms] [cache] img notify url=https://github.githubassets.com/assets/tile-gradient-1-655dba6cdcef3c96.webp observers=9 bytes=41020 all=0
-[  21330.0ms] [cache] img data url=https://github.githubassets.com/assets/tile-gradient-1-655dba6cdcef3c96.webp bytes=41020 all=1 sizeAvail=1 null=0
-[  21330.2ms] [cache] img notify url=https://github.githubassets.com/assets/tile-gradient-1-655dba6cdcef3c96.webp observers=9 bytes=41020 all=0
-[  21492.5ms] [cache] mem hit type=image url=https://github.githubassets.com/assets/tile-gradient-1-67516fb57f624345.webp
-[  21493.9ms] [cache] mem hit type=image url=https://github.githubassets.com/assets/tile-gradient-2-bd0a28f700770812.webp
-[  21690.1ms] [cache] mem hit type=image url=https://github.githubassets.com/assets/tile-gradient-2-032af4e10b4f5dad.webp
-[  21694.2ms] [cache] mem hit type=image url=https://github.githubassets.com/assets/tile-gradient-1-655dba6cdcef3c96.webp
-[  24657.7ms] [ui] blur
-[  24658.7ms] [shell] session saved tabs=1 -> E:\mybrowsers\agave\build-zig-native\AgaveShellData\session.txt
-[  24667.4ms] [shell] message loop ended
-[  24683.7ms] [shell] atexit fired, bases exe=7ff656230000 agave=7ffef2e90000 ant=7ffeeed20000
+[      4.8ms] [shell] window ready hwnd=0000000000A54674
+[      6.3ms] [shell] history loaded: 200 entries from E:\mybrowsers\agave\build-zig-native\AgaveShellData\history.txt
+[     50.8ms] [shell] startup url from argv: https://github.com
+[     51.9ms] [ui] resize 800x400
+[     53.6ms] [shell] tab create index=0 url=https://github.com
+[     54.0ms] [shell] download dir=C:\Users\linswin\Downloads
+[     55.7ms] [ui] resize 1084x677
+[     58.2ms] [ui] focus
+[     59.1ms] [shell] entering message loop
+[     67.8ms] [flag] set js=000001A5F23DBF30 on=1 -> 1
+[     84.9ms] [dl] directory C:\Users\linswin\Downloads
+[     88.8ms] [evt] realm start gen=2 engine=000001A5808ECD20 (view context)
+[     93.0ms] [nav] open url=https://github.com
+[     94.1ms] [nav] request main type=other method=GET url=https://github.com/
+[     94.9ms] [cache] http miss url=https://github.com/
+[   1189.4ms] [evt] commit https://github.com/
+[   1191.7ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/light-0011b1fed09cb294.css
+[   1192.7ms] [cache] http miss url=https://github.githubassets.com/assets/light-0011b1fed09cb294.css
+[   1193.1ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/light_high_contrast-267ab2e12d3b7ade.css
+[   1193.7ms] [cache] http miss url=https://github.githubassets.com/assets/light_high_contrast-267ab2e12d3b7ade.css
+[   1194.1ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/dark-37b5e41810563d82.css
+[   1194.8ms] [cache] http miss url=https://github.githubassets.com/assets/dark-37b5e41810563d82.css
+[   1195.3ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/dark_high_contrast-d69295870cb5f203.css
+[   1195.9ms] [cache] http miss url=https://github.githubassets.com/assets/dark_high_contrast-d69295870cb5f203.css
+[   1196.3ms] [cache] mem miss type=css url=https://github.com/
+[   1197.1ms] [cache] http miss url=https://github.com/
+[   1197.5ms] [cache] mem hit type=css url=https://github.com/
+[   1197.8ms] [cache] mem hit type=css url=https://github.com/
+[   1198.2ms] [cache] mem hit type=css url=https://github.com/
+[   1198.6ms] [cache] mem hit type=css url=https://github.com/
+[   1198.9ms] [cache] mem hit type=css url=https://github.com/
+[   1199.2ms] [cache] mem hit type=css url=https://github.com/
+[   1199.5ms] [cache] mem hit type=css url=https://github.com/
+[   1199.8ms] [cache] mem hit type=css url=https://github.com/
+[   1200.1ms] [cache] mem hit type=css url=https://github.com/
+[   1200.4ms] [cache] mem hit type=css url=https://github.com/
+[   1200.7ms] [cache] mem hit type=css url=https://github.com/
+[   1201.0ms] [cache] mem hit type=css url=https://github.com/
+[   1201.2ms] [cache] mem hit type=css url=https://github.com/
+[   1201.7ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/primer-primitives-bd624c4ec96b42e9.css
+[   1202.5ms] [cache] http miss url=https://github.githubassets.com/assets/primer-primitives-bd624c4ec96b42e9.css
+[   1202.9ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/primer-2aeb1babdc762f70.css
+[   1203.6ms] [cache] http miss url=https://github.githubassets.com/assets/primer-2aeb1babdc762f70.css
+[   1204.1ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/global-747fc17113063fdc.css
+[   1205.2ms] [cache] http miss url=https://github.githubassets.com/assets/global-747fc17113063fdc.css
+[   1205.8ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/github-d4a7053a1b3b1731.css
+[   1206.7ms] [cache] http miss url=https://github.githubassets.com/assets/github-d4a7053a1b3b1731.css
+[   1207.2ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/marketing-d7adf5c7af320655.css
+[   1207.9ms] [cache] http miss url=https://github.githubassets.com/assets/marketing-d7adf5c7af320655.css
+[   1208.3ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/home-df64966d2549e9a4.css
+[   1209.2ms] [cache] http miss url=https://github.githubassets.com/assets/home-df64966d2549e9a4.css
+[   1220.0ms] [evt] bindDocument 000001A580753890 (realm-bound=0 prev=0000000000000000) url=https://github.com/
+[   1224.1ms] [evt] main binding gen=2 doc=000001A580753890 realm=000001A5808ED130
+[   2143.0ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/app-runtime.0cb71910f854d01a.module.css
+[   2144.0ms] [cache] http miss url=https://github.githubassets.com/assets/app-runtime.0cb71910f854d01a.module.css
+[   2144.4ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/react-core.8f5cf887bee405a6.module.css
+[   2145.0ms] [cache] http miss url=https://github.githubassets.com/assets/react-core.8f5cf887bee405a6.module.css
+[   5348.0ms] [evt] window event load doc=000001A580753890 listeners=0
+[   5348.5ms] [evt] window event pageshow doc=000001A580753890 listeners=0
+[   5724.4ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/primer-react-css.4af22a99b464e505.module.css
+[   5725.4ms] [cache] http miss url=https://github.githubassets.com/assets/primer-react-css.4af22a99b464e505.module.css
+[   5725.8ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/primer-react-brand-css.97609ed1d71c6231.module.css
+[   5726.4ms] [cache] http miss url=https://github.githubassets.com/assets/primer-react-brand-css.97609ed1d71c6231.module.css
+[   5726.7ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/landing-pages.51e9680af4a75e8c.module.css
+[   5727.3ms] [cache] http miss url=https://github.githubassets.com/assets/landing-pages.51e9680af4a75e8c.module.css
+[   5730.0ms] [cache] mem hit type=css url=https://github.githubassets.com/assets/primer-react-css.4af22a99b464e505.module.css
+[   5730.3ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/keyboard-shortcuts-dialog.a292b37e7d62fa75.module.css
+[   5730.9ms] [cache] http miss url=https://github.githubassets.com/assets/keyboard-shortcuts-dialog.a292b37e7d62fa75.module.css
+[   5731.6ms] [cache] mem hit type=css url=https://github.githubassets.com/assets/primer-react-css.4af22a99b464e505.module.css
+[   5731.9ms] [cache] mem hit type=css url=https://github.githubassets.com/assets/primer-react-brand-css.97609ed1d71c6231.module.css
+[   5732.2ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/marketing-global-banner.fd3cd2c4f2abbd6a.module.css
+[   5732.8ms] [cache] http miss url=https://github.githubassets.com/assets/marketing-global-banner.fd3cd2c4f2abbd6a.module.css
+[  10212.7ms] [cache] mem hit type=css url=https://github.githubassets.com/assets/primer-react-css.4af22a99b464e505.module.css
+[  10479.4ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/app-install-banner-partial.7c40ae188680a846.module.css
+[  10480.3ms] [cache] http miss url=https://github.githubassets.com/assets/app-install-banner-partial.7c40ae188680a846.module.css
+[  10481.0ms] [cache] mem hit type=css url=https://github.githubassets.com/assets/primer-react-css.4af22a99b464e505.module.css
+[  10762.0ms] [cache] mem hit type=css url=https://github.githubassets.com/assets/primer-react-brand-css.97609ed1d71c6231.module.css
+[  12495.9ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/marketing-header.ca0f33527e594ad0.module.css
+[  12496.9ms] [cache] http miss url=https://github.githubassets.com/assets/marketing-header.ca0f33527e594ad0.module.css
+[  12498.9ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/platform-4ce65ae0bf273ce2.png
+[  12499.5ms] [cache] http miss url=https://github.githubassets.com/assets/platform-4ce65ae0bf273ce2.png
+[  12499.8ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/platform-dark-ac89fbf373737ed3.png
+[  12500.4ms] [cache] http miss url=https://github.githubassets.com/assets/platform-dark-ac89fbf373737ed3.png
+[  12501.0ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/copilot-e2b89335a66dba00.png
+[  12501.6ms] [cache] http miss url=https://github.githubassets.com/assets/copilot-e2b89335a66dba00.png
+[  12501.9ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/copilot-dark-2b28403b6080e898.png
+[  12502.6ms] [cache] http miss url=https://github.githubassets.com/assets/copilot-dark-2b28403b6080e898.png
+[  12508.8ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/changelog-fd687bff072883b0.png
+[  12509.8ms] [cache] http miss url=https://github.githubassets.com/assets/changelog-fd687bff072883b0.png
+[  12510.3ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/changelog-dark-b1c25ae971bd641b.png
+[  12511.0ms] [cache] http miss url=https://github.githubassets.com/assets/changelog-dark-b1c25ae971bd641b.png
+[  12517.3ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/universe-a98cd54821b27569.png
+[  12518.0ms] [cache] http miss url=https://github.githubassets.com/assets/universe-a98cd54821b27569.png
+[  12518.4ms] [cache] mem hit type=image url=https://github.githubassets.com/assets/universe-a98cd54821b27569.png
+[  12532.5ms] [cache] mem miss type=image url=https://images.ctfassets.net/8aevphvgewt8/home2026-9ccb55275227c79b036824fc/b44aaf40a80735ae613a6db469af23c1/ducky-shadows.png
+[  12545.9ms] [cache] http miss url=https://images.ctfassets.net/8aevphvgewt8/home2026-9ccb55275227c79b036824fc/b44aaf40a80735ae613a6db469af23c1/ducky-shadows.png
+[  12717.9ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/features-platform-1-light-d1af443446caafe7.webp
+[  12718.7ms] [cache] http miss url=https://github.githubassets.com/assets/features-platform-1-light-d1af443446caafe7.webp
+[  12719.8ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/features-platform-2-light-deba569ff3c98363.webp
+[  12720.3ms] [cache] http miss url=https://github.githubassets.com/assets/features-platform-2-light-deba569ff3c98363.webp
+[  12721.6ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/features-ways-1-light-3a999d15192f9ed9.webp
+[  12722.6ms] [cache] http miss url=https://github.githubassets.com/assets/features-ways-1-light-3a999d15192f9ed9.webp
+[  12723.7ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/features-ways-2-light-bb0bc31df1d658b8.webp
+[  12724.5ms] [cache] http miss url=https://github.githubassets.com/assets/features-ways-2-light-bb0bc31df1d658b8.webp
+[  12725.4ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/features-ways-3-light-e2458d99331b9f87.webp
+[  12726.0ms] [cache] http miss url=https://github.githubassets.com/assets/features-ways-3-light-e2458d99331b9f87.webp
+[  12726.8ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/features-ways-4-light-c6d08e31ba77efdd.webp
+[  12727.4ms] [cache] http miss url=https://github.githubassets.com/assets/features-ways-4-light-c6d08e31ba77efdd.webp
+[  12728.2ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/features-ways-5-light-51976df09d6ae707.webp
+[  12728.8ms] [cache] http miss url=https://github.githubassets.com/assets/features-ways-5-light-51976df09d6ae707.webp
+[  12744.4ms] [cache] mem miss type=image url=https://images.ctfassets.net/8aevphvgewt8/home2026-f899e02bc1ad1a5df31a307f/6acd0742069d2c9591b307f87e903a69/avatar-5.webp
+[  12759.6ms] [cache] http miss url=https://images.ctfassets.net/8aevphvgewt8/home2026-f899e02bc1ad1a5df31a307f/6acd0742069d2c9591b307f87e903a69/avatar-5.webp
+[  12760.7ms] [cache] mem miss type=image url=https://images.ctfassets.net/8aevphvgewt8/home2026-01ac80921a7a68bb3d4ce527/b8f43648b9c0fa6cdb8946ed2be492cf/avatar-1.webp
+[  12761.3ms] [cache] http miss url=https://images.ctfassets.net/8aevphvgewt8/home2026-01ac80921a7a68bb3d4ce527/b8f43648b9c0fa6cdb8946ed2be492cf/avatar-1.webp
+[  12762.0ms] [cache] mem miss type=image url=https://images.ctfassets.net/8aevphvgewt8/home2026-1bdfd19a362a9b42660488c1/dd6db8061a69e8cd6f3611e6b495b3dd/avatar-2.webp
+[  12762.5ms] [cache] http miss url=https://images.ctfassets.net/8aevphvgewt8/home2026-1bdfd19a362a9b42660488c1/dd6db8061a69e8cd6f3611e6b495b3dd/avatar-2.webp
+[  12763.3ms] [cache] mem miss type=image url=https://images.ctfassets.net/8aevphvgewt8/home2026-f6d013dea6d5575cba3b8294/41503e0438e56c6ebb8827c41e3c6fa8/avatar-3.webp
+[  12764.3ms] [cache] http miss url=https://images.ctfassets.net/8aevphvgewt8/home2026-f6d013dea6d5575cba3b8294/41503e0438e56c6ebb8827c41e3c6fa8/avatar-3.webp
+[  12765.2ms] [cache] mem miss type=image url=https://images.ctfassets.net/8aevphvgewt8/home2026-5de180004bab10ed7bf6174a/6609dfc82864ffad130f96c32866ca62/avatar-4.webp
+[  12765.9ms] [cache] http miss url=https://images.ctfassets.net/8aevphvgewt8/home2026-5de180004bab10ed7bf6174a/6609dfc82864ffad130f96c32866ca62/avatar-4.webp
+[  12769.7ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/ducky-c9ab74b64c4d1e8d.webp
+[  12770.3ms] [cache] http miss url=https://github.githubassets.com/assets/ducky-c9ab74b64c4d1e8d.webp
+[  12780.3ms] [cache] mem hit type=css url=https://github.githubassets.com/assets/primer-react-css.4af22a99b464e505.module.css
+[  13066.3ms] [cache] mem hit type=css url=https://github.githubassets.com/assets/primer-react-brand-css.97609ed1d71c6231.module.css
+[  14529.2ms] [ui] blur
+[  14940.5ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/marketing-footer.be3c624614264dd3.module.css
+[  14993.2ms] [cache] http miss url=https://github.githubassets.com/assets/marketing-footer.be3c624614264dd3.module.css
+[cedef] #1 live-region-52d739d1-ccaa-4b58-933a-f43b2ea71200 doc=000001A580753890
+[cedef] #2 include-fragment doc=000001A580753890
+[cedef] #3 remote-input doc=000001A580753890
+[cedef] #4 action-list doc=000001A580753890
+[cedef] #5 action-bar doc=000001A580753890
+[cedef] #6 details-menu doc=000001A580753890
+[cedef] #7 anchored-position doc=000001A580753890
+[cedef] #8 dialog-helper doc=000001A580753890
+[cedef] #9 focus-group doc=000001A580753890
+[cedef] #10 scrollable-region doc=000001A580753890
+[cedef] #11 modal-dialog doc=000001A580753890
+[cedef] #12 nav-list doc=000001A580753890
+[cedef] #13 nav-list-group doc=000001A580753890
+[cedef] #14 segmented-control doc=000001A580753890
+[cedef] #15 toggle-switch doc=000001A580753890
+[cedef] #16 tool-tip doc=000001A580753890
+[  15728.7ms] [gap-jsdom] name=tool-tip#tooltip-dfc19f4a-c595-4abf-b7e7-1b76f2928815.attachShadow area=dom effect="undefined; no shadow DOM"
+[cedef] #17 x-banner doc=000001A580753890
+[cedef] #18 auto-complete doc=000001A580753890
+[cedef] #19 clipboard-copy doc=000001A580753890
+[cedef] #20 relative-time doc=000001A580753890
+[cedef] #21 tab-container doc=000001A580753890
+[cedef] #22 primer-multi-input doc=000001A580753890
+[cedef] #23 auto-check doc=000001A580753890
+[cedef] #24 primer-text-field doc=000001A580753890
+[cedef] #25 primer-text-area doc=000001A580753890
+[cedef] #26 toggle-switch-input doc=000001A580753890
+[cedef] #27 action-menu doc=000001A580753890
+[cedef] #28 live-region doc=000001A580753890
+[cedef] #29 select-panel doc=000001A580753890
+[cedef] #30 details-toggle doc=000001A580753890
+[cedef] #31 tree-view doc=000001A580753890
+[cedef] #32 tree-view-icon-pair doc=000001A580753890
+[cedef] #33 tree-view-sub-tree-node doc=000001A580753890
+[cedef] #34 tree-view-include-fragment doc=000001A580753890
+[cedef] #35 details-dialog doc=000001A580753890
+[cedef] #36 file-attachment doc=000001A580753890
+[cedef] #37 filter-input doc=000001A580753890
+[cedef] #38 g-emoji doc=000001A580753890
+[cedef] #39 md-header doc=000001A580753890
+[cedef] #40 md-bold doc=000001A580753890
+[cedef] #41 md-italic doc=000001A580753890
+[cedef] #42 md-quote doc=000001A580753890
+[cedef] #43 md-code doc=000001A580753890
+[cedef] #44 md-link doc=000001A580753890
+[cedef] #45 md-image doc=000001A580753890
+[cedef] #46 md-unordered-list doc=000001A580753890
+[cedef] #47 md-ordered-list doc=000001A580753890
+[cedef] #48 md-task-list doc=000001A580753890
+[cedef] #49 md-mention doc=000001A580753890
+[cedef] #50 md-ref doc=000001A580753890
+[cedef] #51 md-strikethrough doc=000001A580753890
+[cedef] #52 markdown-toolbar doc=000001A580753890
+[cedef] #53 task-lists doc=000001A580753890
+[cedef] #54 text-expander doc=000001A580753890
+[cedef] #55 typing-effect doc=000001A580753890
+[cedef] #56 image-crop doc=000001A580753890
+[cedef] #57 batch-deferred-content doc=000001A580753890
+[cedef] #58 turbo-frame doc=000001A580753890
+[cedef] #59 turbo-stream doc=000001A580753890
+[cedef] #60 turbo-stream-source doc=000001A580753890
+[cedef] #61 webauthn-get doc=000001A580753890
+[cedef] #62 sudo-credential-options doc=000001A580753890
+[cedef] #63 collapsible-sidebar-widget doc=000001A580753890
+[cedef] #64 sidebar-memex-input doc=000001A580753890
+[cedef] #65 react-app doc=000001A580753890
+[  19870.4ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/kq9.fe1d3ed6827ca69b.module.css
+[  19871.4ms] [cache] http miss url=https://github.githubassets.com/assets/kq9.fe1d3ed6827ca69b.module.css
+[  20135.5ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/u2l.0c500f555cd81ce4.module.css
+[  20136.4ms] [cache] http miss url=https://github.githubassets.com/assets/u2l.0c500f555cd81ce4.module.css
+[  20437.2ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/7gn.7507d38d20e4dfb2.module.css
+[  20438.6ms] [cache] http miss url=https://github.githubassets.com/assets/7gn.7507d38d20e4dfb2.module.css
+[  20720.5ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/xy4.a8f51d907bf04870.module.css
+[  20721.6ms] [cache] http miss url=https://github.githubassets.com/assets/xy4.a8f51d907bf04870.module.css
+[  21722.5ms] [cache] mem miss type=css url=https://github.githubassets.com/assets/jdp.e5850a4dc814890e.module.css
+[  21723.6ms] [cache] http miss url=https://github.githubassets.com/assets/jdp.e5850a4dc814890e.module.css
+[cedef] #66 select-panel-experimental doc=000001A580753890
+[cedef] #67 toggle-switch doc=000001A580753890
+[cedef] re-define toggle-switch ignored (first ctor kept, different ctor)
+[cedef] #68 cookie-consent-link doc=000001A580753890
+[cedef] #69 fullstory-capture doc=000001A580753890
+[cedef] #70 ghcc-consent doc=000001A580753890
+[  22320.3ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/tile-gradient-1-67516fb57f624345.webp
+[  22321.3ms] [cache] http miss url=https://github.githubassets.com/assets/tile-gradient-1-67516fb57f624345.webp
+[  22322.5ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/tile-gradient-2-bd0a28f700770812.webp
+[  22323.4ms] [cache] http miss url=https://github.githubassets.com/assets/tile-gradient-2-bd0a28f700770812.webp
+[  22499.5ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/tile-gradient-2-032af4e10b4f5dad.webp
+[  22500.4ms] [cache] http miss url=https://github.githubassets.com/assets/tile-gradient-2-032af4e10b4f5dad.webp
+[  22503.4ms] [cache] mem miss type=image url=https://github.githubassets.com/assets/tile-gradient-1-655dba6cdcef3c96.webp
+[  22504.0ms] [cache] http miss url=https://github.githubassets.com/assets/tile-gradient-1-655dba6cdcef3c96.webp
+[  22748.4ms] [cache] img data url=https://github.githubassets.com/assets/platform-4ce65ae0bf273ce2.png bytes=16384 all=0 sizeAvail=1 null=0
+[  22748.8ms] [cache] img notify url=https://github.githubassets.com/assets/platform-4ce65ae0bf273ce2.png observers=2 bytes=16384 all=0
+[  22749.1ms] [cache] img data url=https://github.githubassets.com/assets/platform-dark-ac89fbf373737ed3.png bytes=16384 all=0 sizeAvail=1 null=0
+[  22749.4ms] [cache] img notify url=https://github.githubassets.com/assets/platform-dark-ac89fbf373737ed3.png observers=2 bytes=16384 all=0
+[  22749.7ms] [cache] img data url=https://github.githubassets.com/assets/platform-dark-ac89fbf373737ed3.png bytes=25995 all=0 sizeAvail=1 null=0
+[  22749.9ms] [cache] img notify url=https://github.githubassets.com/assets/platform-dark-ac89fbf373737ed3.png observers=2 bytes=25995 all=0
+[  22750.2ms] [cache] img data url=https://github.githubassets.com/assets/platform-4ce65ae0bf273ce2.png bytes=26674 all=0 sizeAvail=1 null=0
+[  22750.6ms] [cache] img notify url=https://github.githubassets.com/assets/platform-4ce65ae0bf273ce2.png observers=2 bytes=26674 all=0
+[  22751.3ms] [cache] img data url=https://github.githubassets.com/assets/platform-dark-ac89fbf373737ed3.png bytes=25995 all=1 sizeAvail=1 null=0
+[  22751.5ms] [cache] img notify url=https://github.githubassets.com/assets/platform-dark-ac89fbf373737ed3.png observers=2 bytes=25995 all=0
+[  22752.1ms] [cache] img data url=https://github.githubassets.com/assets/platform-4ce65ae0bf273ce2.png bytes=26674 all=1 sizeAvail=1 null=0
+[  22752.4ms] [cache] img notify url=https://github.githubassets.com/assets/platform-4ce65ae0bf273ce2.png observers=2 bytes=26674 all=0
+[  22765.5ms] [cache] img data url=https://github.githubassets.com/assets/copilot-e2b89335a66dba00.png bytes=16384 all=0 sizeAvail=1 null=0
+[  22792.1ms] [cache] img notify url=https://github.githubassets.com/assets/copilot-e2b89335a66dba00.png observers=2 bytes=16384 all=0
+[  22792.6ms] [cache] img data url=https://github.githubassets.com/assets/copilot-e2b89335a66dba00.png bytes=32768 all=0 sizeAvail=1 null=0
+[  22792.9ms] [cache] img notify url=https://github.githubassets.com/assets/copilot-e2b89335a66dba00.png observers=2 bytes=32768 all=0
+[  22793.1ms] [cache] img data url=https://github.githubassets.com/assets/copilot-e2b89335a66dba00.png bytes=33776 all=0 sizeAvail=1 null=0
+[  22793.4ms] [cache] img notify url=https://github.githubassets.com/assets/copilot-e2b89335a66dba00.png observers=2 bytes=33776 all=0
+[  22794.2ms] [cache] img data url=https://github.githubassets.com/assets/copilot-e2b89335a66dba00.png bytes=33776 all=1 sizeAvail=1 null=0
+[  22794.5ms] [cache] img notify url=https://github.githubassets.com/assets/copilot-e2b89335a66dba00.png observers=2 bytes=33776 all=0
+[  22797.9ms] [cache] img data url=https://github.githubassets.com/assets/features-ways-5-light-51976df09d6ae707.webp bytes=13158 all=0 sizeAvail=1 null=0
+[  22798.2ms] [cache] img notify url=https://github.githubassets.com/assets/features-ways-5-light-51976df09d6ae707.webp observers=2 bytes=13158 all=0
+[  22799.9ms] [cache] img data url=https://github.githubassets.com/assets/features-ways-5-light-51976df09d6ae707.webp bytes=13158 all=1 sizeAvail=1 null=0
+[  22800.1ms] [cache] img notify url=https://github.githubassets.com/assets/features-ways-5-light-51976df09d6ae707.webp observers=2 bytes=13158 all=0
+[  22800.7ms] [cache] img data url=https://github.githubassets.com/assets/features-ways-1-light-3a999d15192f9ed9.webp bytes=16384 all=0 sizeAvail=1 null=0
+[  22800.9ms] [cache] img notify url=https://github.githubassets.com/assets/features-ways-1-light-3a999d15192f9ed9.webp observers=2 bytes=16384 all=0
+[  22801.2ms] [cache] img data url=https://github.githubassets.com/assets/features-ways-4-light-c6d08e31ba77efdd.webp bytes=16384 all=0 sizeAvail=1 null=0
+[  22801.4ms] [cache] img notify url=https://github.githubassets.com/assets/features-ways-4-light-c6d08e31ba77efdd.webp observers=2 bytes=16384 all=0
+[  22801.7ms] [cache] img data url=https://github.githubassets.com/assets/features-ways-4-light-c6d08e31ba77efdd.webp bytes=25594 all=0 sizeAvail=1 null=0
+[  22801.9ms] [cache] img notify url=https://github.githubassets.com/assets/features-ways-4-light-c6d08e31ba77efdd.webp observers=2 bytes=25594 all=0
+[  22802.1ms] [cache] img data url=https://github.githubassets.com/assets/features-ways-1-light-3a999d15192f9ed9.webp bytes=21772 all=0 sizeAvail=1 null=0
+[  22802.4ms] [cache] img notify url=https://github.githubassets.com/assets/features-ways-1-light-3a999d15192f9ed9.webp observers=2 bytes=21772 all=0
+[  22802.9ms] [cache] img data url=https://github.githubassets.com/assets/features-ways-4-light-c6d08e31ba77efdd.webp bytes=25594 all=1 sizeAvail=1 null=0
+[  22803.2ms] [cache] img notify url=https://github.githubassets.com/assets/features-ways-4-light-c6d08e31ba77efdd.webp observers=2 bytes=25594 all=0
+[  22803.8ms] [cache] img data url=https://github.githubassets.com/assets/features-ways-1-light-3a999d15192f9ed9.webp bytes=21772 all=1 sizeAvail=1 null=0
+[  22804.0ms] [cache] img notify url=https://github.githubassets.com/assets/features-ways-1-light-3a999d15192f9ed9.webp observers=2 bytes=21772 all=0
+[  22805.4ms] [cache] img data url=https://github.githubassets.com/assets/changelog-dark-b1c25ae971bd641b.png bytes=16384 all=0 sizeAvail=1 null=0
+[  22805.8ms] [cache] img notify url=https://github.githubassets.com/assets/changelog-dark-b1c25ae971bd641b.png observers=2 bytes=16384 all=0
+[  22806.2ms] [cache] img data url=https://github.githubassets.com/assets/features-platform-1-light-d1af443446caafe7.webp bytes=16384 all=0 sizeAvail=1 null=0
+[  22806.5ms] [cache] img notify url=https://github.githubassets.com/assets/features-platform-1-light-d1af443446caafe7.webp observers=2 bytes=16384 all=0
+[  22806.9ms] [cache] img data url=https://github.githubassets.com/assets/universe-a98cd54821b27569.png bytes=16384 all=0 sizeAvail=1 null=0
+[  22807.2ms] [cache] img notify url=https://github.githubassets.com/assets/universe-a98cd54821b27569.png observers=4 bytes=16384 all=0
+[  22807.5ms] [cache] img data url=https://github.githubassets.com/assets/universe-a98cd54821b27569.png bytes=29704 all=0 sizeAvail=1 null=0
+[  22807.8ms] [cache] img notify url=https://github.githubassets.com/assets/universe-a98cd54821b27569.png observers=4 bytes=29704 all=0
+[  22808.0ms] [cache] img data url=https://github.githubassets.com/assets/features-ways-2-light-bb0bc31df1d658b8.webp bytes=16384 all=0 sizeAvail=1 null=0
+[  22808.2ms] [cache] img notify url=https://github.githubassets.com/assets/features-ways-2-light-bb0bc31df1d658b8.webp observers=2 bytes=16384 all=0
+[  22809.0ms] [cache] img data url=https://github.githubassets.com/assets/universe-a98cd54821b27569.png bytes=29704 all=1 sizeAvail=1 null=0
+[  22809.2ms] [cache] img notify url=https://github.githubassets.com/assets/universe-a98cd54821b27569.png observers=4 bytes=29704 all=0
+[  22809.8ms] [cache] img data url=https://images.ctfassets.net/8aevphvgewt8/home2026-9ccb55275227c79b036824fc/b44aaf40a80735ae613a6db469af23c1/ducky-shadows.png bytes=15850 all=0 sizeAvail=1 null=0
+[  22810.1ms] [cache] img notify url=https://images.ctfassets.net/8aevphvgewt8/home2026-9ccb55275227c79b036824fc/b44aaf40a80735ae613a6db469af23c1/ducky-shadows.png observers=2 bytes=15850 all=0
+[  22810.6ms] [cache] img data url=https://images.ctfassets.net/8aevphvgewt8/home2026-9ccb55275227c79b036824fc/b44aaf40a80735ae613a6db469af23c1/ducky-shadows.png bytes=15850 all=1 sizeAvail=1 null=0
+[  22810.9ms] [cache] img notify url=https://images.ctfassets.net/8aevphvgewt8/home2026-9ccb55275227c79b036824fc/b44aaf40a80735ae613a6db469af23c1/ducky-shadows.png observers=2 bytes=15850 all=0
+[  22811.2ms] [cache] img data url=https://github.githubassets.com/assets/features-ways-2-light-bb0bc31df1d658b8.webp bytes=24162 all=0 sizeAvail=1 null=0
+[  22811.4ms] [cache] img notify url=https://github.githubassets.com/assets/features-ways-2-light-bb0bc31df1d658b8.webp observers=2 bytes=24162 all=0
+[  22811.7ms] [cache] img data url=https://github.githubassets.com/assets/changelog-dark-b1c25ae971bd641b.png bytes=32768 all=0 sizeAvail=1 null=0
+[  22811.9ms] [cache] img notify url=https://github.githubassets.com/assets/changelog-dark-b1c25ae971bd641b.png observers=2 bytes=32768 all=0
+[  22812.2ms] [cache] img data url=https://github.githubassets.com/assets/features-ways-3-light-e2458d99331b9f87.webp bytes=16384 all=0 sizeAvail=1 null=0
+[  22812.4ms] [cache] img notify url=https://github.githubassets.com/assets/features-ways-3-light-e2458d99331b9f87.webp observers=2 bytes=16384 all=0
+[  22812.6ms] [cache] img data url=https://github.githubassets.com/assets/features-platform-1-light-d1af443446caafe7.webp bytes=32768 all=0 sizeAvail=1 null=0
+[  22812.9ms] [cache] img notify url=https://github.githubassets.com/assets/features-platform-1-light-d1af443446caafe7.webp observers=2 bytes=32768 all=0
+[  22813.5ms] [cache] img data url=https://github.githubassets.com/assets/features-ways-2-light-bb0bc31df1d658b8.webp bytes=24162 all=1 sizeAvail=1 null=0
+[  22813.7ms] [cache] img notify url=https://github.githubassets.com/assets/features-ways-2-light-bb0bc31df1d658b8.webp observers=2 bytes=24162 all=0
+[  22814.0ms] [cache] img data url=https://github.githubassets.com/assets/features-platform-1-light-d1af443446caafe7.webp bytes=48278 all=0 sizeAvail=1 null=0
+[  22814.3ms] [cache] img notify url=https://github.githubassets.com/assets/features-platform-1-light-d1af443446caafe7.webp observers=2 bytes=48278 all=0
+[  22814.5ms] [cache] img data url=https://github.githubassets.com/assets/features-ways-3-light-e2458d99331b9f87.webp bytes=27858 all=0 sizeAvail=1 null=0
+[  22814.7ms] [cache] img notify url=https://github.githubassets.com/assets/features-ways-3-light-e2458d99331b9f87.webp observers=2 bytes=27858 all=0
+[  22815.0ms] [cache] img data url=https://github.githubassets.com/assets/changelog-dark-b1c25ae971bd641b.png bytes=49152 all=0 sizeAvail=1 null=0
+[  22815.2ms] [cache] img notify url=https://github.githubassets.com/assets/changelog-dark-b1c25ae971bd641b.png observers=2 bytes=49152 all=0
+[  22815.5ms] [cache] img data url=https://github.githubassets.com/assets/changelog-fd687bff072883b0.png bytes=16384 all=0 sizeAvail=1 null=0
+[  22815.8ms] [cache] img notify url=https://github.githubassets.com/assets/changelog-fd687bff072883b0.png observers=2 bytes=16384 all=0
+[  22816.0ms] [cache] img data url=https://github.githubassets.com/assets/features-platform-2-light-deba569ff3c98363.webp bytes=16384 all=0 sizeAvail=1 null=0
+[  22816.2ms] [cache] img notify url=https://github.githubassets.com/assets/features-platform-2-light-deba569ff3c98363.webp observers=2 bytes=16384 all=0
+[  22816.8ms] [cache] img data url=https://github.githubassets.com/assets/features-platform-1-light-d1af443446caafe7.webp bytes=48278 all=1 sizeAvail=1 null=0
+[  22817.1ms] [cache] img notify url=https://github.githubassets.com/assets/features-platform-1-light-d1af443446caafe7.webp observers=2 bytes=48278 all=0
+[  22817.4ms] [cache] img data url=https://github.githubassets.com/assets/changelog-dark-b1c25ae971bd641b.png bytes=62851 all=0 sizeAvail=1 null=0
+[  22817.6ms] [cache] img notify url=https://github.githubassets.com/assets/changelog-dark-b1c25ae971bd641b.png observers=2 bytes=62851 all=0
+[  22818.1ms] [cache] img data url=https://github.githubassets.com/assets/features-ways-3-light-e2458d99331b9f87.webp bytes=27858 all=1 sizeAvail=1 null=0
+[  22818.3ms] [cache] img notify url=https://github.githubassets.com/assets/features-ways-3-light-e2458d99331b9f87.webp observers=2 bytes=27858 all=0
+[  22818.9ms] [cache] img data url=https://github.githubassets.com/assets/changelog-dark-b1c25ae971bd641b.png bytes=62851 all=1 sizeAvail=1 null=0
+[  22819.1ms] [cache] img notify url=https://github.githubassets.com/assets/changelog-dark-b1c25ae971bd641b.png observers=2 bytes=62851 all=0
+[  22819.4ms] [cache] img data url=https://github.githubassets.com/assets/changelog-fd687bff072883b0.png bytes=32768 all=0 sizeAvail=1 null=0
+[  22819.7ms] [cache] img notify url=https://github.githubassets.com/assets/changelog-fd687bff072883b0.png observers=2 bytes=32768 all=0
+[  22819.9ms] [cache] img data url=https://github.githubassets.com/assets/copilot-dark-2b28403b6080e898.png bytes=16384 all=0 sizeAvail=1 null=0
+[  22820.1ms] [cache] img notify url=https://github.githubassets.com/assets/copilot-dark-2b28403b6080e898.png observers=2 bytes=16384 all=0
+[  22820.4ms] [cache] img data url=https://github.githubassets.com/assets/copilot-dark-2b28403b6080e898.png bytes=25246 all=0 sizeAvail=1 null=0
+[  22820.6ms] [cache] img notify url=https://github.githubassets.com/assets/copilot-dark-2b28403b6080e898.png observers=2 bytes=25246 all=0
+[  22820.9ms] [cache] img data url=https://github.githubassets.com/assets/features-platform-2-light-deba569ff3c98363.webp bytes=32768 all=0 sizeAvail=1 null=0
+[  22821.1ms] [cache] img notify url=https://github.githubassets.com/assets/features-platform-2-light-deba569ff3c98363.webp observers=2 bytes=32768 all=0
+[  22821.5ms] [cache] img data url=https://github.githubassets.com/assets/changelog-fd687bff072883b0.png bytes=49152 all=0 sizeAvail=1 null=0
+[  22821.7ms] [cache] img notify url=https://github.githubassets.com/assets/changelog-fd687bff072883b0.png observers=2 bytes=49152 all=0
+[  22822.0ms] [cache] img data url=https://github.githubassets.com/assets/changelog-fd687bff072883b0.png bytes=56292 all=0 sizeAvail=1 null=0
+[  22822.3ms] [cache] img notify url=https://github.githubassets.com/assets/changelog-fd687bff072883b0.png observers=2 bytes=56292 all=0
+[  22823.0ms] [cache] img data url=https://github.githubassets.com/assets/copilot-dark-2b28403b6080e898.png bytes=25246 all=1 sizeAvail=1 null=0
+[  22823.4ms] [cache] img notify url=https://github.githubassets.com/assets/copilot-dark-2b28403b6080e898.png observers=2 bytes=25246 all=0
+[  22823.8ms] [cache] img data url=https://github.githubassets.com/assets/features-platform-2-light-deba569ff3c98363.webp bytes=49152 all=0 sizeAvail=1 null=0
+[  22824.0ms] [cache] img notify url=https://github.githubassets.com/assets/features-platform-2-light-deba569ff3c98363.webp observers=2 bytes=49152 all=0
+[  22824.7ms] [cache] img data url=https://github.githubassets.com/assets/changelog-fd687bff072883b0.png bytes=56292 all=1 sizeAvail=1 null=0
+[  22825.0ms] [cache] img notify url=https://github.githubassets.com/assets/changelog-fd687bff072883b0.png observers=2 bytes=56292 all=0
+[  22825.3ms] [cache] img data url=https://github.githubassets.com/assets/features-platform-2-light-deba569ff3c98363.webp bytes=51862 all=0 sizeAvail=1 null=0
+[  22825.5ms] [cache] img notify url=https://github.githubassets.com/assets/features-platform-2-light-deba569ff3c98363.webp observers=2 bytes=51862 all=0
+[  22826.1ms] [cache] img data url=https://github.githubassets.com/assets/features-platform-2-light-deba569ff3c98363.webp bytes=51862 all=1 sizeAvail=1 null=0
+[  22826.3ms] [cache] img notify url=https://github.githubassets.com/assets/features-platform-2-light-deba569ff3c98363.webp observers=2 bytes=51862 all=0
+[  22826.9ms] [cache] img data url=https://github.githubassets.com/assets/ducky-c9ab74b64c4d1e8d.webp bytes=2738 all=0 sizeAvail=1 null=0
+[  22827.2ms] [cache] img notify url=https://github.githubassets.com/assets/ducky-c9ab74b64c4d1e8d.webp observers=2 bytes=2738 all=0
+[  22827.8ms] [cache] img data url=https://github.githubassets.com/assets/ducky-c9ab74b64c4d1e8d.webp bytes=2738 all=1 sizeAvail=1 null=0
+[  22828.0ms] [cache] img notify url=https://github.githubassets.com/assets/ducky-c9ab74b64c4d1e8d.webp observers=2 bytes=2738 all=0
+[  22828.5ms] [cache] img data url=https://images.ctfassets.net/8aevphvgewt8/home2026-01ac80921a7a68bb3d4ce527/b8f43648b9c0fa6cdb8946ed2be492cf/avatar-1.webp bytes=2060 all=0 sizeAvail=1 null=0
+[  22828.8ms] [cache] img notify url=https://images.ctfassets.net/8aevphvgewt8/home2026-01ac80921a7a68bb3d4ce527/b8f43648b9c0fa6cdb8946ed2be492cf/avatar-1.webp observers=2 bytes=2060 all=0
+[  22829.3ms] [cache] img data url=https://images.ctfassets.net/8aevphvgewt8/home2026-01ac80921a7a68bb3d4ce527/b8f43648b9c0fa6cdb8946ed2be492cf/avatar-1.webp bytes=2060 all=1 sizeAvail=1 null=0
+[  22829.6ms] [cache] img notify url=https://images.ctfassets.net/8aevphvgewt8/home2026-01ac80921a7a68bb3d4ce527/b8f43648b9c0fa6cdb8946ed2be492cf/avatar-1.webp observers=2 bytes=2060 all=0
+[  22830.1ms] [cache] img data url=https://images.ctfassets.net/8aevphvgewt8/home2026-1bdfd19a362a9b42660488c1/dd6db8061a69e8cd6f3611e6b495b3dd/avatar-2.webp bytes=3746 all=0 sizeAvail=1 null=0
+[  22830.3ms] [cache] img notify url=https://images.ctfassets.net/8aevphvgewt8/home2026-1bdfd19a362a9b42660488c1/dd6db8061a69e8cd6f3611e6b495b3dd/avatar-2.webp observers=2 bytes=3746 all=0
+[  22830.8ms] [cache] img data url=https://images.ctfassets.net/8aevphvgewt8/home2026-1bdfd19a362a9b42660488c1/dd6db8061a69e8cd6f3611e6b495b3dd/avatar-2.webp bytes=3746 all=1 sizeAvail=1 null=0
+[  22831.0ms] [cache] img notify url=https://images.ctfassets.net/8aevphvgewt8/home2026-1bdfd19a362a9b42660488c1/dd6db8061a69e8cd6f3611e6b495b3dd/avatar-2.webp observers=2 bytes=3746 all=0
+[  22831.5ms] [cache] img data url=https://images.ctfassets.net/8aevphvgewt8/home2026-f6d013dea6d5575cba3b8294/41503e0438e56c6ebb8827c41e3c6fa8/avatar-3.webp bytes=1258 all=0 sizeAvail=1 null=0
+[  22831.8ms] [cache] img notify url=https://images.ctfassets.net/8aevphvgewt8/home2026-f6d013dea6d5575cba3b8294/41503e0438e56c6ebb8827c41e3c6fa8/avatar-3.webp observers=2 bytes=1258 all=0
+[  22832.3ms] [cache] img data url=https://images.ctfassets.net/8aevphvgewt8/home2026-f6d013dea6d5575cba3b8294/41503e0438e56c6ebb8827c41e3c6fa8/avatar-3.webp bytes=1258 all=1 sizeAvail=1 null=0
+[  22832.6ms] [cache] img notify url=https://images.ctfassets.net/8aevphvgewt8/home2026-f6d013dea6d5575cba3b8294/41503e0438e56c6ebb8827c41e3c6fa8/avatar-3.webp observers=2 bytes=1258 all=0
+[  22833.1ms] [cache] img data url=https://images.ctfassets.net/8aevphvgewt8/home2026-5de180004bab10ed7bf6174a/6609dfc82864ffad130f96c32866ca62/avatar-4.webp bytes=1234 all=0 sizeAvail=1 null=0
+[  22833.3ms] [cache] img notify url=https://images.ctfassets.net/8aevphvgewt8/home2026-5de180004bab10ed7bf6174a/6609dfc82864ffad130f96c32866ca62/avatar-4.webp observers=2 bytes=1234 all=0
+[  22833.9ms] [cache] img data url=https://images.ctfassets.net/8aevphvgewt8/home2026-5de180004bab10ed7bf6174a/6609dfc82864ffad130f96c32866ca62/avatar-4.webp bytes=1234 all=1 sizeAvail=1 null=0
+[  22834.1ms] [cache] img notify url=https://images.ctfassets.net/8aevphvgewt8/home2026-5de180004bab10ed7bf6174a/6609dfc82864ffad130f96c32866ca62/avatar-4.webp observers=2 bytes=1234 all=0
+[  22834.6ms] [cache] img data url=https://images.ctfassets.net/8aevphvgewt8/home2026-f899e02bc1ad1a5df31a307f/6acd0742069d2c9591b307f87e903a69/avatar-5.webp bytes=2112 all=0 sizeAvail=1 null=0
+[  22834.8ms] [cache] img notify url=https://images.ctfassets.net/8aevphvgewt8/home2026-f899e02bc1ad1a5df31a307f/6acd0742069d2c9591b307f87e903a69/avatar-5.webp observers=2 bytes=2112 all=0
+[  22835.3ms] [cache] img data url=https://images.ctfassets.net/8aevphvgewt8/home2026-f899e02bc1ad1a5df31a307f/6acd0742069d2c9591b307f87e903a69/avatar-5.webp bytes=2112 all=1 sizeAvail=1 null=0
+[  22835.6ms] [cache] img notify url=https://images.ctfassets.net/8aevphvgewt8/home2026-f899e02bc1ad1a5df31a307f/6acd0742069d2c9591b307f87e903a69/avatar-5.webp observers=2 bytes=2112 all=0
+[  22862.5ms] [cache] img data url=https://github.githubassets.com/assets/tile-gradient-1-67516fb57f624345.webp bytes=3974 all=0 sizeAvail=1 null=0
+[  22864.1ms] [cache] img notify url=https://github.githubassets.com/assets/tile-gradient-1-67516fb57f624345.webp observers=33 bytes=3974 all=0
+[  22864.8ms] [cache] img data url=https://github.githubassets.com/assets/tile-gradient-1-67516fb57f624345.webp bytes=3974 all=1 sizeAvail=1 null=0
+[  22865.1ms] [cache] img notify url=https://github.githubassets.com/assets/tile-gradient-1-67516fb57f624345.webp observers=33 bytes=3974 all=0
+[  22865.7ms] [cache] img data url=https://github.githubassets.com/assets/tile-gradient-2-bd0a28f700770812.webp bytes=3426 all=0 sizeAvail=1 null=0
+[  22866.0ms] [cache] img notify url=https://github.githubassets.com/assets/tile-gradient-2-bd0a28f700770812.webp observers=33 bytes=3426 all=0
+[  22866.5ms] [cache] img data url=https://github.githubassets.com/assets/tile-gradient-2-bd0a28f700770812.webp bytes=3426 all=1 sizeAvail=1 null=0
+[  22866.8ms] [cache] img notify url=https://github.githubassets.com/assets/tile-gradient-2-bd0a28f700770812.webp observers=33 bytes=3426 all=0
+[  22904.6ms] [cache] img notify url=https://github.githubassets.com/assets/platform-dark-ac89fbf373737ed3.png observers=2 bytes=25995 all=1
+[  22905.2ms] [cache] img notify url=https://github.githubassets.com/assets/platform-4ce65ae0bf273ce2.png observers=2 bytes=26674 all=1
+[  22905.6ms] [cache] img notify url=https://github.githubassets.com/assets/copilot-e2b89335a66dba00.png observers=2 bytes=33776 all=1
+[  22905.9ms] [cache] img notify url=https://github.githubassets.com/assets/copilot-dark-2b28403b6080e898.png observers=2 bytes=25246 all=1
+[  22907.8ms] [cache] img data url=https://github.githubassets.com/assets/tile-gradient-2-032af4e10b4f5dad.webp bytes=16384 all=0 sizeAvail=1 null=0
+[  22908.2ms] [cache] img notify url=https://github.githubassets.com/assets/tile-gradient-2-032af4e10b4f5dad.webp observers=6 bytes=16384 all=0
+[  22908.5ms] [cache] img data url=https://github.githubassets.com/assets/tile-gradient-2-032af4e10b4f5dad.webp bytes=30628 all=0 sizeAvail=1 null=0
+[  22908.7ms] [cache] img notify url=https://github.githubassets.com/assets/tile-gradient-2-032af4e10b4f5dad.webp observers=6 bytes=30628 all=0
+[  22909.5ms] [cache] img data url=https://github.githubassets.com/assets/tile-gradient-2-032af4e10b4f5dad.webp bytes=30628 all=1 sizeAvail=1 null=0
+[  22909.7ms] [cache] img notify url=https://github.githubassets.com/assets/tile-gradient-2-032af4e10b4f5dad.webp observers=6 bytes=30628 all=0
+[  22911.4ms] [cache] frame idx=0 status=2 rows=300/300
+[  22912.7ms] [cache] frame idx=0 status=2 rows=300/300
+[  22913.8ms] [cache] frame idx=0 status=2 rows=300/300
+[  22914.9ms] [cache] frame idx=0 status=2 rows=300/300
+[  23021.5ms] [cache] img data url=https://github.githubassets.com/assets/tile-gradient-1-655dba6cdcef3c96.webp bytes=16384 all=0 sizeAvail=1 null=0
+[  23022.1ms] [cache] img notify url=https://github.githubassets.com/assets/tile-gradient-1-655dba6cdcef3c96.webp observers=9 bytes=16384 all=0
+[  23022.4ms] [cache] img data url=https://github.githubassets.com/assets/tile-gradient-1-655dba6cdcef3c96.webp bytes=32768 all=0 sizeAvail=1 null=0
+[  23022.8ms] [cache] img notify url=https://github.githubassets.com/assets/tile-gradient-1-655dba6cdcef3c96.webp observers=9 bytes=32768 all=0
+[  23023.2ms] [cache] img data url=https://github.githubassets.com/assets/tile-gradient-1-655dba6cdcef3c96.webp bytes=41020 all=0 sizeAvail=1 null=0
+[  23023.6ms] [cache] img notify url=https://github.githubassets.com/assets/tile-gradient-1-655dba6cdcef3c96.webp observers=9 bytes=41020 all=0
+[  23024.4ms] [cache] img data url=https://github.githubassets.com/assets/tile-gradient-1-655dba6cdcef3c96.webp bytes=41020 all=1 sizeAvail=1 null=0
+[  23024.7ms] [cache] img notify url=https://github.githubassets.com/assets/tile-gradient-1-655dba6cdcef3c96.webp observers=9 bytes=41020 all=0
+[  23178.4ms] [cache] mem hit type=image url=https://github.githubassets.com/assets/tile-gradient-1-67516fb57f624345.webp
+[  23179.7ms] [cache] mem hit type=image url=https://github.githubassets.com/assets/tile-gradient-2-bd0a28f700770812.webp
+[  23377.1ms] [cache] mem hit type=image url=https://github.githubassets.com/assets/tile-gradient-2-032af4e10b4f5dad.webp
+[  23380.7ms] [cache] mem hit type=image url=https://github.githubassets.com/assets/tile-gradient-1-655dba6cdcef3c96.webp
+[  26597.6ms] [shell] session saved tabs=1 -> E:\mybrowsers\agave\build-zig-native\AgaveShellData\session.txt
+[  26608.5ms] [shell] message loop ended
+[  26622.5ms] [shell] atexit fired, bases exe=7ff656230000 agave=7ffef2e90000 ant=7ffeeed20000
   #00 exe+0x215d
   #01 ?+0x7fffc2689c85
   #02 ?+0x7fffc26898a7
@@ -925,7 +390,7 @@
   #08 exe+0xfebc
   #09 ?+0x7fffc3c4dda7
   #10 ?+0x7fffc5179c5c
-LEAK: 2865 Node
+LEAK: 2866 Node
 LEAK: 1 Frame
 LEAK: 1 Page
 LEAK: 3240 RenderObject

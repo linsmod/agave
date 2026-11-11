@@ -276,7 +276,7 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
 | 日志 | `AGB_UI_DEBUG=1` | 连 `mouse move` 也打（默认只打 down/up/wheel/key/char/focus/resize） |
 | 选区 | `AGB_SEL_DEBUG=1` | 打选区链路：`[sel] press ... clicks=/maySelect=/target=`、`[sel] drag rejected`、`[sel] extent ... type=range/caret len=`（拖拽扩展选区）、`[sel] canStart ... userSelect=`（`user-select:none` 判定）、`[selctl] set sel ...`（每次 `SelectionController::setSelection`）、`[paste] plainText size=/canPaste edit= textLen=`（剪贴板读与粘贴判定）。`tools/run_selection_tests.ps1` 有失败用例时先开它 |
 | 探针宿主 | `AGB_WAIT_MS` / `AGB_MAX_FRAMES` / `AGB_IDLE_FRAMES` / `AGB_FRAME_LOG` | `agave_view_host` 的等待与帧循环（出图用） |
-| JS 错误 | `AGB_ERR_SNIPPET=1` | 引擎抛内部错误时打 `[snippet]` 源码片段（ant 侧） |
+| JS 错误 | `AGB_ERR_SNIPPET=1` | 引擎抛内部错误时打 `[snippet]` 源码片段（ant 侧）；**同一条 message 最多 3 次**，之后静默计数（core-js 之类的特性探测会故意抛几十次同类 TypeError，2026-11-11 起不再刷屏） |
 | JS 调用 | `AGB_JS_DEBUG=1` / `AGB_JS_TRACE=1` / `AGB_CALL_DEBUG=1` | JS 求值 / 每次 JS→C 调用（`[call] name nargs`）/ 桥调用细节 |
 | JS 绑定 | `AGB_DOM_DEBUG=1` / `AGB_STYLE_DEBUG=1` / `AGB_EVT_DEBUG=1` | DOM 绑定 / style 访问 / realm·teardown 事件 |
 | 事件派发链 | `AGB_EVT_TRACE=1` | 每次派发沿冒泡链打印 `[evt-trace] <type> node=<ptr> listeners=<n>`：看某个监听器到底在不在链上、有没有被调用（R45 就是靠它确认 React 的委托监听器确实执行了） |
