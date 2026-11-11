@@ -26,10 +26,18 @@
 #include "DownloadManager.h"
 #include "AgbGapJsdom.h"
 
+
 namespace WebCore { bool prefersDarkColorScheme(); }
 #include "AgbSelector.h"
 #include "AgbTextCodec.h"
 #include "AntBridge.h"
+
+/* The custom element construct hook (issues #18/#22) is defined with the custom
+ * element helpers far below but has to be passed to the bridge when a document
+ * binds: a file-scope pointer, assigned right after its definition, bridges the
+ * gap without another forward declaration through two anonymous namespaces. */
+typedef int (*AgbConstructHookFn)(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*);
+static AgbConstructHookFn g_constructHookFn = NULL;
 #include "RealmDocument.h"
 #include "RealmTags.h"
 #include "../../webcore/platform/network/native/NetworkSession.h"
@@ -6477,6 +6485,8 @@ static void installGlobalApi(AntbEngine* engine, AntbValue* global)
         antb_define_method(g_engine, global, "__agbCEDefine", globalCEDefine, NULL);
         antb_define_method(g_engine, global, "__agbCEUpgrade", globalCEUpgrade, NULL);
         antb_define_method(g_engine, global, "__agbAttachShadow", globalAttachShadow, NULL);
+        /* Custom element constructors run through this hook (issues #18/#22). */
+        antb_set_construct_hook(g_engine, g_constructHookFn);
         antb_define_method(g_engine, global, "__agbViewportWidth", globalViewportSize, (void*)0);
         antb_define_method(g_engine, global, "__agbViewportHeight", globalViewportSize, (void*)1);
         /* Direct value access for the prototype-level value accessor (React tracker). */
@@ -9327,6 +9337,103 @@ static void customElementMarkUpgraded(WebCore::Element* element)
     runtime->upgradedCustom->insert(element);
 }
 
+/* Element that the in-progress custom element construction adopts: set by
+ * document.createElement()/upgrade before calling the constructor, consumed by
+ * customElementConstruct() (issues #18/#22). Construction is synchronous. */
+static WebCore::Element* g_pendingCustomElement = NULL;
+
+static char* customElementNameForCtor(AntbValue* ctor)
+{
+    DocumentRuntime* runtime;
+
+    if (!ctor || !g_document || !g_currentState)
+        return NULL;
+    runtime = documentRuntimeFor(g_currentState, g_document);
+    if (!runtime || !runtime->customDefs)
+        return NULL;
+
+    for (std::map<std::string, AntbValue*>::iterator it = runtime->customDefs->begin();
+         it != runtime->customDefs->end(); ++it) {
+        if (it->second && antb_value_same(it->second, ctor)) {
+            char* copy = (char*)malloc(it->first.size() + 1);
+
+            if (!copy)
+                return NULL;
+            memcpy(copy, it->first.c_str(), it->first.size() + 1);
+            return copy;
+        }
+    }
+    return NULL;
+}
+
+/* Bridge hook: new.target is the user class; super() lands in the interface
+ * constructor and asks us for the instance. We build it from new.target.prototype
+ * and adopt the element onto it. Returning 0 leaves the WebIDL error in place. */
+static int customElementConstruct(AntbEngine* engine, AntbValue* newTarget,
+                                  AntbValue** args, int argc, AntbValue* out)
+{
+    char* name;
+    WebCore::Element* element;
+    AntbValue* instance;
+    AntbValue* proto;
+
+    (void)args;
+    (void)argc;
+
+    if (!engine || !newTarget || !out)
+        return 0;
+
+    name = customElementNameForCtor(newTarget);
+    if (!name)
+        return 0;
+
+    element = g_pendingCustomElement;
+    if (!element && g_document) {
+        /* `new X()` with no element yet: create one for the registered tag. The
+         * PassRefPtr temporary must be held, and the node pinned the same way
+         * wrapNode() pins (it is kept alive for the realm's lifetime). */
+        WebCore::ExceptionCode ec = 0;
+        RefPtr<WebCore::Element> created =
+            g_document->createElement(WebCore::String::fromUTF8(name), ec);
+
+        element = created.get();
+        if (element) {
+            AntbValue* pinned = wrapNode(engine, element);
+
+            if (pinned)
+                antb_value_release(pinned);
+        }
+    }
+    free(name);
+
+    if (!element)
+        return 0;
+
+    instance = antb_make_object(engine);
+    if (!instance)
+        return 0;
+
+    proto = antb_get_prop(engine, newTarget, "prototype");
+    if (proto) {
+        antb_object_set_proto(instance, proto);
+        antb_value_release(proto);
+    }
+
+    if (!antb_object_adopt_native(engine, instance, classForNode(element), element,
+                                  AGB_TAG_NODE, element->document())) {
+        antb_value_release(instance);
+        return 0;
+    }
+
+    antb_value_assign(out, instance);
+    antb_value_release(instance);
+    return 1;
+}
+
+/* Publish the hook for the per-document registration in bindDocument(). */
+static const bool s_constructHookPublished = (g_constructHookFn = customElementConstruct, true);
+
+
 /* Calls `hook` on the definition's prototype with the element's wrapper as
  * `this`. Returns false when the hook does not exist. */
 static bool customElementCall(AntbValue* ctor, const char* hook, AntbValue* self,
@@ -9684,10 +9791,23 @@ static void customElementDidInsert(void* elementPointer)
         return;
 
     g_inCustomElementHook = true;
-    owned = upgradeCustomElement(element, ctor, NULL);
+
+    /* An element that existed before define() (parser-inserted, or created while
+     * the tag was still unknown) gets its constructor run here: it adopts the
+     * element onto the class instance, which is what makes class fields such as
+     * `this.delegate = ...` exist (issues #18/#22). */
+    if (!customElementWasUpgraded(element)) {
+        g_pendingCustomElement = element;
+        owned = antb_construct(g_engine, ctor, NULL, 0);
+        g_pendingCustomElement = NULL;
+    }
+    if (!owned)
+        owned = upgradeCustomElement(element, ctor, NULL);
+
     if (owned) {
         static const char* kHooks[] = { "connectedCallback" };
 
+        customElementMarkUpgraded(element);
         customElementCall(ctor, kHooks[0], owned, NULL, 0);
         antb_value_release(owned);
     }
@@ -12502,13 +12622,31 @@ int docCreateElement(AntbEngine* engine, AntbValue* self, AntbValue** args, int 
      * here leaked the node (and, through Node::m_document, its whole document)
      * on every tab close (R141). */
     {
+        /* wrapNode() first: it pins the node for the realm's lifetime. */
         AntbValue* v = wrapNode(engine, element.get());
 
         if (v) {
-            /* A registered custom element comes back already upgraded (prototype
-             * replaced), so `createElement('x-foo') instanceof XFoo` holds before
-             * it is inserted; the callbacks wait for insertion. */
-            upgradeCustomElementIfDefined(element.get(), v);
+            AntbValue* ctor = customElementCtor(element.get());
+
+            if (ctor) {
+                /* A registered custom element: run its constructor, which builds
+                 * the instance from the class prototype and adopts this element
+                 * (issues #18/#22). Null means the constructor threw or declined;
+                 * fall back to the prototype-only upgrade. */
+                AntbValue* instance;
+
+                g_pendingCustomElement = element.get();
+                instance = antb_construct(engine, ctor, NULL, 0);
+                g_pendingCustomElement = NULL;
+
+                if (instance) {
+                    antb_value_assign(out, instance);
+                    antb_value_release(instance);
+                    antb_value_release(v);
+                    return 1;
+                }
+                upgradeCustomElementIfDefined(element.get(), v);
+            }
             antb_value_assign(out, v);
             antb_value_release(v);
         }

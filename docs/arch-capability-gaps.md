@@ -114,7 +114,7 @@ qsChild=3 qsDesc=3 qsAdj=1 qsSib=2 qsNth=1 qsOdd=2 qsNot=2 qsFirst=1 qsList2=4 q
 `geolocation`、`FileReader`、`OffscreenCanvas`、
 `AudioContext`/`speechSynthesis`、`devicePixelRatio`、`print`、`Temporal`、`WebGL`。
 
-**Web Components（P0，issues #18）现状**：`customElements`（**已支持**，阶段 A：`define/get/getName/whenDefined/upgrade` +
+**Web Components（P0，issues #18）现状**：`customElements`（**已支持**，阶段 A：`define/get/getName/whenDefined/upgrade` + **构造器执行**（`new X()`/`super()` 走"分配/接管元素"，类字段如 `this.delegate` 因此存在）+
 `connectedCallback`/`disconnectedCallback`/`attributeChangedCallback`/`adoptedCallback` 的宿主侧分发 + `createElement` 升级）、
 `HTMLTemplateElement`（**已支持**，阶段 B）、`attachShadow`/`ShadowRoot`（**已支持**，阶段 C，务实版，见下）；
 阶段 D（**已支持 2026-11-11**）：构造式 `CSSStyleSheet`（`new CSSStyleSheet()`、`replaceSync`/`replace`）与

@@ -503,6 +503,33 @@
              deep.innerHTML === roundtrip ? false : (deep.content.childNodes.length === 2) &&
              t.content.childNodes.length === 3;
     })());
+    /* issues #18/#22: the custom element constructor runs, so class fields exist
+     * (GitHub's Turbo builds its delegate in the constructor). */
+    ok('custom element constructor runs', (function () {
+      var log = [];
+      var XCtor = class extends HTMLElement {
+        constructor() {
+          super();
+          this.delegate = { kind: 'delegate' };
+          this.made = 'ctor';
+        }
+        connectedCallback() { log.push('c:' + (this.delegate ? this.delegate.kind : 'x')); }
+      };
+      customElements.define('x-ctor-probe', XCtor);
+      var el = document.createElement('x-ctor-probe');
+      var created = el instanceof XCtor && el.delegate && el.delegate.kind === 'delegate' &&
+                    el.made === 'ctor';
+      var host = document.createElement('div');
+      document.body.appendChild(host);
+      host.appendChild(el);
+      var direct = new XCtor();
+      var directOk = direct instanceof XCtor && direct.delegate &&
+                     direct.delegate.kind === 'delegate' && direct.tagName === 'X-CTOR-PROBE';
+      var plain = null;
+      try { new HTMLElement(); } catch (e) { plain = e.name; }
+      host.parentNode.removeChild(host);
+      return created && directOk && plain === 'TypeError' && log.join(',') === 'c:delegate';
+    })());
     ok('customElements registry', (function () {
       var log = [];
       var XProbe = class extends HTMLElement {

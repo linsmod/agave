@@ -408,6 +408,44 @@ AGB_API void antb_class_install_properties(AntbEngine* engine, AntbClass* klass,
  * which is what a NodeList/HTMLCollection wrapper needs. `length` is asked
  * through the existing property dispatch, so the object must answer it. */
 AGB_API void antb_object_set_indexed_keys(AntbEngine* engine, AntbValue* obj);
+/* ---- custom element construction (issues #18/#22) ---------------------- *
+ * antb_construct runs a constructor exactly like Reflect.construct(); the DOM
+ * bridge uses it to run a custom element's constructor when an element is created
+ * or upgraded. antb_object_adopt_native registers an already-created JS object
+ * (the one the constructor produced, whose prototype is the user class) as the
+ * wrapper of a node, so document.createElement() hands back that same object and
+ * later wraps of the node return it too. A host installs an AntbConstructFn with
+ * antb_set_construct_hook to make interface constructors callable for registered
+ * custom element classes; declining keeps the WebIDL "Illegal constructor" error. */
+typedef int (*AntbConstructFn)(AntbEngine* engine, AntbValue* newTarget,
+                               AntbValue** args, int argc, AntbValue* out);
+
+AGB_API AntbValue* antb_construct(AntbEngine* engine, const AntbValue* ctor,
+                                  AntbValue** args, int argc);
+AGB_API int  antb_object_adopt_native(AntbEngine* engine, AntbValue* obj,
+                                      AntbClass* klass, void* ptr, unsigned tag,
+                                      void* owner);
+AGB_API void antb_set_construct_hook(AntbEngine* engine, AntbConstructFn fn);
+
+/* ---- custom element construction (issues #18/#22) ---------------------- *
+ * antb_construct runs a constructor exactly like Reflect.construct(); the DOM
+ * bridge uses it to run a custom element's constructor when an element is created
+ * or upgraded. antb_object_adopt_native registers an already-created JS object
+ * (the one the constructor produced, whose prototype is the user class) as the
+ * wrapper of a node, so document.createElement() hands back that same object and
+ * later wraps of the node return it too. A host installs an AntbConstructFn with
+ * antb_set_construct_hook to make interface constructors callable for registered
+ * custom element classes; declining keeps the WebIDL "Illegal constructor" error. */
+typedef int (*AntbConstructFn)(AntbEngine* engine, AntbValue* newTarget,
+                               AntbValue** args, int argc, AntbValue* out);
+
+AGB_API AntbValue* antb_construct(AntbEngine* engine, const AntbValue* ctor,
+                                  AntbValue** args, int argc);
+AGB_API int  antb_object_adopt_native(AntbEngine* engine, AntbValue* obj,
+                                      AntbClass* klass, void* ptr, unsigned tag,
+                                      void* owner);
+AGB_API void antb_set_construct_hook(AntbEngine* engine, AntbConstructFn fn);
+
 /* Replaces an object's [[Prototype]]. Used by the DOM facade for custom element
  * upgrades: the wrapper's prototype becomes the user class' prototype, so
  * `el instanceof MyElement` and the class' methods resolve, while the native
