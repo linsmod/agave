@@ -53,6 +53,10 @@ static volatile LONG g_stopWatchdog;
 static MaCrossView*  g_view;
 static MC_BYTE*      g_frame;
 static int           g_visible = 1;
+/* The host asked for one frame while the view is hidden (cold tab switch: it
+ * wants a frame before showing the view). Cleared once that frame is
+ * published; the view stays "hidden" for Page Visibility purposes. */
+static int           g_wantFrame;
 static int           g_log;
 
 /* Full-size command text buffer: one command's arena text is copied here whole
@@ -545,6 +549,11 @@ static int executeCommand(const AgwIpcCommand* cmd)
         g_visible = cmd->a ? 1 : 0;
         macross_view_set_visible(g_view, g_visible);
         return 1;
+    case AGW_VIEW_CMD_FRAME:
+        /* One frame despite being hidden: the host is about to show this view
+         * and wants its first frame instead of an empty client. */
+        g_wantFrame = 1;
+        return 1;
     case AGW_VIEW_CMD_FOCUS:
         if (cmd->a)
             macross_view_set_focus(g_view);
@@ -844,7 +853,7 @@ int main(int argc, char** argv)
 
         macross_event_dispatch();
 
-        if (!g_visible) {
+        if (!g_visible && !g_wantFrame) {
             /* Hidden view: timers/network keep running, no layout or paint
              * (the same rule as R150 in-process). */
             macross_view_pump(g_view);
@@ -862,6 +871,10 @@ int main(int argc, char** argv)
             uint32_t seq;
 
             macross_view_update(g_view, NULL);
+
+            /* The wanted frame is delivered; a second one would undo the
+             * "hidden views do not paint" saving. */
+            g_wantFrame = 0;
 
             seq = (uint32_t)InterlockedIncrement(&g_hdr->frameSeq);
             pushFrameEvent(seq, (int)g_hdr->width, (int)g_hdr->height);

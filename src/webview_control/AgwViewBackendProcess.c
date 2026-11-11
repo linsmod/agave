@@ -29,6 +29,97 @@ static int64_t qpcUs(void)
     return (int64_t)(c.QuadPart * 1000000 / f.QuadPart);
 }
 
+/* The shared canvas starts as zeros - black - and the renderer publishes a
+ * frame on every loop for a visible view whether or not the page painted
+ * anything (a frame is a buffer copy, not "the page has content"). A loading
+ * page therefore shows a plain black rectangle that is impossible to tell apart
+ * from anything else. Stamp it with black + "AGAVE PROCESS RENDERER" in
+ * grey-black, the same marker the in-process control writes into its own DIB
+ * (AgaveWebView.c agwDrawRendererBackground). macross_view_create() does not
+ * clear the buffer, so the stamp survives until the page actually paints. */
+static void stampProcessCanvas(AgwIpcHeader* hdr)
+{
+    BITMAPINFO info;
+    HDC screen, mem;
+    HBITMAP bmp;
+    HGDIOBJ old;
+    void* bits = NULL;
+    MC_BYTE* frame;
+    RECT rect;
+    int w, h, pitch, y, size;
+
+    if (!hdr || hdr->width <= 0 || hdr->height <= 0)
+        return;
+
+    w = (int)hdr->width;
+    h = (int)hdr->height;
+    pitch = (int)hdr->framePitch;
+
+    if (pitch < w * 4)
+        return;
+
+    memset(&info, 0, sizeof(info));
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = w;
+    info.bmiHeader.biHeight = -h;          /* top-down, like the canvas */
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+
+    screen = GetDC(NULL);
+    mem = CreateCompatibleDC(screen);
+    bmp = CreateDIBSection(mem, &info, DIB_RGB_COLORS, &bits, NULL, 0);
+
+    if (bmp && bits) {
+        old = SelectObject(mem, bmp);
+
+        SetRect(&rect, 0, 0, w, h);
+        FillRect(mem, &rect, (HBRUSH)GetStockObject(BLACK_BRUSH));
+
+        size = h / 8;
+        if (size < 24)
+            size = 24;
+        if (size > 140)
+            size = 140;
+        if (size > w / 8)
+            size = w / 8;
+
+        if (size >= 8) {
+            HFONT font = CreateFontA(-size, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                                     DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                                     CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                     DEFAULT_PITCH | FF_DONTCARE, "Segoe UI");
+
+            if (font) {
+                HGDIOBJ oldFont = SelectObject(mem, font);
+
+                SetBkMode(mem, TRANSPARENT);
+                SetTextColor(mem, RGB(0x33, 0x33, 0x33));
+                DrawTextA(mem, "AGAVE PROCESS RENDERER", -1, &rect,
+                          DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+                SelectObject(mem, oldFont);
+                DeleteObject(font);
+            }
+        }
+
+        frame = (MC_BYTE*)hdr + hdr->frameOffset;
+
+        for (y = 0; y < h; ++y)
+            memcpy(frame + (size_t)y * (size_t)pitch,
+                   (const unsigned char*)bits + (size_t)y * (size_t)w * 4u,
+                   (size_t)w * 4u);
+
+        SelectObject(mem, old);
+    }
+
+    if (bmp)
+        DeleteObject(bmp);
+    if (mem)
+        DeleteDC(mem);
+    if (screen)
+        ReleaseDC(NULL, screen);
+}
+
 /* One kill-on-close job for every renderer this process starts: whatever ends
  * the control (a clean shutdown, a crash, the probe calling ExitProcess) takes
  * the rendersers with it, instead of leaving orphans behind. */
@@ -279,6 +370,10 @@ static void* processCreate(void* owner, MC_BYTE* buffer, int width, int height, 
     pv->hdr->frameOffset = frameOffset;
     pv->hdr->framePitch = (uint32_t)AGW_IPC_FRAME_W_MAX * 4u;
     pv->hdr->frameBytes = frameBytes;
+
+    /* Name the empty canvas before the renderer starts: whatever it publishes
+     * before the page paints is this black + label background. */
+    stampProcessCanvas(pv->hdr);
 
     {
         char eventName[160];

@@ -809,6 +809,7 @@ static void applyZoomToActive(void)
 /* ------------------------------------------------------------------------- */
 
 static void setActiveTab(int index);
+static void switchTabWarm(int index);
 static void createTab(const char* url);
 static void updateWindowTitle(void);
 static void onCloseWindow(AgaveWebView* view, void* user);
@@ -864,14 +865,19 @@ static void setActiveTab(int index)
 
     g_activeTab = index;
 
+    syncTabVisibility();
+
+    /* Lay the view out before showing it: a view shown at its previous rect for
+     * one frame paints a page that covers only part of the content area (and
+     * the rest is the shell's background) - that snap is the "torn page area"
+     * when a tab is opened. */
+    layoutTab(index);
+
     for (i = 0; i < MAX_TABS; ++i) {
         if (g_tabs[i].used && g_tabs[i].hwnd)
             ShowWindow(g_tabs[i].hwnd, i == index ? SW_SHOW : SW_HIDE);
     }
 
-    syncTabVisibility();
-
-    layoutTab(index);
     applyZoomToActive();
 
     if (g_tabs[index].view) {
@@ -897,6 +903,77 @@ static void setActiveTab(int index)
      * (which is called from tab creation and from the tab strip). */
     if (g_tabs[index].hangPending && index == g_activeTab)
         PostMessageA(g_hwnd, AGW_SHELL_HANG_PROMPT, (WPARAM)index, 0);
+}
+
+/* --- cold tab switches: render a frame, then switch ------------------------
+ *
+ * Showing a tab paints its last frame immediately. After a resize while the tab
+ * was in the background its surface was rebuilt and the engine, which skips
+ * layout+paint for hidden views, had no frame to publish - so the switch showed
+ * an empty client for a frame or two (a flash). Instead of showing the empty
+ * surface, ask the engine for one frame and finish the switch when it lands
+ * (one or two engine ticks, ~6-12 ms), leaving the old tab on screen meanwhile.
+ * A target that already has a frame switches immediately, which is the common
+ * case; a page that cannot produce one (hung, crashed) still switches after a
+ * short timeout so a click never feels stuck. */
+#define WARM_TAB_TIMER      1
+#define WARM_TAB_TIMEOUT_MS 120
+#define WARM_TAB_POLL_MS    5
+
+static int           g_warmTab = -1;
+static unsigned long g_warmSince;
+
+static void cancelWarmSwitch(void)
+{
+    g_warmTab = -1;
+
+    if (g_hwnd)
+        KillTimer(g_hwnd, WARM_TAB_TIMER);
+}
+
+static void finishWarmSwitch(void)
+{
+    int index = g_warmTab;
+
+    if (index >= 0)
+        agbLog(AGB_LOG_SHELL, "tab switch warm settled index=%d waited=%lums",
+               index, (unsigned long)(GetTickCount() - g_warmSince));
+
+    cancelWarmSwitch();
+
+    if (index >= 0 && index < MAX_TABS && g_tabs[index].used && index != g_activeTab)
+        setActiveTab(index);
+}
+
+/* User-initiated switch (tab click, Ctrl+Tab). Internal flows (new tab, close,
+ * session restore, window.open) keep calling setActiveTab directly: they own
+ * the ordering and are not about to show a stale surface. */
+static void switchTabWarm(int index)
+{
+    if (index < 0 || index >= MAX_TABS || !g_tabs[index].used || index == g_activeTab)
+        return;
+
+    /* A newer click supersedes a pending switch. */
+    cancelWarmSwitch();
+
+    if (!g_tabs[index].view || agave_webview_has_frame(g_tabs[index].view)) {
+        setActiveTab(index);
+        return;
+    }
+
+    /* The surface may still be the pre-resize one; layoutTab posts the resize,
+     * request_frame asks for the frame, and the engine applies both in the same
+     * iteration. */
+    layoutTab(index);
+    agave_webview_request_frame(g_tabs[index].view);
+
+    g_warmTab = index;
+    g_warmSince = GetTickCount();
+
+    agbLog(AGB_LOG_SHELL, "tab switch warm index=%d (no frame yet)", index);
+
+    if (g_hwnd)
+        SetTimer(g_hwnd, WARM_TAB_TIMER, WARM_TAB_POLL_MS, NULL);
 }
 
 static void closeTab(int index)
@@ -1010,7 +1087,7 @@ static void switchTab(int direction)
             continue;
 
         if (slot == index) {
-            setActiveTab(i);
+            switchTabWarm(i);
             return;
         }
 
@@ -2431,10 +2508,22 @@ static void createTab(const char* url)
 
     tab->used = 1;
     tab->window = g_cur;
-    tab->view = agave_webview_create(g_hwnd, 0,
-                                     CHROME->content.y > 0 ? CHROME->content.y
-                                                           : TAB_HEIGHT + TOOLBAR_H,
-                                     800, 400, &callbacks, tab);
+    {
+        /* Create the control at the rect layoutTab() will use. It used to be
+         * created at a placeholder 800x400 and resized on activation, so a new
+         * tab showed a page surface that covered only part of the content area
+         * (the rest was the shell's white background) until the resize landed -
+         * the "torn page area" when opening a tab. */
+        UiRect content = CHROME->content;
+
+        if (content.w < 1)
+            content.w = 1;
+        if (content.h < 1)
+            content.h = 1;
+
+        tab->view = agave_webview_create(g_hwnd, content.x, content.y,
+                                         content.w, content.h, &callbacks, tab);
+    }
 
     if (!tab->view) {
         agbLog(AGB_LOG_SHELL, "tab create failed: view=null url=%s", url ? url : "");
@@ -3236,7 +3325,7 @@ static void onChromeActivateTab(void* user, int index)
         return;
 
     g_cur = win;
-    setActiveTab(index);
+    switchTabWarm(index);
 }
 
 static void onChromeCloseTab(void* user, int index)
@@ -3466,6 +3555,27 @@ static LRESULT CALLBACK shellProcInner(HWND hwnd, UINT message, WPARAM wParam, L
         updateToolbarState();
         InvalidateRect(hwnd, NULL, FALSE);
         return 0;
+
+    case WM_TIMER:
+        /* A cold tab switch is waiting for its warm-up frame (see
+         * switchTabWarm): finish as soon as it lands, or give up after the
+         * timeout so a hung page cannot swallow the click. */
+        if (wParam == WARM_TAB_TIMER) {
+            int index = g_warmTab;
+
+            if (index < 0 || index >= MAX_TABS || !g_tabs[index].used) {
+                cancelWarmSwitch();
+                return 0;
+            }
+
+            if ((g_tabs[index].view &&
+                 agave_webview_has_frame(g_tabs[index].view)) ||
+                GetTickCount() - g_warmSince > WARM_TAB_TIMEOUT_MS)
+                finishWarmSwitch();
+
+            return 0;
+        }
+        break;
 
     case WM_PAINT:
         paintShell(hwnd);

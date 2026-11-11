@@ -82,6 +82,7 @@ RVVM 后端用 guest 内存 + `virtpass_browser` 的 ecall；local 后端只是�
 |---|---|---|
 | `VIEW_RESIZE` | `w,h,scale,dpi` | 唯一触发重排的命令；必须幂等 |
 | `VIEW_VISIBLE` | `0/1` | 冻结/解冻（后台 tab、最小化）；对接 R150 的 skip + 整幅重绘 |
+| `VIEW_FRAME` | 无 | 冻结中**只画一帧**并发布：宿主切 tab 前预热用（隐藏期间被 resize 的视图没有可显示的帧）。渲染进程仍是 hidden（Page Visibility 不变），只做一次 layout+paint+publish |
 | `VIEW_FOCUS` | `0/1` | 与 visibility 分开（活动窗口的焦点不等于可见性） |
 | `VIEW_ZOOM` | `percent` | `macross_view_set_scale_factor`；控件缩放已接 |
 | `INPUT_MOUSE` | `action,x,y,button,wheel,t` | 移动可合并（只留最后一个坐标），按下/抬起保序 |

@@ -285,6 +285,13 @@ chrome 全部落在 `HTCLIENT` 里（只有标签条空白处是 `HTCAPTION`）�
   （对 `#DEE1E6` 的 strip 是提亮而不是压暗）。
 - **按下即切换**：tab 主体的 `UI_MOUSE_DOWN` 直接 `activate_tab`，`UI_MOUSE_UP` 只
   处理关闭 chip / `+`（否则会切两次）。关闭 chip 仍等抬起，避免拖一下就关页。
+- **冷切换先渲染一帧再切**（`switchTabWarm`）：点 tab / `Ctrl+Tab` 时先问
+  `agave_webview_has_frame()`；有效就直接 `setActiveTab()`（常见路径，零延迟）；
+  无效（隐藏期间被 resize、surface 已重建）就先 `layoutTab()` + `agave_webview_request_frame()`，
+  旧 tab 画面保持不动，5 ms 轮询到帧（通常 10~35 ms）再真正切换，150 ms 超时兜底
+  （页面卡死也不能吞点击）。日志：`tab switch warm index=N (no frame yet)` /
+  `... settled index=N waited=Nms`。新建/关闭/会话恢复/window.open 这些内部流程仍直接
+  调 `setActiveTab()`：它们自己掌握顺序，不会显示过期 surface。
 - **活动标签的轮廓**（`uiFillTabShape` 画身体、`paintTabBaseFlare` 画底部外张）：
   上角 8px 圆弧；底部与工具栏交界处**向外张开**——侧边收到一个与工具栏顶边相切的
   1/4 圆弧（半径 8@96），所以底座比标签身体宽。圆弧 = 角方块 − 以方块外角为圆心的

@@ -137,6 +137,10 @@ static int localSubmit(void* view, const AgwViewCommand* cmd)
         if (text && text[0])
             macross_view_exec_editor_command(mcv, text);
         return 1;
+    case AGW_VIEW_CMD_FRAME:
+        /* In-process views are painted by the control's own loop; the request is
+         * handled there (AgaveWebView.c AGW_CMD_REQUEST_FRAME -> wantFrame). */
+        return 1;
     case AGW_VIEW_CMD_ZOOM:
         macross_view_set_scale_factor(mcv, cmd->a > 0 ? cmd->a : 100);
         return 1;

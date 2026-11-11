@@ -105,12 +105,24 @@ view 并让宿主切过去，没命中才建新控件交给宿主开 tab。两�
   宿主会等一次回收完成（2 s 上限，卡在页面脚本里时靠看门狗 abort）。设计记录见
   [design-tab-teardown.md](design-tab-teardown.md)。
 * 每个控件独立：独立 `MaCrossView`、独立 DIB、独立进度与标题。
-* **绘制契约：控件窗口任何时刻自己负责整块客户区**。`agwPaint()` 先补白底（当 DIB
-  还没建好、或 DIB 比客户区小），再把 `mirrorBits` BitBlt 上去；`WM_ERASEBKGND` 直接
-  `return 1`，不会让系统擦背景。不这么补底的话，新标签的控件会在第一个引擎帧到达前
-  被绘制（此时 `width/height` 还是 0），露出的就是那块区域原来的像素——看起来就是
-  "网页区域撕裂"。帧拷贝（引擎线程 → `mirrorBits`）与 BitBlt 共用 `agwLock`，所以
-  不会出现半帧。
+* **绘制契约：控件窗口任何时刻自己负责整块客户区**。新 `CreateDIBSection` 的内存是 0
+  （**黑**），而**可见视图每轮都会把 `bits` 拷进镜像并发一帧**（拷帧不等于“页面画了
+  东西”），所以页面还在 loading、没有 paint 时窗口看到的就是这块黑 buffer——不是
+  “没有帧”。为了能归因，`agwCreateSurface()` 在建 surface 时把 **黑底 + 灰黑(#333)的
+  `AGAVE LOCAL RENDERER` 大字**直接画进 `bits` 和 `mirrorBits`（process 后端则由控件在
+  启动 renderer 前把 `AGAVE PROCESS RENDERER` 画进共享 canvas，见
+  `AgwViewBackendProcess.c:stampProcessCanvas`）；页面真画上去后自然覆盖。
+  `agwPaint()` 再按 `mirrorW/H`（镜像里真正有效的那块）判断：完全没帧时重画同一背景，
+  部分覆盖时只补黑边，绝不露出窗口原本的残留像素。`WM_ERASEBKGND` 直接 `return 1`。
+  帧拷贝（引擎线程 → `mirrorBits`）与 BitBlt 共用 `agwLock`，不会出现半帧。
+  `AGB_PAINT_DEBUG=1` 会打印 `[paint] no-frame background ...` /
+  `[paint] partial-frame background ...` 帮助判断黑区来自哪一侧。
+* **冷切换预热**：引擎对 `visible == 0` 的视图跳过 layout+paint，隐藏期间被 resize 的
+  视图 surface 会被重建、镜像没有帧，切回去时窗口先画一帧空白。宿主可以用
+  `agave_webview_has_frame()` 判断镜像是否有效，无效时调
+  `agave_webview_request_frame()`（进程内 → `wantFrame`；process 后端 → 额外发
+  `AGW_VIEW_CMD_FRAME`，渲染进程即使 hidden 也画并发一帧），等帧到了再显示。
+  shell 的策略见 [design-shell-ui.md](design-shell-ui.md) §5.3。
 
 ## 多控件
 

@@ -39,7 +39,10 @@ typedef enum {
     AGW_VIEW_CMD_SEARCH,        /* text = needle, a = forward, b = caseSensitive */
     AGW_VIEW_CMD_CONTEXT_MENU,  /* a = modifier, c = x, d = y */
     AGW_VIEW_CMD_SERVICE_REPLY, /* a = id, b = status, text = payload (B4) */
-    AGW_VIEW_CMD_EDITOR         /* text = Editor::execCommand name, e.g. "Copy" */
+    AGW_VIEW_CMD_EDITOR,        /* text = Editor::execCommand name, e.g. "Copy" */
+    AGW_VIEW_CMD_FRAME          /* layout+paint+publish one frame even while the
+                                 * view is hidden (cold tab switch: the host wants
+                                 * a frame before it shows the view) */
 } AgwViewCommandKind;
 
 typedef struct {

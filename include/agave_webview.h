@@ -218,6 +218,18 @@ AGW_API int  agave_webview_zoom(AgaveWebView* view);
  * commands; call it whenever the host shows/hides a tab. */
 AGW_API void agave_webview_set_visible(AgaveWebView* view, int visible);
 
+/* Cold-switch warm-up for a hidden view. The engine skips layout+paint for a
+ * hidden view, and a resize while it was hidden replaced its surface, so the
+ * next show had no frame to display (it painted an empty client for one or
+ * more frames). request_frame() asks for exactly one frame to be laid out,
+ * painted and published into the paint mirror even though the view is hidden;
+ * has_frame() says whether the mirror currently holds a frame for the current
+ * surface size. A host switching tabs can therefore ask first and only show
+ * the view once a frame exists - the usual path (valid frame) stays instant.
+ * Both are safe from any thread; has_frame() is a cheap lock read. */
+AGW_API void agave_webview_request_frame(AgaveWebView* view);
+AGW_API int  agave_webview_has_frame(AgaveWebView* view);
+
 /* Last known state (valid on any thread, copied under lock). */
 AGW_API const char* agave_webview_url(AgaveWebView* view);
 AGW_API const char* agave_webview_title(AgaveWebView* view);

@@ -120,7 +120,7 @@ enum {
     AGW_CMD_RELOAD, AGW_CMD_STOP, AGW_CMD_EVAL, AGW_CMD_ZOOM,
     AGW_CMD_RESIZE, AGW_CMD_UA, AGW_CMD_DL_DIR, AGW_CMD_MOUSE, AGW_CMD_KEY,
     AGW_CMD_CHAR, AGW_CMD_FOCUS, AGW_CMD_SEARCH, AGW_CMD_CONTEXT,
-    AGW_CMD_DL_CANCEL, AGW_CMD_VISIBLE, AGW_CMD_EDITOR
+    AGW_CMD_DL_CANCEL, AGW_CMD_VISIBLE, AGW_CMD_EDITOR, AGW_CMD_REQUEST_FRAME
 };
 
 /* Commands that mean "the user wants the page to change": while one of them
@@ -190,6 +190,7 @@ static const char* agwCommandKindName(int type)
     case AGW_CMD_CONTEXT:   return "context-menu";
     case AGW_CMD_VISIBLE:   return "visible";
     case AGW_CMD_EDITOR:    return "editor";
+    case AGW_CMD_REQUEST_FRAME: return "frame";
     default:                return "command";
     }
 }
@@ -324,6 +325,28 @@ struct AgaveWebView {
     int                backCount;
     int                forwardCount;
     unsigned long      lastMirrorMs;   /* last InvalidateRect mirrored to the window */
+    /* 1 = mirrorBits holds a complete frame for the current surface size.
+     * Cleared when the surface is (re)created - a resize while the view is
+     * hidden recreates it and the engine skips the copy for hidden views, so
+     * when the tab comes back the mirror is empty: blitting it showed a blank
+     * or half-old page for the first frame (the "torn page area" after a
+     * resize + tab switch). While it is 0 the window paints white and waits
+     * for the first real frame. */
+    int                mirrorValid;
+    /* Pixel extent of the mirror content that is actually filled: the local
+     * backend covers the whole surface, the process backend covers only what
+     * the renderer has published (its canvas can still be the old, smaller
+     * size for a frame or two after a resize). Everything outside is painted
+     * white instead of whatever the DIB holds - a fresh DIB is zeroed, i.e.
+     * black, and that is the black band that showed up next to the white page
+     * on a cold switch. */
+    int                mirrorW;
+    int                mirrorH;
+    /* Engine thread: a host asked for one frame while this view is hidden
+     * (agave_webview_request_frame, a cold tab switch). The loop then lays out,
+     * paints and publishes that frame even though `visible` is 0; the flag is
+     * cleared as soon as a frame has been copied. */
+    int                wantFrame;
     int                navigatePending; /* a CMD_NAVIGATE is queued for this view */
     /* Page Visibility as the engine loop sees it (host order: background tab,
      * minimized window). A hidden view keeps running JS and its async work, but
@@ -469,6 +492,10 @@ static void agwOnClipboardSetData(void* data, unsigned int len);
  * called while the engine is inside macross_view_update on this item, or while
  * macross_event_dispatch() is firing that page's timers. */
 static void agwDestroySurface(AgaveWebView* item);
+/* Black background + backend name, stamped into a fresh surface and painted
+ * wherever no frame covers the client (defined next to agwPaint). */
+static void agwDrawRendererBackground(AgaveWebView* item, HDC hdc,
+                                      int width, int height, int label);
 
 /* Window destruction belongs to the thread that created it: tabs are created by
  * the host, popups (agwOnOpenWindow) by the engine thread. A host that creates a
@@ -1115,6 +1142,9 @@ static void agwDestroySurface(AgaveWebView* item)
         item->mirrorBitmap = NULL;
     }
     item->mirrorBits = NULL;
+    item->mirrorValid = 0;
+    item->mirrorW = 0;
+    item->mirrorH = 0;
 }
 
 static int agwCreateSurface(AgaveWebView* item, int width, int height)
@@ -1152,6 +1182,22 @@ static int agwCreateSurface(AgaveWebView* item, int width, int height)
 
     item->width = width;
     item->height = height;
+    item->mirrorValid = 0;      /* no page frame yet */
+    item->mirrorW = width;      /* the stamped background is well-defined */
+    item->mirrorH = height;
+
+    /* A fresh DIB is zeroed, i.e. black. The control publishes a frame for a
+     * visible view on every engine tick whether or not the page painted
+     * anything, so before the first real paint the window shows this black
+     * buffer - and a plain black rectangle is impossible to attribute. Stamp
+     * the renderer's own background (black + "AGAVE <backend> RENDERER") into
+     * both buffers: the black frame then names itself, and the page covers it
+     * as soon as it paints. */
+    if (item->memdc)
+        agwDrawRendererBackground(item, item->memdc, width, height, 1);
+    if (item->mirrorDc)
+        agwDrawRendererBackground(item, item->mirrorDc, width, height, 1);
+
     return item->bits != NULL && item->mirrorBits != NULL;
 }
 
@@ -2043,6 +2089,21 @@ static void agwDrainCommands(void)
                 InvalidateRect(item->hwnd, NULL, FALSE);
             break;
 
+        case AGW_CMD_REQUEST_FRAME:
+            /* Hidden view: paint exactly one frame so the host can switch to it
+             * without showing an empty client. forceFullPaint: the dirty rects
+             * accumulated while hidden were consumed by the paint skip. A remote
+             * renderer skips paint for a hidden view too, so it needs the same
+             * request through its command ring. */
+            if (!item->visible) {
+                item->wantFrame = 1;
+                item->forceFullPaint = 1;
+
+                if (item->backend && item->backend->frame)
+                    agwSubmitSimple(item, AGW_VIEW_CMD_FRAME, 0, 0, 0, 0);
+            }
+            break;
+
         case AGW_CMD_RESIZE:
             /* Only remember the size: a live drag queues one of these per
              * WM_SIZE, and recreating the DIB (plus a restyle) for every one of
@@ -2432,6 +2493,12 @@ static int agwCopyRemoteFrame(AgaveWebView* item)
             memcpy(item->mirrorBits + (size_t)y * (size_t)rowBytes,
                    src + (size_t)y * (size_t)pitch, (size_t)copyBytes);
 
+        /* A renderer that has not caught up with the last resize publishes a
+         * smaller canvas; only the copied rect is valid, everything else stays
+         * white (see agwPaint). */
+        item->mirrorW = copyBytes / 4;
+        item->mirrorH = rows;
+        item->mirrorValid = (w >= item->width && h >= item->height);
         item->lastMirrorMs = GetTickCount();
         copied = 1;
     }
@@ -2556,7 +2623,7 @@ static DWORD WINAPI agwEngineThread(LPVOID param)
                      * per view - has to fix first: K threads must not all paint
                      * a hidden view). The page still lays out on demand: every
                      * geometry read in WebCore calls updateLayout(). */
-                    if (item->visible) {
+                    if (item->visible || item->wantFrame) {
                         if (item->forceFullPaint && item->width > 0 && item->height > 0) {
                             MC_RECT full;
 
@@ -2602,8 +2669,12 @@ static DWORD WINAPI agwEngineThread(LPVOID param)
                  * scrolling); the copy is ~1ms, the engine paints outside it.
                  * The size check is inside the lock too: agwEnsureSurface()
                  * replaces both buffers (and their dimensions) under it.
-                 * A hidden view paints nothing, so it has nothing to copy. */
-                if (item->visible) {
+                 * A hidden view normally paints nothing, so it has nothing to
+                 * copy - except the one frame a host explicitly asked for
+                 * (wantFrame, a cold tab switch). */
+                if (item->visible || item->wantFrame) {
+                    int hadWantedFrame = item->wantFrame;
+
                     /* A backend that keeps its canvas in shared memory hands out
                      * the frame here (one copy, straight into the mirror); the
                      * local backend has none and painted into item->bits. */
@@ -2618,6 +2689,9 @@ static DWORD WINAPI agwEngineThread(LPVOID param)
 
                             memcpy(item->mirrorBits, item->bits, bytes);
                             item->lastMirrorMs = GetTickCount();
+                            item->mirrorValid = 1;
+                            item->mirrorW = item->width;
+                            item->mirrorH = item->height;
                             copied = 1;
                         }
                         agwUnlock();
@@ -2625,6 +2699,11 @@ static DWORD WINAPI agwEngineThread(LPVOID param)
                         if (copied && item->hwnd && IsWindowVisible(item->hwnd))
                             InvalidateRect(item->hwnd, NULL, FALSE);
                     }
+
+                    /* The greedy frame is delivered; a second one would undo the
+                     * "hidden views do not paint" saving. */
+                    if (hadWantedFrame && item->mirrorValid)
+                        item->wantFrame = 0;
                 }
 
                 g_lastActive = item;
@@ -2732,6 +2811,61 @@ static const char* agwButtonName(int button)
     }
 }
 
+/* The renderer's own background, for the area no frame covers yet (a view that
+ * has not produced its first frame - e.g. while the page is still loading).
+ * It is BLACK with the backend's name in dark grey: the shell's page area is
+ * white, so a black page area with this text is unambiguously the control's DIB
+ * before the renderer painted anything, which is what tells a host/debugger
+ * which side a black flash came from. Label 0 = edges only (a partial frame is
+ * on screen; do not stamp text over it). */
+static void agwDrawRendererBackground(AgaveWebView* item, HDC hdc,
+                                       int width, int height, int label)
+{
+    RECT fill;
+    HFONT font;
+    HGDIOBJ oldFont;
+
+    SetRect(&fill, 0, 0, width, height);
+    FillRect(hdc, &fill, (HBRUSH)GetStockObject(BLACK_BRUSH));
+
+    if (!label || width <= 0 || height <= 0)
+        return;
+
+    {
+        int size = height / 8;
+
+        if (size < 24)
+            size = 24;
+        if (size > 140)
+            size = 140;
+        if (size > width / 8)
+            size = width / 8;
+        if (size < 8)
+            return;
+
+        font = CreateFontA(-size, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                           DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                           CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                           DEFAULT_PITCH | FF_DONTCARE, "Segoe UI");
+        if (!font)
+            return;
+
+        oldFont = SelectObject(hdc, font);
+        SetBkMode(hdc, TRANSPARENT);
+        /* Grey-black on black: readable as a marker, dim enough not to look
+         * like page content. */
+        SetTextColor(hdc, RGB(0x33, 0x33, 0x33));
+        DrawTextA(hdc,
+                  (item && item->backend && item->backend->frame)
+                      ? "AGAVE PROCESS RENDERER"
+                      : "AGAVE LOCAL RENDERER",
+                  -1, &fill,
+                  DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        SelectObject(hdc, oldFont);
+        DeleteObject(font);
+    }
+}
+
 static void agwPaint(AgaveWebView* item, HDC hdc)
 {
     RECT client;
@@ -2749,21 +2883,38 @@ static void agwPaint(AgaveWebView* item, HDC hdc)
     agwLock();
 
     /* The window must never show whatever pixels happened to be under it.
-     * A new tab paints before its DIB exists (width/height are 0 until the
-     * engine thread builds the surface), and a resize can paint while the DIB
-     * is still the old, smaller one - BitBlt alone left the rest of the client
-     * area stale, which read as a torn page area. White first (what Chrome
-     * shows for an empty view), then the frame on top. */
+     * - a new tab paints before its DIB exists (mirrorW/H are 0);
+     * - a resize can paint while the DIB is still the old, smaller one;
+     * - the process backend publishes its own canvas, which can be smaller
+     *   than the surface for a frame or two after a resize.
+     * With no frame at all the area is the renderer's empty background (black +
+     * the backend's name); a partial frame only gets black edges, because the
+     * frame itself is about to cover them. */
     if (!item->mirrorDc || !item->mirrorBits ||
-        item->width < cw || item->height < ch) {
-        RECT fill;
+        item->mirrorW <= 0 || item->mirrorH <= 0) {
+        agwDrawRendererBackground(item, hdc, cw, ch, 1);
 
-        SetRect(&fill, 0, 0, cw, ch);
-        FillRect(hdc, &fill, (HBRUSH)GetStockObject(WHITE_BRUSH));
+        if (getenv("AGB_PAINT_DEBUG")) {
+            fprintf(stderr, "[paint] no-frame background client=%dx%d backend=%s\n",
+                    cw, ch, item->backend && item->backend->name
+                                ? item->backend->name : "?");
+            fflush(stderr);
+        }
+    } else if (item->mirrorW < cw || item->mirrorH < ch) {
+        agwDrawRendererBackground(item, hdc, cw, ch, 0);
+
+        if (getenv("AGB_PAINT_DEBUG")) {
+            fprintf(stderr, "[paint] partial-frame background client=%dx%d mirror=%dx%d\n",
+                    cw, ch, item->mirrorW, item->mirrorH);
+            fflush(stderr);
+        }
     }
 
-    if (item->mirrorDc && item->mirrorBits) {
-        BitBlt(hdc, 0, 0, item->width, item->height, item->mirrorDc, 0, 0, SRCCOPY);
+    if (item->mirrorDc && item->mirrorBits && item->mirrorW > 0 && item->mirrorH > 0) {
+        int w = item->mirrorW < cw ? item->mirrorW : cw;
+        int h = item->mirrorH < ch ? item->mirrorH : ch;
+
+        BitBlt(hdc, 0, 0, w, h, item->mirrorDc, 0, 0, SRCCOPY);
     }
 
     agwUnlock();
@@ -2775,23 +2926,26 @@ int agave_webview_paint_to(AgaveWebView* item, void* hdc, int width, int height)
         return 0;
 
     agwLock();
-    if (item->mirrorDc && item->mirrorBits && item->width > 0 && item->height > 0) {
-        int w = width > 0 ? width : item->width;
-        int h = height > 0 ? height : item->height;
+    if (item->mirrorDc && item->mirrorBits && item->mirrorW > 0 && item->mirrorH > 0) {
+        int w = width > 0 ? width : item->mirrorW;
+        int h = height > 0 ? height : item->mirrorH;
 
-        if (w != item->width || h != item->height) {
+        /* Partial mirror (process backend still at the old size): the part the
+         * frame does not cover gets the renderer background, not stale pixels. */
+        if (item->mirrorW < w || item->mirrorH < h)
+            agwDrawRendererBackground(item, (HDC)hdc, w, h, 0);
+
+        if (w != item->mirrorW || h != item->mirrorH) {
             SetStretchBltMode((HDC)hdc, HALFTONE);
             SetBrushOrgEx((HDC)hdc, 0, 0, NULL);
             StretchBlt((HDC)hdc, 0, 0, w, h, item->mirrorDc,
-                       0, 0, item->width, item->height, SRCCOPY);
+                       0, 0, item->mirrorW, item->mirrorH, SRCCOPY);
         } else {
             BitBlt((HDC)hdc, 0, 0, w, h, item->mirrorDc, 0, 0, SRCCOPY);
         }
     } else {
-        RECT fill;
-
-        SetRect(&fill, 0, 0, width, height);
-        FillRect((HDC)hdc, &fill, (HBRUSH)GetStockObject(WHITE_BRUSH));
+        /* No frame yet: the renderer background (black + backend name). */
+        agwDrawRendererBackground(item, (HDC)hdc, width, height, 1);
     }
     agwUnlock();
     return 1;
@@ -3812,6 +3966,28 @@ void agave_webview_set_visible(AgaveWebView* item, int visible)
         return;
 
     agwPost(AGW_CMD_VISIBLE, item, NULL, 0, 0, visible ? 1 : 0, 0);
+}
+
+void agave_webview_request_frame(AgaveWebView* item)
+{
+    if (!item)
+        return;
+
+    agwPost(AGW_CMD_REQUEST_FRAME, item, NULL, 0, 0, 0, 0);
+}
+
+int agave_webview_has_frame(AgaveWebView* item)
+{
+    int valid;
+
+    if (!item)
+        return 0;
+
+    agwLock();
+    valid = item->mirrorValid;
+    agwUnlock();
+
+    return valid;
 }
 
 int agave_webview_search(AgaveWebView* item, const char* text, int forward, int case_sensitive)
