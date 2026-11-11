@@ -109,6 +109,9 @@ WHEN USER REPLY A QUESTION MARK[?] ONLY, MAY BE RETRY CONNECTION. IF MUTI QUESTI
 可以并发的测试必须并发，userdata dir冲突的独立出各自的dir去执行。有资源冲突必须串行要文档或代码注释中明确。
 新增测试沿用tools/TestParallel.psm1并行模式或改进它，必须串行的放在具体测试脚本内部。
 
+10. **UI相关测试如果偶尔失败需要二次确认**
+用户可能正在操作桌面会无意影响到测试结果。
+
 ## 三个最常用命令
 
 ```powershell
@@ -141,3 +144,7 @@ Remove-Item -Recurse -Force build-zig-native\test-runs -ErrorAction SilentlyCont
 
 ## Enable New Vendor libs
 May need edit `build/mconfig.h.in`
+
+
+## alias Main or shell-ui or agave browser program.
+[borwser program](examples/browser_shell/main.c)
