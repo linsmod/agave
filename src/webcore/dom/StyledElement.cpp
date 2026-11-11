@@ -24,6 +24,8 @@
  */
 
 #include "config.h"
+
+#include "AntRuntime.h"
 #include "StyledElement.h"
 
 #include "CSSStyleSelector.h"
@@ -141,6 +143,14 @@ void StyledElement::destroyInlineStyleDecl()
 void StyledElement::attributeChanged(Attribute* attr, bool preserveDecls)
 {
     MappedAttribute* mappedAttr = static_cast<MappedAttribute*>(attr);
+
+    /* Custom element hook (issues #18): a no-op unless this tag is registered. */
+    if (attr && !attr->name().localName().isEmpty()) {
+        WebCore::String attrName = attr->name().localName();
+        CString attrUtf8 = attrName.utf8();
+
+        AntRuntime::elementAttributeChanged(this, attrUtf8.data());
+    }
     if (mappedAttr->decl() && !preserveDecls) {
         mappedAttr->setDecl(0);
         setChanged();

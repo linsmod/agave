@@ -232,6 +232,11 @@ struct RuntimeState {
     AntbClass*         cssDeclarationClass;
     std::vector<CssomRef>* cssomRefs;   /* ref'd CSSOM objects, released at realm teardown */
     std::set<void*>*   cssomSeen;
+    /* Custom element definitions (issues #18 phase A): lowercase tag name ->
+     * registered constructor (retained), plus the elements upgraded so far.
+     * Both belong to the document's realm and die with it. */
+    std::map<std::string, AntbValue*>* customDefs;
+    std::set<WebCore::Node*>*          upgradedCustom;
     AntbValue*         docObj;          /* the JS document object (rooted) */
     bool               documentBound;
     void*              listeners;       /* std::vector<Listener>* (see below) */
@@ -361,6 +366,11 @@ struct DocumentRuntime {
     unsigned long      generation;
     std::vector<CssomRef>* cssomRefs;
     std::set<void*>*   cssomSeen;
+    /* Custom element definitions (issues #18 phase A): lowercase tag name ->
+     * registered constructor (retained), plus the elements upgraded so far.
+     * Both belong to the document's realm and die with it. */
+    std::map<std::string, AntbValue*>* customDefs;
+    std::set<WebCore::Node*>*          upgradedCustom;
     /* DOM Selection API: one live DOMSelection per document (a view over the
      * frame's selection) and the Range objects handed to JS. Ranges are ref'd
      * when wrapped and released with the document (see selectionReleaseRefs);
@@ -925,6 +935,22 @@ static void releaseDocumentRuntime(DocumentRuntime* document, bool releaseValues
         document->importMap = NULL;
     }
 
+    /* Custom element definitions retain their constructors; on the engine-gone
+     * path the VM values cannot be touched, only the map is dropped. */
+    if (document->customDefs) {
+        if (releaseValues) {
+            for (std::map<std::string, AntbValue*>::iterator it = document->customDefs->begin();
+                 it != document->customDefs->end(); ++it) {
+                if (it->second)
+                    antb_value_release(it->second);
+            }
+        }
+        delete document->customDefs;
+        document->customDefs = NULL;
+    }
+    delete document->upgradedCustom;
+    document->upgradedCustom = NULL;
+
     if (documents) {
         for (size_t i = 0; i < documents->size(); ++i) {
             if ((*documents)[i] == document) {
@@ -1327,6 +1353,11 @@ int globalStorageCount(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, vo
 int globalComputedStyle(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalStylePropertyNames(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalPrefersDark(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int globalCEHas(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int globalCEGet(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int globalCEGetName(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int globalCEDefine(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int globalCEUpgrade(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalViewportSize(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalInputValue(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalActivateSlot(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
@@ -6406,6 +6437,13 @@ static void installGlobalApi(AntbEngine* engine, AntbValue* global)
         antb_define_method(g_engine, global, "__agbComputedStyle", globalComputedStyle, NULL);
         antb_define_method(g_engine, global, "__agbStylePropertyNames", globalStylePropertyNames, NULL);
         antb_define_method(g_engine, global, "__agbPrefersDark", globalPrefersDark, NULL);
+        /* custom element registry (prelude's `customElements` object calls these;
+         * the storage is per document, see customDefs). */
+        antb_define_method(g_engine, global, "__agbCEHas", globalCEHas, NULL);
+        antb_define_method(g_engine, global, "__agbCEGet", globalCEGet, NULL);
+        antb_define_method(g_engine, global, "__agbCEGetName", globalCEGetName, NULL);
+        antb_define_method(g_engine, global, "__agbCEDefine", globalCEDefine, NULL);
+        antb_define_method(g_engine, global, "__agbCEUpgrade", globalCEUpgrade, NULL);
         antb_define_method(g_engine, global, "__agbViewportWidth", globalViewportSize, (void*)0);
         antb_define_method(g_engine, global, "__agbViewportHeight", globalViewportSize, (void*)1);
         /* Direct value access for the prototype-level value accessor (React tracker). */
@@ -8885,6 +8923,485 @@ int nodeReplaceWith(AntbEngine*, AntbValue* self, AntbValue** args, int argc,
 {
     (void)out;
     return mixinInsert(self, args, argc, 4);
+}
+
+/* ---- custom elements (issues #18 phase A) ------------------------------- *
+ * The registry is per document (per realm): tag -> constructor. An element is
+ * upgraded by replacing its wrapper's [[Prototype]] with the registered
+ * constructor's prototype (the native dispatch hook is untouched, so attributes
+ * and methods keep working), then the lifecycle callbacks run. The constructor
+ * itself is not executed: our HTMLElement constructor has no allocation path for
+ * a subclass to call (documented limitation, needs an ant-side capability). */
+static bool g_inCustomElementHook = false;
+
+static void customElementDidInsert(void* elementPointer);
+
+static DocumentRuntime* customElementRuntime(WebCore::Element* element)
+{
+    if (!element || !g_currentState)
+        return NULL;
+    return documentRuntimeFor(g_currentState, element->document());
+}
+
+static std::string customElementTag(WebCore::Element* element)
+{
+    WebCore::String tag;
+
+    if (!element)
+        return std::string();
+
+    tag = element->tagName();
+    {
+        std::string text = tag.utf8().data();
+        size_t i;
+
+        for (i = 0; i < text.size(); ++i) {
+            if (text[i] >= 'A' && text[i] <= 'Z')
+                text[i] = (char)(text[i] - 'A' + 'a');
+        }
+        return text;
+    }
+}
+
+static AntbValue* customElementCtor(WebCore::Element* element)
+{
+    DocumentRuntime* runtime = customElementRuntime(element);
+    std::string tag;
+
+    if (!runtime || !runtime->customDefs || runtime->customDefs->empty())
+        return NULL;
+
+    tag = customElementTag(element);
+    {
+        std::map<std::string, AntbValue*>::iterator it = runtime->customDefs->find(tag);
+
+        return it == runtime->customDefs->end() ? NULL : it->second;
+    }
+}
+
+static bool customElementWasUpgraded(WebCore::Element* element)
+{
+    DocumentRuntime* runtime = customElementRuntime(element);
+
+    return runtime && runtime->upgradedCustom &&
+           runtime->upgradedCustom->count(element) > 0;
+}
+
+static void customElementMarkUpgraded(WebCore::Element* element)
+{
+    DocumentRuntime* runtime = customElementRuntime(element);
+
+    if (!runtime)
+        return;
+    if (!runtime->upgradedCustom)
+        runtime->upgradedCustom = new std::set<WebCore::Node*>();
+    runtime->upgradedCustom->insert(element);
+}
+
+/* Calls `hook` on the definition's prototype with the element's wrapper as
+ * `this`. Returns false when the hook does not exist. */
+static bool customElementCall(AntbValue* ctor, const char* hook, AntbValue* self,
+                             AntbValue** args, int argc)
+{
+    AntbValue* proto;
+    AntbValue* fn;
+    bool called = false;
+
+    if (!ctor || !self || !g_engine)
+        return false;
+
+    proto = antb_get_prop(g_engine, ctor, "prototype");
+    if (!proto)
+        return false;
+    fn = antb_get_prop(g_engine, proto, hook);
+    if (fn && antb_is_function(fn)) {
+        AntbValue* result = antb_call(g_engine, fn, self, args, argc, NULL);
+
+        if (result)
+            antb_value_release(result);
+        called = true;
+    }
+    if (fn)
+        antb_value_release(fn);
+    antb_value_release(proto);
+    return called;
+}
+
+static bool customElementObserves(AntbValue* ctor, const char* name)
+{
+    AntbValue* list;
+    AntbValue* lengthValue;
+    int length, i;
+    bool observed = false;
+
+    if (!ctor || !name)
+        return false;
+
+    list = antb_get_prop(g_engine, ctor, "observedAttributes");
+    if (!list)
+        return false;
+    lengthValue = antb_get_prop(g_engine, list, "length");
+    length = lengthValue ? (int)antb_to_number(lengthValue) : 0;
+    if (lengthValue)
+        antb_value_release(lengthValue);
+
+    for (i = 0; i < length; ++i) {
+        AntbValue* item = antb_array_get(list, i);
+
+        if (!item)
+            continue;
+        {
+            char* text = antb_to_utf8(item);
+
+            if (text) {
+                if (!strcmp(text, name))
+                    observed = true;
+                antb_free(text);
+            }
+        }
+        antb_value_release(item);
+        if (observed)
+            break;
+    }
+    antb_value_release(list);
+    return observed;
+}
+
+/* Replaces the wrapper's prototype with the definition's, so instanceof and the
+ * class' methods resolve. Safe to call twice. */
+static bool customElementApplyPrototype(AntbValue* ctor, AntbValue* wrapper)
+{
+    AntbValue* proto;
+    bool ok = false;
+
+    if (!ctor || !wrapper || !g_engine)
+        return false;
+
+    proto = antb_get_prop(g_engine, ctor, "prototype");
+    if (proto) {
+        antb_object_set_proto(wrapper, proto);
+        antb_value_release(proto);
+        ok = true;
+    }
+    return ok;
+}
+
+/* Upgraded on demand: `wrapper` may be NULL (hook path), in which case the cached
+ * wrapper is asked for. Returns a retained wrapper or NULL. */
+static AntbValue* upgradeCustomElement(WebCore::Element* element, AntbValue* ctor,
+                                       AntbValue* wrapper)
+{
+    AntbValue* owned = NULL;
+
+    if (!element || !ctor || !g_engine)
+        return NULL;
+
+    if (!wrapper) {
+        owned = wrapNode(g_engine, element);
+        wrapper = owned;
+    }
+    if (!wrapper)
+        return NULL;
+
+    customElementApplyPrototype(ctor, wrapper);
+    customElementMarkUpgraded(element);
+
+    return owned ? owned : antb_retain(wrapper);
+}
+
+static void customElementAttributeChanged(WebCore::Element* element, const char* name,
+                                          const char* value)
+{
+    AntbValue* ctor = customElementCtor(element);
+    AntbValue* wrapper;
+    AntbValue* args[3];
+    AntbValue* nullOld;
+
+    if (!ctor || !name || !customElementWasUpgraded(element) ||
+        !customElementObserves(ctor, name))
+        return;
+
+    wrapper = wrapNode(g_engine, element);
+    if (!wrapper)
+        return;
+
+    nullOld = antb_make_null(g_engine);
+    args[0] = antb_make_string(g_engine, name);
+    args[1] = nullOld;                       /* the previous value is not tracked */
+    args[2] = antb_make_string(g_engine, value ? value : "");
+    customElementCall(ctor, "attributeChangedCallback", wrapper, args, 3);
+    for (int i = 0; i < 3; ++i)
+        if (args[i])
+            antb_value_release(args[i]);
+    antb_value_release(wrapper);
+}
+
+int globalCEHas(AntbEngine*, AntbValue*, AntbValue** args, int argc, AntbValue* out, void*)
+{
+    AntbValue* result;
+    char* name;
+    bool found = false;
+
+    if (argc < 1 || !args[0] || !g_document)
+        return 1;
+    name = antb_to_utf8(args[0]);
+    if (!name)
+        return 1;
+
+    {
+        DocumentRuntime* runtime = documentRuntimeFor(g_currentState, g_document);
+
+        if (runtime && runtime->customDefs) {
+            std::string tag = name;
+
+            for (size_t i = 0; i < tag.size(); ++i)
+                if (tag[i] >= 'A' && tag[i] <= 'Z')
+                    tag[i] = (char)(tag[i] - 'A' + 'a');
+            found = runtime->customDefs->count(tag) > 0;
+        }
+    }
+    antb_free(name);
+
+    result = antb_make_boolean(g_engine, found ? 1 : 0);
+    if (!result)
+        return 0;
+    antb_value_assign(out, result);
+    antb_value_release(result);
+    return 1;
+}
+
+int globalCEGet(AntbEngine*, AntbValue*, AntbValue** args, int argc, AntbValue* out, void*)
+{
+    char* name;
+
+    if (argc < 1 || !args[0] || !g_document)
+        return 1;
+    name = antb_to_utf8(args[0]);
+    if (!name)
+        return 1;
+
+    {
+        DocumentRuntime* runtime = documentRuntimeFor(g_currentState, g_document);
+
+        if (runtime && runtime->customDefs) {
+            std::string tag = name;
+            std::map<std::string, AntbValue*>::iterator it;
+
+            for (size_t i = 0; i < tag.size(); ++i)
+                if (tag[i] >= 'A' && tag[i] <= 'Z')
+                    tag[i] = (char)(tag[i] - 'A' + 'a');
+            it = runtime->customDefs->find(tag);
+            if (it != runtime->customDefs->end()) {
+                antb_value_assign(out, it->second);
+                antb_free(name);
+                return 1;
+            }
+        }
+    }
+    antb_free(name);
+    return 0;
+}
+
+int globalCEGetName(AntbEngine*, AntbValue*, AntbValue** args, int argc, AntbValue* out, void*)
+{
+    if (argc < 1 || !args[0] || !g_document)
+        return 1;
+
+    {
+        DocumentRuntime* runtime = documentRuntimeFor(g_currentState, g_document);
+
+        if (runtime && runtime->customDefs) {
+            for (std::map<std::string, AntbValue*>::iterator it = runtime->customDefs->begin();
+                 it != runtime->customDefs->end(); ++it) {
+                if (antb_value_same(it->second, args[0])) {
+                    AntbValue* name = antb_make_string(g_engine, it->first.c_str());
+
+                    if (!name)
+                        return 0;
+                    antb_value_assign(out, name);
+                    antb_value_release(name);
+                    return 1;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+int globalCEDefine(AntbEngine*, AntbValue*, AntbValue** args, int argc, AntbValue* out, void*)
+{
+    char* name;
+    AntbValue* result;
+    DocumentRuntime* runtime;
+
+    if (argc < 2 || !args[0] || !args[1] || !g_document || !antb_is_function(args[1]))
+        return 0;
+    name = antb_to_utf8(args[0]);
+    if (!name)
+        return 1;
+
+    runtime = documentRuntimeFor(g_currentState, g_document);
+    if (!runtime) {
+        antb_free(name);
+        return 0;
+    }
+    if (!runtime->customDefs)
+        runtime->customDefs = new std::map<std::string, AntbValue*>();
+
+    {
+        std::string tag = name;
+
+        for (size_t i = 0; i < tag.size(); ++i)
+            if (tag[i] >= 'A' && tag[i] <= 'Z')
+                tag[i] = (char)(tag[i] - 'A' + 'a');
+        if (runtime->customDefs->count(tag)) {
+            antb_free(name);
+            return 0;                       /* already defined (prelude checks too) */
+        }
+        (*runtime->customDefs)[tag] = antb_retain(args[1]);
+    }
+    antb_free(name);
+
+    /* Upgrade what is already in the document, in document order. */
+    if (g_document) {
+        char* tag = antb_to_utf8(args[0]);
+
+        if (tag) {
+            RefPtr<WebCore::NodeList> existing =
+                g_document->getElementsByTagName(WebCore::String::fromUTF8(tag));
+
+            if (existing) {
+                for (unsigned i = 0; i < existing->length(); ++i) {
+                    WebCore::Node* node = existing->item(i);
+
+                    if (node && node->isElementNode())
+                        customElementDidInsert(node);
+                }
+            }
+            antb_free(tag);
+        }
+    }
+
+    result = antb_make_boolean(g_engine, 1);
+    if (result) {
+        antb_value_assign(out, result);
+        antb_value_release(result);
+    }
+    return 1;
+}
+
+int globalCEUpgrade(AntbEngine* engine, AntbValue*, AntbValue** args, int argc, AntbValue* out, void*)
+{
+    AntbValue* result;
+
+    (void)engine;
+
+    if (argc > 0 && args[0]) {
+        WebCore::Node* root = nodeOf(args[0]);
+
+        if (root) {
+            std::vector<WebCore::Element*> elements;
+            size_t i;
+
+            elements.push_back(root->isElementNode() ? static_cast<WebCore::Element*>(root) : NULL);
+            for (WebCore::Node* n = root->firstChild(); n; n = n->traverseNextNode(root))
+                if (n->isElementNode())
+                    elements.push_back(static_cast<WebCore::Element*>(n));
+
+            for (i = 0; i < elements.size(); ++i) {
+                if (!elements[i] || !customElementCtor(elements[i]))
+                    continue;
+                customElementDidInsert(elements[i]);
+            }
+        }
+    }
+
+    result = antb_make_boolean(g_engine, 1);
+    if (result) {
+        antb_value_assign(out, result);
+        antb_value_release(result);
+    }
+    return 1;
+}
+
+/* Called by document.createElement() and by the WebCore hooks below. */
+static void upgradeCustomElementIfDefined(WebCore::Element* element, AntbValue* wrapper)
+{
+    AntbValue* ctor = customElementCtor(element);
+
+    if (!ctor || !wrapper)
+        return;
+    if (customElementWasUpgraded(element))
+        return;
+
+    {
+        AntbValue* owned = upgradeCustomElement(element, ctor, wrapper);
+
+        if (owned)
+            antb_value_release(owned);
+    }
+}
+
+static void customElementDidInsert(void* elementPointer)
+{
+    WebCore::Element* element = static_cast<WebCore::Element*>(elementPointer);
+    AntbValue* ctor;
+    AntbValue* owned;
+
+    if (!element || !g_engine || g_inCustomElementHook)
+        return;
+    ctor = customElementCtor(element);
+    if (!ctor)
+        return;
+
+    g_inCustomElementHook = true;
+    owned = upgradeCustomElement(element, ctor, NULL);
+    if (owned) {
+        static const char* kHooks[] = { "connectedCallback" };
+
+        customElementCall(ctor, kHooks[0], owned, NULL, 0);
+        antb_value_release(owned);
+    }
+    g_inCustomElementHook = false;
+}
+
+static void customElementDidRemove(void* elementPointer)
+{
+    WebCore::Element* element = static_cast<WebCore::Element*>(elementPointer);
+    AntbValue* ctor;
+    AntbValue* wrapper;
+
+    if (!element || !g_engine || g_inCustomElementHook)
+        return;
+    ctor = customElementCtor(element);
+    if (!ctor || !customElementWasUpgraded(element))
+        return;
+
+    g_inCustomElementHook = true;
+    wrapper = wrapNode(g_engine, element);
+    if (wrapper) {
+        customElementCall(ctor, "disconnectedCallback", wrapper, NULL, 0);
+        antb_value_release(wrapper);
+    }
+    g_inCustomElementHook = false;
+}
+
+static void customElementAttributeHook(void* elementPointer, const char* name)
+{
+    WebCore::Element* element = static_cast<WebCore::Element*>(elementPointer);
+
+    if (!element || !g_engine || g_inCustomElementHook || !name)
+        return;
+    if (!customElementCtor(element))
+        return;
+
+    {
+        const WebCore::String& value = element->getAttribute(name);
+
+        g_inCustomElementHook = true;
+        customElementAttributeChanged(element, name, value.utf8().data());
+        g_inCustomElementHook = false;
+    }
 }
 
 int nodeScrollIntoView(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
@@ -11555,7 +12072,12 @@ int docCreateElement(AntbEngine* engine, AntbValue* self, AntbValue** args, int 
      * on every tab close (R141). */
     {
         AntbValue* v = wrapNode(engine, element.get());
+
         if (v) {
+            /* A registered custom element comes back already upgraded (prototype
+             * replaced), so `createElement('x-foo') instanceof XFoo` holds before
+             * it is inserted; the callbacks wait for insertion. */
+            upgradeCustomElementIfDefined(element.get(), v);
             antb_value_assign(out, v);
             antb_value_release(v);
         }
@@ -17827,22 +18349,25 @@ extern "C" int agb_dump_js_stack_for(void* context, const char* path)
     return antb_dump_js_stack_to_file(state->engine, path);
 }
 
+/* Custom element lifecycle entry points (issues #18 phase A): WebCore calls these
+ * from Element::insertedIntoDocument/removedFromDocument and
+ * StyledElement::attributeChanged; the real work lives with the rest of the
+ * custom element helpers (anonymous namespace above). */
+namespace AntRuntime {
 
+void elementDidInsert(void* element)
+{
+    customElementDidInsert(element);
+}
 
+void elementDidRemove(void* element)
+{
+    customElementDidRemove(element);
+}
 
+void elementAttributeChanged(void* element, const char* name)
+{
+    customElementAttributeHook(element, name);
+}
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+} /* namespace AntRuntime */

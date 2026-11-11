@@ -147,6 +147,67 @@
       length: 0
     };
   }
+  /* customElements (issues #18 phase A): the registry storage is per document and
+   * lives in C++; this object owns the spec validation (name rules, duplicates),
+   * whenDefined()'s promise bookkeeping and the upgrade() walk. */
+  if (!g.customElements && typeof g.__agbCEDefine === 'function') {
+    (function () {
+      var pending = {};
+      var NAME = /^[a-z][.0-9_a-z]*-[\-.0-9_a-z]*$/;
+      var RESERVED = { 'annotation-xml': 1, 'color-profile': 1, 'font-face': 1,
+                       'font-face-src': 1, 'font-face-uri': 1, 'font-face-format': 1,
+                       'font-face-name': 1, 'missing-glyph': 1 };
+
+      function domError(name, message) {
+        var error = new Error(message);
+        error.name = name;
+        return error;
+      }
+
+      function resolvePending(name, ctor) {
+        var list = pending[name];
+        if (!list) return;
+        delete pending[name];
+        for (var i = 0; i < list.length; ++i) {
+          try { list[i](ctor); } catch (e) { /* consumer's reaction */ }
+        }
+      }
+
+      g.customElements = {
+        define: function (name, ctor, options) {
+          if (typeof name !== 'string' || !NAME.test(name) || RESERVED[name])
+            throw domError('SyntaxError', '"' + name + '" is not a valid custom element name');
+          if (typeof ctor !== 'function')
+            throw domError('TypeError', 'The custom element constructor is not a function');
+          if (g.__agbCEHas(name))
+            throw domError('NotSupportedError', 'the name "' + name + '" has already been used');
+          if (!g.__agbCEDefine(name, ctor))
+            throw domError('NotSupportedError', 'could not register "' + name + '"');
+          resolvePending(name, ctor);
+          return undefined;
+        },
+        get: function (name) {
+          var ctor = g.__agbCEGet(String(name));
+          return ctor === undefined || ctor === null ? undefined : ctor;
+        },
+        getName: function (ctor) {
+          var name = g.__agbCEGetName(ctor);
+          return name === undefined || name === null ? null : name;
+        },
+        whenDefined: function (name) {
+          name = String(name);
+          if (g.__agbCEHas(name)) return Promise.resolve(g.__agbCEGet(name));
+          return new Promise(function (resolve) {
+            (pending[name] || (pending[name] = [])).push(resolve);
+          });
+        },
+        upgrade: function (root) {
+          g.__agbCEUpgrade(root || g.document);
+        }
+      };
+    }());
+  }
+
   if (!g.CSS) g.CSS = {};
   /* CSS.supports is provided by polyfills.js: it has to judge whether a value is
      really implemented (a degraded 'display:grid' must not report true) and it

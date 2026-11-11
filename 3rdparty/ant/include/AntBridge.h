@@ -408,6 +408,14 @@ AGB_API void antb_class_install_properties(AntbEngine* engine, AntbClass* klass,
  * which is what a NodeList/HTMLCollection wrapper needs. `length` is asked
  * through the existing property dispatch, so the object must answer it. */
 AGB_API void antb_object_set_indexed_keys(AntbEngine* engine, AntbValue* obj);
+/* Replaces an object's [[Prototype]]. Used by the DOM facade for custom element
+ * upgrades: the wrapper's prototype becomes the user class' prototype, so
+ * `el instanceof MyElement` and the class' methods resolve, while the native
+ * dispatch hook stays untouched. */
+AGB_API void antb_object_set_proto(AntbValue* obj, const AntbValue* proto);
+
+/* The object's [[Prototype]], or NULL when there is none. */
+AGB_API AntbValue* antb_object_get_proto(AntbEngine* engine, AntbValue* obj);
 
 /* ---- misc --------------------------------------------------------------- */
 

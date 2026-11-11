@@ -402,6 +402,36 @@
        document instanceof Document && window instanceof Window);
     /* issues #20: the IndexedDB stub returns EventTarget requests, so
      * indexedDB.deleteDatabase(...).addEventListener('blocked', ...) works. */
+    /* issues #18 phase A: CustomElementRegistry + lifecycle + createElement
+     * upgrade. The constructor body is not executed (documented limitation). */
+    ok('customElements registry', (function () {
+      var log = [];
+      var XProbe = class extends HTMLElement {
+        static get observedAttributes() { return ['data-p']; }
+        connectedCallback() { log.push('c'); }
+        disconnectedCallback() { log.push('d'); }
+        attributeChangedCallback(n, o, v) { log.push('a:' + n + '=' + v); }
+        probeMethod() { return 'ok'; }
+      };
+      customElements.define('x-probe-el', XProbe);
+      var el = document.createElement('x-probe-el');
+      var created = el instanceof XProbe && el instanceof HTMLElement &&
+                    typeof el.probeMethod === 'function' && el.probeMethod() === 'ok';
+      var host = document.createElement('div');
+      document.body.appendChild(host);
+      host.appendChild(el);
+      el.setAttribute('data-p', '1');
+      el.setAttribute('data-q', '2');
+      el.remove();
+      host.parentNode.removeChild(host);
+      var dup = null, bad = null;
+      try { customElements.define('x-probe-el', XProbe); } catch (e) { dup = e.name; }
+      try { customElements.define('badname', XProbe); } catch (e) { bad = e.name; }
+      return created && customElements.get('x-probe-el') === XProbe &&
+             customElements.getName(XProbe) === 'x-probe-el' &&
+             log.join(',') === 'c,a:data-p=1,d' &&
+             dup === 'NotSupportedError' && bad === 'SyntaxError';
+    })());
     ok('indexedDB stub requests are EventTargets', (function () {
       var d = indexedDB.deleteDatabase('x');
       var o = indexedDB.open('y');

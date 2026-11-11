@@ -113,6 +113,13 @@ void bindDocument(void* document);
 /* The document the engine is bound to right now (NULL before the first bind). */
 void* boundDocument();
 
+/* Custom element lifecycle (issues #18 phase A). WebCore calls these when an
+ * element enters/leaves a document and when an attribute changed; each returns
+ * immediately unless the document's registry has a definition for the tag. */
+void elementDidInsert(void* element);
+void elementDidRemove(void* element);
+void elementAttributeChanged(void* element, const char* name);
+
 /* Delivers completed async requests (XHR) to the page. Call from the frame loop. */
 void pumpAsyncRequests(void);
 

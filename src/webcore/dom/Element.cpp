@@ -23,6 +23,8 @@
  */
 
 #include "config.h"
+
+#include "AntRuntime.h"
 #include "Element.h"
 
 #include "CSSStyleSelector.h"
@@ -719,6 +721,8 @@ void Element::insertedIntoDocument()
     // by the time we reach updateId
     ContainerNode::insertedIntoDocument();
 
+    AntRuntime::elementDidInsert(this);
+
     if (hasID()) {
         NamedAttrMap* attrs = attributes(true);
         if (attrs) {
@@ -731,6 +735,8 @@ void Element::insertedIntoDocument()
 
 void Element::removedFromDocument()
 {
+    AntRuntime::elementDidRemove(this);
+
     if (hasID()) {
         NamedAttrMap* attrs = attributes(true);
         if (attrs) {
