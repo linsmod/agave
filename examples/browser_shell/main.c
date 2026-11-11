@@ -2867,6 +2867,36 @@ static void invalidateChromeDirty(HWND hwnd)
         InvalidateRect(g_cur->statusBar, NULL, FALSE);
 }
 
+/* Mouse tracking is per window: crossing from the chrome onto the native EDIT
+ * (or back out of it) posts WM_MOUSELEAVE to the window being left even though
+ * the pointer never left the pill. Clearing the hover there and re-setting it
+ * from the other window's first WM_MOUSEMOVE repainted the pill twice (normal,
+ * then hover), which showed up as a flash on the edge/inside boundary. So a
+ * "leave" that is still inside the shell client is turned into a move at the
+ * current cursor position - the hover then simply never changes. */
+static int cursorInClient(HWND hwnd, int* x, int* y)
+{
+    POINT point;
+    RECT client;
+
+    if (!hwnd || !GetCursorPos(&point) || !ScreenToClient(hwnd, &point))
+        return 0;
+
+    if (!GetClientRect(hwnd, &client))
+        return 0;
+
+    if (point.x < client.left || point.y < client.top ||
+        point.x >= client.right || point.y >= client.bottom)
+        return 0;
+
+    if (x)
+        *x = point.x;
+    if (y)
+        *y = point.y;
+
+    return 1;
+}
+
 /* The address and find fields are native EDITs: mouse moves over the text go to
  * the control, never to the shell, so the pill around it could not highlight.
  * Forward those moves into the chrome's own state machine in shell client
@@ -2893,9 +2923,21 @@ static LRESULT CALLBACK pillEditProc(HWND hwnd, UINT message, WPARAM wParam, LPA
         event.y += origin.y;
 
         if (message == WM_MOUSELEAVE) {
-            event.type = UI_MOUSE_LEAVE;
-            event.x = 0;
-            event.y = 0;
+            int x = 0;
+            int y = 0;
+
+            /* Still inside the shell (the pointer went from the text back onto
+             * the pill, or into another child): keep the hover instead of
+             * clearing it and letting the shell's next move set it again. */
+            if (cursorInClient(win->hwnd, &x, &y)) {
+                event.type = UI_MOUSE_MOVE;
+                event.x = x;
+                event.y = y;
+            } else {
+                event.type = UI_MOUSE_LEAVE;
+                event.x = 0;
+                event.y = 0;
+            }
         } else {
             event.type = UI_MOUSE_MOVE;
         }
@@ -3495,9 +3537,19 @@ static LRESULT CALLBACK shellProcInner(HWND hwnd, UINT message, WPARAM wParam, L
     case WM_MOUSELEAVE: {
         UiMouseEvent event;
 
-        event.type = UI_MOUSE_LEAVE;
-        event.x = -1;
-        event.y = -1;
+        /* The pointer may only have moved onto a child (the native EDIT keeps
+         * its pill hovered). If the cursor is still inside the shell, report a
+         * move at that point instead of clearing the hover: clearing it here
+         * and letting the EDIT's forwarded move set it again repainted the pill
+         * twice (normal, then hover) - the edge/inside flash. */
+        if (cursorInClient(hwnd, &event.x, &event.y)) {
+            event.type = UI_MOUSE_MOVE;
+        } else {
+            event.type = UI_MOUSE_LEAVE;
+            event.x = -1;
+            event.y = -1;
+        }
+
         uiChromeMouse(CHROME, &event);
         invalidateChromeDirty(hwnd);
         return 0;

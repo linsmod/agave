@@ -268,6 +268,12 @@ chrome 全部落在 `HTCLIENT` 里（只有标签条空白处是 `HTCAPTION`）�
   会重新出现一块矩形。两态切换时 shell 会把 EDIT 一起失效重画；鼠标停在文字上时走
   EDIT 子类化（`pillEditProc`）把移动换算回 shell 客户区喂给 `uiChromeMouse`，否则
   胶囊在文字区上永远不亮。
+- **胶囊 hover 跨"边框 ↔ 文字"边界不闪**：鼠标跟踪是按窗口算的，指针从胶囊边进到
+  EDIT 里会给 shell 发 `WM_MOUSELEAVE`（反向同理）。若照着 clear hover，再让另一侧
+  的第一个 `WM_MOUSEMOVE` 重新 set，同一颗胶囊会被重画两次（normal → hover），看起来
+  就是闪两下。所以两处 leave（shell 的 `WM_MOUSELEAVE`、`pillEditProc` 的
+  `WM_MOUSELEAVE`）都先问 `cursorInClient()`：光标还在 shell 客户区内就转成该点的
+  `UI_MOUSE_MOVE`（hover part 不变 → 零脏矩形），真离开窗口才发 `UI_MOUSE_LEAVE`。
 - **胶囊 hover 填充 = 它的边框色**（`field_hover` 直接取 `border_strong` 的值），
   hover 时整个胶囊是一个平色块。
 - **tab 分隔线**（`paintTabSeparators`）：相邻两个 tab 之间画竖线
