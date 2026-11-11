@@ -5,6 +5,7 @@
 #include "shell_ops.h"
 
 #include <windows.h>
+#include <dwmapi.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -248,57 +249,65 @@ static void win32_enable_dpi_awareness(void* user)
 }
 
 typedef HRESULT (WINAPI* DwmSetWindowAttributeFn)(HWND, DWORD, LPCVOID, DWORD);
+typedef HRESULT (WINAPI* DwmExtendFrameIntoClientAreaFn)(HWND, const MARGINS*);
 
-static DwmSetWindowAttributeFn resolveDwmSetAttribute(void)
+typedef struct {
+    DwmSetWindowAttributeFn setAttribute;
+    DwmExtendFrameIntoClientAreaFn extendFrame;
+    int tried;
+} DwmApi;
+
+static DwmApi* resolveDwmApi(void)
 {
-    static DwmSetWindowAttributeFn setAttribute;
-    static int tried;
+    static DwmApi api;
 
-    if (!tried) {
+    if (!api.tried) {
         HMODULE dwm = LoadLibraryA("dwmapi.dll");
 
-        tried = 1;
+        api.tried = 1;
 
-        if (dwm)
-            setAttribute = (DwmSetWindowAttributeFn)(void*)GetProcAddress(dwm, "DwmSetWindowAttribute");
+        if (dwm) {
+            api.setAttribute = (DwmSetWindowAttributeFn)(void*)GetProcAddress(
+                dwm, "DwmSetWindowAttribute");
+            api.extendFrame = (DwmExtendFrameIntoClientAreaFn)(void*)GetProcAddress(
+                dwm, "DwmExtendFrameIntoClientArea");
+        }
     }
 
-    return setAttribute;
+    return &api;
 }
 
-static void win32_set_dark_titlebar(void* user, void* hwnd, int dark)
+/* Keep WS_THICKFRAME | WS_CAPTION (shadow, resize/snap semantics) but let the
+ * chrome paint the whole window: extend the DWM frame 1px into every side for
+ * the shadow, round the Win11 corners, and set DWMWA_BORDER_COLOR to "none" so
+ * the light-mode 1px frame border cannot show as a white rim. The caption's
+ * dark/light color is deliberately not touched (the caption is client-drawn). */
+static int win32_prepare_frame(void* user, void* hwnd)
 {
-    DwmSetWindowAttributeFn setAttribute = resolveDwmSetAttribute();
-    BOOL value = dark ? TRUE : FALSE;
-    DWORD attributes[2] = { 20u, 19u };   /* DWMWA_USE_IMMERSIVE_DARK_MODE (new/old) */
-    int i;
+    DwmApi* api = resolveDwmApi();
+    int extended = 0;
 
     (void)user;
 
-    if (!hwnd || !setAttribute)
-        return;
-
-    for (i = 0; i < 2; ++i) {
-        if (SUCCEEDED(setAttribute((HWND)hwnd, attributes[i], &value, sizeof(value))))
-            return;
-    }
-}
-
-/* DWMWA_BORDER_COLOR (34) exists on Windows 11 22000+. The color is a
- * COLORREF (0x00BBGGRR); our tokens are 0xAARRGGBB. */
-static int win32_set_window_border(void* user, void* hwnd, unsigned rgb)
-{
-    DwmSetWindowAttributeFn setAttribute = resolveDwmSetAttribute();
-    COLORREF color;
-
-    (void)user;
-
-    if (!hwnd || !setAttribute)
+    if (!hwnd)
         return 0;
 
-    color = RGB((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF);
+    if (api->extendFrame) {
+        MARGINS margins = { 1, 1, 1, 1 };
 
-    return SUCCEEDED(setAttribute((HWND)hwnd, 34u, &color, sizeof(color))) ? 1 : 0;
+        extended = SUCCEEDED(api->extendFrame((HWND)hwnd, &margins)) ? 1 : 0;
+    }
+
+    if (api->setAttribute) {
+        int corner = 2;              /* DWMWCP_ROUND */
+        DWORD border = 0xFFFFFFFEu;  /* DWMWA_COLOR_NONE */
+
+        /* Optional: Win10 ignores both attributes. */
+        api->setAttribute((HWND)hwnd, 33u, &corner, sizeof(corner));
+        api->setAttribute((HWND)hwnd, 34u, &border, sizeof(border));
+    }
+
+    return extended;
 }
 
 static int win32_message_box(void* user, void* parent, const char* text,
@@ -414,18 +423,10 @@ static void mock_noop_dpi(void* user)
     (void)user;
 }
 
-static void mock_noop_dark_titlebar(void* user, void* hwnd, int dark)
+static int mock_prepare_frame(void* user, void* hwnd)
 {
     (void)user;
     (void)hwnd;
-    (void)dark;
-}
-
-static int mock_set_window_border(void* user, void* hwnd, unsigned rgb)
-{
-    (void)user;
-    (void)hwnd;
-    (void)rgb;
     return 1;
 }
 
@@ -470,8 +471,7 @@ static void fillTables(void)
     g_win32_ops.system_is_dark = win32_system_is_dark;
     g_win32_ops.dpi_for_window = win32_dpi_for_window;
     g_win32_ops.enable_dpi_awareness = win32_enable_dpi_awareness;
-    g_win32_ops.set_dark_titlebar = win32_set_dark_titlebar;
-    g_win32_ops.set_window_border = win32_set_window_border;
+    g_win32_ops.prepare_frame = win32_prepare_frame;
     g_win32_ops.message_box = win32_message_box;
     g_win32_ops.tick_ms = win32_tick_ms;
 
@@ -483,8 +483,7 @@ static void fillTables(void)
     g_mock_ops.system_is_dark = mock_system_is_dark;
     g_mock_ops.dpi_for_window = mock_dpi_for_window;
     g_mock_ops.enable_dpi_awareness = mock_noop_dpi;
-    g_mock_ops.set_dark_titlebar = mock_noop_dark_titlebar;
-    g_mock_ops.set_window_border = mock_set_window_border;
+    g_mock_ops.prepare_frame = mock_prepare_frame;
     g_mock_ops.message_box = mock_message_box;
     g_mock_ops.tick_ms = mock_tick_ms;
 

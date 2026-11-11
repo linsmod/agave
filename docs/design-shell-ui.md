@@ -79,8 +79,7 @@ UI 侧的具体症状：
 | `system_is_dark` | `HKCU\…\Themes\Personalize\AppsUseLightTheme==0` | chrome 暗色主题 |
 | `dpi_for_window` | `GetDpiForWindow`（动态解析；回退 `GetDeviceCaps`） | 每窗口 DPI |
 | `enable_dpi_awareness` | `SetProcessDpiAwarenessContext(PER_MONITOR_AWARE_V2)`（回退 `SetProcessDPIAware`） | 启动时一次性 |
-| `set_dark_titlebar` | `DwmSetWindowAttribute(DWMWA_USE_IMMERSIVE_DARK_MODE)`（动态） | 暗色标题栏 |
-| `set_window_border` | `DwmSetWindowAttribute(DWMWA_BORDER_COLOR=34)`（Win11 22000+，返回是否接受） | 圆角窗体 1px 外框跟随主题色 |
+| `prepare_frame` | `DwmExtendFrameIntoClientArea`（1,1,1,1）+ `DWMWA_WINDOW_CORNER_PREFERENCE=ROUND` + `DWMWA_BORDER_COLOR=NONE`（后两个 Win11 22000+，动态） | 保留阴影/缩放/Snap，同时让客户区盖满窗口、去掉白边 |
 | `message_box` | `MessageBoxA` + flags 映射 | `alert/confirm` |
 | `tick_ms` | `GetTickCount64` | 看门狗提示/测量 |
 
@@ -159,11 +158,28 @@ WM_NCMOUSEMOVE/LEAVE  → 只更新 hover
 完成，不会再出现系统 classic 按下态。**原生 OS 画按钮与“tab 同一行”在纯 Win32/GDI
 下不可兼得**；Chrome 也是自绘，这是对齐 Chrome 的唯一可行路径。
 
-**窗口外框也要跟主题走**：Win11 会给圆角顶层窗口画一圈 1px 边框，这圈边框默认
-跟系统 app 模式（浅色）而不是我们的 chrome 主题，所以深色窗口最外圈会露出一条
-白边（左上圆角尤其明显）。`applyWindowFrame()` 在窗口创建、换主题、`WM_DPICHANGED`
-时调用 `set_window_border`，暗色传 `theme->chrome`（`#1F2020`）、亮色传
-`theme->border`；属性不被系统接受（Win10）时只是保持系统默认，不影响其他行为。
+**窗口外框：让 DWM 保留框架，但客户区盖满窗口**。只把 `WM_NCCALCSIZE` 做成
+“顶部 0、左右下减边框”会留下非客户区的 1px 白边；正确的组合是：
+
+- `WS_THICKFRAME | WS_CAPTION` 保持不变（否则 DWM 不画阴影/系统动效，Snap 也退化）；
+- `DwmExtendFrameIntoClientArea(hwnd, {1,1,1,1})`：把 frame 往客户区extend 1px，
+  阴影保留；
+- `WM_NCCALCSIZE` 让客户区覆盖**整个 window rect**（最大化时用 monitor work area，
+  避免盖任务栏）；
+- Win11 圆角 `DWMWA_WINDOW_CORNER_PREFERENCE = DWMWCP_ROUND`；
+- `DWMWA_BORDER_COLOR = DWMWA_COLOR_NONE`，不跟主题色，也不让系统 1px 白框露出来；
+- `WM_NCHITTEST` 自己按 DPI 缩放后的 8px 热区返回 `HTLEFT/HTTOP/...`，
+  空白标题栏 `HTCAPTION`，按钮 `HTMINBUTTON/HTMAXBUTTON/HTCLOSE`；
+- `WM_GETMINMAXINFO` 只设最小尺寸，**不要**把 `ptMaxSize/ptMaxPosition` 钉成
+  work area：标准最大化会让 window rect 向屏幕外多出 frame 厚度，客户区再取
+  work area，DWM 的 1px 外框就被推到屏幕外；钉死后那 1px 会露在顶部成白边。
+- 最大化时再 `SetWindowRgn` 把窗口区域裁到 monitor work area（Chromium 的
+  `ResetWindowRegion`），把 invisible frame overscan 完全挡在可见表面外；还原时
+  清空 region。`WM_SIZE` / `WM_DPICHANGED` 各更新一次。
+
+这套只在 `shell_ops_t::prepare_frame` 里做 OS 调用；**不再强制 caption 的暗色**
+（`DWMWA_USE_IMMERSIVE_DARK_MODE` 已移除），边框色也不再取 `theme->chrome/border`，
+chrome 自身的亮暗 token 不受影响。
 
 原生控件只有两个 `EDIT`（地址栏、查找框），无边框、按主题设置
 `WM_CTLCOLOREDIT` 背景/文字色；它们在 chrome 里只是两个矩形，离屏模式下不创建。
@@ -283,8 +299,8 @@ Esc 关闭上下文菜单，然后 `WM_CLOSE` 退出。这是手动检查，不�
 - 窗口框架：`pwsh -File tools/check_shell_frame.ps1`（`AGB_SHELL_HIDDEN=1`，不显示窗口）
   → `FRAME=PASS`：client origin y=0、`WM_NCHITTEST` min=8/max=9/close=20、
   tab=1、空白=2，`WM_NCLBUTTONDOWN + WM_LBUTTONUP` 触发最大化/还原、最小化、关闭；
-  并检查 `[shell] window frame … applied=1`（Win11 的 DWM 边框色被接受，
-  深色窗口不再有白边）。这是**手动检查**，不进默认套件（需要真实 HWND）。
+  并检查 `[shell] window frame extended=1`（DWM 1px frame 扩展成功）。这是
+  **手动检查**，不进默认套件（需要真实 HWND）。
 - 菜单宿主：`pwsh -File tools/check_shell_menu.ps1`（`AGB_SHELL_HIDDEN=1`，不显示窗口）
   → `MENU-HOST=PASS`：应用菜单弹窗存在且是 layered/toolwindow、首行点击生效，
   页面右键上下文菜单能打开、Esc 能关，最后 `WM_CLOSE` 干净退出。同样是

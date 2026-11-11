@@ -2842,35 +2842,64 @@ static void applyEditFonts(void)
         SendMessageW(g_findEdit, WM_SETFONT, (WPARAM)CHROME->theme.hfont_ui, TRUE);
 }
 
-/* Native window frame: the custom-drawn caption removes the title bar, but
- * Win11 still paints a 1 px DWM border around the rounded frame. In light
- * Windows mode that border is white, which shows up as a pale rim around the
- * dark chrome; set it to the theme's frame color (and keep immersive dark
- * mode for the shadow/non-client parts). */
+/* Native window frame: keep WS_THICKFRAME | WS_CAPTION and let DWM draw the
+ * shadow/rounded frame, while WM_NCCALCSIZE gives the client the whole window
+ * rectangle. DwmExtendFrameIntoClientArea(1,1,1,1) keeps the shadow; the
+ * Win11 corner preference rounds the top; DWMWA_BORDER_COLOR is set to "none"
+ * so the light-mode 1px frame border cannot show as a white rim. No caption
+ * dark/light color is forced here. */
 static void applyWindowFrame(ShellWindow* win)
 {
-    int dark;
-    unsigned rgb;
-    int applied;
+    int extended;
 
     if (!win || !win->hwnd)
         return;
 
-    dark = win->chrome.theme.kind == UI_THEME_DARK;
-    rgb = (dark ? win->chrome.theme.chrome : win->chrome.theme.border) & 0xFFFFFFu;
+    extended = shellOps()->prepare_frame(NULL, win->hwnd);
 
-    shellOps()->set_dark_titlebar(NULL, win->hwnd, dark);
-
-    applied = shellOps()->set_window_border
-                  ? shellOps()->set_window_border(NULL, win->hwnd, rgb)
-                  : 0;
-
-    agbLog(AGB_LOG_SHELL, "window frame dark=%d border=#%06x applied=%d",
-           dark, rgb, applied);
+    agbLog(AGB_LOG_SHELL, "window frame extended=%d", extended);
 }
 
-/* Resize border thickness for this window's DPI. The top edge is client (the
- * tab strip is the title bar), so only left/right/bottom subtract it. */
+/* Chromium's maximized custom frame also clips the window region to the
+ * monitor work area (ResetWindowRegion). Maximized window rects overscan the
+ * work area by the invisible frame thickness; the region keeps the DWM frame
+ * and the 1px top border outside the visible surface. Restored windows have
+ * no region (the full window rect is client). */
+static void updateWindowRegion(HWND hwnd)
+{
+    RECT window;
+    HMONITOR monitor;
+    MONITORINFO info;
+    RECT work;
+    HRGN region;
+
+    if (!hwnd)
+        return;
+
+    if (!IsZoomed(hwnd) || !GetWindowRect(hwnd, &window)) {
+        SetWindowRgn(hwnd, NULL, TRUE);
+        return;
+    }
+
+    monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+    memset(&info, 0, sizeof(info));
+    info.cbSize = sizeof(info);
+
+    if (!monitor || !GetMonitorInfoA(monitor, &info)) {
+        SetWindowRgn(hwnd, NULL, TRUE);
+        return;
+    }
+
+    work = info.rcWork;
+    OffsetRect(&work, -window.left, -window.top);
+
+    region = CreateRectRgnIndirect(&work);
+    if (region)
+        SetWindowRgn(hwnd, region, TRUE);   /* the window owns the region */
+}
+
+/* Resize hit-test thickness for this window's DPI (WM_NCHITTEST only; the
+ * client itself covers the full window, including the DWM 1px frame). */
 static int shellFrameBorder(HWND hwnd)
 {
     unsigned dpi = shellOps()->dpi_for_window(NULL, hwnd);
@@ -3047,10 +3076,10 @@ static LRESULT CALLBACK shellProcInner(HWND hwnd, UINT message, WPARAM wParam, L
         return 0;
     }
 
-    /* Chrome-style frame: the client area starts at the window's top-left, so
-     * the tab strip is the title bar. Only the side/bottom resize borders stay
-     * non-client; the native caption is gone and its buttons are drawn by the
-     * chrome at the top-right (the tab strip reserves their width). */
+    /* Chrome-style frame: the client area covers the whole window, so the tab
+     * strip is the title bar. WS_THICKFRAME | WS_CAPTION stay (shadow, snap,
+     * resize semantics); DwmExtendFrameIntoClientArea(1,1,1,1) keeps a 1px
+     * frame margin for the shadow while WM_NCCALCSIZE paints over it. */
     case WM_NCCALCSIZE:
         if (wParam) {
             NCCALCSIZE_PARAMS* params = (NCCALCSIZE_PARAMS*)lParam;
@@ -3064,15 +3093,8 @@ static LRESULT CALLBACK shellProcInner(HWND hwnd, UINT message, WPARAM wParam, L
 
                 if (monitor && GetMonitorInfoA(monitor, &info))
                     params->rgrc[0] = info.rcWork;
-            } else {
-                int border = shellFrameBorder(hwnd);
-                RECT window = params->rgrc[0];
-
-                params->rgrc[0].left = window.left + border;
-                params->rgrc[0].right = window.right - border;
-                params->rgrc[0].top = window.top;              /* title bar */
-                params->rgrc[0].bottom = window.bottom - border;
             }
+            /* Normal window: rgrc[0] already is the full window rectangle. */
 
             return 0;
         } else {
@@ -3081,13 +3103,9 @@ static LRESULT CALLBACK shellProcInner(HWND hwnd, UINT message, WPARAM wParam, L
              * caption back (the shell would show two title rows). */
             RECT* client = (RECT*)lParam;
             RECT window;
-            int border = shellFrameBorder(hwnd);
 
             GetWindowRect(hwnd, &window);
-            client->left = window.left + border;
-            client->right = window.right - border;
-            client->top = window.top;
-            client->bottom = window.bottom - border;
+            *client = window;
             return 0;
         }
 
@@ -3167,6 +3185,7 @@ static LRESULT CALLBACK shellProcInner(HWND hwnd, UINT message, WPARAM wParam, L
         g_minimized = (wParam == SIZE_MINIMIZED) ? 1 : 0;
         syncTabVisibility();
         layoutAll();
+        updateWindowRegion(hwnd);
         updateToolbarState();
         InvalidateRect(hwnd, NULL, FALSE);
         return 0;
@@ -3185,7 +3204,14 @@ static LRESULT CALLBACK shellProcInner(HWND hwnd, UINT message, WPARAM wParam, L
             info->ptMinTrackSize.x = uiThemeScale(&CHROME->theme, 680);
             info->ptMinTrackSize.y = uiThemeScale(&CHROME->theme, 460);
         }
-        return 0;
+
+        /* Leave ptMaxSize/ptMaxPosition alone (DefWindowProc's default): a
+         * normal maximized window overscans the work area by the invisible
+         * frame thickness, which keeps the DWM 1px frame off-screen. Pinning
+         * the maximized window to the exact work area exposed that frame as a
+         * white line along the top edge. WM_NCCALCSIZE still sets the client
+         * to the monitor work area, so the taskbar is not covered. */
+        break;
     }
 
     case WM_CTLCOLOREDIT: {
@@ -3361,6 +3387,7 @@ static LRESULT CALLBACK shellProcInner(HWND hwnd, UINT message, WPARAM wParam, L
 
         applyWindowFrame(g_cur);
         layoutAll();
+        updateWindowRegion(hwnd);
         InvalidateRect(hwnd, NULL, FALSE);
         return 0;
     }

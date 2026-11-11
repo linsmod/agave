@@ -49,6 +49,9 @@ public static class W {
   [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
   [DllImport("user32.dll")] public static extern bool IsZoomed(IntPtr h);
   [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
+  [DllImport("user32.dll")] public static extern int GetWindowRgn(IntPtr h, IntPtr rgn);
+  [DllImport("gdi32.dll")] public static extern IntPtr CreateRectRgn(int l, int t, int r, int b);
+  [DllImport("gdi32.dll")] public static extern bool DeleteObject(IntPtr h);
   public struct RECT { public int left, top, right, bottom; }
   public struct POINT { public int x, y; }
 
@@ -88,14 +91,11 @@ try {
     if ($hwnd -eq [IntPtr]::Zero) { throw 'AgaveShellWindow not found' }
     Start-Sleep -Milliseconds 500
 
-    # The custom caption must also paint the DWM frame border (Windows 11):
-    # without DWMWA_BORDER_COLOR the rounded frame keeps a light 1 px rim
-    # around the dark chrome. Win10 has no such attribute; only Win11 can be
-    # required to accept it.
+    # The frame path must have run: DwmExtendFrameIntoClientArea(1,1,1,1)
+    # keeps the shadow while WM_NCCALCSIZE gives the client the whole window.
     $frameLog = if (Test-Path (Join-Path $profileDir 'err.txt')) {
         Get-Content (Join-Path $profileDir 'err.txt') -Raw
     } else { '' }
-    $isWin11 = [Environment]::OSVersion.Version.Build -ge 22000
     $frameLine = ($frameLog -split "`n" | Where-Object { $_ -match 'window frame' } |
         Select-Object -Last 1)
     if ($frameLine) { Write-Host ("      " + $frameLine.Trim()) }
@@ -146,8 +146,7 @@ try {
     $checks['client-origin-top'] = ($topOffset -eq 0)
     $checks['client-size'] = ($cr.right -gt [int](600 * $scale) -and
                               $cr.bottom -gt [int](500 * $scale))
-    $checks['frame-border'] = (-not $isWin11) -or
-        ($frameLog -match 'window frame dark=[01] border=#[0-9a-fA-F]{6} applied=1')
+    $checks['frame-extended'] = ($frameLog -match 'window frame extended=1')
     $checks['hit-close'] = ((Hit $closeX $cy) -eq 20)
     $checks['hit-max'] = ((Hit $maxX $cy) -eq 9)
     $checks['hit-min'] = ((Hit $minX $cy) -eq 8)
@@ -156,6 +155,13 @@ try {
 
     NcClick $maxX $cy 9
     $checks['click-max'] = [W]::IsZoomed($hwnd)
+
+    # Maximized custom frame: clip the window region to the monitor work area
+    # so the invisible frame overscan cannot show a 1px line at the top.
+    $rgn = [W]::CreateRectRgn(0, 0, 0, 0)
+    $rgnType = [W]::GetWindowRgn($hwnd, $rgn)
+    [void][W]::DeleteObject($rgn)
+    $checks['max-region'] = ($rgnType -eq 2 -or $rgnType -eq 3)
 
     [void][W]::GetClientRect($hwnd, [ref]$cr)
     $closeX = $cr.right - [int]($btn / 2)

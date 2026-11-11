@@ -50,13 +50,11 @@ struct shell_ops_s {
     /* Process-wide DPI awareness, called once before any window exists. */
     void (*enable_dpi_awareness)(void* user);
 
-    /* Dark/light native title bar (DWMWA_USE_IMMERSIVE_DARK_MODE). */
-    void (*set_dark_titlebar)(void* user, void* hwnd, int dark);
-
-    /* Paint the Win11 DWM window border (the 1 px line around the rounded
-     * frame) with `rgb` (0xRRGGBB). Without this, a light-mode DWM border
-     * stays white around a dark chrome. 1 = attribute accepted. */
-    int (*set_window_border)(void* user, void* hwnd, unsigned rgb);
+    /* Frame-only DWM setup for the custom title bar: extend the frame 1px into
+     * the client so the shadow survives, round Win11 corners, and drop the
+     * DWM border line. Does not touch the caption's dark/light colors.
+     * Returns 1 when DwmExtendFrameIntoClientArea was accepted. */
+    int (*prepare_frame)(void* user, void* hwnd);
 
     /* Modal message box. Returns 1 for OK/yes, 0 for cancel/no. */
     int (*message_box)(void* user, void* parent, const char* text,

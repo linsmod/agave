@@ -30,6 +30,13 @@ shell 不直接调用任何 `macross_*` 接口 —— 它和第三方宿主用�
 避免系统再画一套 classic 按下态按钮。标签宽度不足时自动压缩（上限 220px，
 无最小宽度；标题省略、favicon/关闭按宽度隐藏），永远排不进右侧按钮区。
 
+窗口框架保留 `WS_THICKFRAME | WS_CAPTION`（DWM 阴影/缩放/Snap 语义），
+`WM_NCCALCSIZE` 让客户区覆盖**整个 window rect**，`DwmExtendFrameIntoClientArea`
+只扩 1px 进客户区保阴影；Win11 用 `DWMWC_ROUND` 圆角 + `DWMWA_BORDER_COLOR=NONE`，
+最大化走系统默认 overscan（frame 在屏幕外），客户区在 `WM_NCCALCSIZE` 里取
+monitor work area，并用 `SetWindowRgn` 把窗口区域裁到 work area（避免最大化
+顶部 1px 白边）。不再强制 caption 的暗色，也不把 DWM 边框染成主题色。
+
 ## 构建
 
 ```
@@ -181,6 +188,11 @@ pwsh -File tools\check_shell_frame.ps1   # 手动：隐藏窗口 + 真实 WM_NCC
 8. **`WM_NCPAINT` 叠加在 DWM 下不可见**：Win11 实测真实屏幕仍是系统 caption
    颜色；`PrintWindow` 能看到只是因为走了 WM_PRINT/classic 路径。不要在 NC 里
    画 tab。
+9. **白边不是靠改边框颜色解决的**：`DWMWA_BORDER_COLOR` 跟主题色只是把 1px
+   系统边框染成相近颜色，换个主题/高对比度还会露。正确组合是保留
+   `WS_THICKFRAME|WS_CAPTION` + `WM_NCCALCSIZE` 客户区盖满 + `DwmExtendFrameIntoClientArea
+   (1,1,1,1)` 保阴影 + `DWMWA_BORDER_COLOR=NONE`；最大化**不要**钉
+   `ptMaxSize`，让系统 overscan 把 frame 推离屏幕。
 
 ## 与 examples/touchweb 的关系
 
