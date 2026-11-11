@@ -3297,10 +3297,13 @@ static char          g_probeScript[8192] =
  * silent cut at 8 KiB used to break them before the backend ever saw them. */
 static char*         g_probeScriptFile;
 static int g_probeWaitMs    = 3000;   /* after load finished, before eval   */
+static int g_probeWaitGiven;          /* --wait was explicit (see --wait-dcl) */
+static int g_probeWaitDcl;            /* arm --eval at DOMContentLoaded      */
 static int g_probeSettleMs  = 1000;   /* after eval, before exit            */
 static int g_probeTimeoutMs = 60000;  /* hard cap from start                */
 static int g_probeFinished;
 static int g_probeLoadArmed;   /* the load-finished signal already scheduled --eval */
+static int g_probeLoadNoted;   /* wait-dcl: load finished logged, DCL arms the eval */
 static int g_probeEvalDone;
 /* --eval-retry: a script click/navigation can replace the document between
  * arming the eval timer and the eval reaching the engine; the control then
@@ -3758,6 +3761,28 @@ static void probeOnMessage(AgaveWebView* view, const char* message, void* user)
         return;
     }
 
+    /* DOMContentLoaded, reported by prelude.js (registered at document bind,
+     * before the page's own scripts). Only --wait-dcl consumes it: other probes
+     * ignore the message, so the opt-in stays invisible in their output. */
+    if (message && !strncmp(message, "__agb_dcl__", 11)) {
+        const char* href = message + 11;
+
+        if (!g_probeWaitDcl)
+            return;
+
+        if (!g_probeFinished && !g_probeLoadArmed) {
+            char line[768];
+
+            g_probeLoadArmed = 1;
+            _snprintf(line, sizeof(line), "domcontentloaded url=%s",
+                      href && href[0] ? href : "(unknown)");
+            line[sizeof(line) - 1] = 0;
+            probePrint("[probe]", line);
+            PostMessageA(g_probeWnd, AGW_PROBE_MSG, g_probeWaitMs, 0);
+        }
+        return;
+    }
+
     /* The --eval script has returned (the probe posts a follow-up eval that
      * sends this). Only now may --settle start counting: it used to be armed
      * when the eval was *posted*, so any script slower than --settle had the
@@ -3802,6 +3827,7 @@ static void probeOnError(AgaveWebView* view, int code, const char* url, void* us
     if (probeRespawnInto(view, url)) {
         g_probeSawError = 0;
         g_probeLoadArmed = 0;
+        g_probeLoadNoted = 0;
     }
 
     /* A failed navigation commits no document, so on_progress(finished) never
@@ -4061,9 +4087,19 @@ static void probeOnProgress(AgaveWebView* view, int percent, int finished, void*
      * report early. --wait is therefore measured from the real load, and no JS
      * hook or readyState poll is needed. */
     if (finished && !g_probeFinished && !g_probeLoadArmed) {
-        g_probeLoadArmed = 1;
-        probePrint("[probe]", g_probeSawError ? "progress finished (with error)" : "progress finished");
-        PostMessageA(g_probeWnd, AGW_PROBE_MSG, g_probeWaitMs, 0);
+        if (g_probeWaitDcl) {
+            /* --wait-dcl: DOMContentLoaded (reported by prelude.js) owns the
+             * arming. Log the load for the record, once, and do not start the
+             * test at a later lifecycle point than the caller asked for. */
+            if (!g_probeLoadNoted) {
+                g_probeLoadNoted = 1;
+                probePrint("[probe]", "progress finished (waiting for domcontentloaded)");
+            }
+        } else {
+            g_probeLoadArmed = 1;
+            probePrint("[probe]", g_probeSawError ? "progress finished (with error)" : "progress finished");
+            PostMessageA(g_probeWnd, AGW_PROBE_MSG, g_probeWaitMs, 0);
+        }
     }
 }
 
@@ -4801,6 +4837,7 @@ static int probeRun(const char* url)
                     g_probeRound++;
                     g_probeFinished = 0;
                     g_probeLoadArmed = 0;
+                    g_probeLoadNoted = 0;
                     g_probeEvalDone = 0;
                     g_probePollCount = 0;
                     g_probeInjectDone = 0;
@@ -4969,6 +5006,11 @@ static void probeUsage(void)
             "            (vconsole.min.js) resolve next to the exe, anything else is\n"
             "            a file path (next to the exe first, then the cwd)\n"
             "  --wait    settle time after 'load finished' before eval (default 3000)\n"
+            "  --wait-dcl  arm --eval at DOMContentLoaded instead of load, and count\n"
+            "            --wait from there (a mark from prelude.js; without an explicit\n"
+            "            --wait it becomes 0). Starts the test before subresources are\n"
+            "            done; state seen by the eval depends on how fast the page\n"
+            "            finishes loading (record DCL state from page JS to be exact)\n"
             "  --settle  time after the eval script returns before exit (default 1000;\n"
             "            a script slower than settle is still allowed to finish)\n"
             "  --timeout hard cap from start (default 60000)\n"
@@ -5311,6 +5353,13 @@ static void parseShellArgv(void)
             }
         } else if (!strcmp(argv[i], "--wait") && i + 1 < argc) {
             g_probeWaitMs = atoi(argv[++i]);
+            g_probeWaitGiven = 1;
+        } else if (!strcmp(argv[i], "--wait-dcl")) {
+            /* Start --eval at DOMContentLoaded instead of after load. The
+             * marker comes from prelude.js (top frame only). --wait then counts
+             * from DCL; without an explicit --wait it defaults to 0, otherwise
+             * the default 3 s would usually land after load anyway. */
+            g_probeWaitDcl = 1;
         } else if (!strcmp(argv[i], "--settle") && i + 1 < argc) {
             g_probeSettleMs = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--timeout") && i + 1 < argc) {
@@ -5373,6 +5422,9 @@ static void parseShellArgv(void)
          * "localhost:port" stays a host instead of a search term. */
         normalizeUrl(urlArg, g_startupUrl, sizeof(g_startupUrl));
     }
+
+    if (g_probeWaitDcl && !g_probeWaitGiven)
+        g_probeWaitMs = 0;
 
     if (g_backendArgSet && strcmp(g_backendArg, "local") && strcmp(g_backendArg, "process")) {
         fprintf(stderr, "shell: --backend wants local or process, got '%s'\n", g_backendArg);

@@ -24,6 +24,8 @@
 #   8. Node.baseURI / document.baseURI (R176);
 #   9. HTML import maps (R176);
 #  10. browser shims (R176): URLSearchParams iteration + frame realm web globals.
+#  11. probe lifecycle: --wait-dcl arms --eval at DOMContentLoaded (marker from
+#      prelude.js), and stays invisible/opt-in for a normal load-armed probe.
 #
 # All probes run at once (own profiles); the bench keeps a clean retry if its
 # per-iteration budget is exceeded while the batch is loading the machine.
@@ -123,6 +125,17 @@ $jobs.importmap = Start-TestProbe -Run $run -Name 'importmap' -Url $imUrl `
 $polyUrl = 'file:///' + ((Join-Path $root 'tools/pages/cap_polyfills.html') -replace '\\', '/')
 $jobs.polyfills = Start-TestProbe -Run $run -Name 'polyfills' -Url $polyUrl `
     -Eval 'probeExit(String(window.__poly))' -Wait 2500 -Settle 500
+
+# 11. --wait-dcl (probe lifecycle): the eval can be armed at DOMContentLoaded
+#     instead of load. Prelude.js (bound before the page's scripts) reports the
+#     event; a probe without the flag must not see the marker at all.
+$dclUrl = 'file:///' + ((Join-Path $root 'tools/pages/dcl_probe.html') -replace '\\', '/')
+$dclEval = 'probeExit(String(window.__phase) + String.fromCharCode(124) + ' +
+           '(window.__dclSeen ? 1 : 0) + String.fromCharCode(124) + (window.__loadSeen ? 1 : 0))'
+$jobs.dcl = Start-TestProbe -Run $run -Name 'wait-dcl' -Url $dclUrl `
+    -Eval $dclEval -Extra @('--wait-dcl') -Wait 0 -Settle 300
+$jobs.nodcl = Start-TestProbe -Run $run -Name 'wait-load' -Url $dclUrl `
+    -Eval $dclEval -Wait 500 -Settle 300
 
 $res = @{}
 foreach ($name in @($jobs.Keys)) { $res[$name] = Complete-TestProbe -Job $jobs[$name] }
@@ -253,6 +266,29 @@ if ($res.polyfills.Code -ne 0 -or $res.polyfills.Text -notmatch 'usp:function,2,
     Write-Host (($res.polyfills.Text + $res.polyfills.Stderr) -split "`n" | Select-Object -Last 8 | Out-String)
 } else {
     Write-Host 'PASS  URLSearchParams wrapper iteration + frame-realm web globals'
+}
+
+# 11. --wait-dcl: marker consumed only when asked, and the eval is armed by DCL.
+$dclArmed = $res.dcl.Text.IndexOf('domcontentloaded')
+$dclEvalAt = $res.dcl.Text.IndexOf('running eval')
+if ($res.dcl.Code -ne 0 -or $dclArmed -lt 0 -or $dclEvalAt -lt 0 -or $dclArmed -gt $dclEvalAt) {
+    $failures++
+    Write-Host ("FAIL  --wait-dcl: exit {0}, marker/index {1}/{2}" -f $res.dcl.Code, $dclArmed, $dclEvalAt)
+    Write-Host (($res.dcl.Text + $res.dcl.Stderr) -split "`n" | Select-Object -Last 8 | Out-String)
+} elseif ($res.dcl.Text -notmatch '\|1\|') {
+    $failures++
+    Write-Host 'FAIL  --wait-dcl: eval ran before the page saw DOMContentLoaded'
+    Write-Host (($res.dcl.Text) -split "`n" | Select-Object -Last 4 | Out-String)
+} else {
+    Write-Host 'PASS  --wait-dcl: eval armed at DOMContentLoaded (page saw it)'
+}
+
+if ($res.nodcl.Code -ne 0 -or $res.nodcl.Text -match 'domcontentloaded' -or $res.nodcl.Text -notmatch '\|1\|1') {
+    $failures++
+    Write-Host ("FAIL  load-armed eval is unchanged / marker is opt-in: exit {0}" -f $res.nodcl.Code)
+    Write-Host (($res.nodcl.Text + $res.nodcl.Stderr) -split "`n" | Select-Object -Last 8 | Out-String)
+} else {
+    Write-Host 'PASS  without --wait-dcl the eval still starts at load and no DCL marker leaks'
 }
 
 Remove-TestRun $run $failures

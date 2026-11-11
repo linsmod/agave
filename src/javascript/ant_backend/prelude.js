@@ -2167,4 +2167,22 @@
   if (typeof g.__vite_is_modern_browser === 'undefined')
     g.__vite_is_modern_browser = true;
 
+  /* Lifecycle marker for the probe harness (`--wait-dcl`): this script runs at
+   * document bind, before the page's own scripts, so its listener is the only
+   * reliable "DOMContentLoaded happened" signal the host can get without an
+   * engine callback. Top frame only - an iframe's DCL arrives earlier and
+   * would arm the host too soon; the URL is carried for sanity checks. Hosts
+   * that did not ask simply ignore the message (the probe filters it unless
+   * --wait-dcl was given). */
+  try {
+    if (g.document && g.document.addEventListener && g.top === g) {
+      g.document.addEventListener('DOMContentLoaded', function () {
+        try {
+          if (typeof g.agavePostMessage === 'function')
+            g.agavePostMessage('__agb_dcl__' + (g.location ? g.location.href : ''));
+        } catch (e) {}
+      }, false);
+    }
+  } catch (e) {}
+
 })(window);

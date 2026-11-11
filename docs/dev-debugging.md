@@ -11,6 +11,13 @@ build-zig-native\agave_shell.exe --probe <url> [--eval <js>] [--wait ms] [--sett
 ```
 
 - **eval 时机** = 页面 `window load` 事件 + `--wait`；`on_progress finished` 只是长延迟兜底
+- **`--wait-dcl`** = eval 改成在页面 `DOMContentLoaded` 之后 `--wait` 毫秒（缺省 `--wait` 时按 0）
+  开始。标记由 `prelude.js` 在 document bind 时注册的 DCL 监听发出（只发顶层 frame），
+  所以不依赖引擎回调，local/process 两个后端都一样；探针只在带这个开关时才消费它。
+  适合"load 被慢子资源拖住、测试要在 DCL 就开工"的场景。注意 DCL 之后命令才排队进引擎，
+  所以 eval 看到的状态可能已经是 `interactive` 甚至 `complete`（简单页面 load 紧跟 DCL）；
+  要精确观察 DCL 时刻的状态，还是让页面自己的 DCL 监听把值记进全局再读
+  （`tools/pages/cap_lifecycle.html`、`dcl_probe.html`）。
   （**加载失败也会报 finished**，别拿它当成功判据）。
 - `--settle` 从 **eval 脚本返回**开始计时，不是从投递开始：脚本比 settle 慢时探针会等它跑完
   （之前按投递计时，长脚本会在运行中被销毁视图 → `0xC0000005`，见 R61）。

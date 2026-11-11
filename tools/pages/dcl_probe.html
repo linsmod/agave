@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>dcl probe</title>
+<script>
+/* Phase marker for the probe harness's --wait-dcl (tools/run_script_mode_tests).
+ * The page records what it can see of its own lifecycle; the probe's eval -
+ * armed at DOMContentLoaded or at load - reports how far it got. No external
+ * resources: load follows DCL almost immediately, so --wait-dcl is judged by
+ * the arming event in the log, not by a "load has not fired yet" race. */
+window.__dclSeen = 0;
+window.__loadSeen = 0;
+window.__phase = document.readyState;
+
+document.addEventListener('DOMContentLoaded', function () {
+  window.__dclSeen = 1;
+  window.__phase = document.readyState;
+});
+
+window.addEventListener('load', function () {
+  window.__loadSeen = 1;
+});
+</script>
+</head>
+<body><p id="p">dcl probe</p></body>
+</html>
