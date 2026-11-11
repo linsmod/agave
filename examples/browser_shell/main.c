@@ -660,6 +660,13 @@ static void probeCrashPage(AgaveWebView* view, const char* html, const char* bas
  * by the callbacks above. */
 static int g_probeMode;
 
+/* The control delivers state callbacks (progress/title/url/status) on the thread
+ * that owns its window; the probe checks that once so a regression fails a suite
+ * instead of showing up as an intermittent cross-thread AV (R185). */
+static DWORD g_probeUiThread;
+static int   g_probeCallbackThreadChecked;
+static int   g_probeCallbackThreadBad;
+
 /* Page Visibility for the whole shell: exactly the active tab is visible, and
  * nothing is when the window is minimized (Chrome does the same, and a minimized
  * window's views must stop laying out and painting). Sent only on a change: the
@@ -2738,6 +2745,13 @@ static HWND makeButton(const char* text, int id)
 /* Set when --probe was given: headless runs must not pop dialogs (their stderr
  * already carries the same information, and a modal box would hang CI). */
 static int g_probeMode;
+
+/* The control delivers state callbacks (progress/title/url/status) on the thread
+ * that owns its window; the probe checks that once so a regression fails a suite
+ * instead of showing up as an intermittent cross-thread AV (R185). */
+static DWORD g_probeUiThread;
+static int   g_probeCallbackThreadChecked;
+static int   g_probeCallbackThreadBad;
 /* --interrupt-after <ms>: abort the page script once, mid-load (hang recovery). */
 static int g_probeInterruptAfterMs;
 /* --nav-after <ms>: navigate while the page is still busy (choke-point test). */
@@ -3776,6 +3790,16 @@ static void probeOnProgress(AgaveWebView* view, int percent, int finished, void*
     (void)percent;
     (void)user;
 
+    if (!g_probeCallbackThreadChecked) {
+        g_probeCallbackThreadChecked = 1;
+        if (g_probeUiThread && GetCurrentThreadId() != g_probeUiThread) {
+            g_probeCallbackThreadBad = 1;
+            probePrint("[probe]", "callback thread violation: progress arrived on the engine thread");
+        } else {
+            probePrint("[probe]", "callback thread ok: progress arrived on the ui thread");
+        }
+    }
+
     /* Engine-thread callback: never SetTimer here (the probe window is owned
      * by the main thread; cross-thread window timers are undefined). Post the
      * request to the main loop instead.
@@ -4042,6 +4066,7 @@ static int probeRun(const char* url)
     g_probeWnd = CreateWindowExA(WS_EX_TOOLWINDOW, "AgaveProbeWindow", "agave probe",
                                  WS_POPUP, CW_USEDEFAULT, CW_USEDEFAULT,
                                  1100, 800, NULL, NULL, g_instance, NULL);
+    g_probeUiThread = GetCurrentThreadId();
     if (!g_probeWnd) {
         agbLog(AGB_LOG_PROBE, "CreateWindowEx failed: %lu", (unsigned long)GetLastError());
         return PROBE_EXIT_USAGE;

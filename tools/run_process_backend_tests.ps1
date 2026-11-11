@@ -319,6 +319,20 @@ Add-Case -Name 'load-title-timers' -Url (File-Url (Join-Path $pages 'cap_hidden_
         return $null
     }
 
+# R185: a status/progress callback that runs on the engine thread makes the host
+# touch its window cross-thread (the shell's onStatus -> updateStatus crashed with
+# a first-chance AV). The probe reports the thread it saw once, so the
+# remote-backend path - which is where the crash was caught - is covered.
+Add-Case -Name 'callback-thread' -Url (File-Url (Join-Path $pages 'cap_hidden_view.html')) `
+    -Js 'probeExit("ok");' -Wait 1200 -Settle 300 `
+    -Check {
+        param($r)
+        if ($r.Code -ne 0) { return "exit=$($r.Code)" }
+        if ($r.Text -match 'callback thread violation') { return "state callback ran on the engine thread: $($r.Text)" }
+        if ($r.Text -notmatch 'callback thread ok') { return "probe did not report the callback thread: $($r.Text)" }
+        return $null
+    }
+
 $shot = Join-Path $runRoot 'paint.bmp'
 Add-Case -Name 'paint' -Url (File-Url (Join-Path $pages 'cap_hidden_view.html')) `
     -Wait 1500 -Settle 400 -Extra @('--shot', $shot) `
