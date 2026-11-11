@@ -109,9 +109,16 @@ qsChild=3 qsDesc=3 qsAdj=1 qsSib=2 qsNth=1 qsOdd=2 qsNot=2 qsFirst=1 qsList2=4 q
 
 ### 1.1 连 shim 都没有（feature detect 会走 fallback）
 
-`ResizeObserver`、`IntersectionObserver`、`PerformanceObserver`、`indexedDB`、`caches`、`Notification`、
-`geolocation`、`FileReader`、`customElements`、`ShadowRoot`/`attachShadow`、`OffscreenCanvas`、
+`ResizeObserver`、`IntersectionObserver`、`PerformanceObserver`、`caches`、`Notification`、
+`geolocation`、`FileReader`、`OffscreenCanvas`、
 `AudioContext`/`speechSynthesis`、`devicePixelRatio`、`print`、`Temporal`、`WebGL`。
+
+**Web Components 单列（P0，issues #18）**：`customElements`（`typeof` 为 `undefined`）、`attachShadow`/`ShadowRoot`、
+`HTMLTemplateElement`（prelude 只给了占位构造器，`typeof` 是 function 但 `new` 返回 null——feature detect 会被骗）、
+`adoptedStyleSheets` 全缺；这也是 GitHub 首页 `core-*`/`marketing-*`/`landing-pages-*` 模块 `ReferenceError: 'customElements' is not defined` 的原因。
+
+**`indexedDB` 是桩**（见 §1 `indexedDB.open` 行）：请求对象没有 `addEventListener`，deepseek 的
+`n=indexedDB.deleteDatabase(t); n.addEventListener("blocked",…)` 会抛 `undefined is not a function`（issues #20）。
 
 **媒体元素（`<video>`/`<audio>`/`<source>`/`<track>`）已有实现**：元素类、常用 API、
 容器头元数据（MP4/WebM/MKV）、`textTracks` + WebVTT cue，尺寸与 Chrome 对齐；
@@ -243,7 +250,7 @@ bareMedia=2px schemeBg=rgb(0, 0, 200) mediaDark=1 mediaMin=1
 | `rem` 长度单位：`height:2.25rem`、`padding:1.25rem`、简写 `margin:0.5rem 1rem`、`margin:-1rem`、`width:calc(100% - 2rem)` | 根字号钉死时与 Chrome 逐项一致：`2.25rem`→`45px`、`-1rem`→`-20px`、`calc(100% - 2rem)`→`460px` | **已支持（R165）**：2008 的 tokenizer/语法没有 rem，`{num}{ident}` 是被所有长度分支拒绝的 `DIMEN` token，于是 `height`/`padding`/`max-height` 整条声明被丢（Tailwind 的 `h-9`/`py-5` 全中）。现在含 bare rem 的声明先留成 raw value，`CSSStyleSelector::applyExpandedProperty()` 用**根元素**字号折成 px（同 R88 的字体相关 calc 路线，负号经语法 `isInt` 保留）。**限制**：默认根字号是 **14px**（Chrome 16px，Settings 的 `m_defaultFontSize`），不自带 `html{font-size}` 的站点 rem 会整体小 12.5% —— 独立缺口，见 [plan-roadmap.md](plan-roadmap.md)。`@media` 前导里的 rem 也已支持（R166，按 CSS 初始 16px，与 Chrome 一致）。复测：`tools/pages/layout/rem_units.html`（14 case 对拍 Chrome，接进 `run_layout_tests.ps1`） |
 | computed margin：`getComputedStyle().marginRight`（固定 / auto / % / calc） | 与 Chrome 一致：固定 20px → `20px`；`auto` → used px（居中 492px）；`10%` → `108.4px`（Chrome `108.391px`，视口小数差）；`calc(10% + 5px)` → `113.4px` | **已修（R166）**：以前只要元素有 renderer 就一律报 `renderer->marginX()`（used 值），过约束块的 `margin-right` 被 CSS2.1 重算成填充值（1100 宽 body 里 `width:100px;margin:0 20px` 读 980px）。现在 `valueForMargin()`：`auto` 用 used 值，百分比/calc 按包含块宽度解成 px（绝对定位用 padding box），固定长度报指定值。复测：`debug/margin_computed.html` 与 Chrome 对拍（8 个 case），`rem_units.html` 的 `rem-margin` 已把 `margin-right=20px` 加回断言 |
 
-| `indexedDB.open(...)` | 请求异步 `onerror` | **桩实现（R57 诊断）**：`window.indexedDB` 不存在时直接引用会抛 `ReferenceError`，所以提供 open/deleteDatabase/databases 都异步失败的桩 + `IDBKeyRange`；站点走“失败回退内存存储”的分支，而不是在 Promise 链里炸掉。真正的 IDB 存储未做 |
+| `indexedDB.open(...)` / `deleteDatabase(...)` | 请求异步 `onerror`；请求对象**没有 `addEventListener`**（issues #20） | **桩实现（R57 诊断）**：`window.indexedDB` 不存在时直接引用会抛 `ReferenceError`，所以提供 open/deleteDatabase/databases 都异步失败的桩 + `IDBKeyRange`；站点走“失败回退内存存储”的分支，而不是在 Promise 链里炸掉。真正的 IDB 存储未做 |
 
 | `border-radius: 50%`（百分比半径） | 期望圆/椭圆；当前画成**方角** | **不支持**：`RenderStyle` 的四个角半径存的是 px `IntSize`，百分比在解析期就丢了（px 半径正常；半径和超过边长时按 CSS 缩小，见 R120）。本地 `debug/radius_test.html` 的 64×64 `#g` 复现。要支持得把半径改成 `Length`、布局后按盒子尺寸解算，再让 `scaledBorderRadii()` 接百分比结果。⚠ R125 起 **px 的四值/椭圆简写**（`8px 8px 0 0`、`4px / 2px`）能正确解析成四个角，以前被当成单个角的 h/v |
 
