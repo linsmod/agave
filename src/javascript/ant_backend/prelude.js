@@ -147,6 +147,132 @@
       length: 0
     };
   }
+  /* Constructable stylesheets + adoptedStyleSheets (issues #18 phase D).
+   *
+   * new CSSStyleSheet() is legal in Chrome (adopted sheets) while the engine's
+   * interface constructor throws "Illegal constructor". The wrapper below keeps
+   * the interface identity (`instanceof CSSStyleSheet` stays true for the engine's
+   * own sheets) and gives the constructed object replaceSync/replace; adopting it
+   * on a Document or ShadowRoot injects one <style> element per target, which is
+   * what actually applies the rules (there is no style-scoping engine here).
+   *
+   * Known limit: reading cssRules on a *constructed* sheet hits the native
+   * accessor and throws; component code uses replaceSync, not cssRules. */
+  if (typeof g.CSSStyleSheet === 'function' && !g.CSSStyleSheet.__agbConstructable) {
+    (function () {
+      var Native = g.CSSStyleSheet;
+      var adopted = new Map();      /* target (document or shadow root) -> { sheets, style } */
+
+      function isSheet(value) {
+        return value && value.__agbSheet === true;
+      }
+
+      function combinedText(sheets) {
+        var text = [], i;
+        for (i = 0; i < sheets.length; ++i) text.push(sheets[i].__agbCssText || '');
+        return text.join('\n');
+      }
+
+      function refresh(target, entry) {
+        var isDocument = target && target.nodeType === 9;
+        var doc = isDocument ? target : ((target && target.ownerDocument) || g.document);
+        /* A document's sheet lives in <head>; a shadow root's <style> is appended
+         * to the root, which the facade backs by the host element. */
+        var host = isDocument ? (target.head || target.documentElement) : target;
+        var text = combinedText(entry.sheets);
+
+        if (!host || !doc) return;
+        if (!entry.style) {
+          entry.style = doc.createElement('style');
+          entry.style.setAttribute('data-adopted', '');
+          host.appendChild(entry.style);
+        }
+        entry.style.textContent = text;
+      }
+
+      function entryFor(target) {
+        var entry = adopted.get(target);
+        if (!entry) { entry = { sheets: [], style: null }; adopted.set(target, entry); }
+        return entry;
+      }
+
+      function defineAdopted(proto, name) {
+        if (!proto) return;
+        try {
+          Object.defineProperty(proto, 'adoptedStyleSheets', {
+            configurable: true,
+            enumerable: true,
+            get: function () { return entryFor(this).sheets.slice(); },
+            set: function (value) {
+              var entry = entryFor(this), list = [], i;
+              value = value || [];
+              for (i = 0; i < value.length; ++i) {
+                if (!isSheet(value[i])) {
+                  var error = new Error('adoptedStyleSheets accepts constructable CSSStyleSheet objects only');
+                  error.name = 'TypeError';
+                  throw error;
+                }
+                list.push(value[i]);
+              }
+              entry.sheets = list;
+              refresh(this, entry);
+            }
+          });
+        } catch (e) { /* read-only prototype in some realm */ }
+      }
+
+      function Ctor() {
+        var sheet = Object.create(Ctor.prototype);
+
+        sheet.__agbSheet = true;
+        sheet.__agbCssText = '';
+        sheet.replaceSync = function (text) {
+          sheet.__agbCssText = String(text === undefined ? '' : text);
+          adopted.forEach(function (entry) {
+            if (entry.sheets.indexOf(sheet) >= 0) refreshEntry(sheet, entry);
+          });
+          return undefined;
+        };
+        sheet.replace = function (text) {
+          sheet.replaceSync(text);
+          return Promise.resolve(sheet);
+        };
+        return sheet;
+      }
+
+      /* keep the engine's own sheets instanceof-compatible */
+      Ctor.prototype = Native.prototype;
+      Ctor.__agbConstructable = true;
+      g.CSSStyleSheet = Ctor;
+
+      /* The interface classes may not be exposed yet when the prelude runs (they
+       * are per realm and created around the same bind), so install now, again on
+       * the next tick, and from attachShadow() (which is where a ShadowRoot first
+       * exists). Idempotent: a second defineProperty just replaces the accessor. */
+      var installedDocument = null, installedShadow = null;
+      function installAdopted() {
+        if (g.Document && g.Document.prototype !== installedDocument) {
+          installedDocument = g.Document.prototype;
+          defineAdopted(installedDocument, 'Document');
+        }
+        if (g.ShadowRoot && g.ShadowRoot.prototype !== installedShadow) {
+          installedShadow = g.ShadowRoot.prototype;
+          defineAdopted(installedShadow, 'ShadowRoot');
+        }
+      }
+      installAdopted();
+      try { setTimeout(installAdopted, 0); } catch (e) { /* no timers yet */ }
+      g.__agbInstallAdopted = installAdopted;
+
+      /* replaceSync needs to re-render every target that adopted the sheet */
+      function refreshEntry(sheet, entry) {
+        var target = null;
+        adopted.forEach(function (value, key) { if (value === entry) target = key; });
+        if (target) refresh(target, entry);
+      }
+    }());
+  }
+
   /* attachShadow (issues #18 phase C): the spec checks live here because they have
    * to throw real error types; the C++ side only records the root and returns the
    * wrapper whose children are the host's real children (no shadow tree in this
@@ -162,6 +288,7 @@
         return error;
       }
       Element.prototype.attachShadow = function (init) {
+        if (typeof g.__agbInstallAdopted === 'function') g.__agbInstallAdopted();
         var mode = init && init.mode;
         var tag = String(this.localName || this.tagName || '').toLowerCase();
         var root = g.__agbAttachShadow(this, mode === 'closed' ? 'closed' : 'open');

@@ -12098,6 +12098,12 @@ int nodeSetter(AntbEngine* engine, AntbValue* self, const char* name, const Antb
     /* The side object is owned by C++ (see expandoFor): reading one of these
      * fields back goes through the generic property hook, which cannot read a
      * `__agbExpando` field stored on the wrapper itself. */
+    /* Names a prototype accessor owns: the expando store would shadow it and the
+     * accessor would never run (prelude installs adoptedStyleSheets on
+     * Document.prototype/ShadowRoot.prototype, issues #18 phase D). */
+    if (!strcmp(name, "adoptedStyleSheets"))
+        return 0;
+
     {
         AntbValue* expando = expandoFor(g_engine, n, true);
 

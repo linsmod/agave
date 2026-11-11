@@ -116,7 +116,9 @@ qsChild=3 qsDesc=3 qsAdj=1 qsSib=2 qsNth=1 qsOdd=2 qsNot=2 qsFirst=1 qsList2=4 q
 **Web Components（P0，issues #18）现状**：`customElements`（**已支持**，阶段 A：`define/get/getName/whenDefined/upgrade` +
 `connectedCallback`/`disconnectedCallback`/`attributeChangedCallback`/`adoptedCallback` 的宿主侧分发 + `createElement` 升级）、
 `HTMLTemplateElement`（**已支持**，阶段 B）、`attachShadow`/`ShadowRoot`（**已支持**，阶段 C，务实版，见下）；
-**仍缺** `adoptedStyleSheets` 与构造式 `CSSStyleSheet`（阶段 D，未做）。GitHub 首页原先的
+阶段 D（**已支持 2026-11-11**）：构造式 `CSSStyleSheet`（`new CSSStyleSheet()`、`replaceSync`/`replace`）与
+`document.adoptedStyleSheets`/`shadowRoot.adoptedStyleSheets`（设值后按目标注入一个 `<style>`，`replaceSync` 会重新应用；
+非构造式 sheet 抛 `TypeError`）。⚠ 没有样式作用域引擎：adopted 样式对目标文档/宿主全局生效，`cssRules` 在**构造式** sheet 上不可读。GitHub 首页原先的
 `ReferenceError: 'customElements' is not defined` 已消失。
 
 **`attachShadow` / `ShadowRoot` 已支持（2026-11-11，issues #18 phase C，务实版）**：`attachShadow({mode})` 返回

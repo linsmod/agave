@@ -408,6 +408,47 @@
     /* issues #18 phase B: HTMLTemplateElement. The parser has no template-contents
      * mode in this tree, so the facade hoists the parser children into `content`
      * on first access; innerHTML and cloneNode go through the same fragment. */
+    /* issues #18 phase D: constructable CSSStyleSheet + adoptedStyleSheets. The
+     * facade injects one <style> per target (there is no style-scoping engine), so
+     * the rules really apply and replaceSync re-applies them. */
+    ok('adoptedStyleSheets', (function () {
+      var el = document.createElement('p');
+      el.className = 'adopted-probe';
+      document.body.appendChild(el);
+      var sheet = new CSSStyleSheet();
+      sheet.replaceSync('.adopted-probe { color: rgb(1, 2, 3); }');
+      var ctor = sheet instanceof CSSStyleSheet && typeof sheet.replaceSync === 'function' &&
+                 typeof sheet.replace === 'function';
+      var before = getComputedStyle(el).color;
+      document.adoptedStyleSheets = [sheet];
+      var applied = getComputedStyle(el).color;
+      var adopted = document.adoptedStyleSheets.length === 1 &&
+                    document.adoptedStyleSheets[0] === sheet;
+      sheet.replaceSync('.adopted-probe { color: rgb(4, 5, 6); }');
+      var updated = getComputedStyle(el).color;
+      var bad = null;
+      try { document.adoptedStyleSheets = [{}]; } catch (e) { bad = e.name; }
+      document.adoptedStyleSheets = [];
+      var cleared = getComputedStyle(el).color;
+      var host = document.createElement('div');
+      document.body.appendChild(host);
+      var sr = host.attachShadow({ mode: 'open' });
+      sr.innerHTML = '<span class="sh-adopted">x</span>';
+      var shadowSheet = new CSSStyleSheet();
+      shadowSheet.replaceSync('.sh-adopted { color: rgb(7, 8, 9); }');
+      sr.adoptedStyleSheets = [shadowSheet];
+      var shadowApplied = getComputedStyle(sr.querySelector('.sh-adopted')).color;
+      el.parentNode.removeChild(el);
+      host.parentNode.removeChild(host);
+      var style = document.createElement('style');
+      document.head.appendChild(style);
+      var nativeOk = document.styleSheets.length > 0 &&
+                     document.styleSheets[document.styleSheets.length - 1] instanceof CSSStyleSheet;
+      style.parentNode.removeChild(style);
+      return ctor && before === 'rgb(0, 0, 0)' && applied === 'rgb(1, 2, 3)' && adopted &&
+             updated === 'rgb(4, 5, 6)' && bad === 'TypeError' &&
+             cleared === 'rgb(0, 0, 0)' && shadowApplied === 'rgb(7, 8, 9)' && nativeOk;
+    })());
     /* issues #18 phase C: attachShadow / ShadowRoot. The root is host-backed (its
      * children are the host's), so component output renders; there is no style
      * encapsulation and no light-DOM distribution yet. */
