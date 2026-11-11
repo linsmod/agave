@@ -239,12 +239,14 @@ static void applyPalette(UiTheme* theme)
         theme->hover = UI_RGB(0x47, 0x47, 0x47);
         theme->pressed = UI_RGB(0x56, 0x56, 0x56);
         theme->field = UI_RGB(0x28, 0x28, 0x28);
+        theme->field_hover = UI_RGB(0x45, 0x45, 0x45);
         /* Hover fill == the pill's hover border colour ("背景色和边框一致"), so
-         * the pill reads as one flat shape while the pointer is on it. */
-        theme->field_hover = UI_RGB(0x5A, 0x5A, 0x5A);
+         * the pill reads as one flat shape while the pointer is on it. #5A5A5A
+         * was blinding next to a #3C3C3C toolbar; #454545 keeps the step visible
+         * without a flash. */
+        theme->border_strong = UI_RGB(0x45, 0x45, 0x45);
         theme->field_focus = UI_RGB(0x3C, 0x3C, 0x3C);
         theme->border = UI_RGB(0x37, 0x37, 0x37);
-        theme->border_strong = UI_RGB(0x5A, 0x5A, 0x5A);
         theme->icon = UI_RGB(0xC4, 0xC7, 0xC5);
         theme->text = UI_RGB(0xE8, 0xEA, 0xED);
         theme->text_muted = UI_RGB(0x9A, 0xA0, 0xA6);
