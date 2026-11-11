@@ -43,6 +43,11 @@ extern "C" {
 typedef struct AgaveWebView AgaveWebView;
 
 typedef struct AgaveWebViewCallback {
+    /* Calling convention: every callback below except on_new_window runs on the
+     * thread that owns the control's window (the UI thread), so a host may touch
+     * its own windows/widgets from them. The engine thread only records state and
+     * posts a message; on_new_window is synchronous by contract (it decides
+     * whether the popup survives) and therefore runs on the engine thread. */
     /* Page title changed (UTF-8). */
     void (*on_title)(AgaveWebView* view, const char* title, void* user);
     /* Main frame URL changed (UTF-8). */

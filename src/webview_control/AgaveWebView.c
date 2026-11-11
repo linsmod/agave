@@ -68,6 +68,25 @@ static DWORD agwQueueWaitType(int* type);
  * agave_webview_destroy: the engine thread may be the caller for popups). */
 #define AGW_MSG_RETIRE (WM_APP + 0x56)
 
+/* Pending host callbacks, drained by the window proc (AGW_MSG_STATE). The engine
+ * thread records title/url/status/progress and posts the message; the host
+ * callbacks run on the thread that owns the window, because hosts update their
+ * UI from them (the shell's onStatus/onProgress touch the status bar). */
+#define AGW_STATE_TITLE    1u
+#define AGW_STATE_URL      2u
+#define AGW_STATE_PROGRESS 4u
+#define AGW_STATE_STATUS   8u
+
+/* The "engine process died" report, handed to the UI thread so the host's crash
+ * page (a load_html + status bar update) runs on the thread that owns the window. */
+#define AGW_MSG_CRASHED (WM_APP + 0x57)
+
+typedef struct {
+    int  code;
+    int  haveCallbacks;
+    char report[AGW_IPC_CRASH_BYTES];
+} AgwCrashPayload;
+
 #define AGW_MAX_DOWNLOADS 32
 
 /* Per-view mirror of one engine download job. Fixed buffers: the engine's
@@ -297,6 +316,7 @@ struct AgaveWebView {
     char               status[512];
     int                progress;
     int                loading;
+    unsigned           stateDirty;     /* AGW_STATE_*: host callbacks owed */
     /* Engine-loop accounting for the hidden-view skip (AGB_LOOP_DEBUG). */
     unsigned long      painted;
     unsigned long      skippedPaints;
@@ -667,6 +687,22 @@ static int agwPost(int type, AgaveWebView* view, const char* text,
 /* engine callbacks (engine thread)                                           */
 /* ------------------------------------------------------------------------- */
 
+/* Records that the host owes a callback for this state and asks the UI thread to
+ * deliver it. Never call the host directly from the engine thread for these:
+ * see the note on AGW_STATE_* above. */
+static void agwQueueState(AgaveWebView* item, unsigned bits)
+{
+    if (!item)
+        return;
+
+    agwLock();
+    item->stateDirty |= bits;
+    agwUnlock();
+
+    if (item->hwnd)
+        PostMessageA(item->hwnd, AGW_MSG_STATE, 0, 0);
+}
+
 static void agwOnInvalidate(MaCrossView* view, const MC_RECT* rect)
 {
     AgaveWebView* item = agwByView(view);
@@ -835,8 +871,7 @@ static void agwOnTitle(MaCrossView* view, const char* title)
     }
     agwUnlock();
 
-    if (item->callbacks.on_title)
-        item->callbacks.on_title(item, item->title, item->user);
+    agwQueueState(item, AGW_STATE_TITLE);
 }
 
 static void agwOnLocation(MaCrossView* view, const char* url)
@@ -851,11 +886,7 @@ static void agwOnLocation(MaCrossView* view, const char* url)
     item->url[sizeof(item->url) - 1] = 0;
     agwUnlock();
 
-    if (item->callbacks.on_url)
-        item->callbacks.on_url(item, item->url, item->user);
-
-    if (item->hwnd)
-        PostMessageA(item->hwnd, AGW_MSG_STATE, 0, 0);
+    agwQueueState(item, AGW_STATE_URL);
 }
 
 static void agwOnStatus(MaCrossView* view, const char* text)
@@ -872,8 +903,7 @@ static void agwOnStatus(MaCrossView* view, const char* text)
     }
     agwUnlock();
 
-    if (item->callbacks.on_status)
-        item->callbacks.on_status(item, item->status, item->user);
+    agwQueueState(item, AGW_STATE_STATUS);
 }
 
 static void agwOnHistoryStatus(MaCrossView* view, unsigned int backCount, unsigned int forwardCount)
@@ -914,14 +944,10 @@ static void agwOnProgress(MaCrossView* view, unsigned int percent, MC_BOOL finis
     }
     agwUnlock();
 
-    if (item->callbacks.on_progress)
-        item->callbacks.on_progress(item, (int)percent, finished ? 1 : 0, item->user);
-
     if (notify && item->callbacks.on_url && item->url[0])
         ; /* page finished: hosts usually refresh their address bar */
 
-    if (item->hwnd)
-        PostMessageA(item->hwnd, AGW_MSG_STATE, 0, 0);
+    agwQueueState(item, AGW_STATE_PROGRESS);
 }
 
 static void agwOnError(int err, const char* failedUrl)
@@ -2079,15 +2105,17 @@ static void agwDispatchBackendEvent(AgaveWebView* item, const AgwViewEvent* ev)
         }
         agwUnlock();
 
-        if (item->callbacks.on_title)
-            item->callbacks.on_title(item, item->title, item->user);
-        if (item->hwnd)
-            PostMessageA(item->hwnd, AGW_MSG_STATE, 0, 0);
+        agwQueueState(item, AGW_STATE_TITLE);
         break;
 
     case AGW_VIEW_EVENT_STATUS:
-        if (item->callbacks.on_status && ev->text)
-            item->callbacks.on_status(item, ev->text, item->user);
+        if (ev->text) {
+            agwLock();
+            strncpy(item->status, ev->text, sizeof(item->status) - 1);
+            item->status[sizeof(item->status) - 1] = 0;
+            agwUnlock();
+        }
+        agwQueueState(item, AGW_STATE_STATUS);
         break;
 
     case AGW_VIEW_EVENT_URL:
@@ -2098,8 +2126,7 @@ static void agwDispatchBackendEvent(AgaveWebView* item, const AgwViewEvent* ev)
         }
         agwUnlock();
 
-        if (item->callbacks.on_url)
-            item->callbacks.on_url(item, item->url, item->user);
+        agwQueueState(item, AGW_STATE_URL);
         break;
 
     case AGW_VIEW_EVENT_PROGRESS: {
@@ -2117,10 +2144,7 @@ static void agwDispatchBackendEvent(AgaveWebView* item, const AgwViewEvent* ev)
         }
         agwUnlock();
 
-        if (item->callbacks.on_progress)
-            item->callbacks.on_progress(item, ev->a, ev->b ? 1 : 0, item->user);
-        if (notify && item->hwnd)
-            PostMessageA(item->hwnd, AGW_MSG_STATE, 0, 0);
+        agwQueueState(item, AGW_STATE_PROGRESS);
         break;
     }
 
@@ -2292,10 +2316,26 @@ static void agwDispatchBackendEvent(AgaveWebView* item, const AgwViewEvent* ev)
                 item->view = NULL;
             }
 
-            if (item->callbacks.on_crashed)
-                item->callbacks.on_crashed(item, code, report ? report : "", item->user);
-            else if (item->callbacks.on_error)
-                item->callbacks.on_error(item, code, item->url, item->user);
+            if ((item->callbacks.on_crashed || item->callbacks.on_error) && item->hwnd) {
+                AgwCrashPayload* payload = (AgwCrashPayload*)calloc(1, sizeof(AgwCrashPayload));
+
+                if (payload) {
+                    payload->code = code;
+                    payload->haveCallbacks = 1;
+                    if (report)
+                        strncpy(payload->report, report, sizeof(payload->report) - 1);
+
+                    if (!PostMessageA(item->hwnd, AGW_MSG_CRASHED, 0, (LPARAM)payload))
+                        free(payload);
+                }
+            } else if (item->hwnd == NULL) {
+                /* No window to marshal through (headless embedder): the host is
+                 * the only thread there is, so deliver directly. */
+                if (item->callbacks.on_crashed)
+                    item->callbacks.on_crashed(item, code, report ? report : "", item->user);
+                else if (item->callbacks.on_error)
+                    item->callbacks.on_error(item, code, item->url, item->user);
+            }
         } else if (item->callbacks.on_error) {
             item->callbacks.on_error(item, code, ev->text ? ev->text : item->url, item->user);
         }
@@ -2763,8 +2803,40 @@ static LRESULT CALLBACK agwProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
         InvalidateRect(hwnd, NULL, FALSE);
         return 0;
 
-    case AGW_MSG_STATE:
+    case AGW_MSG_STATE: {
+        /* UI thread: deliver the host callbacks the engine thread queued. The
+         * values are copied under the lock so a host callback cannot run with a
+         * buffer that is being rewritten. */
+        unsigned bits;
+        char title[512];
+        char url[2048];
+        char status[512];
+        int progress = 0;
+        int finished = 0;
+
+        if (!item)
+            return 0;
+
+        agwLock();
+        bits = item->stateDirty;
+        item->stateDirty = 0;
+        memcpy(title, item->title, sizeof(title));
+        memcpy(url, item->url, sizeof(url));
+        memcpy(status, item->status, sizeof(status));
+        progress = item->progress;
+        finished = item->loading ? 0 : 1;
+        agwUnlock();
+
+        if ((bits & AGW_STATE_TITLE) && item->callbacks.on_title)
+            item->callbacks.on_title(item, title, item->user);
+        if ((bits & AGW_STATE_URL) && item->callbacks.on_url)
+            item->callbacks.on_url(item, url, item->user);
+        if ((bits & AGW_STATE_STATUS) && item->callbacks.on_status)
+            item->callbacks.on_status(item, status, item->user);
+        if ((bits & AGW_STATE_PROGRESS) && item->callbacks.on_progress)
+            item->callbacks.on_progress(item, progress, finished, item->user);
         return 0;
+    }
 
     case AGW_MSG_RETIRE:
         /* agave_webview_destroy() was called from a thread other than the one
@@ -2779,6 +2851,19 @@ static LRESULT CALLBACK agwProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
         agwDeliverDownloads(item);
         InvalidateRect(hwnd, NULL, FALSE);
         return 0;
+
+    case AGW_MSG_CRASHED: {
+        AgwCrashPayload* payload = (AgwCrashPayload*)(INT_PTR)lParam;
+
+        if (item && payload) {
+            if (item->callbacks.on_crashed)
+                item->callbacks.on_crashed(item, payload->code, payload->report, item->user);
+            else if (item->callbacks.on_error)
+                item->callbacks.on_error(item, payload->code, item->url, item->user);
+        }
+        free(payload);
+        return 0;
+    }
 
     case AGW_MSG_UNRESPONSIVE: {
         /* UI thread: tell the host. A modal notice belongs to the thread that
