@@ -146,7 +146,9 @@ v 入口打开"搜索标签"弹层、Esc 关闭；`pwsh -File tools/check_shell_
 
 ⚠ `check_shell_frame.ps1` 的 `click-min` 是最小化路径的唯一覆盖：它曾经因为
 "最小化后客户端高 1px → 标签条可用宽度为负 → 整数除零"而稳定 FAIL，别再把它
-当成脚本竞态跳过。
+当成脚本竞态跳过。同一脚本的 `min-no-tiny-view-resize` 断言最小化期间**没有**
+`[ui] resize` 落到 100px 以下（否则每次最小化/还原都会把视图缩到 1x1 再还原：
+DIB 重建 + 页面在 1x1 上重排各一次）。
 
 ## 2. 改动 → 该跑什么
 

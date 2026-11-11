@@ -3410,6 +3410,15 @@ static LRESULT CALLBACK shellProcInner(HWND hwnd, UINT message, WPARAM wParam, L
          * restored: only the active tab is. */
         g_minimized = (wParam == SIZE_MINIMIZED) ? 1 : 0;
         syncTabVisibility();
+
+        /* Nothing is visible while minimized, and Windows reports a ~199x1
+         * client: laying out would resize every view to 1x1 (DIB rebuilt, page
+         * reflowed at 1x1) only to undo it on restore - a full surface rebuild
+         * and reflow per minimize/restore. Restore always reports a different
+         * size, so it lays out then. */
+        if (g_minimized)
+            return 0;
+
         layoutAll();
         updateWindowRegion(hwnd);
         updateToolbarState();

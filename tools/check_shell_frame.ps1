@@ -185,6 +185,21 @@ try {
     NcClick $minX $cy 8
     $checks['click-min'] = [W]::IsIconic($hwnd)
 
+    # Minimizing must not resize any view. The shell used to lay the chrome out
+    # at the ~199x1 client Windows reports while minimized, so every view went
+    # to 1x1 (DIB rebuilt, page reflowed at 1x1) and back again on restore.
+    Start-Sleep -Milliseconds 250
+    $minLog = if (Test-Path (Join-Path $profileDir 'err.txt')) {
+        Get-Content (Join-Path $profileDir 'err.txt') -Raw
+    } else { '' }
+    $tinyResize = $false
+    foreach ($m in [regex]::Matches($minLog, '\[ui\] resize (\d+)x(\d+)')) {
+        if ([int]$m.Groups[1].Value -lt 100 -or [int]$m.Groups[2].Value -lt 100) {
+            $tinyResize = $true
+        }
+    }
+    $checks['min-no-tiny-view-resize'] = -not $tinyResize
+
     # The close button is tested on a fresh hidden instance: a minimized
     # window has no usable client rect for hit-testing the chrome.
     Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
