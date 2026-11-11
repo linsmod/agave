@@ -3570,8 +3570,11 @@ AgaveWebView* agave_webview_create(void* parent, int x, int y, int width, int he
     if (callbacks)
         item->callbacks = *callbacks;
 
+    /* WS_CLIPSIBLINGS: a host may float overlays of its own over the view (the
+     * shell's find bar does). Without it the view repaints over them, because a
+     * child window only respects siblings when it carries the style. */
     item->hwnd = CreateWindowExW(0, L"AgaveWebViewControl", L"",
-                                 WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN,
+                                 WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
                                  x, y, width, height,
                                  (HWND)parent, NULL,
                                  (HINSTANCE)GetWindowLongPtrW((HWND)parent, GWLP_HINSTANCE),

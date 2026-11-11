@@ -96,7 +96,7 @@ UI 侧的具体症状：
 | `UiButton` | 32×32@96，圆形 hover 底（Chrome 工具栏），图标盒按按钮尺寸算（上限 16px），`enabled/toggled/pressed` | 命中 → `id` |
 | `UiTabStrip` | 标签条 + `+`；活动标签削底与工具栏融合，非活动标签 hover/press 是**内缩 pill**；每 tab 默认带关闭 chip（20px 圆 + 16px glyph；背景标签压到不足一半宽度才隐藏，活动标签始终保留）；tab 之间常驻分隔线；中键关闭 | 命中标签/关闭/新标签 |
 | `UiToolbar` | 后退/前进/刷新-停止/地址胶囊/Go/菜单 | 命令 ID 与旧按钮完全一致 |
-| `UiFindBar` | 右对齐浮条：搜索图标 + 输入 + 上/下/关闭 | `ID_FIND_*`；Ctrl+F 打开并全选、Esc 从任何焦点处关闭 |
+| `UiFindBar` | **内容区右上角的浮层卡片**（搜索图标 + 输入 + 上/下/关闭），页面不重排 | `ID_FIND_*`；Ctrl+F 打开并全选、Esc 从任何焦点处关闭 |
 | `UiStatusBar` | 24px 状态栏 + 进度线 + 缩放胶囊 | 纯绘制 |
 | `UiChrome` | 组合上述 + 内容区矩形 + 原生 EDIT 位置 | `uiChromeLayout/Paint/Mouse` |
 | `UiMenu` | Chrome 风格圆角面板：30px 行、可选图标列、右对齐快捷键、子菜单、禁用/分隔行 | hover/键盘/点击；`uiMenuSessionMove/Key/Click` |
@@ -106,12 +106,13 @@ UI 侧的具体症状：
 几何（96 DPI 基准，全部经 `scale = dpi/96`）：
 
 ```
-tabStripH 40   toolbarH 44   findH 40   statusH 24
+tabStripH 40   toolbarH 44   statusH 24
 tab: maxW 220   h 32   gap 2   radius 8
 window buttons: 46 x tabStripH, right-aligned
 address: h 32  radius 16  go 28×28
-content: y = tabStripH + toolbarH + (findVisible ? findH : 0)
+content: y = tabStripH + toolbarH          （查找栏是浮层，不加高度）
          h = windowH - y - statusH
+find overlay: 右上角, w = min(360+24, content.w-2*pad)  h = findFieldH + 8
 ```
 
 **标题栏就是标签条**：`WM_NCCALCSIZE` 把客户区顶到窗口顶边（只保留左/右/下 resize
@@ -243,6 +244,25 @@ chrome 全部落在 `HTCLIENT` 里（只有标签条空白处是 `HTCAPTION`）�
   不显示、hover 的 tab 两侧不显示"。颜色 `tab_sep`：暗色深灰 `#3C4043`、亮色浅白
   `#F4F6F8`（对 `#DEE1E6` 的 strip 是提亮而不是压暗）。
 
+### 5.4 查找栏浮层
+
+Chrome 的 find bar 浮在内容区右上角，**页面不重排**。本仓库原先把它做成 chrome 里的
+一整行（`content_top += findH`），打开查找时整页往下跳 40px，页面高度/滚动位置都变。
+
+Win32 下页面是 shell 的子窗口，想让它"浮在页面上"只能是**另一个子窗口**：
+
+- `AgaveShellFindBar` 子窗口（`WS_CHILD | WS_CLIPSIBLINGS`）放在
+  `chrome->findbar.rect`，画一张圆角卡片（`uiChromePaintFindOverlay`），窗口区域用
+  `SetWindowRgn` 裁成胶囊，四角露出页面；
+- 原生 `EDIT` 仍是 **shell 的子窗口**（不是浮层的子窗口），这样 `WM_CTLCOLOREDIT`
+  还发给 shell，主题色/焦点底色不用重写；它被 `SetWindowPos(..., HWND_TOP)` 抬到浮层之上；
+- 页面控件带 `WS_CLIPSIBLINGS`（`AgaveWebView.c`）：没有它，页面每次重绘都会盖掉浮层；
+- 鼠标事件在浮层窗口里换成 shell 客户区坐标后仍走 `uiChromeMouse`，所以 hover /
+  按下 / `ID_FIND_*` 命令与别处共用一套状态机和脏矩形；
+- 浮层随 `layoutAll()` 定位（内容区右上角，pad 边距），`Ctrl+F` 打开、`Esc` 关闭
+  （Esc 在主消息循环里，任何焦点都能关）。`AGB_SHELL_FIND=1` 让启动即打开，供
+  `tools/check_shell_findbar.ps1` 用真实窗口验证 z-order / 不重排 / Esc。
+
 ## 6 主题 token
 
 浅色（Chrome 2023 风格）：tab strip `#DEE1E6`、toolbar `#FFFFFF`、
@@ -312,15 +332,18 @@ build-zig-native\agave_shell.exe --ui-shot build-zig-native\ui-focus.png --ui-th
 6. 标签条（5）：每个 tab 默认有 chip（按"w 是否过半"的规则断言，任意窗口尺寸都成立）、
    **活动标签任何宽度都有 chip**、tab 间分隔线 = `tab_sep`、活动标签两侧与 hover
    标签两侧的分隔线 = strip 色、压缩后背景标签 chip 为零矩形且 favicon 仍在；
-7. 150% DPI：tabstrip 60 / toolbar 66 / content top = 126，菜单仍在窗口内；
+7. 150% DPI：tabstrip 60 / toolbar 66 / content top = **126**（查找栏不再占一行），
+   菜单仍在窗口内；
 8. 暗色层次：strip < toolbar、胶囊 < toolbar、hover > 活动标签、焦点环 =
    `#A8C7FA`；
-9. `--ui-menu`（82 项）：菜单宽度/锚定、子菜单打开与反向翻转、行/分隔行命中、
-   Down 跳过分隔行与禁用行、Right/Left 进出子菜单、点击选中/点外取消、
-   hover/背景像素、圆形工具栏 hover；
-10. `--ui-focus`（64 项）：焦点字段、胶囊填充色、焦点环左右/上边像素与 token。
+9. 查找栏浮层（5.4）：卡片在内容区内、右上角对齐、EDIT 在卡片内、卡片在工具栏下方，
+   并把卡片画进独立 DIB 校验底色；
+10. `--ui-menu`（87 项）：菜单宽度/锚定、子菜单打开与反向翻转、行/分隔行命中、
+    Down 跳过分隔行与禁用行、Right/Left 进出子菜单、点击选中/点外取消、
+    hover/背景像素、圆形工具栏 hover；
+11. `--ui-focus`（69 项）：焦点字段、胶囊填充色、焦点环左右/上边像素与 token。
 
-各项计数（2026-11-11）：亮 55 / 暗 59 / 亮-150% 55 / 暗-菜单 82 / 暗-焦点 64。
+各项计数（2026-11-11）：亮 60 / 暗 64 / 亮-150% 60 / 暗-菜单 87 / 暗-焦点 69。
 窄窗口（如 `--ui-size 700x460`，背景标签不足一半宽度）会少 2 条 chip 像素断言：
 那里背景标签本来就没有 chip（活动标签的 chip 仍在，命中/点击断言照常跑）。
 
@@ -329,7 +352,12 @@ build-zig-native\agave_shell.exe --ui-shot build-zig-native\ui-focus.png --ui-th
 **分层弹出窗口本身**（真实 HWND、鼠标捕获、模态循环、点外关闭）不在离屏测试里：
 `pwsh -File tools/check_shell_menu.ps1` 用 `AGB_SHELL_HIDDEN=1` 起真实壳，点菜单
 按钮/发右键，断言弹出窗口存在（WS_EX_LAYERED/TOOLWINDOW）、首行点击生效、
-Esc 关闭上下文菜单，然后 `WM_CLOSE` 退出。这是手动检查，不进默认套件。
+右键关掉并在点击处重开（`UI_MENU_REOPEN` + 重放点击）、Esc 关闭上下文菜单，
+然后 `WM_CLOSE` 退出。
+**查找栏浮层**同理：`pwsh -File tools/check_shell_findbar.ps1`（`AGB_SHELL_FIND=1`）
+断言浮层是 shell 的子窗口、EDIT 在浮层内且 z-order 在其上、页面矩形没被压小、
+Esc 关掉。两者都是手动检查，不进默认套件；它们都按 pid 找窗口，开发者自己开着的
+shell 不会被脚本动。
 
 ## 8 兼容性
 

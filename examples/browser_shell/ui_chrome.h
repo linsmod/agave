@@ -117,6 +117,12 @@ void uiChromeSetFocusField(UiChrome* chrome, int field);
 void uiChromeLayout(UiChrome* chrome, int width, int height);
 void uiChromePaint(UiChrome* chrome, HDC hdc);
 
+/* The find bar floats over the page (Chrome's overlay), so it lives in its own
+ * child window instead of a chrome row: this paints the card into a DC whose
+ * origin is that window's client. The shell positions the window at
+ * chrome->findbar.rect and the native EDIT at chrome->find_edit. */
+void uiChromePaintFindOverlay(UiChrome* chrome, HDC hdc, int width, int height);
+
 /* Refresh derived widget state (enabled back/forward) after the model changed. */
 void uiChromeSync(UiChrome* chrome);
 

@@ -102,6 +102,7 @@ typedef struct ShellWindow {
     int           used;
     HWND          hwnd;
     HWND          address, findEdit;
+    HWND          findBar;       /* find overlay: child window above the view */
     UiChrome      chrome;
     Tab           tabs[MAX_TABS];
     int           activeTab;
@@ -695,6 +696,9 @@ static void placeChild(HWND child, int x, int y, int w, int h)
     MoveWindow(child, x, y, w, h, TRUE);
 }
 
+static HWND createFindOverlay(ShellWindow* win);
+static void invalidateFindOverlay(void);
+
 static void layoutAll(void)
 {
     RECT client;
@@ -712,11 +716,31 @@ static void layoutAll(void)
     edit = CHROME->address_edit;
     placeChild(g_address, edit.x, edit.y, edit.w, edit.h);
 
+    /* The find bar floats over the page: its own child window sits at
+     * chrome->findbar.rect, the native EDIT inside it stays a child of the
+     * shell (WM_CTLCOLOREDIT keeps working) and is raised above the overlay. */
     if (g_findVisible) {
+        if (!g_cur->findBar)
+            g_cur->findBar = createFindOverlay(g_cur);
+
+        if (g_cur->findBar) {
+            const UiRect* card = &CHROME->findbar.rect;
+
+            placeChild(g_cur->findBar, card->x, card->y, card->w, card->h);
+            ShowWindow(g_cur->findBar, SW_SHOW);
+            SetWindowPos(g_cur->findBar, HWND_TOP, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            InvalidateRect(g_cur->findBar, NULL, FALSE);
+        }
+
         edit = CHROME->find_edit;
         ShowWindow(g_findEdit, SW_SHOW);
         placeChild(g_findEdit, edit.x, edit.y, edit.w, edit.h);
+        SetWindowPos(g_findEdit, HWND_TOP, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     } else {
+        if (g_cur->findBar)
+            ShowWindow(g_cur->findBar, SW_HIDE);
         ShowWindow(g_findEdit, SW_HIDE);
     }
 
@@ -3494,6 +3518,8 @@ static LRESULT CALLBACK shellProcInner(HWND hwnd, UINT message, WPARAM wParam, L
                 uiChromeSetFocusField(CHROME, note == EN_SETFOCUS ? 2 : 0);
 
             InvalidateRect(hwnd, NULL, FALSE);
+            /* The find bar paints its own focus ring in the overlay window. */
+            invalidateFindOverlay();
             return 0;
         }
 
@@ -5924,7 +5950,6 @@ static int uiShotMain(void)
     UiChrome chrome;
     UiChromeCallbacks callbacks;
     UiThemeKind kind = UI_THEME_LIGHT;
-    UiChromeModel* model;
     BITMAPINFO info;
     HDC screen;
     HDC memory;
@@ -5958,7 +5983,6 @@ static int uiShotMain(void)
 
     uiChromeInit(&chrome, kind, g_uiShotDpi, 1, &callbacks);
     shotFillModel(&chrome.model);
-    model = &chrome.model;
 
     uiChromeLayout(&chrome, width, height);
 
@@ -6446,6 +6470,74 @@ static int uiShotMain(void)
                 uiChromeHitTest(&chrome, chrome.findbar.field.x + 4,
                                 chrome.findbar.field.y + 4) == UI_PART_FIND_FIELD);
 
+        /* --- find bar overlay (5.4) ---------------------------------------- */
+        {
+            const UiRect* card = &chrome.findbar.rect;
+            const UiRect* findEdit = &chrome.find_edit;
+
+            uiCheck("find-overlay-in-content",
+                    chrome.model.find_visible &&
+                    card->w > 0 && card->h > 0 &&
+                    card->x >= chrome.content.x &&
+                    card->y >= chrome.content.y &&
+                    card->x + card->w <= chrome.content.x + chrome.content.w &&
+                    card->y + card->h <= chrome.content.y + chrome.content.h);
+            uiCheck("find-overlay-top-right",
+                    card->x + card->w >= chrome.content.x + chrome.content.w -
+                                        uiThemeScale(&chrome.theme, 6) - 1);
+            uiCheck("find-overlay-edit-inside",
+                    findEdit->x >= card->x && findEdit->y >= card->y &&
+                    findEdit->x + findEdit->w <= card->x + card->w &&
+                    findEdit->y + findEdit->h <= card->y + card->h);
+            uiCheck("find-overlay-below-toolbar",
+                    card->y >= chrome.toolbar.rect.y + chrome.toolbar.rect.h);
+
+            /* The card is painted into its own window, not into the chrome. */
+            {
+                BITMAPINFO cardInfo;
+                HDC cardDc;
+                HBITMAP cardBitmap;
+                HGDIOBJ cardOld;
+                void* cardBits = NULL;
+                unsigned want;
+
+                memset(&cardInfo, 0, sizeof(cardInfo));
+                cardInfo.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+                cardInfo.bmiHeader.biWidth = card->w;
+                cardInfo.bmiHeader.biHeight = card->h;   /* bottom-up: shotPixel */
+                cardInfo.bmiHeader.biPlanes = 1;
+                cardInfo.bmiHeader.biBitCount = 32;
+                cardInfo.bmiHeader.biCompression = BI_RGB;
+
+                cardDc = CreateCompatibleDC(screen);
+                cardBitmap = CreateDIBSection(cardDc, &cardInfo, DIB_RGB_COLORS,
+                                              &cardBits, NULL, 0);
+
+                if (cardBitmap && cardBits) {
+                    cardOld = SelectObject(cardDc, cardBitmap);
+                    uiChromePaintFindOverlay(&chrome, cardDc, card->w, card->h);
+                    GdiFlush();
+
+                    want = chrome.focus_field == 2 ? chrome.theme.field_focus
+                         : chrome.hover_part == UI_PART_FIND_FIELD ? chrome.theme.field_hover
+                         : chrome.theme.field;
+
+                    uiCheck("pixel-find-card",
+                            sameColor(shotPixel((const unsigned char*)cardBits,
+                                                card->w, card->h,
+                                                card->w / 2, card->h / 2), want));
+                    SelectObject(cardDc, cardOld);
+                } else {
+                    uiCheck("pixel-find-card", 0);
+                }
+
+                if (cardBitmap)
+                    DeleteObject(cardBitmap);
+                if (cardDc)
+                    DeleteDC(cardDc);
+            }
+        }
+
         /* Every tab carries its close chip at rest, not only when hovered, and
          * only loses it once the strip is squeezed below half the natural
          * width. Asserted as the rule so the check holds at any window size. */
@@ -6588,7 +6680,9 @@ static int uiShotMain(void)
     uiChromeLayout(&chrome, 1350, 1050);
     uiCheck("dpi-tabstrip", chrome.theme.tabstrip_h == 60);
     uiCheck("dpi-toolbar", chrome.theme.toolbar_h == 66);
-    uiCheck("dpi-content-top", chrome.content.y == 60 + 66 + (model->find_visible ? 60 : 0));
+    /* The find bar is an overlay: it must not push the page down (it used to add
+     * its own row, which is what "searchbar 不要占页面空间" was about). */
+    uiCheck("dpi-content-top", chrome.content.y == 60 + 66);
     uiCheck("dpi-menu-inside", chrome.toolbar.menu.rect.x + chrome.toolbar.menu.rect.w <= 1350);
 
     SelectObject(memory, old);
@@ -7042,6 +7136,192 @@ static void applySystemColorScheme(void)
  * path, not a flashing window. */
 static int g_shellHidden;
 
+/* ------------------------------------------------------------------------- */
+/* find bar overlay                                                          */
+/* ------------------------------------------------------------------------- */
+
+/* Chrome's find bar floats over the page and the page does not reflow. In Win32
+ * the page *is* a child window, so the only way to be seen above it is another
+ * child on top: this window holds the card, while the native EDIT stays a child
+ * of the shell (so WM_CTLCOLOREDIT keeps working) and is raised above it. The
+ * card is a pill, so the window is clipped to a round region. */
+
+static void findBarUpdateRegion(HWND bar)
+{
+    RECT client;
+    HRGN region;
+    int diameter;
+
+    if (!bar || !GetClientRect(bar, &client))
+        return;
+
+    diameter = client.bottom - client.top;
+
+    if (diameter < 2 || client.right <= 0)
+        return;
+
+    region = CreateRoundRectRgn(0, 0, client.right + 1, client.bottom + 1,
+                                diameter, diameter);
+
+    if (region)
+        SetWindowRgn(bar, region, TRUE);
+}
+
+static void invalidateFindOverlay(void)
+{
+    if (g_cur && g_cur->findBar)
+        InvalidateRect(g_cur->findBar, NULL, FALSE);
+}
+
+/* Overlay client point -> shell client point, then the chrome's own state
+ * machine: hover, pressed and the UI_CMD_FIND_* commands stay in one place. */
+static void findBarMouse(HWND hwnd, ShellWindow* win, UiMouseEvent* event)
+{
+    UiRect dirty;
+    ShellWindow* previous;
+
+    if (!win)
+        return;
+
+    event->x += win->chrome.findbar.rect.x;
+    event->y += win->chrome.findbar.rect.y;
+
+    previous = g_cur;
+    g_cur = win;
+    uiChromeMouse(&win->chrome, event);
+
+    if (uiChromeTakeDirty(&win->chrome, &dirty))
+        InvalidateRect(hwnd, NULL, FALSE);
+
+    g_cur = previous;
+}
+
+static LRESULT CALLBACK findBarProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    ShellWindow* win = windowForHwnd(hwnd);
+
+    (void)wParam;
+
+    switch (message) {
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        RECT client;
+        HDC hdc = BeginPaint(hwnd, &ps);
+
+        if (win && GetClientRect(hwnd, &client))
+            uiChromePaintFindOverlay(&win->chrome, hdc, client.right, client.bottom);
+
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+
+    case WM_ERASEBKGND:
+        return 1;
+
+    case WM_SIZE:
+        findBarUpdateRegion(hwnd);
+        return 0;
+
+    case WM_MOUSEMOVE:
+    case WM_MOUSELEAVE:
+    case WM_LBUTTONDOWN:
+    case WM_LBUTTONUP: {
+        UiMouseEvent event;
+        TRACKMOUSEEVENT track;
+
+        event.x = (short)LOWORD(lParam);
+        event.y = (short)HIWORD(lParam);
+
+        if (message == WM_MOUSEMOVE) {
+            event.type = UI_MOUSE_MOVE;
+        } else if (message == WM_MOUSELEAVE) {
+            event.type = UI_MOUSE_LEAVE;
+            event.x = 0;
+            event.y = 0;
+        } else if (message == WM_LBUTTONDOWN) {
+            event.type = UI_MOUSE_DOWN;
+            SetCapture(hwnd);
+        } else {
+            event.type = UI_MOUSE_UP;
+
+            if (GetCapture() == hwnd)
+                ReleaseCapture();
+        }
+
+        findBarMouse(hwnd, win, &event);
+
+        if (message == WM_MOUSEMOVE) {
+            memset(&track, 0, sizeof(track));
+            track.cbSize = sizeof(track);
+            track.dwFlags = TME_LEAVE;
+            track.hwndTrack = hwnd;
+            TrackMouseEvent(&track);
+        }
+
+        return 0;
+    }
+
+    /* Capture went elsewhere (the window is going away, another window grabbed
+     * the mouse): a find button must not stay stuck in "pressed". */
+    case WM_CAPTURECHANGED:
+        if (win && (HWND)lParam != hwnd) {
+            UiMouseEvent leave;
+
+            leave.type = UI_MOUSE_LEAVE;
+            leave.x = 0;
+            leave.y = 0;
+            findBarMouse(hwnd, win, &leave);
+        }
+        return 0;
+
+    case WM_SETCURSOR: {
+        POINT point;
+        UiPart part;
+
+        if (LOWORD(lParam) != HTCLIENT || !win)
+            break;
+
+        GetCursorPos(&point);
+        ScreenToClient(hwnd, &point);
+        part = uiChromeHitTest(&win->chrome,
+                               point.x + win->chrome.findbar.rect.x,
+                               point.y + win->chrome.findbar.rect.y);
+
+        /* Caret over the query, arrow over the three buttons. */
+        SetCursor(LoadCursorW(NULL, (part == UI_PART_FIND_PREV ||
+                                     part == UI_PART_FIND_NEXT ||
+                                     part == UI_PART_FIND_CLOSE)
+                                        ? IDC_ARROW : IDC_IBEAM));
+        return TRUE;
+    }
+
+    default:
+        break;
+    }
+
+    return DefWindowProcA(hwnd, message, wParam, lParam);
+}
+
+static HWND createFindOverlay(ShellWindow* win)
+{
+    HWND bar;
+
+    if (!win || !win->hwnd || !g_instance)
+        return NULL;
+
+    bar = CreateWindowExA(0, "AgaveShellFindBar", "",
+                          WS_CHILD | WS_CLIPSIBLINGS, 0, 0, 0, 0,
+                          win->hwnd, NULL, g_instance, NULL);
+
+    if (!bar) {
+        agbLog(AGB_LOG_SHELL, "find overlay create failed: %lu",
+               (unsigned long)GetLastError());
+        return NULL;
+    }
+
+    return bar;
+}
+
 static void registerShellWindowClass(void)
 {
     static int registered;
@@ -7057,6 +7337,15 @@ static void registerShellWindowClass(void)
     wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
     wc.lpszClassName = "AgaveShellWindow";
     RegisterClassA(&wc);
+
+    memset(&wc, 0, sizeof(wc));
+    wc.lpfnWndProc = findBarProc;
+    wc.hInstance = g_instance;
+    wc.hCursor = LoadCursorA(NULL, (LPCSTR)IDC_ARROW);
+    wc.hbrBackground = NULL;   /* painted by uiChromePaintFindOverlay */
+    wc.lpszClassName = "AgaveShellFindBar";
+    RegisterClassA(&wc);
+
     registered = 1;
 }
 
@@ -7102,6 +7391,12 @@ static ShellWindow* createShellWindow(const char* title)
         uiChromeInit(&win->chrome, shellThemeKind(),
                      shellOps()->dpi_for_window(NULL, NULL), 0, &callbacks);
     }
+
+    /* AGB_SHELL_FIND=1 opens the find bar with the first layout: the bar is an
+     * overlay the automation cannot reach (Ctrl+F needs a real modifier), and
+     * tools/check_shell_findbar.ps1 needs exactly that state. */
+    if (getenv("AGB_SHELL_FIND"))
+        win->findVisible = 1;
 
     win->hwnd = CreateWindowExA(0, "AgaveShellWindow",
                                 title ? title : "BrowserShell - Agave",

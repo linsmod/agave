@@ -120,7 +120,7 @@ void uiChromeLayout(UiChrome* chrome, int width, int height)
     UiTheme* theme;
     UiChromeModel* model;
     int pad, gap, x, y;
-    int toolbar_top, toolbar_h, strip_h, find_h, status_h;
+    int toolbar_top, toolbar_h, strip_h, status_h;
     int content_top;
     int button_w, button_h;
 
@@ -140,7 +140,6 @@ void uiChromeLayout(UiChrome* chrome, int width, int height)
 
     strip_h = theme->tabstrip_h;
     toolbar_h = theme->toolbar_h;
-    find_h = theme->find_h;
     status_h = theme->status_h;
     pad = scale(theme, 6);
     gap = scale(theme, 2);
@@ -222,58 +221,68 @@ void uiChromeLayout(UiChrome* chrome, int width, int height)
 
     content_top = strip_h + toolbar_h;
 
-    if (model->find_visible) {
-        int field_h = theme->find_field_h;
-        int field_w = theme->find_field_w;
-        int field_x;
-        int field_y;
-        int bs = scale(theme, 24);
-        int bx;
-
-        chrome->findbar.rect = uiRectMake(0, content_top, width, find_h);
-
-        if (field_w > width - pad * 2)
-            field_w = width - pad * 2;
-        if (field_w < scale(theme, 160))
-            field_w = scale(theme, 160);
-
-        field_x = width - pad - field_w;
-
-        if (field_x < pad)
-            field_x = pad;
-
-        field_y = content_top + (find_h - field_h) / 2;
-        chrome->findbar.field = uiRectMake(field_x, field_y, field_w, field_h);
-
-        bx = field_x + field_w - pad - bs;
-        chrome->findbar.close.rect = uiRectMake(bx, field_y + (field_h - bs) / 2, bs, bs);
-        bx -= bs + gap;
-        chrome->findbar.next.rect = uiRectMake(bx, field_y + (field_h - bs) / 2, bs, bs);
-        bx -= bs + gap;
-        chrome->findbar.prev.rect = uiRectMake(bx, field_y + (field_h - bs) / 2, bs, bs);
-        bx -= scale(theme, 4);
-
-        chrome->findbar.edit = uiRectMake(
-            field_x + scale(theme, 11) + scale(theme, 16) + scale(theme, 8),
-            field_y + (field_h - scale(theme, 20)) / 2,
-            bx - (field_x + scale(theme, 11) + scale(theme, 16) + scale(theme, 8)),
-            scale(theme, 20));
-
-        if (chrome->findbar.edit.w < scale(theme, 40))
-            chrome->findbar.edit.w = scale(theme, 40);
-
-        chrome->find_edit = chrome->findbar.edit;
-        content_top += find_h;
-    } else {
-        memset(&chrome->findbar, 0, sizeof(chrome->findbar));
-        chrome->find_edit = uiRectMake(0, 0, 0, 0);
-    }
-
     chrome->content = uiRectMake(0, content_top, width,
                                  height - content_top - status_h);
 
     if (chrome->content.h < 0)
         chrome->content.h = 0;
+
+    /* The find bar floats over the top-right of the page: it does not take a row
+     * of its own (the page used to shift down by find_h whenever it opened).
+     * The rect is in shell-client coordinates; the shell puts an overlay child
+     * window exactly there and the native EDIT inside it. */
+    if (model->find_visible && chrome->content.w > scale(theme, 160)) {
+        int card_w = theme->find_field_w + uiThemeScale(theme, 24);
+        int card_h = theme->find_field_h + uiThemeScale(theme, 8);
+        int bs = scale(theme, 28);
+        int right;
+        int left;
+
+        if (card_w > chrome->content.w - pad * 2)
+            card_w = chrome->content.w - pad * 2;
+        if (card_w < scale(theme, 160))
+            card_w = scale(theme, 160);
+        if (card_h < scale(theme, 30))
+            card_h = scale(theme, 30);
+
+        chrome->findbar.rect = uiRectMake(
+            chrome->content.x + chrome->content.w - pad - card_w,
+            chrome->content.y + pad, card_w, card_h);
+
+        if (chrome->findbar.rect.x < chrome->content.x + pad)
+            chrome->findbar.rect.x = chrome->content.x + pad;
+
+        right = chrome->findbar.rect.x + chrome->findbar.rect.w - scale(theme, 6);
+        left = chrome->findbar.rect.x + scale(theme, 11) + scale(theme, 16) + scale(theme, 8);
+
+        chrome->findbar.close.rect = uiRectMake(right - bs,
+                                                chrome->findbar.rect.y +
+                                                    (card_h - bs) / 2, bs, bs);
+        right -= bs;
+        chrome->findbar.next.rect = uiRectMake(right - bs,
+                                               chrome->findbar.rect.y +
+                                                   (card_h - bs) / 2, bs, bs);
+        right -= bs;
+        chrome->findbar.prev.rect = uiRectMake(right - bs,
+                                               chrome->findbar.rect.y +
+                                                   (card_h - bs) / 2, bs, bs);
+        right -= scale(theme, 4);
+
+        /* The pill's own rect is the card; the native EDIT sits inside it. */
+        chrome->findbar.field = chrome->findbar.rect;
+        chrome->findbar.edit = uiRectMake(left,
+                                          chrome->findbar.rect.y +
+                                              (card_h - scale(theme, 20)) / 2,
+                                          right - left, scale(theme, 20));
+
+        if (chrome->findbar.edit.w < scale(theme, 40))
+            chrome->findbar.edit.w = scale(theme, 40);
+
+        chrome->find_edit = chrome->findbar.edit;
+    } else {
+        memset(&chrome->findbar, 0, sizeof(chrome->findbar));
+        chrome->find_edit = uiRectMake(0, 0, 0, 0);
+    }
 
     chrome->statusbar.rect = uiRectMake(0, height - status_h, width, status_h);
     chrome->statusbar.text = uiRectMake(scale(theme, 10), height - status_h,
@@ -292,11 +301,6 @@ void uiChromeLayout(UiChrome* chrome, int width, int height)
 
     if (chrome->statusbar.text.w < 0)
         chrome->statusbar.text.w = 0;
-
-    /* Keep the tab strip's + button and the edit fields in sync after a
-     * shrink; the shell reads these rects to MoveWindow its EDITs. */
-    if (!model->find_visible)
-        chrome->find_edit = uiRectMake(0, 0, 0, 0);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -382,47 +386,76 @@ static void paintToolbar(UiChrome* chrome, UiPainter* painter)
     }
 }
 
-static void paintFindBar(UiChrome* chrome, UiPainter* painter)
+/* Chrome's find bar is an overlay on the page: one rounded card with the query
+ * on the left and three buttons on the right. It is painted into the shell's
+ * overlay child window (see uiChromePaintFindOverlay), not into the chrome, so
+ * the (dx, dy) offset maps its shell-client rects onto that window's origin. */
+static void paintFindBar(UiChrome* chrome, UiPainter* painter, int dx, int dy)
 {
     UiTheme* theme = &chrome->theme;
     UiFindBar* bar = &chrome->findbar;
+    UiButton prev = bar->prev;
+    UiButton next = bar->next;
+    UiButton close = bar->close;
     int focused = chrome->focus_field == 2;
     int hovered = chrome->hover_part == UI_PART_FIND_FIELD;
+    int radius;
+    UiRect card;
 
-    if (!chrome->model.find_visible || bar->rect.h <= 0)
+    if (!chrome->model.find_visible || bar->rect.w <= 0 || bar->rect.h <= 0)
         return;
 
-    uiFillRect(painter, bar->rect, theme->toolbar);
-    uiFillRect(painter, uiRectMake(0, bar->rect.y + bar->rect.h - scale(theme, 1),
-                                   bar->rect.w, scale(theme, 1)), theme->border);
+    card = uiRectMake(bar->rect.x + dx, bar->rect.y + dy, bar->rect.w, bar->rect.h);
+    radius = bar->rect.h / 2;
 
-    uiFillRoundRect(painter, bar->field, theme->find_field_h / 2,
+    uiFillRoundRect(painter, card, radius,
                     focused ? theme->field_focus
                             : (hovered ? theme->field_hover : theme->field));
 
     if (focused)
-        uiStrokeRoundRect(painter, bar->field, theme->find_field_h / 2,
-                          theme->focus_ring, (float)scale(theme, 2));
+        uiStrokeRoundRect(painter, card, radius, theme->focus_ring,
+                          (float)scale(theme, 2));
     else
-        uiStrokeRoundRect(painter, bar->field, theme->find_field_h / 2, theme->border, 1.0f);
+        uiStrokeRoundRect(painter, card, radius, theme->border, 1.0f);
 
     uiIcon(painter, UI_ICON_SEARCH,
-           uiRectMake(bar->field.x + scale(theme, 11),
-                      bar->field.y + (bar->field.h - scale(theme, 16)) / 2,
+           uiRectMake(card.x + scale(theme, 11),
+                      card.y + (card.h - scale(theme, 16)) / 2,
                       scale(theme, 16), scale(theme, 16)),
            theme->icon, (1.5f * theme->scale));
 
     if (chrome->offscreen || !chrome->find_hwnd) {
         const char* text = chrome->model.find_text[0] ? chrome->model.find_text
                                                       : "Find in page";
+        UiRect text_rect = uiRectMake(bar->edit.x + dx, card.y,
+                                      bar->edit.w, card.h);
 
-        uiText(painter, text, bar->edit, theme->font_ui,
+        uiText(painter, text, text_rect, theme->font_ui,
                chrome->model.find_text[0] ? theme->text : theme->text_faint, UI_ALIGN_LEFT);
     }
 
-    uiButtonPaint(&bar->prev, theme, painter);
-    uiButtonPaint(&bar->next, theme, painter);
-    uiButtonPaint(&bar->close, theme, painter);
+    prev.rect.x += dx;  prev.rect.y += dy;
+    next.rect.x += dx;  next.rect.y += dy;
+    close.rect.x += dx; close.rect.y += dy;
+
+    uiButtonPaint(&prev, theme, painter);
+    uiButtonPaint(&next, theme, painter);
+    uiButtonPaint(&close, theme, painter);
+}
+
+void uiChromePaintFindOverlay(UiChrome* chrome, HDC hdc, int width, int height)
+{
+    UiPainter painter;
+
+    if (!chrome || !hdc)
+        return;
+
+    if (!uiPainterBegin(&painter, hdc, &chrome->theme, width, height))
+        return;
+
+    paintFindBar(chrome, &painter, -chrome->findbar.rect.x, -chrome->findbar.rect.y);
+
+    uiPainterEnd(&painter);
 }
 
 static void paintStatus(UiChrome* chrome, UiPainter* painter)
@@ -469,7 +502,8 @@ void uiChromePaint(UiChrome* chrome, HDC hdc)
     uiButtonPaint(&chrome->win_close, theme, &painter);
 
     paintToolbar(chrome, &painter);
-    paintFindBar(chrome, &painter);
+    /* No find bar here: it floats over the page in its own overlay window
+     * (uiChromePaintFindOverlay). */
     paintStatus(chrome, &painter);
 
     uiPainterEnd(&painter);

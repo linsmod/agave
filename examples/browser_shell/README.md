@@ -13,11 +13,10 @@ shell 不直接调用任何 `macross_*` 接口 —— 它和第三方宿主用�
 +--------------------------------------------------------------------+
 | <  >  R/X  [ 锁 地址栏..................................... > ] ☰  |
 +--------------------------------------------------------------------+
-| 查找栏（Ctrl+F 时出现）                                             |
-+--------------------------------------------------------------------+
-|                                                                    |
-|                    网页（引擎直接画进 DIB）                          |
-|                                                                    |
+|                                            +---------------------+ |
+|                                            | 查找栏（浮层，Ctrl+F）| |
+|                    网页（引擎直接画进 DIB） | 不占页面空间，Esc 关闭 | |
+|                                            +---------------------+ |
 +--------------------------------------------------------------------+
 | 状态栏：加载进度 / 悬停链接 / 错误 / 下载路径 / 缩放               |
 +--------------------------------------------------------------------+
@@ -81,9 +80,11 @@ UI 不再由 `main.c` 里的一排原生 `BUTTON` 拼出来；`main.c` 只保留
 ```powershell
 build-zig-native\agave_shell.exe --ui-shot build-zig-native\ui-light.png --ui-theme light
 build-zig-native\agave_shell.exe --ui-shot build-zig-native\ui-dark.png  --ui-theme dark
-build-zig-native\agave_shell.exe --ui-shot build-zig-native\ui-150.png   --ui-dpi 144
+build-zig-native\agave_shell.exe --ui-shot build-zig-native\ui-150.png   --ui-dpi 144 --ui-size 1650x1140
 pwsh -File tools\run_shell_ui_tests.ps1
 pwsh -File tools\check_shell_frame.ps1   # 手动：隐藏窗口 + 真实 WM_NCCALCSIZE/WM_NCHITTEST/NC 点击
+pwsh -File tools\check_shell_menu.ps1    # 手动：真实弹出菜单（Esc/右键重开/点行选中）
+pwsh -File tools\check_shell_findbar.ps1 # 手动：查找栏浮层（不占页面空间、z-order、Esc）
 ```
 
 ## 功能
@@ -98,7 +99,7 @@ pwsh -File tools\check_shell_frame.ps1   # 手动：隐藏窗口 + 真实 WM_NCC
 | `X` / Esc | 停止加载（Esc 在查找栏打开时先关查找栏；地址栏里 Esc 还原 URL） |
 | `_` `□` `X`（标签条右侧） | 最小化 / 最大化-还原 / 关闭窗口；按 Chromium 的 CUSTOM_DRAWN 命中方式交给自己的按钮状态机 |
 | Ctrl+L / F6 | 聚焦地址栏 |
-| Ctrl+F | 打开查找栏并全选已有关键字（再按不关闭）；回车执行 `macross_view_search_text`；**Esc 从任何焦点处关闭** |
+| Ctrl+F | 打开查找栏（**浮在页面右上角，页面不重排**）并全选已有关键字；回车执行 `macross_view_search_text`；**Esc 从任何焦点处关闭**（`AGB_SHELL_FIND=1` 启动即打开，供自动化用） |
 | 右键菜单 | **自绘** Chrome 风格菜单（圆角/阴影/右对齐快捷键/禁用行）：后退/前进/刷新、链接操作、复制/全选、书签、注入调试脚本；靠近屏幕边缘会自动翻转 |
 | 滚轮、点击、键盘 | 全部转发给页面（中文经 `WM_CHAR` 转 UTF-8） |
 | 下载 | 引擎 DownloadManager 写盘，状态栏显示进度/结果；保存到 `%USERPROFILE%\Downloads` |
