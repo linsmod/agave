@@ -125,6 +125,8 @@ OR
 
 Remove-Item -Recurse -Force build-zig-native\test-runs -ErrorAction SilentlyContinue; Remove-Item -Recurse -Force "$env:TEMP\agb-test-logs" -ErrorAction SilentlyContinue; $sw=[Diagnostics.Stopwatch]::StartNew(); pwsh -File tools\run_all_tests.ps1 *> run_all_tests.log; $code=$LASTEXITCODE; $sw.Stop(); "exit=$code wall=$([math]::Round($sw.Elapsed.TotalSeconds,1))s"; Get-Content run_all_tests.log -Tail 12
 
+# 个别测试的负载敏感是已知问题，单独跑能过就行，有专人处理，不用到处记录。
+
 ```
 
 ## issues directory
