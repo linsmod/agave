@@ -17,7 +17,7 @@
 ### 全部跑一遍
 
 ```powershell
-pwsh -File tools/run_all_tests.ps1                          # 20 个离线套件，默认全并行 ≈25 s，退出码 0 = 全绿
+pwsh -File tools/run_all_tests.ps1                          # 21 个离线套件，默认全并行 ≈28 s，退出码 0 = 全绿
 pwsh -File tools/run_all_tests.ps1 -Sequential              # 套件一个一个跑（≈2 min，调试输出用）
 pwsh -File tools/run_all_tests.ps1 -Parallel 8              # 套件间并发度（1..32，缺省=逻辑核数）
 pwsh -File tools/run_all_tests.ps1 -Only process            # 名字含 process 的
@@ -26,7 +26,7 @@ pwsh -File tools/run_all_tests.ps1 -IncludeNetwork -IncludeReal   # 加上真站
 pwsh -File tools/run_all_tests.ps1 -KeepLogs                # 保留每个套件的 stdout/stderr
 ```
 
-默认**全并行**（`-Parallel` 缺省 = 本机逻辑核数，上限 16）：20 个套件同时起，每个套件是独立的
+默认**全并行**（`-Parallel` 缺省 = 本机逻辑核数，上限 16）：21 个套件同时起，每个套件是独立的
 
 > ⚠ **16 路并发下的时序抖动**（2026-11-10 实测）：`run_window_tests`（process 命名 target）、
 > `run_process_backend_tests`（early-eval-after-load-html）、`run_hidden_view_tests`、`run_image_tests` 偶尔各失败 1 条，
@@ -113,6 +113,7 @@ pwsh -File tools/run_all_tests.ps1 -KeepLogs                # 保留每个套件
 | `run_jit_loop_tests.ps1` | 长 JIT 循环 + "引擎线程仍在跑 EVAL 时销毁视图"（R61 的 0xC0000005） | 无 | `ALL JIT LOOP CHECKS PASSED` |
 | `run_hang_recovery_tests.ps1` | 卡死页恢复：`--interrupt-after` 中断、排队导航中断卡死脚本、空闲页不误中断、慢页连续 reload 不被杀 | 自起服务（8982/8984） | `ALL HANG RECOVERY CHECKS PASSED` |
 | `run_script_mode_tests.ps1` | classic script 语义（顶层 `var`/`function` 进 `window`，R66）+ 热点循环性能 + `document.readyState`/`currentScript`；**模块侧**：frame 模块入口 / 每 realm `import()`、`import(` 开头的 classic 脚本、**HTML import map**（精确 + 前缀 + 相对 + 未映射 reject）、**`document.baseURI`/`Node.baseURI`**（含 `<base href>`）、**URLSearchParams 包装类迭代 + frame realm 的 web 全局**（R176） | 无（Chrome 数值为注释里的基准） | `ALL SCRIPT MODE CHECKS PASSED`（11 组，约 18 s） |
+| `run_webp_tests.ps1` | WebP 解码（issues #19）：`tools/pages/fixtures/webp_{lossy,lossless,alpha}.webp`（各 40×30，Pillow `method=0` 生成）经 `new Image()` 走真实资源加载路径，断言 `naturalWidth/Height`。~2 s。⚠ 只解**首帧**，动画 WebP 与 AVIF 未做 | fixture 在 `tools/pages/fixtures/` |
 | `run_binding_semantics_tests.ps1` | DOM 绑定语义（B1 + B2）：每接口一个 class + 真实原型链、构造器、`@@toStringTag`、`instanceof` 正反例、`constructor`/`Object.prototype.toString`、方法按接口归属、接口对象描述符（`prototype` 不可写、`constructor` 非枚举）、非法构造器抛 `TypeError`、门面（id/class/value/onclick）不回归、polyfill 落在 `Element`/`CharacterData` 原型上、CSSOM/Selection/Range/Canvas 的既有类可 `instanceof`；**B2-1**：`window` 是 `Window` 实例（原型/构造器/`[object Window]`/`instanceof EventTarget`）、事件层级（`MouseEvent → UIEvent → Event`、`KeyboardEvent`/`FocusEvent`/`InputEvent`/`WheelEvent`/`CustomEvent`）、引擎派发 click 是 `MouseEvent` 且 `target`/`currentTarget`/`eventPhase` 在 handler 内正确、冒泡到父节点、派发后复位、页面 `dispatchEvent` 的 `isTrusted=false` 与可取消返回值；**B2-2**：`querySelectorAll` 是静态 `NodeList`（非数组、`item`/`forEach`/迭代器）、`children`/`childNodes`/`getElementsByTagName` 是 live 集合且 identity 稳定、`getElementsByClassName` 按 token 匹配、`document.forms` 是 live `HTMLCollection`、`namedItem`、`new NodeList()` 抛 `Illegal constructor`；**B2-3**：常见属性在接口原型上是 WebIDL accessor（descriptor 形状、`in`、`for-in`、读写仍落到 DOM、只读属性不产生 own prop、expando 仍可写）；已知缺口（`element.style` 的值仍是 shim）单独断言。**A1/A2 生成表**：`AGB_BINDING_CHECK=1` 再跑一次探针，断言 6 个接口（Node/Element/HTMLElement/Document/HTMLCollection/NodeList）的成员数与 `0 missing owner(s)`；页面另断言成员**归属**（`id` 在 Element、`style` 在 HTMLElement、`attributes` 在 Element 而非 Node，Chrome 对拍值） | 无（`tools/pages/cap_binding_semantics.html`） | `ALL BINDING SEMANTICS CHECKS PASSED`（196 条断言 + generated tables，约 3 s） |
 | `run_realm_tests.ps1` | 每 frame 一个 realm（`design-per-frame-realm.md`）：先编译 `tools/ant_realm_probe.c` 直接测桥（一 isolate 三 realm），再走 iframe 页面；**B2-4** 断言 `child.HTMLElement !== parent.HTMLElement`、`child.HTMLElement.prototype !== parent.HTMLElement.prototype`（每 realm 一套接口类） | 本机编译器（脚本自己编 `ant_realm_probe.exe`） | `ALL REALM CHECKS PASSED` |
 | `run_tab_lifecycle_tests.ps1` | 关 view/tab 的生命周期（R141，`design-tab-teardown.md`）：teardown 顺序 `pagehide → visibilitychange → unload → realm stop`、每个 `realm start` 都有 `realm stop`、**JS 创建的节点不 pin 住 Document**（无 `LEAK:` 行）、`window.open` popup 是独立 view context 且同样拆除、字体下载在途时销毁 view 不崩且 `documentDetached` 命中 | 自起 `tools/tab_lifecycle_server.py`（8979，`/slow.ttf` 延迟 1.5s） | `ALL TAB LIFECYCLE CHECKS PASSED (n cases)` |

@@ -175,6 +175,8 @@ set(HEADERS ${PROJ_ROOT}/include
             ${PROJ_ROOT}/src/webcore/platform/image-decoders/jpeg
             ${PROJ_ROOT}/src/webcore/platform/image-decoders/gif
             ${PROJ_ROOT}/src/webcore/platform/image-decoders/png
+    ${PROJ_ROOT}/src/webcore/platform/image-decoders/webp
+    ${PROJ_ROOT}/dist/src/webp/src
             ${PROJ_ROOT}/src/webcore/platform/image-decoders/bmp
             ${PROJ_ROOT}/src/webcore/platform/image-decoders/ico
             ${PROJ_ROOT}/src/webcore/xml

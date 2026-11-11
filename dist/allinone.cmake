@@ -3,7 +3,9 @@
 # Copyright (C) 2024 Zhang Ji Peng
 # Contact: onecoolx@gmail.com
 
-file(GLOB_RECURSE SOURCES ${PROJ_ROOT}/dist/src/*.c)
+# CONFIGURE_DEPENDS: a newly vendored library (e.g. the WebP decoder under
+# dist/src/webp) must be compiled without a manual re-configure.
+file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS ${PROJ_ROOT}/dist/src/*.c)
 
 include_directories(${PROJ_ROOT}/dist ${PROJ_ROOT}/dist/include)
 
@@ -19,6 +21,7 @@ add_library(${LIB_DEPS} STATIC ${SOURCES})
 target_include_directories(${LIB_DEPS} PRIVATE
     ${PROJ_ROOT}/dist/src/jpeg
     ${PROJ_ROOT}/dist/src/png
+    ${PROJ_ROOT}/dist/src/webp
     ${PROJ_ROOT}/dist/src/xml2
     ${PROJ_ROOT}/dist/src/xslt
     ${PROJ_ROOT}/dist/src/exslt

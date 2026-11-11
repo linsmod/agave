@@ -75,6 +75,7 @@ $suites = @(
     'run_realm_tests',
     'run_script_mode_tests',
     'run_binding_semantics_tests',
+    'run_webp_tests',
     'run_tab_lifecycle_tests',
     'run_hang_recovery_tests',
     'run_inspector_tests',

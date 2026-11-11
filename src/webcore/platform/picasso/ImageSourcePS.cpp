@@ -20,6 +20,10 @@
 
 #ifdef JPEG_SUPPORT
 #include "JPEGImageDecoder.h"
+#ifdef WEBP_SUPPORT
+#include "WebPImageDecoder.h"
+#include <webp/decode.h>
+#endif
 #endif /* JPEG_SUPPORT */
 
 /* The one diagnostics sink (src/webview/AgbLog.h, header-only). */
@@ -167,6 +171,16 @@ ImageDecoder* createDecoder(const Vector<char>& data)
         return new JPEGImageDecoder();
     }
 #endif /* JPEG_SUPPORT */
+
+#ifdef WEBP_SUPPORT
+    // WebP: "RIFF" <size> "WEBP" (lossy VP8 , lossless VP8L and extended VP8X
+    // containers all carry the same signature). Checked before the generic
+    // RIFF-based formats and after the fixed-header ones.
+    if (length >= 12 && memcmp(contents, "RIFF", 4) == 0 && memcmp(contents + 8, "WEBP", 4) == 0)
+    {
+        return new WebPImageDecoder();
+    }
+#endif /* WEBP_SUPPORT */
 
 #ifdef BMP_SUPPORT
     // BMP

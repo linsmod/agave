@@ -51,6 +51,7 @@ endif()
 
 OPTION_MACRO_DEFINE(OPT_PNG_SUPPORT PNG_SUPPORT "Build support PNG image format." ON)
 OPTION_MACRO_DEFINE(OPT_JPEG_SUPPORT JPEG_SUPPORT "Build support JPEG image format." ON)
+OPTION_MACRO_DEFINE(OPT_WEBP_SUPPORT WEBP_SUPPORT "Build support WebP image format (vendored libwebp)." ON)
 OPTION_MACRO_DEFINE(OPT_GIF_SUPPORT GIF_SUPPORT "Build support GIF image format." ON)
 OPTION_MACRO_DEFINE(OPT_FILESYSTEM ENABLE_FILESYSTEM "Build support file system." ON)
 OPTION_MACRO_DEFINE(OPT_FTPDIR ENABLE_FTPDIR "Build support list ftp dir." ON)
