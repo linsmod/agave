@@ -4099,6 +4099,17 @@ static int probeRun(const char* url)
     if (g_probeVisible)
         ShowWindow(g_probeWnd, SW_SHOWNOACTIVATE);
 
+    /* A capture needs pixels from the final layout, and the engine loop skips
+     * layout+paint for a view the host reported hidden. Real pages finish their
+     * CSS/JS after the load event, so a skipped paint left the mirror holding
+     * the first, unstyled frame (github.com came out as a white page with default
+     * link blue while every stylesheet had applied in the DOM). Marking the page
+     * visible makes the loop paint every iteration and also gives the page
+     * document.visibilityState/requestAnimationFrame of a foreground tab - both
+     * true for a capture - while the window itself stays hidden. */
+    if (g_probeShot[0])
+        agave_webview_set_visible(g_probeView, 1);
+
     agbLog(AGB_LOG_PROBE, "headless %s (pid %lu)",
            g_probeVisible ? "window shown (AGB_PROBE_SHOW)" : "window hidden, AGB_PROBE_SHOW=1 to show",
            (unsigned long)GetCurrentProcessId());
