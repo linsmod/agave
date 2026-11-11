@@ -119,12 +119,22 @@ if (OPT_SHELL AND WIN32)
     target_link_libraries(${LIB_NAME} PRIVATE user32 gdi32)
     add_library(agave_webview ALIAS ${LIB_NAME})
 
-    add_executable(agave_shell WIN32 ${PROJ_ROOT}/examples/browser_shell/main.c)
-    target_include_directories(agave_shell PRIVATE ${PROJ_ROOT}/include ${PROJ_OUT})
+    # The shell's UI is componentized: ui_theme (tokens/painter/icons),
+    # ui_widgets (button/tab strip), ui_chrome (toolbar/find/status composition)
+    # and shell_ops (the OS seam). main.c keeps tabs/session/singleton/probe.
+    add_executable(agave_shell WIN32
+        ${PROJ_ROOT}/examples/browser_shell/main.c
+        ${PROJ_ROOT}/examples/browser_shell/shell_ops.c
+        ${PROJ_ROOT}/examples/browser_shell/ui_theme.c
+        ${PROJ_ROOT}/examples/browser_shell/ui_widgets.c
+        ${PROJ_ROOT}/examples/browser_shell/ui_chrome.c)
+    target_include_directories(agave_shell PRIVATE ${PROJ_ROOT}/include ${PROJ_OUT}
+                                                ${PROJ_ROOT}/examples/browser_shell)
     target_compile_definitions(agave_shell PRIVATE AGW_USE_DLL)
     # dist carries the vendored libpng/zlib: the probe writes --shot .png files
     # itself (libagave links dist privately, which does not reach an exe).
-    target_link_libraries(agave_shell PRIVATE ${LIB_NAME} dist user32 gdi32 shell32 comdlg32)
+    # gdiplus is the antialiased painter (rounded pills, vector icons, text).
+    target_link_libraries(agave_shell PRIVATE ${LIB_NAME} dist user32 gdi32 shell32 comdlg32 gdiplus)
 
     # Engine side of the B2 process backend: one console process per view, no
     # window; the pixels land in the control's shared section (AgwViewIpc.h).

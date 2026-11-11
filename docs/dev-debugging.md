@@ -181,7 +181,7 @@ antjsb.dll、控件 DLL、宿主壳打出来的行在**同一条时间轴**上�
 把相邻事件排反）。
 
 ```
-[      0.0ms] [shell] window ready hwnd=00000000005C157E
+[      0.0ms] [shell] window ready hwnd=00000000005C157E (windows=1 theme=light dpi=96)
 [      0.3ms] [flag] set js=000001EA69D93CD0 on=1 -> 1
 [      0.9ms] [ui] resize 800x400
 [      1.1ms] [ui] resize 1084x677

@@ -1,0 +1,567 @@
+/*
+ * ui_widgets.c - UiButton and UiTabStrip.
+ */
+
+#include "ui_widgets.h"
+
+#include <string.h>
+
+/* ------------------------------------------------------------------------- */
+/* small helpers                                                             */
+/* ------------------------------------------------------------------------- */
+
+static int tabVisible(const UiChromeModel* model, int index)
+{
+    return index >= 0 && index < UI_MAX_TABS && model->tabs[index].used;
+}
+
+static wchar_t firstCharacter(const char* utf8)
+{
+    wchar_t wide[8];
+    int n;
+    int i;
+
+    if (!utf8 || !utf8[0])
+        return L'?';
+
+    n = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, wide, 8);
+
+    if (n <= 0)
+        return L'?';
+
+    for (i = 0; i < n - 1; ++i) {
+        if (wide[i] != L' ' && wide[i] != L'\t')
+            return wide[i];
+    }
+
+    return L'?';
+}
+
+/* Stable, pleasant color per site: same URL -> same chip color. */
+static unsigned faviconColor(const char* url)
+{
+    static const unsigned palette[] = {
+        0xFF1A73E8, 0xFFD93025, 0xFF188038, 0xFFE37400,
+        0xFF9334E6, 0xFF00897B, 0xFF3949AB, 0xFFC5221F,
+        0xFF6D4C41, 0xFF00838F
+    };
+    unsigned hash = 2166136261u;
+    const char* p;
+
+    for (p = url ? url : ""; *p; ++p) {
+        hash ^= (unsigned char)*p;
+        hash *= 16777619u;
+    }
+
+    return palette[hash % (sizeof(palette) / sizeof(palette[0]))];
+}
+
+static void fillTabShape(UiPainter* painter, UiRect rect, int radius, unsigned color)
+{
+    UiRect bottom;
+
+    if (rect.w <= 0 || rect.h <= 0)
+        return;
+
+    uiFillRoundRect(painter, rect, radius, color);
+
+    /* Square off the bottom: an active tab merges into the toolbar. */
+    bottom = uiRectMake(rect.x, rect.y + rect.h / 2, rect.w, rect.h - rect.h / 2);
+    uiFillRect(painter, bottom, color);
+}
+
+static void paintFavicon(UiPainter* painter, const UiTheme* theme,
+                         UiRect rect, const char* url, const char* title)
+{
+    unsigned color = faviconColor(url);
+    wchar_t letter[2];
+    UiRect text;
+
+    uiFillRoundRect(painter, rect, uiThemeScale(theme, 4), color);
+
+    letter[0] = firstCharacter(title && title[0] ? title : url);
+    letter[1] = 0;
+
+    text = uiRectMake(rect.x, rect.y, rect.w, rect.h);
+    uiTextW(painter, letter, text, theme->font_small, 0xFFFFFFFF, UI_ALIGN_CENTER);
+}
+
+static void paintTabClose(UiPainter* painter, const UiTheme* theme,
+                          UiRect hit, int hovered)
+{
+    int radius = uiThemeScale(theme, 8);
+    int cx = hit.x + hit.w / 2;
+    int cy = hit.y + hit.h / 2;
+    UiRect icon = uiRectMake(cx - radius, cy - radius, radius * 2, radius * 2);
+
+    if (hovered) {
+        uiFillCircle(painter, cx, cy, radius, theme->danger);
+        uiIcon(painter, UI_ICON_CLOSE, uiRectInset(icon, uiThemeScale(theme, 4),
+                                                  uiThemeScale(theme, 4)),
+               0xFFFFFFFF, (1.4f * theme->scale));
+    } else {
+        uiIcon(painter, UI_ICON_CLOSE, uiRectInset(icon, uiThemeScale(theme, 4),
+                                                  uiThemeScale(theme, 4)),
+               theme->text_muted, (1.3f * theme->scale));
+    }
+}
+
+/* ------------------------------------------------------------------------- */
+/* UiButton                                                                  */
+/* ------------------------------------------------------------------------- */
+
+void uiButtonInit(UiButton* button, int id, UiIcon icon)
+{
+    if (!button)
+        return;
+
+    memset(button, 0, sizeof(*button));
+    button->id = id;
+    button->icon = icon;
+    button->enabled = 1;
+    button->visible = 1;
+}
+
+void uiButtonReset(UiButton* button)
+{
+    if (!button)
+        return;
+
+    button->hover = 0;
+    button->pressed = 0;
+}
+
+void uiButtonPaint(UiButton* button, const UiTheme* theme, UiPainter* painter)
+{
+    UiRect icon;
+    unsigned background = 0;
+    unsigned color;
+    int hovered;
+
+    if (!button || !button->visible || button->rect.w <= 0 || button->rect.h <= 0)
+        return;
+
+    hovered = button->hover && button->enabled;
+
+    if (button->window_control) {
+        /* Title-bar buttons run the full tab-strip height, like Chrome's. */
+        if (button->danger && (button->pressed || hovered))
+            background = theme->danger;
+        else if (button->pressed && button->enabled)
+            background = theme->pressed;
+        else if (hovered)
+            background = theme->hover;
+
+        if (background)
+            uiFillRect(painter, button->rect, background);
+
+        if (button->danger && background == theme->danger)
+            color = 0xFFFFFFFFu;
+        else if (!button->enabled)
+            color = theme->text_faint;
+        else
+            color = theme->text_muted;
+
+        {
+            int size = uiThemeScale(theme, 16);
+            int cx = button->rect.x + button->rect.w / 2;
+            int cy = button->rect.y + button->rect.h / 2;
+
+            icon = uiRectMake(cx - size / 2, cy - size / 2, size, size);
+        }
+
+        uiIcon(painter, button->icon, icon, color, (1.4f * theme->scale));
+        return;
+    }
+
+    if (button->pressed && button->enabled)
+        background = theme->pressed;
+    else if (button->toggled)
+        background = theme->accent_soft;
+    else if (hovered)
+        background = theme->hover;
+
+    if (background)
+        uiFillRoundRect(painter, button->rect, theme->button_radius, background);
+
+    if (!button->enabled)
+        color = theme->text_faint;
+    else if (button->toggled)
+        color = theme->accent;
+    else
+        color = theme->text_muted;
+
+    icon = uiRectInset(button->rect, uiThemeScale(theme, 8), uiThemeScale(theme, 8));
+    uiIcon(painter, button->icon, icon, color, (1.7f * theme->scale));
+}
+
+int uiButtonHit(const UiButton* button, int x, int y)
+{
+    return button && button->visible && button->enabled &&
+           uiRectContains(button->rect, x, y);
+}
+
+int uiButtonMouse(UiButton* button, const UiMouseEvent* event, int* fire)
+{
+    int inside;
+
+    if (fire)
+        *fire = 0;
+
+    if (!button || !button->visible || !event)
+        return 0;
+
+    inside = button->enabled && uiRectContains(button->rect, event->x, event->y);
+
+    switch (event->type) {
+    case UI_MOUSE_MOVE:
+        button->hover = inside;
+        return inside;
+
+    case UI_MOUSE_DOWN:
+        if (!inside)
+            return 0;
+        button->pressed = 1;
+        button->hover = 1;
+        return 1;
+
+    case UI_MOUSE_UP: {
+        int wasPressed = button->pressed;
+
+        button->pressed = 0;
+        button->hover = inside;
+
+        if (wasPressed && inside) {
+            if (fire)
+                *fire = 1;
+            return 1;
+        }
+
+        return inside;
+    }
+
+    case UI_MOUSE_LEAVE:
+        button->hover = 0;
+        button->pressed = 0;
+        return 0;
+
+    default:
+        return 0;
+    }
+}
+
+/* ------------------------------------------------------------------------- */
+/* UiTabStrip                                                               */
+/* ------------------------------------------------------------------------- */
+
+void uiTabStripLayout(UiTabStrip* strip, const UiTheme* theme,
+                      const UiChromeModel* model, UiRect area)
+{
+    int i;
+    int slot_w;
+    int x;
+    int tab_y;
+    int available;
+    int gap;
+    int plus;
+    int pad;
+
+    if (!strip || !theme || !model)
+        return;
+
+    strip->rect = area;
+    strip->count = 0;
+    strip->hover_tab = -1;
+    strip->hover_close = -1;
+    strip->pressed_tab = -1;
+    strip->pressed_close = -1;
+    strip->hover_new_tab = 0;
+    strip->pressed_new_tab = 0;
+
+    memset(strip->tab, 0, sizeof(strip->tab));
+    memset(strip->close, 0, sizeof(strip->close));
+    memset(strip->slot_of, 0, sizeof(strip->slot_of));
+
+    for (i = 0; i < UI_MAX_TABS; ++i) {
+        if (tabVisible(model, i))
+            strip->slot_of[strip->count++] = i;
+    }
+
+    pad = theme->strip_pad;
+    gap = theme->tab_gap;
+    plus = theme->button_w;
+    available = area.w - pad * 2 - plus - gap - strip->right_reserved;
+
+    slot_w = theme->tab_max_w;
+
+    if (strip->count > 0) {
+        if (available < strip->count)
+            available = strip->count;
+
+        /* Shrink to fit: never let the last tab run under the window buttons.
+         * At the minimum window width (680 px) even 16 tabs still fit; only
+         * the title ellipsizes and the close button drops out. */
+        slot_w = available / strip->count;
+
+        if (slot_w > theme->tab_max_w)
+            slot_w = theme->tab_max_w;
+    }
+
+    if (slot_w < 1)
+        slot_w = 1;
+
+    x = area.x + pad;
+    tab_y = area.y + area.h - theme->tab_h;
+
+    for (i = 0; i < strip->count; ++i) {
+        int index = strip->slot_of[i];
+        int w = slot_w - gap;
+        int close_w = uiThemeScale(theme, 24);
+
+        if (w < gap + 2)
+            w = gap + 2;
+
+        strip->tab[index] = uiRectMake(x, tab_y, w, theme->tab_h);
+        strip->close[index] = uiRectMake(x + w - close_w - uiThemeScale(theme, 2),
+                                         tab_y + (theme->tab_h - close_w) / 2,
+                                         close_w, close_w);
+
+        x += slot_w;
+    }
+
+    strip->new_tab = uiRectMake(x + gap,
+                                area.y + area.h - theme->button_h,
+                                theme->button_w, theme->button_h);
+
+    if (strip->new_tab.x + strip->new_tab.w >
+        area.x + area.w - pad - strip->right_reserved)
+        strip->new_tab.x = area.x + area.w - pad - strip->right_reserved - strip->new_tab.w;
+
+    if (strip->new_tab.x < area.x + pad)
+        strip->new_tab.x = area.x + pad;
+}
+
+UiPart uiTabStripHit(UiTabStrip* strip, int x, int y, int* model_index)
+{
+    int i;
+
+    if (model_index)
+        *model_index = -1;
+
+    if (!strip || !uiRectContains(strip->rect, x, y))
+        return UI_PART_NONE;
+
+    for (i = 0; i < strip->count; ++i) {
+        int index = strip->slot_of[i];
+
+        if (uiRectContains(strip->close[index], x, y)) {
+            if (model_index)
+                *model_index = index;
+            return UI_PART_TAB_CLOSE;
+        }
+
+        if (uiRectContains(strip->tab[index], x, y)) {
+            if (model_index)
+                *model_index = index;
+            return UI_PART_TAB;
+        }
+    }
+
+    if (uiRectContains(strip->new_tab, x, y))
+        return UI_PART_TAB_NEW;
+
+    return UI_PART_NONE;
+}
+
+static void paintTab(UiPainter* painter, const UiTheme* theme,
+                     const UiChromeModel* model, UiTabStrip* strip,
+                     int index, int active, int hovered, int close_hovered)
+{
+    UiRect rect = strip->tab[index];
+    UiRect favicon;
+    UiRect title;
+    int show_close;
+    int show_favicon;
+
+    if (rect.w <= 0)
+        return;
+
+    /* Below ~52 px a close hit target would eat the whole tab; Chrome drops
+     * it too (the tab still closes with the context menu / middle click). */
+    show_close = (active || hovered || close_hovered) &&
+                 rect.w > uiThemeScale(theme, 52);
+    show_favicon = rect.w > uiThemeScale(theme, 58);
+
+    if (active)
+        fillTabShape(painter, rect, theme->tab_radius, theme->surface);
+    else if (hovered)
+        fillTabShape(painter, rect, theme->tab_radius, theme->hover);
+
+    if (show_favicon) {
+        favicon = uiRectMake(rect.x + uiThemeScale(theme, 10),
+                             rect.y + (rect.h - uiThemeScale(theme, 16)) / 2,
+                             uiThemeScale(theme, 16), uiThemeScale(theme, 16));
+        paintFavicon(painter, theme, favicon,
+                     model->tabs[index].url, model->tabs[index].title);
+
+        if (model->tabs[index].hung)
+            uiFillCircle(painter, favicon.x + favicon.w - 1, favicon.y + 1,
+                         uiThemeScale(theme, 3), theme->danger);
+
+        title.x = favicon.x + favicon.w + uiThemeScale(theme, 8);
+    } else {
+        title.x = rect.x + uiThemeScale(theme, 8);
+    }
+
+    title.y = rect.y;
+    title.h = rect.h;
+
+    if (show_close)
+        title.w = strip->close[index].x - title.x - uiThemeScale(theme, 2);
+    else
+        title.w = rect.x + rect.w - title.x - uiThemeScale(theme, 8);
+
+    if (title.w > 0) {
+        const char* label = model->tabs[index].title[0] ? model->tabs[index].title : "New tab";
+
+        uiText(painter, label, title, theme->font_ui,
+               active ? theme->text : theme->text_muted, UI_ALIGN_LEFT);
+    }
+
+    if (show_close)
+        paintTabClose(painter, theme, strip->close[index], close_hovered);
+}
+
+void uiTabStripPaint(UiTabStrip* strip, const UiTheme* theme,
+                     const UiChromeModel* model, UiPainter* painter)
+{
+    int i;
+    int active = model->active;
+
+    if (!strip || !theme || !model || !painter || !painter->g)
+        return;
+
+    uiFillRect(painter, strip->rect, theme->chrome);
+
+    GdipSetClipRectI(painter->g, strip->rect.x, strip->rect.y,
+                     strip->rect.w, strip->rect.h, CombineModeReplace);
+
+    for (i = 0; i < strip->count; ++i) {
+        int index = strip->slot_of[i];
+
+        if (index == active)
+            continue;
+
+        paintTab(painter, theme, model, strip, index, 0,
+                 strip->hover_tab == index, strip->hover_close == index);
+    }
+
+    if (tabVisible(model, active)) {
+        paintTab(painter, theme, model, strip, active, 1,
+                 strip->hover_tab == active, strip->hover_close == active);
+    }
+
+    /* "+" new tab */
+    if (strip->hover_new_tab || strip->pressed_new_tab) {
+        int radius = uiThemeScale(theme, 12);
+
+        uiFillCircle(painter, strip->new_tab.x + strip->new_tab.w / 2,
+                     strip->new_tab.y + strip->new_tab.h / 2,
+                     radius, strip->pressed_new_tab ? theme->pressed : theme->hover);
+    }
+
+    uiIcon(painter, UI_ICON_PLUS,
+           uiRectInset(strip->new_tab, uiThemeScale(theme, 9), uiThemeScale(theme, 9)),
+           theme->text_muted, (1.7f * theme->scale));
+
+    GdipResetClip(painter->g);
+}
+
+void uiTabStripMouse(UiTabStrip* strip, const UiChromeModel* model,
+                     const UiMouseEvent* event, UiTabAction* action)
+{
+    UiPart part;
+    int index = -1;
+
+    if (action) {
+        action->activate = -1;
+        action->close = -1;
+        action->new_tab = 0;
+    }
+
+    if (!strip || !model || !event)
+        return;
+
+    switch (event->type) {
+    case UI_MOUSE_LEAVE:
+        strip->hover_tab = -1;
+        strip->hover_close = -1;
+        strip->hover_new_tab = 0;
+        strip->pressed_tab = -1;
+        strip->pressed_close = -1;
+        strip->pressed_new_tab = 0;
+        return;
+
+    case UI_MOUSE_MOVE:
+        part = uiTabStripHit(strip, event->x, event->y, &index);
+        strip->hover_tab = (part == UI_PART_TAB || part == UI_PART_TAB_CLOSE) ? index : -1;
+        strip->hover_close = (part == UI_PART_TAB_CLOSE) ? index : -1;
+        strip->hover_new_tab = (part == UI_PART_TAB_NEW);
+        return;
+
+    case UI_MOUSE_DOWN:
+        part = uiTabStripHit(strip, event->x, event->y, &index);
+        strip->pressed_tab = (part == UI_PART_TAB || part == UI_PART_TAB_CLOSE) ? index : -1;
+        strip->pressed_close = (part == UI_PART_TAB_CLOSE) ? index : -1;
+        strip->pressed_new_tab = (part == UI_PART_TAB_NEW);
+        return;
+
+    case UI_MOUSE_UP: {
+        int pressed_tab = strip->pressed_tab;
+        int pressed_close = strip->pressed_close;
+        int pressed_new = strip->pressed_new_tab;
+
+        strip->pressed_tab = -1;
+        strip->pressed_close = -1;
+        strip->pressed_new_tab = 0;
+
+        part = uiTabStripHit(strip, event->x, event->y, &index);
+
+        if (pressed_close >= 0 && part == UI_PART_TAB_CLOSE && index == pressed_close) {
+            if (action)
+                action->close = index;
+            return;
+        }
+
+        if (pressed_tab >= 0 && part == UI_PART_TAB && index == pressed_tab) {
+            if (action)
+                action->activate = index;
+            return;
+        }
+
+        if (pressed_new && part == UI_PART_TAB_NEW) {
+            if (action)
+                action->new_tab = 1;
+            return;
+        }
+
+        return;
+    }
+
+    default:
+        return;
+    }
+}
+
+void uiTabStripLeave(UiTabStrip* strip)
+{
+    if (!strip)
+        return;
+
+    strip->hover_tab = -1;
+    strip->hover_close = -1;
+    strip->hover_new_tab = 0;
+    strip->pressed_tab = -1;
+    strip->pressed_close = -1;
+    strip->pressed_new_tab = 0;
+}

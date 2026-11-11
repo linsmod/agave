@@ -22,23 +22,27 @@
 
 #include "agave_webview.h"
 #include "../../src/webview/AgbLog.h"
+#include "shell_ops.h"
+#include "ui_chrome.h"
 
 #define MAX_TABS        16
 #define MAX_PATH_CHARS  1024
 
-#define ID_BACK       1001
-#define ID_FORWARD    1002
-#define ID_RELOAD     1003
-#define ID_STOP       1004
-#define ID_ADDRESS    1005
-#define ID_GO         1006
-#define ID_NEWTAB     1007
-#define ID_MENU       1009
+/* The command IDs live in ui_chrome.h (UI_CMD_*): the custom-drawn chrome and
+ * the old WM_COMMAND switch must keep speaking the same numbers. */
+#define ID_BACK       UI_CMD_BACK
+#define ID_FORWARD    UI_CMD_FORWARD
+#define ID_RELOAD     UI_CMD_RELOAD
+#define ID_STOP       UI_CMD_STOP
+#define ID_ADDRESS    UI_CMD_ADDRESS
+#define ID_GO         UI_CMD_GO
+#define ID_NEWTAB     UI_CMD_NEWTAB
+#define ID_MENU       UI_CMD_MENU
 
-#define ID_FIND_EDIT  1010
-#define ID_FIND_NEXT  1011
-#define ID_FIND_PREV  1012
-#define ID_FIND_CLOSE 1013
+#define ID_FIND_EDIT  UI_CMD_FIND_EDIT
+#define ID_FIND_NEXT  UI_CMD_FIND_NEXT
+#define ID_FIND_PREV  UI_CMD_FIND_PREV
+#define ID_FIND_CLOSE UI_CMD_FIND_CLOSE
 
 /* Posted (not called) by onUnresponsive so the "page unresponsive" prompt never
  * runs inside the control's window procedure. wParam = tab index. */
@@ -49,13 +53,12 @@
  * onCommandDropped). */
 #define AGW_SHELL_STATUS (WM_APP + 24)
 
-#define TAB_HEIGHT    28
-#define TOOLBAR_Y     4
-#define TOOLBAR_H     34
-#define FIND_H        30
-#define STATUS_H      22
-#define BUTTON_W      34
-#define TAB_W         172
+/* Chrome metrics come from the active window's theme (DPI-scaled). */
+#define CHROME        (&g_cur->chrome)
+#define TAB_HEIGHT    (CHROME->theme.tabstrip_h)
+#define TOOLBAR_H     (CHROME->theme.toolbar_h)
+#define FIND_H        (CHROME->model.find_visible ? CHROME->theme.find_h : 0)
+#define STATUS_H      (CHROME->theme.status_h)
 
 struct ShellWindow;
 
@@ -96,8 +99,8 @@ typedef struct { char url[MAX_PATH_CHARS]; char title[256]; } ClosedTab;
 typedef struct ShellWindow {
     int           used;
     HWND          hwnd;
-    HWND          back, forward, reload, stop, address, go, newtab, menu;
-    HWND          findEdit, findNext, findPrev, findClose;
+    HWND          address, findEdit;
+    UiChrome      chrome;
     Tab           tabs[MAX_TABS];
     int           activeTab;
     int           zoom;
@@ -115,18 +118,8 @@ static ShellWindow* g_lastActive;   /* handoff target = last active window */
 static int          g_shellWindows; /* used entries in g_windows */
 
 #define g_hwnd        (g_cur->hwnd)
-#define g_back        (g_cur->back)
-#define g_forward     (g_cur->forward)
-#define g_reload      (g_cur->reload)
-#define g_stop        (g_cur->stop)
 #define g_address     (g_cur->address)
-#define g_go          (g_cur->go)
-#define g_newtab      (g_cur->newtab)
-#define g_menu        (g_cur->menu)
 #define g_findEdit    (g_cur->findEdit)
-#define g_findNext    (g_cur->findNext)
-#define g_findPrev    (g_cur->findPrev)
-#define g_findClose   (g_cur->findClose)
 #define g_tabs        (g_cur->tabs)
 #define g_activeTab   (g_cur->activeTab)
 #define g_zoom        (g_cur->zoom)
@@ -237,59 +230,23 @@ static void createDirTree(char* path)
 
 static void dataDirInit(void)
 {
-    const char* userdata = getenv("AGB_USERDATA");
+    g_dataDir[0] = 0;
 
-    if (userdata && userdata[0]) {
-        _snprintf(g_dataDir, sizeof(g_dataDir), "%s", userdata);
-        g_dataDir[sizeof(g_dataDir) - 1] = 0;
-        createDirTree(g_dataDir);
-        return;
-    }
+    /* The profile layout (AGB_USERDATA / APPDATA / LOCALAPPDATA / exe-relative
+     * fallback) is an OS service now: shell_ops.c owns it and the mock table
+     * gives tests a path that is not the developer's profile. */
+    if (!shellOps()->profile_root(NULL, g_dataDir, sizeof(g_dataDir)) || !g_dataDir[0]) {
+        const char* temp = getenv("TEMP");
 
-    {
-        const char* appdata = getenv("APPDATA");
-
-        if (appdata && appdata[0]) {
-            _snprintf(g_dataDir, sizeof(g_dataDir), "%s\\AgaveShell", appdata);
+        if (temp && temp[0]) {
+            _snprintf(g_dataDir, sizeof(g_dataDir), "%s\\AgaveShellData", temp);
             g_dataDir[sizeof(g_dataDir) - 1] = 0;
-
-            if (CreateDirectoryA(g_dataDir, NULL) ||
-                GetFileAttributesA(g_dataDir) != INVALID_FILE_ATTRIBUTES)
-                return;
+            createDirTree(g_dataDir);
         }
     }
 
-    /* Fallback: %LOCALAPPDATA%\AgaveShellData. Never default next to the
-     * executable: in a dev tree that is build-zig-native\, which a -Fresh
-     * build deletes (history/bookmarks/session would vanish with it). */
-    {
-        const char* local = getenv("LOCALAPPDATA");
-
-        if (local && local[0]) {
-            _snprintf(g_dataDir, sizeof(g_dataDir), "%s\\AgaveShellData", local);
-            g_dataDir[sizeof(g_dataDir) - 1] = 0;
-
-            if (CreateDirectoryA(g_dataDir, NULL) ||
-                GetFileAttributesA(g_dataDir) != INVALID_FILE_ATTRIBUTES)
-                return;
-        }
-    }
-
-    /* Last resort: next to the executable (portable USB-ish setups). */
-    {
-        char module[MAX_PATH];
-
-        if (GetModuleFileNameA(NULL, module, sizeof(module))) {
-            char* slash = strrchr(module, '\\');
-
-            if (slash)
-                *(slash + 1) = 0;
-
-            _snprintf(g_dataDir, sizeof(g_dataDir), "%sAgaveShellData", module);
-            g_dataDir[sizeof(g_dataDir) - 1] = 0;
-            CreateDirectoryA(g_dataDir, NULL);
-        }
-    }
+    agbLog(AGB_LOG_SHELL, "profile root=%s (%s)",
+           g_dataDir[0] ? g_dataDir : "(none)", shellOps()->name);
 }
 
 /* Headless runs must not share the GUI profile: cookies, localStorage, the
@@ -641,19 +598,73 @@ static int nextFreeTab(void)
     return -1;
 }
 
-static void layoutTab(int index)
+/* One place that turns ShellWindow state into the chrome's value snapshot.
+ * Components never look at Tab/ShellWindow; the UI test feeds this struct
+ * directly. Called from paint/status/layout paths, so it must stay cheap. */
+static void syncChrome(void)
 {
-    RECT client;
-    int top;
+    UiChromeModel* model;
+    Tab* tab;
+    int i;
 
-    if (!g_tabs[index].used || !g_tabs[index].view)
+    if (!g_cur)
         return;
 
-    GetClientRect(g_hwnd, &client);
-    top = TAB_HEIGHT + TOOLBAR_H + (g_findVisible ? FIND_H : 0);
+    model = &g_cur->chrome.model;
+    memset(model, 0, sizeof(*model));
 
-    agave_webview_set_rect(g_tabs[index].view, 0, top,
-                           client.right, client.bottom - top - STATUS_H);
+    tab = &g_tabs[g_activeTab];
+    model->active = g_activeTab;
+
+    if (tab->used && tab->view) {
+        model->can_back = agave_webview_can_back(tab->view) ? 1 : 0;
+        model->can_forward = agave_webview_can_forward(tab->view) ? 1 : 0;
+        model->loading = tab->loading;
+        model->progress = tab->progress;
+        _snprintf(model->address, sizeof(model->address), "%s", tab->url);
+    }
+
+    _snprintf(model->status, sizeof(model->status), "%s", g_status);
+    model->zoom = g_zoom;
+    model->find_visible = g_findVisible;
+    model->maximized = g_hwnd && IsZoomed(g_hwnd) ? 1 : 0;
+
+    if (g_findVisible && g_findEdit)
+        readControlText(g_findEdit, model->find_text, sizeof(model->find_text));
+
+    for (i = 0; i < MAX_TABS; ++i) {
+        if (!g_tabs[i].used)
+            continue;
+
+        model->tabs[i].used = 1;
+        _snprintf(model->tabs[i].title, sizeof(model->tabs[i].title), "%s",
+                  g_tabs[i].title[0] ? g_tabs[i].title : "New tab");
+        _snprintf(model->tabs[i].url, sizeof(model->tabs[i].url), "%s", g_tabs[i].url);
+        model->tabs[i].hung = g_tabs[i].hangPending;
+    }
+
+    model->address[sizeof(model->address) - 1] = 0;
+    model->status[sizeof(model->status) - 1] = 0;
+
+    uiChromeSync(&g_cur->chrome);
+}
+
+static void layoutTab(int index)
+{
+    UiRect content;
+
+    if (!g_cur || !g_tabs[index].used || !g_tabs[index].view)
+        return;
+
+    content = g_cur->chrome.content;
+
+    if (content.w < 1)
+        content.w = 1;
+    if (content.h < 1)
+        content.h = 1;
+
+    agave_webview_set_rect(g_tabs[index].view, content.x, content.y,
+                           content.w, content.h);
 }
 
 /* Move a child only when it actually has to move. MoveWindow(..., TRUE) repaints
@@ -685,33 +696,26 @@ static void placeChild(HWND child, int x, int y, int w, int h)
 static void layoutAll(void)
 {
     RECT client;
-    int width, i;
-    int y = TOOLBAR_Y + TAB_HEIGHT;
-    int x = 6;
-    int reserved;
+    int i;
+    UiRect edit;
+
+    if (!g_cur || !g_hwnd)
+        return;
 
     GetClientRect(g_hwnd, &client);
-    width = client.right;
 
-    placeChild(g_back, x, y, BUTTON_W, 26);             x += BUTTON_W + 2;
-    placeChild(g_forward, x, y, BUTTON_W, 26);          x += BUTTON_W + 2;
-    placeChild(g_reload, x, y, BUTTON_W, 26);           x += BUTTON_W + 2;
-    placeChild(g_stop, x, y, BUTTON_W, 26);             x += BUTTON_W + 6;
+    syncChrome();
+    uiChromeLayout(CHROME, client.right, client.bottom);
 
-    reserved = (BUTTON_W + 6) * 3 + 20;
-    placeChild(g_address, x, y + 1, width - x - reserved, 24);
-    x = width - reserved + 6;
-    placeChild(g_go, x, y, 46, 26);                     x += 46 + 4;
-    placeChild(g_newtab, x, y, BUTTON_W, 26);           x += BUTTON_W + 4;
-    placeChild(g_menu, x, y, BUTTON_W, 26);
+    edit = CHROME->address_edit;
+    placeChild(g_address, edit.x, edit.y, edit.w, edit.h);
 
     if (g_findVisible) {
-        int fy = TAB_HEIGHT + TOOLBAR_H + 2;
-
-        placeChild(g_findEdit, 8, fy, 260, 24);
-        placeChild(g_findPrev, 274, fy, 34, 24);
-        placeChild(g_findNext, 312, fy, 34, 24);
-        placeChild(g_findClose, 350, fy, 28, 24);
+        edit = CHROME->find_edit;
+        ShowWindow(g_findEdit, SW_SHOW);
+        placeChild(g_findEdit, edit.x, edit.y, edit.w, edit.h);
+    } else {
+        ShowWindow(g_findEdit, SW_HIDE);
     }
 
     for (i = 0; i < MAX_TABS; ++i)
@@ -745,6 +749,7 @@ static void updateStatus(void)
 
     strncpy(g_status, text, sizeof(g_status) - 1);
     g_status[sizeof(g_status) - 1] = 0;
+    syncChrome();
     InvalidateRect(g_hwnd, NULL, FALSE);
 }
 
@@ -762,6 +767,7 @@ static void applyZoomToActive(void)
 
 static void setActiveTab(int index);
 static void createTab(const char* url);
+static void updateWindowTitle(void);
 static void onCloseWindow(AgaveWebView* view, void* user);
 static void onActivateView(AgaveWebView* view, void* user);
 static void probeCrashPage(AgaveWebView* view, const char* html, const char* base,
@@ -832,6 +838,13 @@ static void setActiveTab(int index)
     }
 
     updateStatus();
+    updateWindowTitle();
+
+    /* The tab strip's slot rects change when a tab is added/removed, and hit
+     * testing reads those rects. Refresh them before the next mouse message;
+     * without this a newly created first tab is painted nowhere and its
+     * client area is treated as caption. */
+    layoutAll();
     InvalidateRect(g_hwnd, NULL, FALSE);
 
     /* A tab that hung while it was in the background asks now that the user is
@@ -889,6 +902,7 @@ static void closeTab(int index)
     agbLog(AGB_LOG_SHELL, "tab close index=%d url=%s active=%d closed-saved=%d",
            index, url, wasActive, g_closedCount);
 
+    layoutAll();
     InvalidateRect(g_hwnd, NULL, TRUE);
 }
 
@@ -962,12 +976,8 @@ static void onTitle(AgaveWebView* view, const char* title, void* user)
     strncpy(tab->title, title ? title : "", sizeof(tab->title) - 1);
     tab->title[sizeof(tab->title) - 1] = 0;
 
-    if (tab == &g_tabs[g_activeTab]) {
-        wchar_t wide[256];
-
-        utf8ToWide(tab->title[0] ? tab->title : "BrowserShell - Agave", wide, 256);
-        SetWindowTextW(g_hwnd, wide);
-    }
+    if (tab == &g_tabs[g_activeTab])
+        updateWindowTitle();
 
     InvalidateRect(g_hwnd, NULL, FALSE);
 }
@@ -1172,13 +1182,14 @@ static int onDialog(AgaveWebView* view, int type, const char* message,
            message ? message : "");
 
     if (type == 0) {
-        MessageBoxA(g_hwnd, message ? message : "", "Page says", MB_OK | MB_ICONINFORMATION);
+        shellOps()->message_box(NULL, g_hwnd, message ? message : "", "Page says",
+                                SHELL_MB_INFO);
         return 1;
     }
 
     if (type == 1) {
-        answer = MessageBoxA(g_hwnd, message ? message : "", "Confirm",
-                             MB_OKCANCEL | MB_ICONQUESTION) == IDOK;
+        answer = shellOps()->message_box(NULL, g_hwnd, message ? message : "", "Confirm",
+                                         SHELL_MB_QUESTION | SHELL_MB_OKCANCEL);
         agbLog(AGB_LOG_SHELL, "confirm answered %s", answer ? "ok" : "cancel");
         return answer;
     }
@@ -2326,7 +2337,9 @@ static void createTab(const char* url)
 
     tab->used = 1;
     tab->window = g_cur;
-    tab->view = agave_webview_create(g_hwnd, 0, TAB_HEIGHT + TOOLBAR_H,
+    tab->view = agave_webview_create(g_hwnd, 0,
+                                     CHROME->content.y > 0 ? CHROME->content.y
+                                                           : TAB_HEIGHT + TOOLBAR_H,
                                      800, 400, &callbacks, tab);
 
     if (!tab->view) {
@@ -2344,14 +2357,10 @@ static void createTab(const char* url)
     /* The GUI saves where a user expects to find downloads; the probe keeps the
      * engine default (<AGB_USERDATA>/downloads) so tests never touch this. */
     {
-        const char* home = getenv("USERPROFILE");
+        char downloads[MAX_PATH_CHARS];
+        static int logged;
 
-        if (home && home[0]) {
-            char downloads[MAX_PATH_CHARS];
-            static int logged;
-
-            _snprintf(downloads, sizeof(downloads), "%s\\Downloads", home);
-            downloads[sizeof(downloads) - 1] = 0;
+        if (shellOps()->downloads_dir(NULL, downloads, sizeof(downloads))) {
             agave_webview_set_download_dir(tab->view, downloads);
 
             /* Once per process: the directory is per view, the message is not. */
@@ -2479,16 +2488,19 @@ static void toggleFind(void)
 
     agbLog(AGB_LOG_SHELL, "find bar %s", g_findVisible ? "on" : "off");
 
+    /* The find bar is painted by UiChrome now; only the native EDIT is shown or
+     * hidden, and the layout follows the model's find_visible flag. */
     ShowWindow(g_findEdit, g_findVisible ? SW_SHOW : SW_HIDE);
-    ShowWindow(g_findPrev, g_findVisible ? SW_SHOW : SW_HIDE);
-    ShowWindow(g_findNext, g_findVisible ? SW_SHOW : SW_HIDE);
-    ShowWindow(g_findClose, g_findVisible ? SW_SHOW : SW_HIDE);
+
+    syncChrome();
+    layoutAll();
 
     if (g_findVisible)
         SetFocus(g_findEdit);
+    else if (g_tabs[g_activeTab].used)
+        agave_webview_set_focus(g_tabs[g_activeTab].view);
 
-    layoutAll();
-    InvalidateRect(g_hwnd, NULL, TRUE);
+    InvalidateRect(g_hwnd, NULL, FALSE);
 }
 
 static void doFind(int forward)
@@ -2534,10 +2546,8 @@ static void setZoom(int percent, const char* source)
 
 static void updateToolbarState(void)
 {
-    Tab* tab = &g_tabs[g_activeTab];
-
-    EnableWindow(g_back, tab->used && agave_webview_can_back(tab->view));
-    EnableWindow(g_forward, tab->used && agave_webview_can_forward(tab->view));
+    syncChrome();
+    InvalidateRect(g_hwnd, NULL, FALSE);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -2626,84 +2636,49 @@ static void showMainMenu(void)
 }
 
 /* ------------------------------------------------------------------------- */
-/* painting: tab bar + status bar                                            */
+/* painting: UiChrome owns the pixels now                                     */
 /* ------------------------------------------------------------------------- */
 
-static void paintTabs(HDC hdc, int width)
+/* Double-buffered chrome paint: the tab strip, toolbar, find bar and status
+ * bar are all GDI+ antialiased shapes, so painting straight to the window DC
+ * would flash on every hover/resize. */
+static void paintShell(HWND hwnd)
 {
-    int i, x = 0;
-    HFONT font = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
-    HFONT old = (HFONT)SelectObject(hdc, font);
-    RECT strip;
+    PAINTSTRUCT ps;
+    RECT client;
+    HDC hdc;
+    HDC memory;
+    HBITMAP bitmap;
+    HGDIOBJ old;
 
-    SetRect(&strip, 0, 0, width, TAB_HEIGHT);
-    SetBkMode(hdc, TRANSPARENT);
-    FillRect(hdc, &strip, (HBRUSH)(COLOR_BTNFACE + 1));
+    hdc = BeginPaint(hwnd, &ps);
+    GetClientRect(hwnd, &client);
 
-    for (i = 0; i < MAX_TABS; ++i) {
-        RECT box;
-        char label[128];
-
-        if (!g_tabs[i].used)
-            continue;
-
-        SetRect(&box, x, 2, x + TAB_W, TAB_HEIGHT - 2);
-        FillRect(hdc, &box, (HBRUSH)(INT_PTR)((i == g_activeTab) ? COLOR_WINDOW : COLOR_BTNSHADOW + 1));
-
-        SetRect(&box, x + 6, 2, x + 146, TAB_HEIGHT - 2);
-        _snprintf(label, sizeof(label), "%s", g_tabs[i].title[0] ? g_tabs[i].title : "New tab");
-        label[sizeof(label) - 1] = 0;
-
-        if (g_tabs[i].hangPending) {
-            size_t used = strlen(label);
-
-            if (used + 4 < sizeof(label))
-                memcpy(label + used, "  !", 4);   /* NUL included */
-
-            SetTextColor(hdc, RGB(200, 30, 30));
-        }
-
-        {
-            wchar_t wideLabel[128];
-
-            utf8ToWide(label, wideLabel, 128);
-            DrawTextW(hdc, wideLabel, -1, &box,
-                      DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_END_ELLIPSIS);
-        }
-
-        SetTextColor(hdc, RGB(0, 0, 0));
-
-        SetRect(&box, x + 148, 2, x + 168, TAB_HEIGHT - 2);
-        DrawTextW(hdc, L"x", -1, &box, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
-
-        x += TAB_W;
+    if (client.right <= 0 || client.bottom <= 0) {
+        EndPaint(hwnd, &ps);
+        return;
     }
 
-    SelectObject(hdc, old);
-}
+    syncChrome();
 
-static void paintStatus(HDC hdc, int width, int height)
-{
-    RECT bar;
-    HFONT font = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
-    HFONT old = (HFONT)SelectObject(hdc, font);
+    memory = CreateCompatibleDC(hdc);
+    bitmap = CreateCompatibleBitmap(hdc, client.right, client.bottom);
 
-    SetRect(&bar, 0, height - STATUS_H, width, height);
-    FillRect(hdc, &bar, (HBRUSH)(COLOR_BTNFACE + 1));
-
-    bar.left = 8;
-    bar.right = width - 8;
-    SetBkMode(hdc, TRANSPARENT);
-
-    {
-        wchar_t wide[1024];
-
-        utf8ToWide(g_status, wide, 1024);
-        DrawTextW(hdc, wide, -1, &bar,
-                  DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_END_ELLIPSIS);
+    if (memory && bitmap) {
+        old = SelectObject(memory, bitmap);
+        uiChromePaint(CHROME, memory);
+        BitBlt(hdc, 0, 0, client.right, client.bottom, memory, 0, 0, SRCCOPY);
+        SelectObject(memory, old);
+    } else if (memory) {
+        uiChromePaint(CHROME, memory);
     }
 
-    SelectObject(hdc, old);
+    if (bitmap)
+        DeleteObject(bitmap);
+    if (memory)
+        DeleteDC(memory);
+
+    EndPaint(hwnd, &ps);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -2755,6 +2730,199 @@ static void onActivateView(AgaveWebView* view, void* user)
 
     if (g_hwnd)
         PostMessageA(g_hwnd, AGW_SHELL_ACTIVATE_TAB, 0, (LPARAM)view);
+}
+
+/* Chrome action -> the same handlers the old WM_COMMAND switch used, so the
+ * `[shell] back (button)` / `reload (button)` log sources stay meaningful. */
+static void handleShellCommand(int id, const char* source)
+{
+    switch (id) {
+    case ID_BACK:    backActive(source); break;
+    case ID_FORWARD: forwardActive(source); break;
+    case ID_RELOAD:  reloadActive(source); break;
+    case ID_STOP:    stopActive(source); break;
+
+    case ID_GO: {
+        char text[MAX_PATH_CHARS];
+
+        readControlText(g_address, text, sizeof(text));
+        navigateActive(text, 0, source);
+        break;
+    }
+
+    case ID_NEWTAB: navigateActive("about:blank", 1, source); break;
+    case ID_MENU:   showMainMenu(); break;
+
+    case ID_FIND_NEXT:  doFind(1); break;
+    case ID_FIND_PREV:  doFind(-1); break;
+    case ID_FIND_CLOSE: toggleFind(); break;
+
+    case UI_CMD_MINIMIZE:
+        ShowWindow(g_hwnd, SW_MINIMIZE);
+        break;
+    case UI_CMD_MAXIMIZE:
+        ShowWindow(g_hwnd, IsZoomed(g_hwnd) ? SW_RESTORE : SW_MAXIMIZE);
+        break;
+    case UI_CMD_CLOSE_WINDOW:
+        PostMessageA(g_hwnd, WM_CLOSE, 0, 0);
+        break;
+    default: break;
+    }
+}
+
+static UiThemeKind shellThemeKind(void)
+{
+    const char* setting = getenv("AGB_SHELL_THEME");
+
+    if (setting && !_stricmp(setting, "dark"))
+        return UI_THEME_DARK;
+    if (setting && !_stricmp(setting, "light"))
+        return UI_THEME_LIGHT;
+
+    return shellOps()->system_is_dark(NULL) ? UI_THEME_DARK : UI_THEME_LIGHT;
+}
+
+static void applyEditFonts(void)
+{
+    if (!g_cur)
+        return;
+
+    if (g_address)
+        SendMessageW(g_address, WM_SETFONT, (WPARAM)CHROME->theme.hfont_address, TRUE);
+    if (g_findEdit)
+        SendMessageW(g_findEdit, WM_SETFONT, (WPARAM)CHROME->theme.hfont_ui, TRUE);
+}
+
+static void applyDarkTitlebar(ShellWindow* win)
+{
+    if (!win || !win->hwnd)
+        return;
+
+    shellOps()->set_dark_titlebar(NULL, win->hwnd,
+                                  win->chrome.theme.kind == UI_THEME_DARK);
+}
+
+/* Resize border thickness for this window's DPI. The top edge is client (the
+ * tab strip is the title bar), so only left/right/bottom subtract it. */
+static int shellFrameBorder(HWND hwnd)
+{
+    unsigned dpi = shellOps()->dpi_for_window(NULL, hwnd);
+    int frame = GetSystemMetrics(SM_CXSIZEFRAME) + GetSystemMetrics(SM_CXPADDEDBORDER);
+
+    return MulDiv(frame, (int)dpi, 96);
+}
+
+static void updateWindowTitle(void)
+{
+    Tab* tab;
+    wchar_t wide[300];
+
+    if (!g_cur || !g_hwnd)
+        return;
+
+    tab = &g_tabs[g_activeTab];
+    utf8ToWide(tab->used && tab->title[0] ? tab->title : "BrowserShell - Agave",
+               wide, (int)(sizeof(wide) / sizeof(wide[0])));
+    SetWindowTextW(g_hwnd, wide);
+}
+
+/* Follow the OS light/dark switch without restarting. The page's
+ * prefers-color-scheme is deliberately not touched (see
+ * applySystemColorScheme). */
+static void rethemeShellWindow(ShellWindow* win)
+{
+    UiThemeKind kind;
+    UiChromeCallbacks callbacks;
+    unsigned dpi;
+    HWND address;
+    HWND find;
+    int offscreen;
+
+    if (!win || !win->hwnd)
+        return;
+
+    kind = shellThemeKind();
+
+    if (kind == win->chrome.theme.kind)
+        return;
+
+    dpi = win->chrome.theme.dpi;
+    callbacks = win->chrome.cb;
+    address = win->address;
+    find = win->findEdit;
+    offscreen = win->chrome.offscreen;
+
+    uiChromeFree(&win->chrome);
+    uiChromeInit(&win->chrome, kind, dpi, offscreen, &callbacks);
+    uiChromeSetNative(&win->chrome, win->hwnd, address, find);
+    win->address = address;
+    win->findEdit = find;
+
+    g_cur = win;
+    applyEditFonts();
+    applyDarkTitlebar(win);
+    layoutAll();
+}
+
+static void onChromeCommand(void* user, int id)
+{
+    ShellWindow* win = (ShellWindow*)user;
+
+    if (!win)
+        return;
+
+    g_cur = win;
+    handleShellCommand(id, "button");
+}
+
+static void onChromeActivateTab(void* user, int index)
+{
+    ShellWindow* win = (ShellWindow*)user;
+
+    if (!win)
+        return;
+
+    g_cur = win;
+    setActiveTab(index);
+}
+
+static void onChromeCloseTab(void* user, int index)
+{
+    ShellWindow* win = (ShellWindow*)user;
+
+    if (!win)
+        return;
+
+    g_cur = win;
+    closeTab(index);
+}
+
+static void onChromeNewTab(void* user)
+{
+    ShellWindow* win = (ShellWindow*)user;
+
+    if (!win)
+        return;
+
+    g_cur = win;
+    navigateActive("about:blank", 1, "button");
+}
+
+static void onChromeFocusField(void* user, int field)
+{
+    ShellWindow* win = (ShellWindow*)user;
+
+    if (!win)
+        return;
+
+    g_cur = win;
+
+    if (field == 1 && g_address) {
+        SetFocus(g_address);
+        SendMessageW(g_address, EM_SETSEL, (WPARAM)0, (LPARAM)-1);
+    } else if (field == 2 && g_findEdit) {
+        SetFocus(g_findEdit);
+    }
 }
 
 static LRESULT CALLBACK shellProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
@@ -2812,6 +2980,108 @@ static LRESULT CALLBACK shellProcInner(HWND hwnd, UINT message, WPARAM wParam, L
         return 0;
     }
 
+    /* Chrome-style frame: the client area starts at the window's top-left, so
+     * the tab strip is the title bar. Only the side/bottom resize borders stay
+     * non-client; the native caption is gone and its buttons are drawn by the
+     * chrome at the top-right (the tab strip reserves their width). */
+    case WM_NCCALCSIZE:
+        if (wParam) {
+            NCCALCSIZE_PARAMS* params = (NCCALCSIZE_PARAMS*)lParam;
+
+            if (IsZoomed(hwnd)) {
+                HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+                MONITORINFO info;
+
+                memset(&info, 0, sizeof(info));
+                info.cbSize = sizeof(info);
+
+                if (monitor && GetMonitorInfoA(monitor, &info))
+                    params->rgrc[0] = info.rcWork;
+            } else {
+                int border = shellFrameBorder(hwnd);
+                RECT window = params->rgrc[0];
+
+                params->rgrc[0].left = window.left + border;
+                params->rgrc[0].right = window.right - border;
+                params->rgrc[0].top = window.top;              /* title bar */
+                params->rgrc[0].bottom = window.bottom - border;
+            }
+
+            return 0;
+        } else {
+            /* Win32 sends the RECT form (wParam == FALSE) during creation and
+             * some resizes; leaving it to DefWindowProc would put the native
+             * caption back (the shell would show two title rows). */
+            RECT* client = (RECT*)lParam;
+            RECT window;
+            int border = shellFrameBorder(hwnd);
+
+            GetWindowRect(hwnd, &window);
+            client->left = window.left + border;
+            client->right = window.right - border;
+            client->top = window.top;
+            client->bottom = window.bottom - border;
+            return 0;
+        }
+
+    case WM_NCACTIVATE:
+        /* No native caption to repaint; the chrome is the caption. */
+        return TRUE;
+
+    case WM_NCHITTEST: {
+        POINT screen = { (short)LOWORD(lParam), (short)HIWORD(lParam) };
+        POINT client = screen;
+        RECT window;
+        int border;
+        int x, y, w, h;
+
+        GetWindowRect(hwnd, &window);
+        border = shellFrameBorder(hwnd);
+        x = screen.x - window.left;
+        y = screen.y - window.top;
+        w = window.right - window.left;
+        h = window.bottom - window.top;
+
+        if (!IsZoomed(hwnd)) {
+            int left = x < border;
+            int right = x >= w - border;
+            int top = y < border;
+            int bottom = y >= h - border;
+
+            if (top && left) return HTTOPLEFT;
+            if (top && right) return HTTOPRIGHT;
+            if (bottom && left) return HTBOTTOMLEFT;
+            if (bottom && right) return HTBOTTOMRIGHT;
+            if (left) return HTLEFT;
+            if (right) return HTRIGHT;
+            if (top) return HTTOP;
+            if (bottom) return HTBOTTOM;
+        }
+
+        ScreenToClient(hwnd, &client);
+
+        if (client.y >= 0 && client.y < CHROME->theme.tabstrip_h) {
+            /* Same shape as Chromium's BrowserCaptionButtonContainer: the
+             * buttons report system non-client codes (that is what gives
+             * HTMAXBUTTON its Win11 Snap Layouts), but WM_NCLBUTTONDOWN is
+             * intercepted below so DefWindowProc never paints the classic
+             * pressed button over our glyph. Tabs stay HTCLIENT. */
+            if (uiRectContains(CHROME->win_max.rect, client.x, client.y))
+                return HTMAXBUTTON;
+            if (uiRectContains(CHROME->win_min.rect, client.x, client.y))
+                return HTMINBUTTON;
+            if (uiRectContains(CHROME->win_close.rect, client.x, client.y))
+                return HTCLOSE;
+
+            /* Empty tab-strip space drags the window (and double-click
+             * maximizes, right-click opens the system menu) like a caption. */
+            if (uiChromeHitTest(CHROME, client.x, client.y) == UI_PART_NONE)
+                return HTCAPTION;
+        }
+
+        return HTCLIENT;
+    }
+
     case WM_CREATE:
         g_hwnd = hwnd;
         return 0;
@@ -2831,78 +3101,223 @@ static LRESULT CALLBACK shellProcInner(HWND hwnd, UINT message, WPARAM wParam, L
         syncTabVisibility();
         layoutAll();
         updateToolbarState();
+        InvalidateRect(hwnd, NULL, FALSE);
         return 0;
 
-
-    case WM_PAINT: {
-        PAINTSTRUCT ps;
-        RECT client;
-        HDC hdc = BeginPaint(hwnd, &ps);
-
-        GetClientRect(hwnd, &client);
-        paintTabs(hdc, client.right);
-        paintStatus(hdc, client.right, client.bottom);
-        EndPaint(hwnd, &ps);
+    case WM_PAINT:
+        paintShell(hwnd);
         return 0;
-    }
 
     case WM_ERASEBKGND:
         return 1;
 
-    case WM_LBUTTONDOWN: {
-        int x = (short)LOWORD(lParam);
-        int y = (short)HIWORD(lParam);
-        int i, slot = 0;
+    case WM_GETMINMAXINFO: {
+        MINMAXINFO* info = (MINMAXINFO*)lParam;
 
-        if (y >= TAB_HEIGHT)
-            break;
-
-        for (i = 0; i < MAX_TABS; ++i) {
-            int left;
-
-            if (!g_tabs[i].used)
-                continue;
-
-            left = slot * TAB_W;
-
-            if (x >= left && x < left + TAB_W) {
-                if (x >= left + 148)
-                    closeTab(i);
-                else
-                    setActiveTab(i);
-                return 0;
-            }
-
-            ++slot;
+        if (info) {
+            info->ptMinTrackSize.x = uiThemeScale(&CHROME->theme, 680);
+            info->ptMinTrackSize.y = uiThemeScale(&CHROME->theme, 460);
         }
         return 0;
     }
 
+    case WM_CTLCOLOREDIT: {
+        HDC control = (HDC)wParam;
+
+        if ((HWND)lParam == g_address || (HWND)lParam == g_findEdit) {
+            /* The pill's focus ring is painted by the chrome; keep the EDIT
+             * background equal to the pill so the corners stay round. */
+            SetTextColor(control, CHROME->theme.text_color);
+            SetBkColor(control, CHROME->theme.field_color);
+            return (LRESULT)CHROME->theme.field_brush;
+        }
+        break;
+    }
+
+    case WM_MOUSEMOVE: {
+        UiMouseEvent event;
+        TRACKMOUSEEVENT track;
+
+        event.type = UI_MOUSE_MOVE;
+        event.x = (short)LOWORD(lParam);
+        event.y = (short)HIWORD(lParam);
+        uiChromeMouse(CHROME, &event);
+
+        memset(&track, 0, sizeof(track));
+        track.cbSize = sizeof(track);
+        track.dwFlags = TME_LEAVE;
+        track.hwndTrack = hwnd;
+        TrackMouseEvent(&track);
+
+        return 0;
+    }
+
+    case WM_MOUSELEAVE: {
+        UiMouseEvent event;
+
+        event.type = UI_MOUSE_LEAVE;
+        event.x = -1;
+        event.y = -1;
+        uiChromeMouse(CHROME, &event);
+        InvalidateRect(hwnd, NULL, FALSE);
+        return 0;
+    }
+
+    case WM_NCMOUSEMOVE: {
+        POINT point = { (short)LOWORD(lParam), (short)HIWORD(lParam) };
+        UiMouseEvent event;
+        TRACKMOUSEEVENT track;
+
+        ScreenToClient(hwnd, &point);
+        event.type = UI_MOUSE_MOVE;
+        event.x = point.x;
+        event.y = point.y;
+        uiChromeMouse(CHROME, &event);
+
+        memset(&track, 0, sizeof(track));
+        track.cbSize = sizeof(track);
+        track.dwFlags = TME_LEAVE | TME_NONCLIENT;
+        track.hwndTrack = hwnd;
+        TrackMouseEvent(&track);
+
+        InvalidateRect(hwnd, NULL, FALSE);
+        return 0;
+    }
+
+    case WM_NCMOUSELEAVE: {
+        UiMouseEvent event;
+
+        event.type = UI_MOUSE_LEAVE;
+        event.x = -1;
+        event.y = -1;
+        uiChromeMouse(CHROME, &event);
+        InvalidateRect(hwnd, NULL, FALSE);
+        return 0;
+    }
+
+    case WM_NCLBUTTONDOWN: {
+        /* Chromium's HWNDMessageHandler::OnNCLButtonDown does exactly this for
+         * FrameMode::CUSTOM_DRAWN: turn the non-client press into a client
+         * press so our button owns capture and the subsequent WM_LBUTTONUP.
+         * Letting DefWindowProc handle it paints the classic pressed caption
+         * button over our glyph (the offset white square in the bug report). */
+        if (wParam == HTMINBUTTON || wParam == HTMAXBUTTON || wParam == HTCLOSE) {
+            POINT point = { (short)LOWORD(lParam), (short)HIWORD(lParam) };
+            UiMouseEvent event;
+
+            ScreenToClient(hwnd, &point);
+            event.type = UI_MOUSE_DOWN;
+            event.x = point.x;
+            event.y = point.y;
+            uiChromeMouse(CHROME, &event);
+
+            SetCapture(hwnd);
+            SetFocus(hwnd);
+            InvalidateRect(hwnd, NULL, FALSE);
+            return 0;
+        }
+        break;
+    }
+
+    case WM_NCLBUTTONDBLCLK:
+        /* Double-click on our buttons must not fall through to DefWindowProc
+         * (it would paint the classic pressed caption button again). */
+        if (wParam == HTMINBUTTON || wParam == HTMAXBUTTON || wParam == HTCLOSE)
+            return 0;
+        break;
+
+    case WM_LBUTTONDOWN: {
+        UiMouseEvent event;
+
+        event.type = UI_MOUSE_DOWN;
+        event.x = (short)LOWORD(lParam);
+        event.y = (short)HIWORD(lParam);
+
+        if (uiChromeMouse(CHROME, &event)) {
+            SetCapture(hwnd);
+            return 0;
+        }
+        break;
+    }
+
+    case WM_LBUTTONUP: {
+        UiMouseEvent event;
+
+        event.type = UI_MOUSE_UP;
+        event.x = (short)LOWORD(lParam);
+        event.y = (short)HIWORD(lParam);
+
+        if (GetCapture() == hwnd)
+            ReleaseCapture();
+
+        uiChromeMouse(CHROME, &event);
+        InvalidateRect(hwnd, NULL, FALSE);
+        return 0;
+    }
+
+    case WM_SETCURSOR:
+        if (LOWORD(lParam) == HTCLIENT) {
+            POINT point;
+            UiPart part;
+
+            GetCursorPos(&point);
+            ScreenToClient(hwnd, &point);
+            part = uiChromeHitTest(CHROME, point.x, point.y);
+
+            if (part != UI_PART_NONE && part != UI_PART_STATUS &&
+                part != UI_PART_WINDOW_MIN && part != UI_PART_WINDOW_MAX &&
+                part != UI_PART_WINDOW_CLOSE) {
+                SetCursor(LoadCursorA(NULL, (LPCSTR)IDC_HAND));
+                return TRUE;
+            }
+        }
+        break;
+
+    case WM_DPICHANGED: {
+        unsigned dpi = HIWORD(wParam) ? (unsigned)HIWORD(wParam) : (unsigned)LOWORD(wParam);
+        RECT* suggested = (RECT*)lParam;
+
+        uiChromeSetDpi(CHROME, dpi);
+        applyEditFonts();
+
+        if (suggested) {
+            SetWindowPos(hwnd, NULL, suggested->left, suggested->top,
+                         suggested->right - suggested->left,
+                         suggested->bottom - suggested->top,
+                         SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+
+        applyDarkTitlebar(g_cur);
+        layoutAll();
+        InvalidateRect(hwnd, NULL, FALSE);
+        return 0;
+    }
+
+    case WM_SETTINGCHANGE:
+    case WM_THEMECHANGED:
+        if (g_cur) {
+            rethemeShellWindow(g_cur);
+            InvalidateRect(hwnd, NULL, FALSE);
+        }
+        return 0;
+
     case WM_COMMAND: {
         int id = LOWORD(wParam);
+        int note = HIWORD(wParam);
 
-        switch (id) {
-        case ID_BACK:    backActive("button"); break;
-        case ID_FORWARD: forwardActive("button"); break;
-        case ID_RELOAD:  reloadActive("button"); break;
-        case ID_STOP:    stopActive("button"); break;
+        if (note == EN_SETFOCUS || note == EN_KILLFOCUS) {
+            HWND control = (HWND)lParam;
 
-        case ID_GO: {
-            char text[MAX_PATH_CHARS];
+            if (control == g_address)
+                uiChromeSetFocusField(CHROME, note == EN_SETFOCUS ? 1 : 0);
+            else if (control == g_findEdit)
+                uiChromeSetFocusField(CHROME, note == EN_SETFOCUS ? 2 : 0);
 
-            readControlText(g_address, text, sizeof(text));
-            navigateActive(text, 0, "button");
-            break;
+            InvalidateRect(hwnd, NULL, FALSE);
+            return 0;
         }
 
-        case ID_NEWTAB: navigateActive("about:blank", 1, "button"); break;
-        case ID_MENU:   showMainMenu(); break;
-
-        case ID_FIND_NEXT:  doFind(1); break;
-        case ID_FIND_PREV:  doFind(-1); break;
-        case ID_FIND_CLOSE: toggleFind(); break;
-        default: break;
-        }
+        handleShellCommand(id, "button");
         return 0;
     }
 
@@ -2915,6 +3330,7 @@ static LRESULT CALLBACK shellProcInner(HWND hwnd, UINT message, WPARAM wParam, L
         if (last)
             saveSession();
 
+        uiChromeFree(CHROME);
         SetWindowLongPtrA(hwnd, GWLP_USERDATA, 0);
         g_cur->used = 0;
 
@@ -2974,12 +3390,6 @@ static LRESULT CALLBACK shellProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM
 /* ------------------------------------------------------------------------- */
 /* entry point                                                               */
 /* ------------------------------------------------------------------------- */
-
-static HWND makeButton(const char* text, int id)
-{
-    return CreateWindowA("BUTTON", text, WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                         0, 0, 0, 0, g_hwnd, (HMENU)(INT_PTR)id, g_instance, NULL);
-}
 
 /* Exit forensics: if some library calls exit() from inside a callback, the
  * message loop never returns and we never see why. This handler runs on exit()
@@ -3715,6 +4125,13 @@ static int probeCapture(const char* path)
 static int  g_showUsage;                        /* --help                     */
 static int  g_argError;                         /* --probe without a URL       */
 static char g_startupUrl[MAX_PATH_CHARS];       /* normalized, may be empty   */
+
+/* --ui-shot: headless chrome render (no window, no engine, no profile). */
+static char g_uiShotPath[MAX_PATH_CHARS];
+static char g_uiShotTheme[16];
+static int  g_uiShotWidth = 1100;
+static int  g_uiShotHeight = 760;
+static unsigned g_uiShotDpi = 96;
 
 static void probePrint(const char* tag, const char* text)
 {
@@ -5030,6 +5447,11 @@ static void probeUsage(void)
             "            stealing, nothing on screen). Combine it with\n"
             "            --eval/--eval-file to capture what the script changed\n"
             "            (the capture waits for the script and --settle)\n"
+            "  --ui-shot <path>  render the browser chrome offscreen (no window, no\n"
+            "            engine, no profile) and run layout/hit/pixel checks. Files:\n"
+            "            .png or .bmp. --ui-theme light|dark|auto, --ui-dpi 72..288,\n"
+            "            --ui-size WxH.\n"
+            "            Exit 0 only when every check passes (UI_SHOT PASS).\n"
             "  --shot-rect <x,y,w,h>  crop the capture to a CSS-pixel rect\n"
             "            (origin at the viewport's top-left, i.e. the values\n"
             "            getBoundingClientRect() reports for an element scrolled\n"
@@ -5077,6 +5499,400 @@ static void probeUsage(void)
             "GUI: one shell per profile root. A second launch\n"
             "hands its URL to the running shell and exits; give a different\n"
             "--userdata to run two instances side by side.\n");
+}
+
+/* ------------------------------------------------------------------------- */
+/* headless UI render (--ui-shot)                                            */
+/* ------------------------------------------------------------------------- */
+
+typedef struct {
+    int last_command;
+    int command_count;
+    int activated;
+    int closed;
+    int new_tabs;
+} UiShotLog;
+
+static UiShotLog g_uiShotLog;
+static int g_uiChecks;
+static int g_uiFails;
+
+static void uiCheck(const char* name, int ok)
+{
+    ++g_uiChecks;
+
+    if (!ok)
+        ++g_uiFails;
+
+    printf("ui-check %-24s ok=%d\n", name, ok ? 1 : 0);
+    fflush(stdout);
+}
+
+static const char* uiPartName(UiPart part)
+{
+    switch (part) {
+    case UI_PART_TAB: return "tab";
+    case UI_PART_TAB_CLOSE: return "tab-close";
+    case UI_PART_TAB_NEW: return "tab-new";
+    case UI_PART_BACK: return "back";
+    case UI_PART_FORWARD: return "forward";
+    case UI_PART_RELOAD: return "reload";
+    case UI_PART_GO: return "go";
+    case UI_PART_MENU: return "menu";
+    case UI_PART_ADDRESS: return "address";
+    case UI_PART_FIND_FIELD: return "find-field";
+    case UI_PART_FIND_PREV: return "find-prev";
+    case UI_PART_FIND_NEXT: return "find-next";
+    case UI_PART_FIND_CLOSE: return "find-close";
+    case UI_PART_STATUS: return "status";
+    case UI_PART_WINDOW_MIN: return "win-min";
+    case UI_PART_WINDOW_MAX: return "win-max";
+    case UI_PART_WINDOW_CLOSE: return "win-close";
+    default: return "none";
+    }
+}
+
+static void shotCommand(void* user, int id)
+{
+    (void)user;
+    g_uiShotLog.last_command = id;
+    ++g_uiShotLog.command_count;
+}
+
+static void shotActivate(void* user, int index)
+{
+    (void)user;
+    g_uiShotLog.activated = index;
+}
+
+static void shotClose(void* user, int index)
+{
+    (void)user;
+    g_uiShotLog.closed = index;
+}
+
+static void shotNewTab(void* user)
+{
+    (void)user;
+    ++g_uiShotLog.new_tabs;
+}
+
+static void shotFocus(void* user, int field)
+{
+    (void)user;
+    (void)field;
+}
+
+static int shotPartAt(UiChrome* chrome, UiRect rect)
+{
+    return uiChromeHitTest(chrome, rect.x + rect.w / 2, rect.y + rect.h / 2);
+}
+
+static void shotClick(UiChrome* chrome, int x, int y)
+{
+    UiMouseEvent event;
+
+    event.x = x;
+    event.y = y;
+    event.type = UI_MOUSE_DOWN;
+    uiChromeMouse(chrome, &event);
+    event.type = UI_MOUSE_UP;
+    uiChromeMouse(chrome, &event);
+}
+
+static unsigned shotPixel(const unsigned char* bits, int width, int height, int x, int y)
+{
+    const unsigned char* p = bits + (size_t)(height - 1 - y) * (size_t)width * 4 + (size_t)x * 4;
+
+    return UI_RGB(p[2], p[1], p[0]);
+}
+
+static int sameColor(unsigned got, unsigned want)
+{
+    return (got & 0x00FFFFFFu) == (want & 0x00FFFFFFu);
+}
+
+static void shotFillModel(UiChromeModel* model)
+{
+    memset(model, 0, sizeof(*model));
+
+    model->tabs[0].used = 1;
+    strcpy(model->tabs[0].title, "Agave 浏览器引擎");
+    strcpy(model->tabs[0].url, "https://agave.local/");
+    model->tabs[0].hung = 0;
+
+    model->tabs[1].used = 1;
+    strcpy(model->tabs[1].title, "DeepSeek");
+    strcpy(model->tabs[1].url, "https://chat.deepseek.com/");
+
+    model->tabs[2].used = 1;
+    strcpy(model->tabs[2].title, "GitHub - onecoolx/agave");
+    strcpy(model->tabs[2].url, "https://github.com/onecoolx/agave");
+
+    model->tabs[3].used = 1;
+    strcpy(model->tabs[3].title, "MDN Web Docs");
+    strcpy(model->tabs[3].url, "https://developer.mozilla.org/");
+
+    model->tabs[4].used = 1;
+    strcpy(model->tabs[4].title, "New tab");
+    strcpy(model->tabs[4].url, "about:blank");
+
+    model->active = 1;
+    model->can_back = 1;
+    model->can_forward = 0;
+    model->loading = 1;
+    model->progress = 42;
+    strcpy(model->address, "https://chat.deepseek.com/");
+    strcpy(model->status, "Loading https://chat.deepseek.com/ ... 42%");
+    model->zoom = 110;
+    model->find_visible = 1;
+    strcpy(model->find_text, "webkit");
+}
+
+static int uiShotMain(void)
+{
+    UiChrome chrome;
+    UiChromeCallbacks callbacks;
+    UiThemeKind kind = UI_THEME_LIGHT;
+    UiChromeModel* model;
+    BITMAPINFO info;
+    HDC screen;
+    HDC memory;
+    HBITMAP bitmap;
+    HGDIOBJ old;
+    void* bits = NULL;
+    int width = g_uiShotWidth;
+    int height = g_uiShotHeight;
+    int stride;
+    int ok = 1;
+    int index = -1;
+    UiPart part;
+
+    if (!uiSpaceInit()) {
+        fprintf(stderr, "[ui-shot] GDI+ startup failed\n");
+        return 5;
+    }
+
+    if (!_stricmp(g_uiShotTheme, "dark"))
+        kind = UI_THEME_DARK;
+    else if (!_stricmp(g_uiShotTheme, "auto") || !g_uiShotTheme[0])
+        kind = shellOps()->system_is_dark(NULL) ? UI_THEME_DARK : UI_THEME_LIGHT;
+
+    memset(&g_uiShotLog, 0, sizeof(g_uiShotLog));
+    memset(&callbacks, 0, sizeof(callbacks));
+    callbacks.command = shotCommand;
+    callbacks.activate_tab = shotActivate;
+    callbacks.close_tab = shotClose;
+    callbacks.new_tab = shotNewTab;
+    callbacks.focus_field = shotFocus;
+
+    uiChromeInit(&chrome, kind, g_uiShotDpi, 1, &callbacks);
+    shotFillModel(&chrome.model);
+    model = &chrome.model;
+
+    uiChromeLayout(&chrome, width, height);
+
+    memset(&info, 0, sizeof(info));
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = width;
+    info.bmiHeader.biHeight = height;      /* bottom-up: probeWritePng's order */
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+
+    screen = GetDC(NULL);
+    memory = CreateCompatibleDC(screen);
+    bitmap = CreateDIBSection(memory, &info, DIB_RGB_COLORS, &bits, NULL, 0);
+
+    if (!bitmap || !bits) {
+        fprintf(stderr, "[ui-shot] cannot create the offscreen DIB\n");
+        if (bitmap) DeleteObject(bitmap);
+        if (memory) DeleteDC(memory);
+        ReleaseDC(NULL, screen);
+        uiChromeFree(&chrome);
+        return 5;
+    }
+
+    old = SelectObject(memory, bitmap);
+    uiChromePaint(&chrome, memory);
+    GdiFlush();
+
+    stride = width * 4;
+    {
+        int format = probeShotFormat(g_uiShotPath);
+
+        if (format == PROBE_SHOT_BMP)
+            ok = probeWriteBmp(g_uiShotPath, (const unsigned char*)bits, width, height,
+                               stride, 0, 0, width, height);
+        else if (format == PROBE_SHOT_PNG)
+            ok = probeWritePng(g_uiShotPath, (const unsigned char*)bits, width, height,
+                               stride, 0, 0, width, height);
+        else
+            ok = 0;
+    }
+
+    uiCheck("shot-written", ok);
+    printf("ui-shot file=%s size=%dx%d theme=%s dpi=%u bytes=%d\n",
+           g_uiShotPath, width, height, kind == UI_THEME_DARK ? "dark" : "light",
+           g_uiShotDpi, bitmap ? 1 : 0);
+
+    /* --- geometry / hit testing ------------------------------------------- */
+    part = shotPartAt(&chrome, chrome.toolbar.back.rect);
+    uiCheck("hit-back", part == UI_PART_BACK);
+    printf("ui-part back got=%s\n", uiPartName(part));
+
+    part = shotPartAt(&chrome, chrome.toolbar.menu.rect);
+    uiCheck("hit-menu", part == UI_PART_MENU);
+    printf("ui-part menu got=%s\n", uiPartName(part));
+
+    part = uiChromeHitTest(&chrome, chrome.toolbar.address.x + 6,
+                           chrome.toolbar.address.y + chrome.toolbar.address.h / 2);
+    uiCheck("hit-address", part == UI_PART_ADDRESS);
+    printf("ui-part address got=%s\n", uiPartName(part));
+
+    part = uiTabStripHit(&chrome.tabstrip,
+                         chrome.tabstrip.tab[0].x + chrome.tabstrip.tab[0].w / 2,
+                         chrome.tabstrip.tab[0].y + chrome.tabstrip.tab[0].h / 2,
+                         &index);
+    uiCheck("hit-tab", part == UI_PART_TAB && index == 0);
+    uiCheck("tab-at", uiChromeTabAt(&chrome,
+                                   chrome.tabstrip.tab[0].x + chrome.tabstrip.tab[0].w / 2,
+                                   chrome.tabstrip.tab[0].y + chrome.tabstrip.tab[0].h / 2) == 0);
+
+    part = shotPartAt(&chrome, chrome.tabstrip.close[1]);
+    uiCheck("hit-tab-close", part == UI_PART_TAB_CLOSE);
+    printf("ui-part tab-close got=%s\n", uiPartName(part));
+
+    part = shotPartAt(&chrome, chrome.tabstrip.new_tab);
+    uiCheck("hit-tab-new", part == UI_PART_TAB_NEW);
+
+    part = shotPartAt(&chrome, chrome.findbar.prev.rect);
+    uiCheck("hit-find-prev", part == UI_PART_FIND_PREV);
+
+    part = shotPartAt(&chrome, chrome.win_min.rect);
+    uiCheck("hit-win-min", part == UI_PART_WINDOW_MIN);
+    part = shotPartAt(&chrome, chrome.win_max.rect);
+    uiCheck("hit-win-max", part == UI_PART_WINDOW_MAX);
+    part = shotPartAt(&chrome, chrome.win_close.rect);
+    uiCheck("hit-win-close", part == UI_PART_WINDOW_CLOSE);
+
+    /* --- events ----------------------------------------------------------- */
+    g_uiShotLog.last_command = -1;
+    shotClick(&chrome, chrome.toolbar.back.rect.x + chrome.toolbar.back.rect.w / 2,
+              chrome.toolbar.back.rect.y + chrome.toolbar.back.rect.h / 2);
+    uiCheck("click-back", g_uiShotLog.last_command == UI_CMD_BACK);
+
+    shotClick(&chrome, chrome.tabstrip.tab[2].x + chrome.tabstrip.tab[2].w / 2,
+              chrome.tabstrip.tab[2].y + chrome.tabstrip.tab[2].h / 2);
+    uiCheck("click-tab", g_uiShotLog.activated == 2);
+
+    shotClick(&chrome, chrome.tabstrip.close[2].x + chrome.tabstrip.close[2].w / 2,
+              chrome.tabstrip.close[2].y + chrome.tabstrip.close[2].h / 2);
+    uiCheck("click-tab-close", g_uiShotLog.closed == 2);
+
+    shotClick(&chrome, chrome.tabstrip.new_tab.x + chrome.tabstrip.new_tab.w / 2,
+              chrome.tabstrip.new_tab.y + chrome.tabstrip.new_tab.h / 2);
+    uiCheck("click-tab-new", g_uiShotLog.new_tabs == 1);
+
+    g_uiShotLog.last_command = -1;
+    shotClick(&chrome, chrome.win_max.rect.x + chrome.win_max.rect.w / 2,
+              chrome.win_max.rect.y + chrome.win_max.rect.h / 2);
+    uiCheck("click-win-max", g_uiShotLog.last_command == UI_CMD_MAXIMIZE);
+
+    g_uiShotLog.last_command = -1;
+    shotClick(&chrome, chrome.win_close.rect.x + chrome.win_close.rect.w / 2,
+              chrome.win_close.rect.y + chrome.win_close.rect.h / 2);
+    uiCheck("click-win-close", g_uiShotLog.last_command == UI_CMD_CLOSE_WINDOW);
+
+    {
+        UiMouseEvent move;
+
+        move.type = UI_MOUSE_MOVE;
+        move.x = chrome.tabstrip.tab[0].x + chrome.tabstrip.tab[0].w / 2;
+        move.y = chrome.tabstrip.tab[0].y + chrome.tabstrip.tab[0].h / 2;
+        uiChromeMouse(&chrome, &move);
+        uiCheck("hover-tab", chrome.tabstrip.hover_tab == 0);
+
+        move.type = UI_MOUSE_LEAVE;
+        move.x = -1;
+        move.y = -1;
+        uiChromeMouse(&chrome, &move);
+    }
+
+    if (chrome.model.progress != 42 || chrome.model.find_visible != 1)
+        uiCheck("model-retained", 0);
+    else
+        uiCheck("model-retained", 1);
+
+    /* --- pixels (solid fills must match the theme exactly) ---------------- */
+    {
+        UiRect active = chrome.tabstrip.tab[1];
+
+        uiCheck("pixel-strip", sameColor(shotPixel((const unsigned char*)bits, width, height, 2, 2),
+                                         chrome.theme.chrome));
+        uiCheck("pixel-toolbar", sameColor(shotPixel((const unsigned char*)bits, width, height,
+                                                     2, chrome.theme.tabstrip_h + 2),
+                                           chrome.theme.toolbar));
+        uiCheck("pixel-active-tab", sameColor(shotPixel((const unsigned char*)bits, width, height,
+                                                        active.x + 3, active.y + active.h - 3),
+                                              chrome.theme.surface));
+        uiCheck("pixel-status", sameColor(shotPixel((const unsigned char*)bits, width, height,
+                                                    2, height - 2),
+                                          chrome.theme.surface_alt));
+        uiCheck("pixel-content", sameColor(shotPixel((const unsigned char*)bits, width, height,
+                                                     width / 2, chrome.content.y + chrome.content.h / 2),
+                                           chrome.theme.window));
+    }
+
+    /* --- compact layout: the same model at the minimum window size -------- */
+    {
+        int compact_w = uiThemeScale(&chrome.theme, 700);
+        int compact_h = uiThemeScale(&chrome.theme, 460);
+
+        uiChromeLayout(&chrome, compact_w, compact_h);
+        uiCheck("compact-content", chrome.content.h > uiThemeScale(&chrome.theme, 80));
+        uiCheck("compact-address", chrome.toolbar.address.w >= uiThemeScale(&chrome.theme, 120));
+        uiCheck("compact-menu-right", chrome.toolbar.menu.rect.x + chrome.toolbar.menu.rect.w <= compact_w);
+    }
+    uiCheck("compact-back-inside", chrome.toolbar.back.rect.x >= 0 &&
+                                  chrome.toolbar.back.rect.y + chrome.toolbar.back.rect.h <=
+                                      chrome.toolbar.rect.y + chrome.toolbar.rect.h);
+    if (chrome.tabstrip.count > 1) {
+        int i;
+        int overlap = 0;
+
+        for (i = 0; i < chrome.tabstrip.count; ++i) {
+            int ai = chrome.tabstrip.slot_of[i];
+            int bi = chrome.tabstrip.slot_of[(i + 1) % chrome.tabstrip.count];
+
+            if (i + 1 < chrome.tabstrip.count &&
+                chrome.tabstrip.tab[ai].x + chrome.tabstrip.tab[ai].w >
+                    chrome.tabstrip.tab[bi].x)
+                overlap = 1;
+        }
+
+        uiCheck("compact-tabs-no-overlap", !overlap);
+    }
+
+    /* --- 150% DPI: metrics scale, content still lands below the toolbar --- */
+    uiChromeSetDpi(&chrome, 144);
+    uiChromeLayout(&chrome, 1350, 1050);
+    uiCheck("dpi-tabstrip", chrome.theme.tabstrip_h == 60);
+    uiCheck("dpi-toolbar", chrome.theme.toolbar_h == 66);
+    uiCheck("dpi-content-top", chrome.content.y == 60 + 66 + (model->find_visible ? 60 : 0));
+    uiCheck("dpi-menu-inside", chrome.toolbar.menu.rect.x + chrome.toolbar.menu.rect.w <= 1350);
+
+    SelectObject(memory, old);
+    DeleteObject(bitmap);
+    DeleteDC(memory);
+    ReleaseDC(NULL, screen);
+    uiChromeFree(&chrome);
+
+    printf("UI_SHOT %s checks=%d fails=%d file=%s\n",
+           g_uiFails ? "FAIL" : "PASS", g_uiChecks, g_uiFails, g_uiShotPath);
+    fflush(stdout);
+
+    return g_uiFails ? 5 : 0;
 }
 
 /* Parses the raw command line into argv/argc in place, honoring double quotes.
@@ -5149,7 +5965,7 @@ static void applyBackendArg(void)
         DWORD n = GetModuleFileNameA(NULL, exe, (DWORD)sizeof(exe));
 
         if (n && n < sizeof(exe)) {
-            slash = strrchr(exe, '\\\\');
+            slash = strrchr(exe, '\\');
             if (slash) {
                 *(slash + 1) = 0;
                 snprintf(exe + strlen(exe), sizeof(exe) - strlen(exe), "agave_render_host.exe");
@@ -5199,6 +6015,41 @@ static void parseShellArgv(void)
             g_newWindowArg = 1;
         } else if (!strcmp(argv[i], "--probe")) {
             g_probeMode = 1;
+        } else if (!strcmp(argv[i], "--ui-shot") && i + 1 < argc) {
+            strncpy(g_uiShotPath, argv[++i], sizeof(g_uiShotPath) - 1);
+            g_uiShotPath[sizeof(g_uiShotPath) - 1] = 0;
+        } else if (!strcmp(argv[i], "--ui-dpi") && i + 1 < argc) {
+            int dpi = atoi(argv[++i]);
+
+            if (dpi >= 72 && dpi <= 288)
+                g_uiShotDpi = (unsigned)dpi;
+            else {
+                fprintf(stderr, "[shell] --ui-dpi wants 72..288, got %s\n", argv[i]);
+                g_argError = 1;
+                return;
+            }
+        } else if (!strcmp(argv[i], "--ui-theme") && i + 1 < argc) {
+            strncpy(g_uiShotTheme, argv[++i], sizeof(g_uiShotTheme) - 1);
+            g_uiShotTheme[sizeof(g_uiShotTheme) - 1] = 0;
+
+            if (_stricmp(g_uiShotTheme, "light") && _stricmp(g_uiShotTheme, "dark") &&
+                _stricmp(g_uiShotTheme, "auto")) {
+                fprintf(stderr, "[shell] --ui-theme wants light, dark or auto, got %s\n",
+                        g_uiShotTheme);
+                g_argError = 1;
+                return;
+            }
+        } else if (!strcmp(argv[i], "--ui-size") && i + 1 < argc) {
+            int uw = 0, uh = 0;
+
+            if (sscanf(argv[++i], "%dx%d", &uw, &uh) == 2 && uw >= 480 && uh >= 360) {
+                g_uiShotWidth = uw;
+                g_uiShotHeight = uh;
+            } else {
+                fprintf(stderr, "[shell] --ui-size wants WxH >= 480x360, got %s\n", argv[i]);
+                g_argError = 1;
+                return;
+            }
         } else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
             g_showUsage = 1;
         } else if (!strcmp(argv[i], "--eval") && i + 1 < argc) {
@@ -5457,22 +6308,16 @@ static void applySystemColorScheme(void)
 {
     char setting[16];
     DWORD length = GetEnvironmentVariableA("AGB_COLOR_SCHEME", setting, sizeof(setting));
-    DWORD light = 1;
-    DWORD size = sizeof(light);
+    int dark;
 
     /* An explicit dark/light wins; only `auto` follows the OS. */
     if (length == 0 || length >= sizeof(setting) || _stricmp(setting, "auto") != 0)
         return;
 
-    /* NOTE: the path must be a double-backslash C literal; with single
-     * backslashes the escapes are invalid and the key silently turns into
-     * "SoftwareMicrosoftWindows...", which reads as ERROR_FILE_NOT_FOUND. */
-    if (RegGetValueA(HKEY_CURRENT_USER,
-                     "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
-                     "AppsUseLightTheme", RRF_RT_REG_DWORD, NULL, &light, &size) != ERROR_SUCCESS)
-        return;
+    /* The registry read lives in shell_ops.c now (the mock returns light). */
+    dark = shellOps()->system_is_dark(NULL);
 
-    SetEnvironmentVariableA("AGB_COLOR_SCHEME", light ? "light" : "dark");
+    SetEnvironmentVariableA("AGB_COLOR_SCHEME", dark ? "dark" : "light");
 }
 
 /* ------------------------------------------------------------------------- */
@@ -5528,6 +6373,23 @@ static ShellWindow* createShellWindow(const char* title)
     ++g_shellWindows;
     g_cur = win;
 
+    /* Chrome exists before the window so WM_CREATE/WM_SIZE during creation can
+     * already layout and paint. DPI is refined with the real window below. */
+    {
+        UiChromeCallbacks callbacks;
+
+        memset(&callbacks, 0, sizeof(callbacks));
+        callbacks.user = win;
+        callbacks.command = onChromeCommand;
+        callbacks.activate_tab = onChromeActivateTab;
+        callbacks.close_tab = onChromeCloseTab;
+        callbacks.new_tab = onChromeNewTab;
+        callbacks.focus_field = onChromeFocusField;
+
+        uiChromeInit(&win->chrome, shellThemeKind(),
+                     shellOps()->dpi_for_window(NULL, NULL), 0, &callbacks);
+    }
+
     win->hwnd = CreateWindowExA(0, "AgaveShellWindow",
                                 title ? title : "BrowserShell - Agave",
                                 WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
@@ -5536,6 +6398,7 @@ static ShellWindow* createShellWindow(const char* title)
 
     if (!win->hwnd) {
         agbLog(AGB_LOG_SHELL, "CreateWindowEx failed: %lu", (unsigned long)GetLastError());
+        uiChromeFree(&win->chrome);
         win->used = 0;
         --g_shellWindows;
         return NULL;
@@ -5543,41 +6406,42 @@ static ShellWindow* createShellWindow(const char* title)
 
     g_lastActive = win;
 
-    win->back = makeButton("<", ID_BACK);
-    win->forward = makeButton(">", ID_FORWARD);
-    win->reload = makeButton("R", ID_RELOAD);
-    win->stop = makeButton("X", ID_STOP);
-    win->go = makeButton("Go", ID_GO);
-    win->newtab = makeButton("+", ID_NEWTAB);
-    win->menu = makeButton("=", ID_MENU);
-
-    /* Unicode edit controls: CreateWindowExW + L"EDIT" (the ANSI variant would
-     * push typed paths through the ANSI code page, and GetWindowTextA with it). */
-    win->address = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+    /* The only native controls left: two Unicode EDITs. The chrome paints
+     * their pills; WM_CTLCOLOREDIT makes the fields follow the theme. */
+    win->address = CreateWindowExW(0, L"EDIT", L"",
                                    WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
                                    0, 0, 0, 0, win->hwnd, (HMENU)(INT_PTR)ID_ADDRESS,
                                    g_instance, NULL);
 
-    win->findEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+    win->findEdit = CreateWindowExW(0, L"EDIT", L"",
                                     WS_CHILD | ES_AUTOHSCROLL,
                                     0, 0, 0, 0, win->hwnd, (HMENU)(INT_PTR)ID_FIND_EDIT,
                                     g_instance, NULL);
-    win->findNext = CreateWindowW(L"BUTTON", L"v", WS_CHILD | BS_PUSHBUTTON,
-                                  0, 0, 0, 0, win->hwnd, (HMENU)(INT_PTR)ID_FIND_NEXT,
-                                  g_instance, NULL);
-    win->findPrev = CreateWindowW(L"BUTTON", L"^", WS_CHILD | BS_PUSHBUTTON,
-                                  0, 0, 0, 0, win->hwnd, (HMENU)(INT_PTR)ID_FIND_PREV,
-                                  g_instance, NULL);
-    win->findClose = CreateWindowW(L"BUTTON", L"x", WS_CHILD | BS_PUSHBUTTON,
-                                   0, 0, 0, 0, win->hwnd, (HMENU)(INT_PTR)ID_FIND_CLOSE,
-                                   g_instance, NULL);
 
     ShowWindow(win->findEdit, SW_HIDE);
-    ShowWindow(win->findNext, SW_HIDE);
-    ShowWindow(win->findPrev, SW_HIDE);
-    ShowWindow(win->findClose, SW_HIDE);
 
-    agbLog(AGB_LOG_SHELL, "window ready hwnd=%p (windows=%d)", (void*)win->hwnd, g_shellWindows);
+    if (win->address)
+        SendMessageW(win->address, EM_SETMARGINS,
+                     EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(2, 2));
+    if (win->findEdit)
+        SendMessageW(win->findEdit, EM_SETMARGINS,
+                     EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(2, 2));
+
+    uiChromeSetNative(&win->chrome, win->hwnd, win->address, win->findEdit);
+    uiChromeSetDpi(&win->chrome, shellOps()->dpi_for_window(NULL, win->hwnd));
+
+    g_cur = win;
+    applyEditFonts();
+    applyDarkTitlebar(win);
+
+    /* A first layout before any tab: the toolbar/address EMPTY state is what a
+     * handoff-created window shows for a few milliseconds. */
+    uiChromeLayout(&win->chrome, 1100, 760);
+
+    agbLog(AGB_LOG_SHELL, "window ready hwnd=%p (windows=%d theme=%s dpi=%u)",
+           (void*)win->hwnd, g_shellWindows,
+           win->chrome.theme.kind == UI_THEME_DARK ? "dark" : "light",
+           win->chrome.theme.dpi);
 
     return win;
 }
@@ -6115,6 +6979,10 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
     if (g_argError)
         return PROBE_EXIT_USAGE;
 
+    /* --ui-shot renders the chrome into a DIB and never creates a window. */
+    if (g_uiShotPath[0])
+        return uiShotMain();
+
     /* One line that answers "what was I started with": the options that succeed
      * used to leave no trace at all, so a probe run at --zoom 150 or a GUI run
      * with --userdata looked identical to a default start. */
@@ -6133,6 +7001,12 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
 
         return probeRun(g_startupUrl);
     }
+
+    /* Per-monitor DPI is a GUI-only concern. Headless probes stay DPI-unaware:
+     * the synthetic WM_* events posted by tools/send_ui_events.ps1 are
+     * cross-process and Windows scales their coordinates when the target
+     * process changes DPI awareness (the inspector suite asserts 120,140). */
+    shellOps()->enable_dpi_awareness(NULL);
 
     /* The GUI shares the profile root with the engine (cookies, caches) and
      * with bookmarks/session; settle it before the lock, which is keyed on it. */

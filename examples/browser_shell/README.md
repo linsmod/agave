@@ -8,18 +8,27 @@
 shell 不直接调用任何 `macross_*` 接口 —— 它和第三方宿主用的是同一套 API。
 
 ```
-+-------------------------------------------------------------+
-| <  >  R  X | [地址栏.......................................] Go  + |
-+-------------------------------------------------------------+
-| [1  标题/URL              x] [2  标题/URL              x] ... |
-+-------------------------------------------------------------+
-|                                                             |
-|                    网页（引擎直接画进 DIB）                   |
-|                                                             |
-+-------------------------------------------------------------+
-| 状态栏：加载进度 / 悬停链接 / 错误 / 下载路径                 |
-+-------------------------------------------------------------+
++--------------------------------------------------------------------+
+| [1 标题] [2 标题] ... [+]                    [空][_][□][X]         |
++--------------------------------------------------------------------+
+| <  >  R/X  [ 锁 地址栏..................................... > ] ☰  |
++--------------------------------------------------------------------+
+| 查找栏（Ctrl+F 时出现）                                             |
++--------------------------------------------------------------------+
+|                                                                    |
+|                    网页（引擎直接画进 DIB）                          |
+|                                                                    |
++--------------------------------------------------------------------+
+| 状态栏：加载进度 / 悬停链接 / 错误 / 下载路径 / 缩放               |
++--------------------------------------------------------------------+
 ```
+
+**标题栏就是标签条**：窗口客户区从左上角开始（没有原生 title bar）；标签条右侧
+预留三个窗口按钮的位置，`_ □ X` 由 chrome 自绘。拖动空白区移动窗口、双击最大化、
+右键系统菜单走 `HTCAPTION`；按钮区给系统 `HTMINBUTTON/HTMAXBUTTON/HTCLOSE`，
+但 `WM_NCLBUTTONDOWN` 被拦截成客户区按下（Chromium `CUSTOM_DRAWN` 同路径），
+避免系统再画一套 classic 按下态按钮。标签宽度不足时自动压缩（上限 220px，
+无最小宽度；标题省略、favicon/关闭按宽度隐藏），永远排不进右侧按钮区。
 
 ## 构建
 
@@ -42,6 +51,34 @@ UI 线程只负责窗口/消息循环；引擎线程、命令队列和回调线�
 
 实测：163.com 加载期间 UI 线程的 `WM_NULL` 响应在 0.1~14 ms，不再卡死。
 
+## UI 组件与平台 ops
+
+UI 不再由 `main.c` 里的一排原生 `BUTTON` 拼出来；`main.c` 只保留标签/会话/
+单实例/探针和胶水：
+
+| 文件 | 职责 |
+|---|---|
+| `shell_ops.[ch]` | `shell_ops_t`（operations/callbacks interface）：profile 路径、下载目录、系统暗色、DPI、暗色标题栏、消息框、tick。Win32 默认实现 + mock（`AGB_SHELL_OPS=mock`） |
+| `ui_theme.[ch]` | 亮/暗 token、DPI 缩放、Segoe UI 字体、GDI+ painter、矢量图标 |
+| `ui_widgets.[ch]` | `UiButton`、`UiTabStrip`（含 favicon chip、hover、关闭按钮、宽度自适应） |
+| `ui_chrome.[ch]` | 工具栏/地址胶囊/查找栏/状态栏/窗口按钮的组合、布局、绘制、命中与鼠标状态机 |
+
+主题：`AGB_SHELL_THEME=light|dark|auto`（默认 auto，只影响 chrome，不改页面的
+`prefers-color-scheme`）；DPI 用 Per-Monitor V2，`WM_DPICHANGED` 重建字体和度量。
+窗口按钮按 Chromium 的 `CUSTOM_DRAWN` 方式：自绘 glyph、`WM_NCHITTEST` 返回
+`HTMINBUTTON/HTMAXBUTTON/HTCLOSE`、`WM_NCLBUTTONDOWN` 转成客户区按下 + capture。
+完整设计见 [design-shell-ui.md](../../docs/design-shell-ui.md)。
+
+无头验证（不建窗口/引擎/profile，只画离屏 DIB）：
+
+```powershell
+build-zig-native\agave_shell.exe --ui-shot build-zig-native\ui-light.png --ui-theme light
+build-zig-native\agave_shell.exe --ui-shot build-zig-native\ui-dark.png  --ui-theme dark
+build-zig-native\agave_shell.exe --ui-shot build-zig-native\ui-150.png   --ui-dpi 144
+pwsh -File tools\run_shell_ui_tests.ps1
+pwsh -File tools\check_shell_frame.ps1   # 手动：隐藏窗口 + 真实 WM_NCCALCSIZE/WM_NCHITTEST/NC 点击
+```
+
 ## 功能
 
 | 操作 | 说明 |
@@ -50,15 +87,17 @@ UI 线程只负责窗口/消息循环；引擎线程、命令队列和回调线�
 | `+` / Ctrl+T | 新标签页 |
 | 点标签 | 切换；点标签右侧 `x` 关闭 |
 | `<` `>` / Alt+←→ | 后退 / 前进 |
-| `R` / F5 | 刷新 |
+| `R` / F5 | 刷新（加载中同一个按钮变成停止 X） |
 | `X` / Esc | 停止 |
+| `_` `□` `X`（标签条右侧） | 最小化 / 最大化-还原 / 关闭窗口；按 Chromium 的 CUSTOM_DRAWN 命中方式交给自己的按钮状态机 |
 | Ctrl+L / F6 | 聚焦地址栏 |
 | Ctrl+F | 查找栏（回车执行 `macross_view_search_text`） |
 | 右键菜单 | 后退/前进/刷新/停止/新标签/查找 |
 | 滚轮、点击、键盘 | 全部转发给页面（中文经 `WM_CHAR` 转 UTF-8） |
 | 下载 | 引擎 DownloadManager 写盘，状态栏显示进度/结果；保存到 `%USERPROFILE%\Downloads` |
 | Ctrl+D | 加书签（存 `<数据目录>\bookmarks.txt`） |
-| `=` 按钮 / 菜单 | 书签、历史、缩放、注入调试脚本 |
+| `☰` 按钮 / 菜单 | 书签、历史、缩放、注入调试脚本 |
+| 主题 / DPI | `AGB_SHELL_THEME=light\|dark\|auto`；Per-Monitor V2，`WM_DPICHANGED` 自动重排 |
 | 右键菜单 → 注入 vConsole | 从 exe 同目录读 `vconsole.min.js` 注入当前页（默认注入目标） |
 | 右键菜单 → 注入 inspector.js | 从 exe 同目录读 `inspector.js` 注入当前页：hover 高亮元素 + 信息浮层；在页面上再右键出页内菜单，可复制元素信息（JSON）/选择器/尺寸/文本/HTML |
 | 探针 `--inject <name\|path>` | `--probe` 时在 `--eval` 之前注入（`inspector` / `vconsole` / 文件路径） |
@@ -128,6 +167,20 @@ UI 线程只负责窗口/消息循环；引擎线程、命令队列和回调线�
 3. **缓冲区所有权**：早期 UI 线程重建 DIB，引擎还在画旧指针 → 内容全黑。
    现在 DIB 只在引擎线程创建/销毁。
 4. **新建标签必须走 UI 线程**：标签数组是 UI 状态，命令只负责让引擎建 view。
+5. **`WM_NCCALCSIZE` 有两种形态**：带 `NCCALCSIZE_PARAMS`（wParam=TRUE）和不带
+   （wParam=FALSE）。只处理 TRUE 时真实窗口仍保留原生标题栏，表现为“标题栏 +
+   第一行 chrome”两行。两种都要把客户区顶边设到 `window.top`。
+6. **窗口按钮不能交给 DefWindowProc 画按下态**：`WM_NCHITTEST` 对 min/max/close
+   返回系统命中码（Chromium 同款，保留 Snap Layouts 语义）之后，必须在
+   `WM_NCLBUTTONDOWN` 里转成 client 按下 + `SetCapture`；否则 DefWindowProc 会在
+   classic 样式里再画一个偏移的按下态按钮盖住自绘 glyph。Chromium 的
+   `HWNDMessageHandler::OnNCLButtonDown` 注释写明了这一点。
+7. **加/删 tab 后要重排 chrome**：tab 条槽位矩形只在 `uiChromeLayout` 里更新；
+   新建第一个 tab 后若不 `layoutAll()`，绘制和 `WM_NCHITTEST` 都看不到 tab，
+   空白区会被当成 `HTCAPTION`（点击变拖窗口）。
+8. **`WM_NCPAINT` 叠加在 DWM 下不可见**：Win11 实测真实屏幕仍是系统 caption
+   颜色；`PrintWindow` 能看到只是因为走了 WM_PRINT/classic 路径。不要在 NC 里
+   画 tab。
 
 ## 与 examples/touchweb 的关系
 

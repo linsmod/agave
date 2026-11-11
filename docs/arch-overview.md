@@ -63,7 +63,7 @@
 
 | 层 | 位置 | 职责 |
 |---|---|---|
-| 宿主壳 | `examples/browser_shell/main.c` | 标签页/地址栏/查找/书签；单实例接力（第二次启动只投递 URL）与同进程多窗口；`--probe` 真无头探针。只做 UI，不碰引擎 |
+| 宿主壳 | `examples/browser_shell/`：`main.c`（标签/会话/单实例/探针）、`ui_chrome.c`（工具栏/查找/状态栏组合）、`ui_widgets.c`（按钮/标签条）、`ui_theme.c`（GDI+ 主题/图标/DPI）、`shell_ops.c`（OS 缝合口） | 标签页/地址栏/查找/书签；单实例接力（第二次启动只投递 URL）与同进程多窗口；`--probe` 真无头探针、`--ui-shot` 离屏 chrome 回归。只做 UI，不碰引擎；设计见 [design-shell-ui.md](design-shell-ui.md) |
 | Win32 控件 | `src/webview_control/AgaveWebView.c` | 控件窗口、引擎线程、`AGW_CMD_*` 队列、剪贴板/IME、下载表；编进 `libagave.dll` |
 | 渲染后端 seam | `src/webview_control/AgwViewBackend.h/.c`、`AgwViewBackendProcess.c` | 控件与"谁在跑页面"之间的接口（`local` = 进程内 macross；`process` = 每 view 一个 `agave_render_host.exe`，协议 `AgwViewIpc.h`）；`AGB_VIEW_BACKEND` 选后端，设计见 [design-render-backend.md](design-render-backend.md) |
 | 视图适配 | `src/webview/` | MaCross `Page`/`Frame`/`WebView`、帧泵、`FrameLoaderClientMC`（willClose/commit/DCL/load）、`DownloadManager`、内部页、`AgbLog.h` |

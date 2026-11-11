@@ -46,7 +46,7 @@
 #   pwsh -File tools/run_all_tests.ps1 -Skip run_layout_tests,run_media_tests
 #   pwsh -File tools/run_all_tests.ps1 -IncludeNetwork -IncludeReal
 #
-# Expected duration: docs/dev-tests.md §1 (23 suites ≈ 25-30 s wall clock on a
+# Expected duration: docs/dev-tests.md §1 (24 suites ≈ 30 s wall clock on a
 # 16-core machine; -Sequential runs the suites one at a time, ≈2 minutes).
 
 param(
@@ -71,6 +71,7 @@ $suites = @(
     'run_process_backend_tests',
     'run_window_tests',
     'run_singleton_tests',
+    'run_shell_ui_tests',
     'run_nav_tests',
     'run_hidden_view_tests',
     'run_realm_tests',
