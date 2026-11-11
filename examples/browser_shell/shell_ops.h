@@ -53,6 +53,11 @@ struct shell_ops_s {
     /* Dark/light native title bar (DWMWA_USE_IMMERSIVE_DARK_MODE). */
     void (*set_dark_titlebar)(void* user, void* hwnd, int dark);
 
+    /* Paint the Win11 DWM window border (the 1 px line around the rounded
+     * frame) with `rgb` (0xRRGGBB). Without this, a light-mode DWM border
+     * stays white around a dark chrome. 1 = attribute accepted. */
+    int (*set_window_border)(void* user, void* hwnd, unsigned rgb);
+
     /* Modal message box. Returns 1 for OK/yes, 0 for cancel/no. */
     int (*message_box)(void* user, void* parent, const char* text,
                        const char* caption, unsigned flags);

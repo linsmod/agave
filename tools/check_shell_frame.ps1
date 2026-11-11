@@ -88,6 +88,18 @@ try {
     if ($hwnd -eq [IntPtr]::Zero) { throw 'AgaveShellWindow not found' }
     Start-Sleep -Milliseconds 500
 
+    # The custom caption must also paint the DWM frame border (Windows 11):
+    # without DWMWA_BORDER_COLOR the rounded frame keeps a light 1 px rim
+    # around the dark chrome. Win10 has no such attribute; only Win11 can be
+    # required to accept it.
+    $frameLog = if (Test-Path (Join-Path $profileDir 'err.txt')) {
+        Get-Content (Join-Path $profileDir 'err.txt') -Raw
+    } else { '' }
+    $isWin11 = [Environment]::OSVersion.Version.Build -ge 22000
+    $frameLine = ($frameLog -split "`n" | Where-Object { $_ -match 'window frame' } |
+        Select-Object -Last 1)
+    if ($frameLine) { Write-Host ("      " + $frameLine.Trim()) }
+
     $wr = New-Object W+RECT
     $cr = New-Object W+RECT
     [void][W]::GetWindowRect($hwnd, [ref]$wr)
@@ -134,6 +146,8 @@ try {
     $checks['client-origin-top'] = ($topOffset -eq 0)
     $checks['client-size'] = ($cr.right -gt [int](600 * $scale) -and
                               $cr.bottom -gt [int](500 * $scale))
+    $checks['frame-border'] = (-not $isWin11) -or
+        ($frameLog -match 'window frame dark=[01] border=#[0-9a-fA-F]{6} applied=1')
     $checks['hit-close'] = ((Hit $closeX $cy) -eq 20)
     $checks['hit-max'] = ((Hit $maxX $cy) -eq 9)
     $checks['hit-min'] = ((Hit $minX $cy) -eq 8)

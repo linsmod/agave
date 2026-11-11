@@ -2842,13 +2842,31 @@ static void applyEditFonts(void)
         SendMessageW(g_findEdit, WM_SETFONT, (WPARAM)CHROME->theme.hfont_ui, TRUE);
 }
 
-static void applyDarkTitlebar(ShellWindow* win)
+/* Native window frame: the custom-drawn caption removes the title bar, but
+ * Win11 still paints a 1 px DWM border around the rounded frame. In light
+ * Windows mode that border is white, which shows up as a pale rim around the
+ * dark chrome; set it to the theme's frame color (and keep immersive dark
+ * mode for the shadow/non-client parts). */
+static void applyWindowFrame(ShellWindow* win)
 {
+    int dark;
+    unsigned rgb;
+    int applied;
+
     if (!win || !win->hwnd)
         return;
 
-    shellOps()->set_dark_titlebar(NULL, win->hwnd,
-                                  win->chrome.theme.kind == UI_THEME_DARK);
+    dark = win->chrome.theme.kind == UI_THEME_DARK;
+    rgb = (dark ? win->chrome.theme.chrome : win->chrome.theme.border) & 0xFFFFFFu;
+
+    shellOps()->set_dark_titlebar(NULL, win->hwnd, dark);
+
+    applied = shellOps()->set_window_border
+                  ? shellOps()->set_window_border(NULL, win->hwnd, rgb)
+                  : 0;
+
+    agbLog(AGB_LOG_SHELL, "window frame dark=%d border=#%06x applied=%d",
+           dark, rgb, applied);
 }
 
 /* Resize border thickness for this window's DPI. The top edge is client (the
@@ -2909,7 +2927,7 @@ static void rethemeShellWindow(ShellWindow* win)
 
     g_cur = win;
     applyEditFonts();
-    applyDarkTitlebar(win);
+    applyWindowFrame(win);
     layoutAll();
 }
 
@@ -3341,7 +3359,7 @@ static LRESULT CALLBACK shellProcInner(HWND hwnd, UINT message, WPARAM wParam, L
                          SWP_NOZORDER | SWP_NOACTIVATE);
         }
 
-        applyDarkTitlebar(g_cur);
+        applyWindowFrame(g_cur);
         layoutAll();
         InvalidateRect(hwnd, NULL, FALSE);
         return 0;
@@ -6827,7 +6845,7 @@ static ShellWindow* createShellWindow(const char* title)
 
     g_cur = win;
     applyEditFonts();
-    applyDarkTitlebar(win);
+    applyWindowFrame(win);
 
     /* A first layout before any tab: the toolbar/address EMPTY state is what a
      * handoff-created window shows for a few milliseconds. */

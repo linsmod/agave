@@ -249,18 +249,10 @@ static void win32_enable_dpi_awareness(void* user)
 
 typedef HRESULT (WINAPI* DwmSetWindowAttributeFn)(HWND, DWORD, LPCVOID, DWORD);
 
-static void win32_set_dark_titlebar(void* user, void* hwnd, int dark)
+static DwmSetWindowAttributeFn resolveDwmSetAttribute(void)
 {
     static DwmSetWindowAttributeFn setAttribute;
     static int tried;
-    BOOL value = dark ? TRUE : FALSE;
-    DWORD attributes[2] = { 20u, 19u };   /* DWMWA_USE_IMMERSIVE_DARK_MODE (new/old) */
-    int i;
-
-    (void)user;
-
-    if (!hwnd)
-        return;
 
     if (!tried) {
         HMODULE dwm = LoadLibraryA("dwmapi.dll");
@@ -271,13 +263,42 @@ static void win32_set_dark_titlebar(void* user, void* hwnd, int dark)
             setAttribute = (DwmSetWindowAttributeFn)(void*)GetProcAddress(dwm, "DwmSetWindowAttribute");
     }
 
-    if (!setAttribute)
+    return setAttribute;
+}
+
+static void win32_set_dark_titlebar(void* user, void* hwnd, int dark)
+{
+    DwmSetWindowAttributeFn setAttribute = resolveDwmSetAttribute();
+    BOOL value = dark ? TRUE : FALSE;
+    DWORD attributes[2] = { 20u, 19u };   /* DWMWA_USE_IMMERSIVE_DARK_MODE (new/old) */
+    int i;
+
+    (void)user;
+
+    if (!hwnd || !setAttribute)
         return;
 
     for (i = 0; i < 2; ++i) {
         if (SUCCEEDED(setAttribute((HWND)hwnd, attributes[i], &value, sizeof(value))))
             return;
     }
+}
+
+/* DWMWA_BORDER_COLOR (34) exists on Windows 11 22000+. The color is a
+ * COLORREF (0x00BBGGRR); our tokens are 0xAARRGGBB. */
+static int win32_set_window_border(void* user, void* hwnd, unsigned rgb)
+{
+    DwmSetWindowAttributeFn setAttribute = resolveDwmSetAttribute();
+    COLORREF color;
+
+    (void)user;
+
+    if (!hwnd || !setAttribute)
+        return 0;
+
+    color = RGB((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF);
+
+    return SUCCEEDED(setAttribute((HWND)hwnd, 34u, &color, sizeof(color))) ? 1 : 0;
 }
 
 static int win32_message_box(void* user, void* parent, const char* text,
@@ -400,6 +421,14 @@ static void mock_noop_dark_titlebar(void* user, void* hwnd, int dark)
     (void)dark;
 }
 
+static int mock_set_window_border(void* user, void* hwnd, unsigned rgb)
+{
+    (void)user;
+    (void)hwnd;
+    (void)rgb;
+    return 1;
+}
+
 static int mock_message_box(void* user, void* parent, const char* text,
                             const char* caption, unsigned flags)
 {
@@ -442,6 +471,7 @@ static void fillTables(void)
     g_win32_ops.dpi_for_window = win32_dpi_for_window;
     g_win32_ops.enable_dpi_awareness = win32_enable_dpi_awareness;
     g_win32_ops.set_dark_titlebar = win32_set_dark_titlebar;
+    g_win32_ops.set_window_border = win32_set_window_border;
     g_win32_ops.message_box = win32_message_box;
     g_win32_ops.tick_ms = win32_tick_ms;
 
@@ -454,6 +484,7 @@ static void fillTables(void)
     g_mock_ops.dpi_for_window = mock_dpi_for_window;
     g_mock_ops.enable_dpi_awareness = mock_noop_dpi;
     g_mock_ops.set_dark_titlebar = mock_noop_dark_titlebar;
+    g_mock_ops.set_window_border = mock_set_window_border;
     g_mock_ops.message_box = mock_message_box;
     g_mock_ops.tick_ms = mock_tick_ms;
 

@@ -135,7 +135,9 @@ pwsh -File tools/run_all_tests.ps1 -KeepLogs                # 保留每个套件
 **手动检查（不进默认套件）**：`pwsh -File tools/check_shell_frame.ps1` 用
 `AGB_SHELL_HIDDEN=1` 起真实 GUI（窗口不显示），验证自定义窗框：client origin=0、
 `WM_NCHITTEST` 的 min/max/close/tab/caption 码、`WM_NCLBUTTONDOWN + WM_LBUTTONUP`
-的 max/restore/min/close。需要真实 HWND，所以不放进 probe-only 的默认回归。
+的 max/restore/min/close，以及 `[shell] window frame … applied=1`（Win11 的
+`DWMWA_BORDER_COLOR` 被接受，深色窗口外圈不再有白边）。需要真实 HWND，所以不
+放进 probe-only 的默认回归。
 同一个启动方式下，`pwsh -File tools/check_shell_menu.ps1` 验证自绘菜单的分层弹窗
 路径：`☰` 打开应用菜单 → 首行点击生效；页面右键打开上下文菜单 → Esc 关闭；
 `WM_CLOSE` 干净退出。二者都约 2–3 s。
