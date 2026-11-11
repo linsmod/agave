@@ -9678,7 +9678,7 @@ int globalCEDefine(AntbEngine*, AntbValue*, AntbValue** args, int argc, AntbValu
         return 1;
 
     if (getenv("AGB_CE_DEBUG"))
-        fprintf(stderr, "[cedef] #%d %s\n", ++g_ceDefineCount, name);
+        fprintf(stderr, "[cedef] #%d %s doc=%p\n", ++g_ceDefineCount, name, (void*)g_document);
 
     runtime = documentRuntimeFor(g_currentState, g_document);
     if (!runtime) {
@@ -9695,8 +9695,12 @@ int globalCEDefine(AntbEngine*, AntbValue*, AntbValue** args, int argc, AntbValu
             if (tag[i] >= 'A' && tag[i] <= 'Z')
                 tag[i] = (char)(tag[i] - 'A' + 'a');
         if (runtime->customDefs->count(tag)) {
+            if (getenv("AGB_CE_DEBUG"))
+                fprintf(stderr, "[cedef] DUP %s (rejected)\n", name);
+            if (getenv("AGB_CE_DEBUG_STACK") && g_engine)
+                antb_print_js_stack(g_engine);   /* who tries to define it again */
             antb_free(name);
-            return 0;                       /* already defined (prelude checks too) */
+            return 0;                       /* already defined: prelude throws */
         }
         (*runtime->customDefs)[tag] = antb_retain(args[1]);
     }
@@ -12811,6 +12815,16 @@ int nodeRemoveChild(AntbEngine* engine, AntbValue* self, AntbValue** args, int a
 
     child->ref();                 /* removal may drop the last reference */
     parent->removeChild(child, ec);
+
+    /* Chrome returns the removed node; callers chain on it. */
+    {
+        AntbValue* v = wrapNode(engine, child);
+
+        if (v) {
+            antb_value_assign(out, v);
+            antb_value_release(v);
+        }
+    }
     child->deref();
     return 1;
 }
@@ -12917,7 +12931,18 @@ int nodeReplaceChild(AntbEngine* engine, AntbValue* self, AntbValue** args, int 
         return 1;
 
     child->ref();
+    old->ref();                   /* the replaced node is handed back to JS */
     parent->replaceChild(child, old, ec);
+
+    {
+        AntbValue* v = wrapNode(engine, old);
+
+        if (v) {
+            antb_value_assign(out, v);
+            antb_value_release(v);
+        }
+    }
+    old->deref();
     child->deref();
     return 1;
 }

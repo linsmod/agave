@@ -337,10 +337,10 @@
             throw domError('SyntaxError', '"' + name + '" is not a valid custom element name');
           if (typeof ctor !== 'function')
             throw domError('TypeError', 'The custom element constructor is not a function');
-          if (g.__agbCEHas(name))
-            throw domError('NotSupportedError', 'the name "' + name + '" has already been used');
+          /* The duplicate rejection lives in C++ (__agbCEDefine returns 0) so the
+           * debug trace sees every attempt, including the rejected one. */
           if (!g.__agbCEDefine(name, ctor))
-            throw domError('NotSupportedError', 'could not register "' + name + '"');
+            throw domError('NotSupportedError', 'the name "' + name + '" has already been used');
           resolvePending(name, ctor);
           return undefined;
         },
