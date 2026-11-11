@@ -105,6 +105,12 @@ view 并让宿主切过去，没命中才建新控件交给宿主开 tab。两�
   宿主会等一次回收完成（2 s 上限，卡在页面脚本里时靠看门狗 abort）。设计记录见
   [design-tab-teardown.md](design-tab-teardown.md)。
 * 每个控件独立：独立 `MaCrossView`、独立 DIB、独立进度与标题。
+* **绘制契约：控件窗口任何时刻自己负责整块客户区**。`agwPaint()` 先补白底（当 DIB
+  还没建好、或 DIB 比客户区小），再把 `mirrorBits` BitBlt 上去；`WM_ERASEBKGND` 直接
+  `return 1`，不会让系统擦背景。不这么补底的话，新标签的控件会在第一个引擎帧到达前
+  被绘制（此时 `width/height` 还是 0），露出的就是那块区域原来的像素——看起来就是
+  "网页区域撕裂"。帧拷贝（引擎线程 → `mirrorBits`）与 BitBlt 共用 `agwLock`，所以
+  不会出现半帧。
 
 ## 多控件
 

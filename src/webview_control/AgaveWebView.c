@@ -2734,18 +2734,38 @@ static const char* agwButtonName(int button)
 
 static void agwPaint(AgaveWebView* item, HDC hdc)
 {
+    RECT client;
+    int cw = 0;
+    int ch = 0;
+
     if (!item)
         return;
 
+    if (item->hwnd && GetClientRect(item->hwnd, &client)) {
+        cw = client.right;
+        ch = client.bottom;
+    }
+
     agwLock();
-    if (item->mirrorDc && item->mirrorBits) {
-        BitBlt(hdc, 0, 0, item->width, item->height, item->mirrorDc, 0, 0, SRCCOPY);
-    } else {
+
+    /* The window must never show whatever pixels happened to be under it.
+     * A new tab paints before its DIB exists (width/height are 0 until the
+     * engine thread builds the surface), and a resize can paint while the DIB
+     * is still the old, smaller one - BitBlt alone left the rest of the client
+     * area stale, which read as a torn page area. White first (what Chrome
+     * shows for an empty view), then the frame on top. */
+    if (!item->mirrorDc || !item->mirrorBits ||
+        item->width < cw || item->height < ch) {
         RECT fill;
 
-        SetRect(&fill, 0, 0, item->width, item->height);
+        SetRect(&fill, 0, 0, cw, ch);
         FillRect(hdc, &fill, (HBRUSH)GetStockObject(WHITE_BRUSH));
     }
+
+    if (item->mirrorDc && item->mirrorBits) {
+        BitBlt(hdc, 0, 0, item->width, item->height, item->mirrorDc, 0, 0, SRCCOPY);
+    }
+
     agwUnlock();
 }
 
