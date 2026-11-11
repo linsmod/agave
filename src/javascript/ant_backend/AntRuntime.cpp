@@ -9669,12 +9669,16 @@ int globalCEDefine(AntbEngine*, AntbValue*, AntbValue** args, int argc, AntbValu
     char* name;
     AntbValue* result;
     DocumentRuntime* runtime;
+    static int g_ceDefineCount = 0;
 
     if (argc < 2 || !args[0] || !args[1] || !g_document || !antb_is_function(args[1]))
         return 0;
     name = antb_to_utf8(args[0]);
     if (!name)
         return 1;
+
+    if (getenv("AGB_CE_DEBUG"))
+        fprintf(stderr, "[cedef] #%d %s\n", ++g_ceDefineCount, name);
 
     runtime = documentRuntimeFor(g_currentState, g_document);
     if (!runtime) {
