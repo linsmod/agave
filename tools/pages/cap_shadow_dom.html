@@ -79,6 +79,9 @@
     try { badHost.attachShadow({ mode: 'open' }); } catch (e) { hostError = e.name; }
     ok('attachShadow forbidden tag', hostError === 'NotSupportedError' && badHost.shadowRoot === null);
 
+    ok('JSON.stringify node matches Chrome', JSON.stringify(host) === '{}' &&
+        JSON.stringify([document.body]) === '[{}]');
+
     var closedHost = document.getElementById('h2');
     var closedRoot = closedHost.attachShadow({ mode: 'closed' });
     closedRoot.innerHTML = '<i id="ci">closed</i>';

@@ -141,7 +141,7 @@ qsChild=3 qsDesc=3 qsAdj=1 qsSib=2 qsNth=1 qsOdd=2 qsNot=2 qsFirst=1 qsList2=4 q
 `document.querySelectorAll` 也能命中它们；②`slot` 本身不是 `display: contents`（有分配时用
 `slot[data-agb-slot-filled]{display:none}` 藏掉它，把已分发节点放在 slot 之后的兄弟位置）；③`::part` 依赖
 `[part~=]` 后代改写，跨组件同名 part 会串扰；④`:host-context()` 未实现；⑤窗口级全屏没有接（见
-`requestFullscreen`）。回归：`run_shadow_tests`（39 条断言）。
+`requestFullscreen`）。回归：`run_shadow_tests`（40 条断言）。
 
 **`HTMLTemplateElement` 已支持（2026-11-11，issues #18 phase B）**：真接口类（IDL 表 + `tag→class` 映射），
 `content` 是懒创建的 `DocumentFragment`（解析器塞进元素的子节点在首次访问时搬进 content，和 Chrome 的模板内容一致），
@@ -151,10 +151,10 @@ qsChild=3 qsDesc=3 qsAdj=1 qsSib=2 qsNth=1 qsOdd=2 qsNot=2 qsFirst=1 qsList2=4 q
 **`indexedDB` 是桩**（见 §1 `indexedDB.open` 行）：请求对象没有 `addEventListener`，deepseek 的
 `n=indexedDB.deleteDatabase(t); n.addEventListener("blocked",…)` 会抛 `undefined is not a function`（issues #20）。
 
-**已知差异：`JSON.stringify(DOM 节点)` 会抛 `Converting circular structure to JSON`**（2026-11-11 R188 探针
-发现），Chrome 返回 `{}`——节点 wrapper 的 catch-all 让序列化看到了互相引用的 DOM 属性。错误上报 / 日志里直接
-序列化节点会因此进入 catch 分支；建议后续给 Node 原型加 `toJSON() { return {} }`（或让 catch-all 不出现在
-own-enumerable 集合里）。不影响本轮的 Shadow DOM/TreeWalker 功能。
+**`JSON.stringify(DOM 节点)` 与 Chrome 一致返回 `{}`**（R188 发现并修复）：ant 的 `JSON.stringify`/reviver 曾按
+for-in 枚举（含原型链），节点的原型 accessor（`style` → `style.__agbElement` → 节点）会被当成循环；现在按
+`EnumerableOwnPropertyNames` 只枚举 **own enumerable** 键（ant 仓 `967e7f48`，测试
+`tests/test_json_own_keys.cjs`）。节点、`NodeList`（`{"0":{}}`）与数组（`[{}]`）的序列化都与 Chrome 逐字一致。
 
 **媒体元素（`<video>`/`<audio>`/`<source>`/`<track>`）已有实现**：元素类、常用 API、
 容器头元数据（MP4/WebM/MKV）、`textTracks` + WebVTT cue，尺寸与 Chrome 对齐；
