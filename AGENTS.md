@@ -131,3 +131,7 @@ Remove-Item -Recurse -Force build-zig-native\test-runs -ErrorAction SilentlyCont
 ## TOOLS
 [Quick Search Files on Local Machine ](c:/Users/linswin/.agents/skills/everything-search/SKILL.md)
 [Sandbox Bypass](c:/Users/linswin/.agents/skills/traycmd/SKILL.md) Section:一次性/临时命令
+
+
+## Enable New Vendor libs
+May need edit `build/mconfig.h.in`
