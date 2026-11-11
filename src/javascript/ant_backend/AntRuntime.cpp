@@ -1238,6 +1238,10 @@ int nodeGetBoundingClientRect(AntbEngine*, AntbValue*, AntbValue**, int, AntbVal
 int nodeGetRootNode(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeGetAttributeNames(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeToggleAttribute(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeGetAttributeNode(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeGetAttributeNS(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeSetAttributeNS(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int nodeGetClientRects(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeInsertAdjacentHTML(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeInsertAdjacentElement(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeInsertAdjacentText(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
@@ -8658,6 +8662,131 @@ int nodeGetAttributeNames(AntbEngine* engine, AntbValue* self, AntbValue**, int,
         antb_value_assign(out, array);
         antb_value_release(array);
     }
+    return 1;
+}
+
+/* element.getAttributeNode(name): the Attr node, or null. */
+int nodeGetAttributeNode(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                         AntbValue* out, void*)
+{
+    WebCore::Node* n = nodeOf(self);
+    char* name;
+
+    if (!n || !n->isElementNode() || argc < 1 || !args[0])
+        return assignNull(engine, out);
+
+    name = antb_to_utf8(args[0]);
+    if (!name)
+        return assignNull(engine, out);
+
+    {
+        RefPtr<WebCore::Attr> attr =
+            static_cast<WebCore::Element*>(n)->getAttributeNode(WebCore::String::fromUTF8(name));
+
+        antb_free(name);
+        if (!attr)
+            return assignNull(engine, out);
+        {
+            AntbValue* v = wrapNode(engine, attr.get());
+
+            if (!v)
+                return assignNull(engine, out);
+            antb_value_assign(out, v);
+            antb_value_release(v);
+        }
+        return 1;
+    }
+}
+
+/* element.getAttributeNS(ns, name) / setAttributeNS(ns, name, value). */
+int nodeGetAttributeNS(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                       AntbValue* out, void*)
+{
+    WebCore::Node* n = nodeOf(self);
+    char* ns;
+    char* name;
+
+    if (!n || !n->isElementNode() || argc < 2 || !args[0] || !args[1])
+        return assignNull(engine, out);
+
+    ns = antb_to_utf8(args[0]);
+    name = antb_to_utf8(args[1]);
+    if (!name)
+        return assignNull(engine, out);
+
+    {
+        WebCore::String value = static_cast<WebCore::Element*>(n)->getAttributeNS(
+            WebCore::String::fromUTF8(ns ? ns : ""), WebCore::String::fromUTF8(name));
+        AntbValue* v;
+
+        if (ns)
+            antb_free(ns);
+        antb_free(name);
+        v = antb_make_string(engine, value.utf8().data());
+        if (!v)
+            return 0;
+        antb_value_assign(out, v);
+        antb_value_release(v);
+        return 1;
+    }
+}
+
+int nodeSetAttributeNS(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                       AntbValue* out, void*)
+{
+    WebCore::Node* n = nodeOf(self);
+    char* ns;
+    char* name;
+    char* value;
+
+    (void)engine;
+    (void)out;
+
+    if (!n || !n->isElementNode() || argc < 3)
+        return 1;
+
+    ns = antb_to_utf8(args[0]);
+    name = antb_to_utf8(args[1]);
+    value = antb_to_utf8(args[2]);
+    if (!name)
+        return 1;
+
+    {
+        WebCore::ExceptionCode ec = 0;
+
+        static_cast<WebCore::Element*>(n)->setAttributeNS(
+            WebCore::String::fromUTF8(ns ? ns : ""),
+            WebCore::String::fromUTF8(name),
+            WebCore::String::fromUTF8(value ? value : ""), ec);
+        if (ns)
+            antb_free(ns);
+        antb_free(name);
+        if (value)
+            antb_free(value);
+    }
+    return 1;
+}
+
+/* element.getClientRects(): the spec returns a list; one rect is what this
+ * engine's own geometry reports, so an array with that rect answers the callers
+ * that iterate it. */
+int nodeGetClientRects(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                       AntbValue* out, void*)
+{
+    AntbValue* list = antb_make_array(engine);
+    AntbValue* rect = NULL;
+
+    if (!list)
+        return 0;
+
+    nodeGetBoundingClientRect(engine, self, args, argc, rect = antb_make_object(engine), NULL);
+    if (rect)
+        antb_array_push(engine, list, rect);
+    if (rect)
+        antb_value_release(rect);
+
+    antb_value_assign(out, list);
+    antb_value_release(list);
     return 1;
 }
 
@@ -17102,6 +17231,10 @@ static const DomMethodImpl kDomMethodImpls[] = {
     { "focus"                     , nodeFocus },
     { "getAttribute"              , nodeGetAttribute },
     { "getAttributeNames"         , nodeGetAttributeNames },
+    { "getAttributeNode"          , nodeGetAttributeNode },
+    { "getAttributeNS"            , nodeGetAttributeNS },
+    { "setAttributeNS"            , nodeSetAttributeNS },
+    { "getClientRects"            , nodeGetClientRects },
     { "getNamedItem"              , namedMapGetNamedItemFn },
     { "getNamedItemNS"            , namedMapGetNamedItemNS },
     { "setNamedItem"              , namedMapSetNamedItem },
@@ -17184,6 +17317,10 @@ static const DomMethodExtra kExtraMethods[] = {
     { "Document", "write" },
     { "Document", "writeln" },
     { "DocumentFragment", "replaceChildren" },
+    { "Element", "getAttributeNode" },
+    { "Element", "getAttributeNS" },
+    { "Element", "setAttributeNS" },
+    { "Element", "getClientRects" },
     { "Element", "getAttributeNames" },
     { "Element", "getBoundingClientRect" },
     { "Element", "getElementsByClassName" },

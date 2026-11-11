@@ -550,6 +550,25 @@
              el.field === 'ctor' && log.join(',') === 'cc:function' &&
              document.getElementById('up-probe') === el;
     })());
+    /* Values the gap table used to list: attachShadow was already implemented
+     * (phase C) - the report came from the instance-hook fall-through before the
+     * prototype lookup, so the entry was stale. These four are new. */
+    ok('attribute node / NS / client rects', (function () {
+      var el = document.createElement('div');
+      el.setAttribute('data-a', 'v');
+      var attr = el.getAttributeNode('data-a');
+      var okAttr = attr && attr.nodeType === 2 && attr.name === 'data-a' &&
+                   attr.value === 'v' && el.getAttributeNode('nope') === null;
+      el.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', '#x');
+      var okNS = el.getAttributeNS('http://www.w3.org/1999/xlink', 'href') === '#x' &&
+                 el.getAttribute('xlink:href') === '#x';
+      var host = document.createElement('div');
+      document.body.appendChild(host);
+      var rects = host.getClientRects();
+      var okRects = rects && rects.length === 1 && typeof rects[0].width === 'number';
+      host.parentNode.removeChild(host);
+      return okAttr && okNS && okRects && typeof el.attachShadow === 'function';
+    })());
     ok('document.getElementsByName', (function () {
       var host = document.createElement('div');
       host.innerHTML = '<i name="by-probe"></i><i name="by-probe"></i><i name="other"></i>';

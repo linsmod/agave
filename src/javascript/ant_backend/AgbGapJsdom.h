@@ -51,12 +51,8 @@ static const AgbJsdomGap agbJsdomGaps[] = {
     /* --- element: tree navigation ---------------------------------------- */
 
     /* --- element: mutation ----------------------------------------------- */
-    { "attachShadow",         "dom", "undefined; no shadow DOM" },
 
     /* --- element: attributes / text -------------------------------------- */
-    { "getAttributeNode",     "dom", "undefined" },
-    { "setAttributeNS",       "dom", "undefined; setAttribute works" },
-    { "getClientRects",       "dom", "undefined; getBoundingClientRect works" },
 
     /* --- element: reflected attributes ----------------------------------- */
 
