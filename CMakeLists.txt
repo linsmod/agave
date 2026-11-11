@@ -120,14 +120,17 @@ if (OPT_SHELL AND WIN32)
     add_library(agave_webview ALIAS ${LIB_NAME})
 
     # The shell's UI is componentized: ui_theme (tokens/painter/icons),
-    # ui_widgets (button/tab strip), ui_chrome (toolbar/find/status composition)
-    # and shell_ops (the OS seam). main.c keeps tabs/session/singleton/probe.
+    # ui_widgets (button/tab strip), ui_chrome (toolbar/find/status composition),
+    # ui_menu (self-drawn menus) + ui_menu_host (layered popup), and shell_ops
+    # (the OS seam). main.c keeps tabs/session/singleton/probe.
     add_executable(agave_shell WIN32
         ${PROJ_ROOT}/examples/browser_shell/main.c
         ${PROJ_ROOT}/examples/browser_shell/shell_ops.c
         ${PROJ_ROOT}/examples/browser_shell/ui_theme.c
         ${PROJ_ROOT}/examples/browser_shell/ui_widgets.c
-        ${PROJ_ROOT}/examples/browser_shell/ui_chrome.c)
+        ${PROJ_ROOT}/examples/browser_shell/ui_chrome.c
+        ${PROJ_ROOT}/examples/browser_shell/ui_menu.c
+        ${PROJ_ROOT}/examples/browser_shell/ui_menu_host.c)
     target_include_directories(agave_shell PRIVATE ${PROJ_ROOT}/include ${PROJ_OUT}
                                                 ${PROJ_ROOT}/examples/browser_shell)
     target_compile_definitions(agave_shell PRIVATE AGW_USE_DLL)

@@ -69,8 +69,10 @@ typedef struct UiTheme {
     unsigned pressed;
     unsigned field;         /* address pill / find pill */
     unsigned field_hover;
+    unsigned field_focus;   /* pill while the EDIT owns focus */
     unsigned border;
     unsigned border_strong;
+    unsigned icon;          /* toolbar glyphs */
     unsigned text;
     unsigned text_muted;
     unsigned text_faint;
@@ -79,6 +81,27 @@ typedef struct UiTheme {
     unsigned danger;
     unsigned danger_soft;
     unsigned shadow;
+
+    /* Interaction tints lifted from Chrome's dark UI (screenshots in the
+     * design doc): tabs and toolbar glyphs get their own neutral grays, the
+     * focused address pill a light-blue ring, window close a Windows red. */
+    unsigned tab_hover;          /* inactive tab under the pointer */
+    unsigned tab_close_hover;    /* circular close chip inside a tab */
+    unsigned button_hover;       /* circular hover behind toolbar icons */
+    unsigned button_pressed;
+    unsigned close_hover;        /* find-bar close / neutral chips */
+    unsigned focus_ring;         /* address + find field focus ring */
+    unsigned window_close_hover; /* title-bar X, Chrome/Win11 red */
+
+    /* Self-drawn menus (Chrome's context menu look). */
+    unsigned menu_bg;
+    unsigned menu_hover;
+    unsigned menu_border;
+    unsigned menu_sep;
+    unsigned menu_text_disabled;
+    unsigned menu_shortcut;
+    unsigned menu_icon;
+    unsigned menu_shadow;
 
     /* metrics (device px, already scaled) */
     int tabstrip_h;
@@ -103,9 +126,23 @@ typedef struct UiTheme {
     int status_pad;
     int content_top;
 
+    /* menu metrics (device px, already scaled) */
+    int menu_item_h;
+    int menu_sep_h;
+    int menu_pad_x;
+    int menu_pad_y;
+    int menu_radius;
+    int menu_item_radius;
+    int menu_icon_col;
+    int menu_min_w;
+    int menu_max_w;
+    int menu_gap;
+
     COLORREF field_color;
+    COLORREF field_focus_color;
     COLORREF text_color;
     HBRUSH   field_brush;
+    HBRUSH   field_focus_brush;
     HBRUSH   surface_brush;
 
     HFONT  hfont_ui;
@@ -148,6 +185,10 @@ typedef struct {
 } UiPainter;
 
 int  uiPainterBegin(UiPainter* p, HDC hdc, const UiTheme* theme, int width, int height);
+/* Paint into a caller-owned GDI+ graphics (a 32bppPARGB bitmap for the
+ * layered menu popup). uiPainterEnd deletes the graphics, like the HDC path. */
+int  uiPainterBeginGraphics(UiPainter* p, GpGraphics* graphics, const UiTheme* theme,
+                            int width, int height);
 void uiPainterEnd(UiPainter* p);
 
 void uiFillRect(UiPainter* p, UiRect r, unsigned argb);
@@ -162,6 +203,12 @@ void uiText(UiPainter* p, const char* utf8, UiRect r, GpFont* font,
             unsigned argb, UiAlign align);
 void uiTextW(UiPainter* p, const wchar_t* text, UiRect r, GpFont* font,
              unsigned argb, UiAlign align);
+/* Text extents for layout (menu width, shortcut column). Returns 1 on
+ * success; widths are ceil'ed device pixels. */
+int  uiMeasureText(const UiTheme* theme, GpFont* font, const char* utf8,
+                   int* width, int* height);
+int  uiMeasureTextW(const UiTheme* theme, GpFont* font, const wchar_t* text,
+                    int* width, int* height);
 void uiIcon(UiPainter* p, UiIcon icon, UiRect r, unsigned argb, float stroke);
 
 #endif /* AGAVE_UI_THEME_H */

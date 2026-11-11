@@ -24,6 +24,8 @@
 #include "../../src/webview/AgbLog.h"
 #include "shell_ops.h"
 #include "ui_chrome.h"
+#include "ui_menu.h"
+#include "ui_menu_host.h"
 
 #define MAX_TABS        16
 #define MAX_PATH_CHARS  1024
@@ -1571,17 +1573,8 @@ static void stopActive(const char* source);
 /* script injection (inspector.js / vConsole)                                */
 /* ------------------------------------------------------------------------- */
 
-/* Menu labels are UTF-8 (the shell speaks UTF-8 everywhere); the menu itself
- * has to be filled through the wide API or a Chinese label turns into
- * mojibake under the ANSI code page. */
-static void appendMenuUtf8(HMENU menu, UINT flags, UINT_PTR id, const char* text)
-{
-    wchar_t wide[256];
-
-    utf8ToWide(text, wide, 256);
-    AppendMenuW(menu, flags, id, wide);
-}
-
+/* Menu labels are UTF-8 (the shell speaks UTF-8 everywhere); the self-drawn
+ * menu measures and paints them through ui_menu. */
 static char* readFileUtf8(const wchar_t* path, size_t* lengthOut)
 {
     FILE* file;
@@ -1772,12 +1765,14 @@ static void onContextMenu(AgaveWebView* view, int x, int y,
                           const char* linkUrl, const char* imageUrl,
                           const char* text, void* user)
 {
-    HMENU menu = CreatePopupMenu();
+    UiMenu menu;
     POINT point;
     Tab* tab = (Tab*)user;
     HWND viewHwnd = view ? (HWND)agave_webview_hwnd(view) : NULL;
     int choice;
     int hasSelection;
+    int canBack;
+    int canForward;
 
     if (!tab) {
         agbLog(AGB_LOG_SHELL, "context menu without a tab, ignored");
@@ -1789,6 +1784,54 @@ static void onContextMenu(AgaveWebView* view, int x, int y,
     /* Chrome shows Copy enabled only when something is selected; the engine
      * hands us the selection text with the event. */
     hasSelection = (text && text[0]) ? 1 : 0;
+    canBack = tab->view && agave_webview_can_back(tab->view);
+    canForward = tab->view && agave_webview_can_forward(tab->view);
+
+    /* The ids are the historical TrackPopupMenu ids: logs and the switch below
+     * stay exactly the same. */
+    uiMenuInit(&menu);
+    uiMenuAdd(&menu, "Back", "Alt+Left", 1,
+              canBack ? 0 : UI_MENU_ITEM_DISABLED, UI_MENU_ICON_NONE, NULL);
+    uiMenuAdd(&menu, "Forward", "Alt+Right", 2,
+              canForward ? 0 : UI_MENU_ITEM_DISABLED, UI_MENU_ICON_NONE, NULL);
+    uiMenuAdd(&menu, "Reload", "Ctrl+R", 3, 0, UI_MENU_ICON_NONE, NULL);
+    uiMenuAddSeparator(&menu);
+
+    if (linkUrl && linkUrl[0]) {
+        uiMenuAdd(&menu, "Open link in this tab", NULL, 4, 0,
+                  UI_MENU_ICON_LINK, NULL);
+        uiMenuAdd(&menu, "Open link in new tab", NULL, 5, 0,
+                  UI_MENU_ICON_LINK, NULL);
+        uiMenuAdd(&menu, "Copy link address", NULL, 6, 0,
+                  UI_MENU_ICON_NONE, NULL);
+        uiMenuAddSeparator(&menu);
+    }
+
+    if (imageUrl && imageUrl[0])
+        uiMenuAdd(&menu, "Save image (not implemented)", NULL, 7,
+                  UI_MENU_ITEM_DISABLED, UI_MENU_ICON_NONE, NULL);
+
+    /* Chrome's page menu carries the Lens entry here; without an engine hook
+     * it is an honest disabled row (and it exercises the icon column). */
+    uiMenuAddSeparator(&menu);
+    uiMenuAdd(&menu, "Search with Google Lens (not implemented)", NULL, 10,
+              UI_MENU_ITEM_DISABLED, UI_MENU_ICON_LENS, NULL);
+    uiMenuAddSeparator(&menu);
+    uiMenuAdd(&menu, "Copy", "Ctrl+C", 12,
+              hasSelection ? 0 : UI_MENU_ITEM_DISABLED, UI_MENU_ICON_NONE, NULL);
+    uiMenuAdd(&menu, "Select all", "Ctrl+A", 13, 0, UI_MENU_ICON_NONE, NULL);
+    uiMenuAddSeparator(&menu);
+
+    uiMenuAdd(&menu, "Bookmark this page", "Ctrl+D", 8, 0,
+              UI_MENU_ICON_NONE, NULL);
+    /* No view-source support yet: a document->string API does not exist, and the
+     * old "View page source (eval)" evaluated outerHTML into the void (eval
+     * results are discarded), so the item did nothing at all. Say so instead. */
+    uiMenuAdd(&menu, "View page source (not implemented)", "Ctrl+U", 9,
+              UI_MENU_ITEM_DISABLED, UI_MENU_ICON_NONE, NULL);
+    uiMenuAddSeparator(&menu);
+    uiMenuAdd(&menu, "注入 vConsole", NULL, 11, 0, UI_MENU_ICON_NONE, NULL);
+    uiMenuAdd(&menu, "注入 inspector.js", NULL, 14, 0, UI_MENU_ICON_NONE, NULL);
 
     /* x,y are client coordinates of the control, not of the shell window: with
      * g_hwnd the menu was offset by the toolbar height, and on a multi-monitor
@@ -1797,40 +1840,17 @@ static void onContextMenu(AgaveWebView* view, int x, int y,
     point.y = y;
     ClientToScreen(viewHwnd ? viewHwnd : g_hwnd, &point);
 
-    AppendMenuA(menu, MF_STRING, 1, "Back");
-    AppendMenuA(menu, MF_STRING, 2, "Forward");
-    AppendMenuA(menu, MF_STRING, 3, "Reload");
-    AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
+    {
+        /* uiMenuHostRun runs a modal loop; restore the context so the menu
+         * actions below always act on this window. */
+        ShellWindow* previous = g_cur;
 
-    if (linkUrl && linkUrl[0]) {
-        AppendMenuA(menu, MF_STRING, 4, "Open link in this tab");
-        AppendMenuA(menu, MF_STRING, 5, "Open link in new tab");
-        AppendMenuA(menu, MF_STRING, 6, "Copy link address");
-        AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
+        choice = uiMenuHostRun(&CHROME->theme, &menu, point.x, point.y,
+                               UI_MENU_ALIGN_LEFT, g_hwnd);
+        g_cur = previous;
     }
 
-    if (imageUrl && imageUrl[0])
-        AppendMenuA(menu, MF_STRING, 7, "Save image (not implemented)");
-
-    AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
-    AppendMenuA(menu, MF_STRING | (hasSelection ? 0 : MF_GRAYED), 12, "Copy");
-    AppendMenuA(menu, MF_STRING, 13, "Select all");
-    AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
-
-    AppendMenuA(menu, MF_STRING, 8, "Bookmark this page");
-    /* No view-source support yet: a document->string API does not exist, and the
-     * old "View page source (eval)" evaluated outerHTML into the void (eval
-     * results are discarded), so the item did nothing at all. Say so instead. */
-    AppendMenuA(menu, MF_STRING | MF_GRAYED, 9, "View page source (not implemented)");
-    AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
-    appendMenuUtf8(menu, MF_STRING, 10, "注入 vConsole");
-    appendMenuUtf8(menu, MF_STRING, 11, "注入 inspector.js");
-
-    choice = (int)TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN,
-                                 point.x, point.y, 0, g_hwnd, NULL);
-    DestroyMenu(menu);
-
-    /* choice==0 means the menu was dismissed (or TrackPopupMenu failed): the
+    /* choice==0 means the menu was dismissed (or the popup failed to open): the
      * one line that tells "the menu never opened" apart from "the item did
      * nothing". */
     agbLog(AGB_LOG_SHELL, "context menu at %d,%d link=%s image=%s choice=%d",
@@ -1840,8 +1860,8 @@ static void onContextMenu(AgaveWebView* view, int x, int y,
            choice);
 
     switch (choice) {
-    case 1: backActive("context menu"); break;
-    case 2: forwardActive("context menu"); break;
+    case 1: if (canBack) backActive("context menu"); break;
+    case 2: if (canForward) forwardActive("context menu"); break;
     case 3: reloadActive("context menu"); break;
     case 4: if (linkUrl && linkUrl[0]) navigateActive(linkUrl, 0, "context menu"); break;
     case 5: if (linkUrl && linkUrl[0]) navigateActive(linkUrl, 1, "context menu"); break;
@@ -1881,8 +1901,9 @@ static void onContextMenu(AgaveWebView* view, int x, int y,
         break;
     case 8: addBookmarkCurrent(); break;
     case 9: agbLog(AGB_LOG_SHELL, "view source: not implemented"); break;
-    case 10: injectVConsole(view); break;
-    case 11: injectInspector(view); break;
+    case 10: agbLog(AGB_LOG_SHELL, "google lens: not implemented"); break;
+    case 11: injectVConsole(view); break;
+    case 14: injectInspector(view); break;
     case 12:
         /* Copy goes through the engine (Editor::copy), not through the text we
          * already have: the page's own `copy` listener runs, and the pasteboard
@@ -2556,54 +2577,82 @@ static void updateToolbarState(void)
 
 static void showMainMenu(void)
 {
-    HMENU menu = CreatePopupMenu();
-    HMENU bookmarks = CreatePopupMenu();
-    HMENU history = CreatePopupMenu();
-    POINT point;
+    UiMenu root;
+    UiMenu bookmarks;
+    UiMenu history;
+    POINT anchor;
     int choice;
     int i;
 
+    /* Submenu labels borrow the bookmarks/history storage: it stays valid for
+     * the whole modal call, which is all uiMenuHostRun needs. */
+    uiMenuInit(&bookmarks);
+
     for (i = 0; i < g_bookmarkCount && i < 20; ++i)
-        AppendMenuA(bookmarks, MF_STRING, 100 + i,
-                    g_bookmarks[i].title[0] ? g_bookmarks[i].title : g_bookmarks[i].url);
+        uiMenuAdd(&bookmarks,
+                  g_bookmarks[i].title[0] ? g_bookmarks[i].title : g_bookmarks[i].url,
+                  NULL, 100 + i, 0, UI_MENU_ICON_NONE, NULL);
 
     if (g_bookmarkCount == 0)
-        AppendMenuA(bookmarks, MF_STRING | MF_GRAYED, 0, "(empty)");
+        uiMenuAdd(&bookmarks, "(empty)", NULL, 0, UI_MENU_ITEM_DISABLED,
+                  UI_MENU_ICON_NONE, NULL);
+
+    uiMenuInit(&history);
 
     for (i = g_historyCount - 1; i >= 0 && i >= g_historyCount - 20; --i)
-        AppendMenuA(history, MF_STRING, 200 + (g_historyCount - 1 - i), g_history[i]);
+        uiMenuAdd(&history, g_history[i], NULL,
+                  200 + (g_historyCount - 1 - i), 0, UI_MENU_ICON_NONE, NULL);
 
     if (g_historyCount == 0)
-        AppendMenuA(history, MF_STRING | MF_GRAYED, 0, "(empty)");
+        uiMenuAdd(&history, "(empty)", NULL, 0, UI_MENU_ITEM_DISABLED,
+                  UI_MENU_ICON_NONE, NULL);
 
-    AppendMenuA(menu, MF_STRING, 1, "Add bookmark\tCtrl+D");
-    AppendMenuA(menu, MF_POPUP, (UINT_PTR)bookmarks, "Bookmarks");
-    AppendMenuA(menu, MF_POPUP, (UINT_PTR)history, "History");
-    AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
-    AppendMenuA(menu, MF_STRING, 2, "Zoom in\tCtrl+=");
-    AppendMenuA(menu, MF_STRING, 3, "Zoom out\tCtrl+-");
-    AppendMenuA(menu, MF_STRING, 4, "Reset zoom\tCtrl+0");
-    AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
-    AppendMenuA(menu, MF_STRING, 5, "New tab\tCtrl+T");
-    AppendMenuA(menu, MF_STRING, 6, "Find\tCtrl+F");
-    AppendMenuA(menu, MF_STRING, 7, "Reload\tF5");
-    AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
-    appendMenuUtf8(menu, MF_STRING, 8, "注入 vConsole");
-    appendMenuUtf8(menu, MF_STRING, 9, "注入 inspector.js");
+    uiMenuInit(&root);
+    uiMenuAdd(&root, "Add bookmark", "Ctrl+D", 1, 0, UI_MENU_ICON_NONE, NULL);
+    uiMenuAdd(&root, "Bookmarks", NULL, 0, 0, UI_MENU_ICON_NONE, &bookmarks);
+    uiMenuAdd(&root, "History", NULL, 0, 0, UI_MENU_ICON_NONE, &history);
+    uiMenuAddSeparator(&root);
+    uiMenuAdd(&root, "Zoom in", "Ctrl+=", 2, 0, UI_MENU_ICON_NONE, NULL);
+    uiMenuAdd(&root, "Zoom out", "Ctrl+-", 3, 0, UI_MENU_ICON_NONE, NULL);
+    uiMenuAdd(&root, "Reset zoom", "Ctrl+0", 4, 0, UI_MENU_ICON_NONE, NULL);
+    uiMenuAddSeparator(&root);
+    uiMenuAdd(&root, "New tab", "Ctrl+T", 5, 0, UI_MENU_ICON_NONE, NULL);
+    uiMenuAdd(&root, "Find", "Ctrl+F", 6, 0, UI_MENU_ICON_NONE, NULL);
+    uiMenuAdd(&root, "Reload", "F5", 7, 0, UI_MENU_ICON_NONE, NULL);
+    uiMenuAddSeparator(&root);
+    uiMenuAdd(&root, "注入 vConsole", NULL, 8, 0, UI_MENU_ICON_NONE, NULL);
+    uiMenuAdd(&root, "注入 inspector.js", NULL, 9, 0, UI_MENU_ICON_NONE, NULL);
 
-    GetCursorPos(&point);
+    /* Chrome anchors the app menu under the button, right edges aligned. */
+    {
+        UiRect button = CHROME->toolbar.menu.rect;
+
+        anchor.x = button.x + button.w;
+        anchor.y = button.y + button.h + uiThemeScale(&CHROME->theme, 2);
+    }
+    ClientToScreen(g_hwnd, &anchor);
+
+    /* Keep the 3-dot button lit while its menu is open, like Chrome. */
+    CHROME->toolbar.menu.toggled = 1;
+    InvalidateRect(g_hwnd, NULL, FALSE);
+    UpdateWindow(g_hwnd);
+
+    agbLog(AGB_LOG_SHELL, "app menu open");
 
     {
-        /* TrackPopupMenu runs its own message loop; restore the context so the
-         * menu actions above/below always act on this window. */
+        /* uiMenuHostRun runs a modal loop; restore the context so the menu
+         * actions above/below always act on this window. */
         ShellWindow* previous = g_cur;
 
-        choice = (int)TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN,
-                                     point.x, point.y, 0, g_hwnd, NULL);
+        choice = uiMenuHostRun(&CHROME->theme, &root, anchor.x, anchor.y,
+                               UI_MENU_ALIGN_RIGHT, g_hwnd);
         g_cur = previous;
     }
 
-    DestroyMenu(menu);
+    agbLog(AGB_LOG_SHELL, "app menu choice=%d", choice);
+
+    CHROME->toolbar.menu.toggled = 0;
+    InvalidateRect(g_hwnd, NULL, FALSE);
 
     if (choice >= 200) {
         int index = g_historyCount - 1 - (choice - 200);
@@ -3126,10 +3175,15 @@ static LRESULT CALLBACK shellProcInner(HWND hwnd, UINT message, WPARAM wParam, L
 
         if ((HWND)lParam == g_address || (HWND)lParam == g_findEdit) {
             /* The pill's focus ring is painted by the chrome; keep the EDIT
-             * background equal to the pill so the corners stay round. */
+             * background equal to the pill so the corners stay round. Chrome
+             * lightens the dark pill while it owns focus. */
+            int focused = GetFocus() == (HWND)lParam;
+
             SetTextColor(control, CHROME->theme.text_color);
-            SetBkColor(control, CHROME->theme.field_color);
-            return (LRESULT)CHROME->theme.field_brush;
+            SetBkColor(control, focused ? CHROME->theme.field_focus_color
+                                        : CHROME->theme.field_color);
+            return (LRESULT)(focused ? CHROME->theme.field_focus_brush
+                                     : CHROME->theme.field_brush);
         }
         break;
     }
@@ -4132,6 +4186,8 @@ static char g_uiShotTheme[16];
 static int  g_uiShotWidth = 1100;
 static int  g_uiShotHeight = 760;
 static unsigned g_uiShotDpi = 96;
+static int  g_uiShotMenu;          /* --ui-menu: paint the sample app menu */
+static int  g_uiShotFocus;         /* --ui-focus: address pill owns focus */
 
 static void probePrint(const char* tag, const char* text)
 {
@@ -5450,7 +5506,9 @@ static void probeUsage(void)
             "  --ui-shot <path>  render the browser chrome offscreen (no window, no\n"
             "            engine, no profile) and run layout/hit/pixel checks. Files:\n"
             "            .png or .bmp. --ui-theme light|dark|auto, --ui-dpi 72..288,\n"
-            "            --ui-size WxH.\n"
+            "            --ui-size WxH, --ui-menu (paint and assert the self-drawn\n"
+            "            app menu, including its Bookmarks submenu), --ui-focus\n"
+            "            (address pill focused: ring and fill assertions).\n"
             "            Exit 0 only when every check passes (UI_SHOT PASS).\n"
             "  --shot-rect <x,y,w,h>  crop the capture to a CSS-pixel rect\n"
             "            (origin at the viewport's top-left, i.e. the values\n"
@@ -5612,6 +5670,12 @@ static int sameColor(unsigned got, unsigned want)
     return (got & 0x00FFFFFFu) == (want & 0x00FFFFFFu);
 }
 
+static int shotLuma(unsigned argb)
+{
+    return (int)(((argb >> 16) & 0xFF) * 30 + ((argb >> 8) & 0xFF) * 59 +
+                 (argb & 0xFF) * 11) / 100;
+}
+
 static void shotFillModel(UiChromeModel* model)
 {
     memset(model, 0, sizeof(*model));
@@ -5647,6 +5711,86 @@ static void shotFillModel(UiChromeModel* model)
     model->zoom = 110;
     model->find_visible = 1;
     strcpy(model->find_text, "webkit");
+}
+
+/* --- --ui-menu sample ----------------------------------------------------
+ * Static storage keeps the borrowed label pointers alive while the session
+ * assertions below run. The hover starts on "Bookmarks" so the PNG shows an
+ * open submenu next to a highlighted row, exactly the state Chrome users see
+ * when they move onto a submenu parent. */
+static UiMenu g_shotMenuRoot;
+static UiMenu g_shotMenuBookmarks;
+static UiMenu g_shotMenuHistory;
+static UiMenuSession g_shotMenu;
+static int g_shotMenuHoverItem = -1;
+
+static void shotBuildMenu(UiChrome* chrome, HDC dc, int width, int height)
+{
+    UiPainter painter;
+    UiRect work = uiRectMake(0, 0, width, height);
+    UiRect button = chrome->toolbar.menu.rect;
+    const UiMenuPanel* root;
+    int ax = button.x + button.w;
+    int ay = button.y + button.h + uiThemeScale(&chrome->theme, 2);
+    int hx;
+    int hy;
+
+    uiMenuInit(&g_shotMenuRoot);
+    uiMenuInit(&g_shotMenuBookmarks);
+    uiMenuInit(&g_shotMenuHistory);
+
+    uiMenuAdd(&g_shotMenuBookmarks, "Agave 浏览器引擎", NULL, 100, 0,
+              UI_MENU_ICON_NONE, NULL);
+    uiMenuAdd(&g_shotMenuBookmarks, "DeepSeek", NULL, 101, 0,
+              UI_MENU_ICON_NONE, NULL);
+    uiMenuAdd(&g_shotMenuBookmarks, "GitHub - onecoolx/agave", NULL, 102, 0,
+              UI_MENU_ICON_NONE, NULL);
+    uiMenuAdd(&g_shotMenuBookmarks, "MDN Web Docs", NULL, 103, 0,
+              UI_MENU_ICON_NONE, NULL);
+
+    uiMenuAdd(&g_shotMenuHistory, "https://chat.deepseek.com/", NULL, 200, 0,
+              UI_MENU_ICON_NONE, NULL);
+    uiMenuAdd(&g_shotMenuHistory, "https://github.com/onecoolx/agave", NULL, 201,
+              0, UI_MENU_ICON_NONE, NULL);
+    uiMenuAdd(&g_shotMenuHistory, "https://developer.mozilla.org/", NULL, 202, 0,
+              UI_MENU_ICON_NONE, NULL);
+
+    uiMenuAdd(&g_shotMenuRoot, "Add bookmark", "Ctrl+D", 1, 0,
+              UI_MENU_ICON_NONE, NULL);
+    g_shotMenuHoverItem = uiMenuAdd(&g_shotMenuRoot, "Bookmarks", NULL, 0, 0,
+                                    UI_MENU_ICON_NONE, &g_shotMenuBookmarks);
+    uiMenuAdd(&g_shotMenuRoot, "History", NULL, 0, 0, UI_MENU_ICON_NONE,
+              &g_shotMenuHistory);
+    uiMenuAddSeparator(&g_shotMenuRoot);
+    uiMenuAdd(&g_shotMenuRoot, "Zoom in", "Ctrl+=", 2, 0, UI_MENU_ICON_NONE, NULL);
+    uiMenuAdd(&g_shotMenuRoot, "Zoom out", "Ctrl+-", 3, 0, UI_MENU_ICON_NONE, NULL);
+    uiMenuAdd(&g_shotMenuRoot, "Reset zoom", "Ctrl+0", 4, 0, UI_MENU_ICON_NONE, NULL);
+    uiMenuAddSeparator(&g_shotMenuRoot);
+    uiMenuAdd(&g_shotMenuRoot, "New tab", "Ctrl+T", 5, 0, UI_MENU_ICON_NONE, NULL);
+    uiMenuAdd(&g_shotMenuRoot, "Find", "Ctrl+F", 6, 0, UI_MENU_ICON_NONE, NULL);
+    uiMenuAdd(&g_shotMenuRoot, "View page source (not implemented)", "Ctrl+U", 7,
+              UI_MENU_ITEM_DISABLED, UI_MENU_ICON_NONE, NULL);
+    uiMenuAddSeparator(&g_shotMenuRoot);
+    uiMenuAdd(&g_shotMenuRoot, "注入 vConsole", NULL, 8, 0, UI_MENU_ICON_NONE, NULL);
+    uiMenuAdd(&g_shotMenuRoot, "注入 inspector.js", NULL, 9, 0,
+              UI_MENU_ICON_NONE, NULL);
+
+    uiMenuSessionBegin(&g_shotMenu, &g_shotMenuRoot, &chrome->theme, ax, ay,
+                       UI_MENU_ALIGN_RIGHT, &work);
+
+    root = uiMenuSessionPanel(&g_shotMenu, 0);
+
+    if (root && g_shotMenuHoverItem >= 0) {
+        hx = root->rect.x + root->rect.w - uiThemeScale(&chrome->theme, 30);
+        hy = (root->item_top[g_shotMenuHoverItem] +
+              root->item_bottom[g_shotMenuHoverItem]) / 2;
+        uiMenuSessionMove(&g_shotMenu, &chrome->theme, hx, hy);
+    }
+
+    if (uiPainterBegin(&painter, dc, &chrome->theme, width, height)) {
+        uiMenuSessionPaint(&g_shotMenu, &chrome->theme, &painter, 0, 0);
+        uiPainterEnd(&painter);
+    }
 }
 
 static int uiShotMain(void)
@@ -5714,7 +5858,29 @@ static int uiShotMain(void)
     }
 
     old = SelectObject(memory, bitmap);
+
+    if (g_uiShotFocus)
+        uiChromeSetFocusField(&chrome, 1);
+
+    if (g_uiShotMenu) {
+        /* The sample shot also shows Chrome's circular toolbar hover: park the
+         * pointer on Reload before the first paint. */
+        UiMouseEvent move;
+
+        move.type = UI_MOUSE_MOVE;
+        move.x = chrome.toolbar.reload.rect.x + chrome.toolbar.reload.rect.w / 2;
+        move.y = chrome.toolbar.reload.rect.y + chrome.toolbar.reload.rect.h / 2;
+        uiChromeMouse(&chrome, &move);
+
+        /* The menu is "open", so the 3-dot button stays lit. */
+        chrome.toolbar.menu.toggled = 1;
+    }
+
     uiChromePaint(&chrome, memory);
+
+    if (g_uiShotMenu)
+        shotBuildMenu(&chrome, memory, width, height);
+
     GdiFlush();
 
     stride = width * 4;
@@ -5842,6 +6008,231 @@ static int uiShotMain(void)
         uiCheck("pixel-content", sameColor(shotPixel((const unsigned char*)bits, width, height,
                                                      width / 2, chrome.content.y + chrome.content.h / 2),
                                            chrome.theme.window));
+    }
+
+    /* --- Chrome dark tint relationships ---------------------------------- */
+    if (chrome.theme.kind == UI_THEME_DARK) {
+        uiCheck("dark-strip-darker", shotLuma(chrome.theme.chrome) <
+                                         shotLuma(chrome.theme.toolbar));
+        uiCheck("dark-pill-darker", shotLuma(chrome.theme.field) <
+                                        shotLuma(chrome.theme.toolbar));
+        uiCheck("dark-hover-lighter", shotLuma(chrome.theme.tab_hover) >
+                                          shotLuma(chrome.theme.surface));
+        uiCheck("dark-focus-ring", (chrome.theme.focus_ring & 0xFFFFFF) == 0xA8C7FA);
+    }
+
+    /* --- self-drawn menu (--ui-menu) -------------------------------------- */
+    if (g_uiShotMenu) {
+        const UiMenuPanel* root = uiMenuSessionPanel(&g_shotMenu, 0);
+        const UiMenuPanel* sub = NULL;
+        int sub_index = -1;
+        int p = -1;
+        int i = -1;
+        int chosen = 0;
+        int guard;
+        UiRect bounds;
+
+        uiCheck("menu-root", root != NULL);
+        uiCheck("menu-rows", root && g_shotMenuRoot.count >= 10 &&
+                             root->menu->count == g_shotMenuRoot.count);
+
+        if (root) {
+            uiCheck("menu-width", root->rect.w >= chrome.theme.menu_min_w &&
+                                  root->rect.w <= chrome.theme.menu_max_w);
+            uiCheck("menu-inside", root->rect.x >= 0 && root->rect.y >= 0 &&
+                                  root->rect.x + root->rect.w <= width &&
+                                  root->rect.y + root->rect.h <= height);
+            uiCheck("menu-anchor-right",
+                    root->rect.x + root->rect.w ==
+                        chrome.toolbar.menu.rect.x + chrome.toolbar.menu.rect.w);
+        }
+
+        for (i = 1; i < g_shotMenu.count; ++i) {
+            if (g_shotMenu.visible[i]) {
+                sub_index = i;
+                break;
+            }
+        }
+
+        sub = uiMenuSessionPanel(&g_shotMenu, sub_index);
+
+        uiCheck("menu-submenu-open", uiMenuSessionVisibleCount(&g_shotMenu) == 2);
+        uiCheck("menu-submenu-panel", sub && sub->parent == 0 &&
+                                          sub->parent_item == g_shotMenuHoverItem);
+        uiCheck("menu-submenu-inside", sub && sub->rect.x >= 0 && sub->rect.y >= 0 &&
+                                           sub->rect.x + sub->rect.w <= width &&
+                                           sub->rect.y + sub->rect.h <= height);
+        uiCheck("menu-submenu-flipped", sub && root &&
+                    sub->rect.x + sub->rect.w <= root->rect.x + uiThemeScale(&chrome.theme, 2) + 1);
+
+        /* Hit: an item, a separator, and the gap between the two panels. */
+        if (root) {
+            p = -1;
+            i = -1;
+            uiCheck("menu-hit-item",
+                    uiMenuSessionHit(&g_shotMenu, root->rect.x + 30,
+                                     (root->item_top[0] + root->item_bottom[0]) / 2,
+                                     &p, &i) && p == 0 && i == 0);
+            p = -1;
+            i = -1;
+            uiCheck("menu-hit-separator",
+                    uiMenuSessionHit(&g_shotMenu, root->rect.x + 30,
+                                     (root->item_top[3] + root->item_bottom[3]) / 2,
+                                     &p, &i) && p == 0 && i == 3 &&
+                    (g_shotMenuRoot.items[3].flags & UI_MENU_ITEM_SEPARATOR));
+        }
+
+        /* Keyboard: Down starts at the first row and skips separators. */
+        g_shotMenu.key_panel = -1;
+        g_shotMenu.key_item = -1;
+        uiMenuSessionKey(&g_shotMenu, &chrome.theme, VK_DOWN, &chosen);
+
+        for (guard = 0; guard < 3; ++guard)
+            uiMenuSessionKey(&g_shotMenu, &chrome.theme, VK_DOWN, &chosen);
+
+        uiCheck("menu-key-skips-separator",
+                g_shotMenu.key_panel == 0 && g_shotMenu.key_item == 4);
+
+        /* Walk to the disabled "View page source" (10): Down must land on 12. */
+        for (guard = 0; guard < 6 && g_shotMenu.key_item != 9; ++guard)
+            uiMenuSessionKey(&g_shotMenu, &chrome.theme, VK_DOWN, &chosen);
+
+        uiMenuSessionKey(&g_shotMenu, &chrome.theme, VK_DOWN, &chosen);
+        uiCheck("menu-key-skips-disabled",
+                g_shotMenu.key_panel == 0 && g_shotMenu.key_item == 12);
+
+        /* Right opens the focused submenu; Left closes it again. */
+        while (g_shotMenu.key_item != g_shotMenuHoverItem)
+            uiMenuSessionKey(&g_shotMenu, &chrome.theme, VK_UP, &chosen);
+
+        uiMenuSessionKey(&g_shotMenu, &chrome.theme, VK_RIGHT, &chosen);
+        uiCheck("menu-key-right", g_shotMenu.key_panel == sub_index &&
+                                      g_shotMenu.key_item == 0);
+
+        uiMenuSessionKey(&g_shotMenu, &chrome.theme, VK_LEFT, &chosen);
+        uiCheck("menu-key-left", g_shotMenu.key_panel == 0 &&
+                                     g_shotMenu.key_item == g_shotMenuHoverItem);
+
+        /* Click an enabled row: it chooses and dismisses. */
+        chosen = 0;
+        uiCheck("menu-click-chooses",
+                uiMenuSessionClick(&g_shotMenu, &chrome.theme,
+                                   root->rect.x + 40,
+                                   (root->item_top[4] + root->item_bottom[4]) / 2,
+                                   &chosen) == 1 && chosen == 2);
+
+        /* Clicking outside every panel cancels. */
+        chosen = -1;
+        uiCheck("menu-click-outside",
+                uiMenuSessionClick(&g_shotMenu, &chrome.theme,
+                                   root->rect.x - 40, root->rect.y - 40,
+                                   &chosen) == 1 && chosen == 0);
+
+        /* Pixel checks: the hovered row and the plain row must use the menu
+         * tokens exactly (opaque fills; no AA in the sampled points). */
+        if (root) {
+            int hover_item = g_shotMenuHoverItem;
+            int hx = root->rect.x + uiThemeScale(&chrome.theme, 6);
+            int hy = (root->item_top[hover_item] + root->item_bottom[hover_item]) / 2;
+            int bx = root->rect.x + root->rect.w - uiThemeScale(&chrome.theme, 7);
+            int by = (root->item_top[0] + root->item_bottom[0]) / 2;
+
+            uiCheck("pixel-menu-hover",
+                    sameColor(shotPixel((const unsigned char*)bits, width, height, hx, hy),
+                              chrome.theme.menu_hover));
+            uiCheck("pixel-menu-bg",
+                    sameColor(shotPixel((const unsigned char*)bits, width, height, bx, by),
+                              chrome.theme.menu_bg));
+        }
+
+        /* Circular toolbar hover, sampled 3 px inside the circle's left edge
+         * (the icon does not reach there). */
+        uiCheck("pixel-hover-reload",
+                sameColor(shotPixel((const unsigned char*)bits, width, height,
+                                    chrome.toolbar.reload.rect.x + 3,
+                                    chrome.toolbar.reload.rect.y +
+                                        chrome.toolbar.reload.rect.h / 2),
+                          chrome.theme.button_hover));
+
+        bounds = uiMenuSessionBounds(&g_shotMenu);
+        uiCheck("menu-bounds", bounds.w > 0 && bounds.h > 0 &&
+                                   bounds.x >= 0 && bounds.y >= 0);
+
+        /* The popup host paints into a 32bppPARGB GDI+ bitmap, not an HDC.
+         * Prove that path keeps alpha (opaque panel, transparent outside) so
+         * the layered window really has rounded corners. */
+        {
+            enum { ALPHA_W = 220, ALPHA_H = 120 };
+            unsigned char* buffer = (unsigned char*)calloc(
+                (size_t)ALPHA_W * ALPHA_H, 4);
+            GpBitmap* bitmap = NULL;
+            GpGraphics* graphics = NULL;
+            int ready = 0;
+
+            if (buffer &&
+                GdipCreateBitmapFromScan0(ALPHA_W, ALPHA_H, ALPHA_W * 4,
+                                          PixelFormat32bppPARGB, buffer,
+                                          &bitmap) == Ok &&
+                GdipGetImageGraphicsContext(bitmap, &graphics) == Ok) {
+                UiPainter alphaPainter;
+
+                GdipGraphicsClear(graphics, 0);
+
+                if (uiPainterBeginGraphics(&alphaPainter, graphics, &chrome.theme,
+                                           ALPHA_W, ALPHA_H)) {
+                    uiFillRoundRect(&alphaPainter, uiRectMake(10, 10, 140, 80), 8,
+                                    chrome.theme.menu_bg);
+                    uiText(&alphaPainter, "Agave", uiRectMake(20, 24, 100, 30),
+                           chrome.theme.font_ui, chrome.theme.text, UI_ALIGN_LEFT);
+                    uiPainterEnd(&alphaPainter);   /* deletes graphics */
+                    graphics = NULL;
+                    ready = 1;
+                }
+            }
+
+            if (ready) {
+                const unsigned char* inside = buffer + ((size_t)(10 + 6) * ALPHA_W +
+                                                        (10 + 6)) * 4;
+                const unsigned char* outside = buffer + ((size_t)2 * ALPHA_W + 2) * 4;
+                unsigned insideColor = ((unsigned)inside[2] << 16) |
+                                       ((unsigned)inside[1] << 8) | inside[0];
+
+                uiCheck("menu-alpha-opaque", inside[3] == 255 &&
+                                             insideColor ==
+                                                 (chrome.theme.menu_bg & 0xFFFFFF));
+                uiCheck("menu-alpha-empty", outside[3] == 0);
+            } else {
+                uiCheck("menu-alpha-opaque", 0);
+                uiCheck("menu-alpha-empty", 0);
+            }
+
+            if (graphics)
+                GdipDeleteGraphics(graphics);
+            if (bitmap)
+                GdipDisposeImage(bitmap);
+            free(buffer);
+        }
+    }
+
+    /* --- focused address pill (--ui-focus) -------------------------------- */
+    if (g_uiShotFocus) {
+        UiRect pill = chrome.toolbar.address;
+        int cx = pill.x + pill.w / 2;
+        int cy = pill.y + pill.h / 2;
+
+        uiCheck("focus-field", chrome.focus_field == 1);
+        uiCheck("focus-fill", sameColor(shotPixel((const unsigned char*)bits, width,
+                                                  height, cx, pill.y + 6),
+                                        chrome.theme.field_focus));
+        uiCheck("focus-ring-left", sameColor(shotPixel((const unsigned char*)bits, width,
+                                                       height, pill.x, cy),
+                                             chrome.theme.focus_ring));
+        uiCheck("focus-ring-top", sameColor(shotPixel((const unsigned char*)bits, width,
+                                                      height, cx, pill.y),
+                                            chrome.theme.focus_ring));
+        uiCheck("focus-ring-token",
+                chrome.theme.kind != UI_THEME_DARK ||
+                    (chrome.theme.focus_ring & 0xFFFFFF) == 0xA8C7FA);
     }
 
     /* --- compact layout: the same model at the minimum window size -------- */
@@ -6050,6 +6441,10 @@ static void parseShellArgv(void)
                 g_argError = 1;
                 return;
             }
+        } else if (!strcmp(argv[i], "--ui-menu")) {
+            g_uiShotMenu = 1;
+        } else if (!strcmp(argv[i], "--ui-focus")) {
+            g_uiShotFocus = 1;
         } else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
             g_showUsage = 1;
         } else if (!strcmp(argv[i], "--eval") && i + 1 < argc) {

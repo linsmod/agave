@@ -620,9 +620,11 @@
 - 现状：tab 新建/关闭/切换、查找、缩放、书签、右键菜单只发生在 GUI 壳里，探针跑不到，
   回归脚本对它们零断言（日志已经补齐，见 [hist-lessons R75](hist-lessons.md)）。
 - 2026-11-11 部分覆盖：chrome 的布局/命中/绘制/按钮回调由 `--ui-shot` +
-  `tools/run_shell_ui_tests.ps1` 覆盖（34 项，无窗口/引擎/profile）；**窗口框架的 NC 点击**
+  `tools/run_shell_ui_tests.ps1` 覆盖（34–61 项，无窗口/引擎/profile；`--ui-menu`
+  还把自绘菜单的模型/布局/键盘/像素拉进离屏断言）；**窗口框架的 NC 点击**
   由 `tools/check_shell_frame.ps1`（`AGB_SHELL_HIDDEN=1`，不显示窗口；Chromium
-  `CUSTOM_DRAWN` 同路径）验证。真实 GUI 的 tab/find/menu 命令流仍未自动化。
+  `CUSTOM_DRAWN` 同路径）验证，**菜单宿主**（分层弹窗/捕获/模态循环）由
+  `tools/check_shell_menu.ps1` 验证。真实 GUI 的 tab/find 命令流仍未自动化。
 - 已具备的零件：`tools/send_ui_events.ps1`（`-RightClick` 打右键；WM_COMMAND 可直接点按钮）、
   探针的 `on_context_menu`（只记录、不开菜单）。
 - 动作：写 `tools/run_shell_tests.ps1`（**尚未实现**）—— 起 GUI（临时 `--userdata`）→ 用 `WM_COMMAND` 点

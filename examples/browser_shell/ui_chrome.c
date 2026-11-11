@@ -175,8 +175,9 @@ void uiChromeLayout(UiChrome* chrome, int width, int height)
     chrome->toolbar.reload.rect = uiRectMake(x, y, button_w, button_h);
     x += button_w + gap;
 
-    chrome->toolbar.separator = uiRectMake(x + gap, toolbar_top + scale(theme, 12),
-                                           scale(theme, 1), toolbar_h - scale(theme, 24));
+    /* Chrome has no divider between the nav buttons and the omnibox; the
+     * gap alone groups them. */
+    chrome->toolbar.separator = uiRectMake(0, 0, 0, 0);
     x += scale(theme, 8);
 
     {
@@ -309,7 +310,8 @@ static void paintAddress(UiChrome* chrome, UiPainter* painter)
     UiRect pill = bar->address;
     int focused = chrome->focus_field == 1;
     int hovered = chrome->hover_part == UI_PART_ADDRESS || bar->go.hover;
-    unsigned fill = focused ? theme->surface : (hovered ? theme->field_hover : theme->field);
+    unsigned fill = focused ? theme->field_focus
+                            : (hovered ? theme->field_hover : theme->field);
     int icon_size = scale(theme, 16);
     UiRect icon = bar->address_icon;
     int secure = startsWithNoCase(chrome->model.address, "https://");
@@ -320,7 +322,7 @@ static void paintAddress(UiChrome* chrome, UiPainter* painter)
     uiFillRoundRect(painter, pill, theme->address_radius, fill);
 
     if (focused)
-        uiStrokeRoundRect(painter, pill, theme->address_radius, theme->accent,
+        uiStrokeRoundRect(painter, pill, theme->address_radius, theme->focus_ring,
                           (float)scale(theme, 2));
     else if (hovered)
         uiStrokeRoundRect(painter, pill, theme->address_radius, theme->border_strong, 1.0f);
@@ -328,7 +330,7 @@ static void paintAddress(UiChrome* chrome, UiPainter* painter)
         uiStrokeRoundRect(painter, pill, theme->address_radius, theme->border, 1.0f);
 
     uiIcon(painter, secure ? UI_ICON_LOCK : UI_ICON_GLOBE, icon,
-           theme->text_muted, (1.5f * theme->scale));
+           theme->icon, (1.5f * theme->scale));
 
     if (chrome->offscreen || !chrome->address_hwnd) {
         const char* text = chrome->model.address[0] ? chrome->model.address
@@ -395,11 +397,12 @@ static void paintFindBar(UiChrome* chrome, UiPainter* painter)
                                    bar->rect.w, scale(theme, 1)), theme->border);
 
     uiFillRoundRect(painter, bar->field, theme->find_field_h / 2,
-                    focused ? theme->surface : (hovered ? theme->field_hover : theme->field));
+                    focused ? theme->field_focus
+                            : (hovered ? theme->field_hover : theme->field));
 
     if (focused)
-        uiStrokeRoundRect(painter, bar->field, theme->find_field_h / 2, theme->accent,
-                          (float)scale(theme, 2));
+        uiStrokeRoundRect(painter, bar->field, theme->find_field_h / 2,
+                          theme->focus_ring, (float)scale(theme, 2));
     else
         uiStrokeRoundRect(painter, bar->field, theme->find_field_h / 2, theme->border, 1.0f);
 
@@ -407,7 +410,7 @@ static void paintFindBar(UiChrome* chrome, UiPainter* painter)
            uiRectMake(bar->field.x + scale(theme, 11),
                       bar->field.y + (bar->field.h - scale(theme, 16)) / 2,
                       scale(theme, 16), scale(theme, 16)),
-           theme->text_muted, (1.5f * theme->scale));
+           theme->icon, (1.5f * theme->scale));
 
     if (chrome->offscreen || !chrome->find_hwnd) {
         const char* text = chrome->model.find_text[0] ? chrome->model.find_text

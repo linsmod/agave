@@ -92,11 +92,11 @@ pwsh -File tools\check_shell_frame.ps1   # 手动：隐藏窗口 + 真实 WM_NCC
 | `_` `□` `X`（标签条右侧） | 最小化 / 最大化-还原 / 关闭窗口；按 Chromium 的 CUSTOM_DRAWN 命中方式交给自己的按钮状态机 |
 | Ctrl+L / F6 | 聚焦地址栏 |
 | Ctrl+F | 查找栏（回车执行 `macross_view_search_text`） |
-| 右键菜单 | 后退/前进/刷新/停止/新标签/查找 |
+| 右键菜单 | **自绘** Chrome 风格菜单（圆角/阴影/右对齐快捷键/禁用行）：后退/前进/刷新、链接操作、复制/全选、书签、注入调试脚本；靠近屏幕边缘会自动翻转 |
 | 滚轮、点击、键盘 | 全部转发给页面（中文经 `WM_CHAR` 转 UTF-8） |
 | 下载 | 引擎 DownloadManager 写盘，状态栏显示进度/结果；保存到 `%USERPROFILE%\Downloads` |
 | Ctrl+D | 加书签（存 `<数据目录>\bookmarks.txt`） |
-| `☰` 按钮 / 菜单 | 书签、历史、缩放、注入调试脚本 |
+| `☰` 按钮 / 菜单 | **自绘**应用菜单：书签/历史子菜单（右箭头）、缩放、新建/查找/刷新、注入调试脚本；打开时按钮保持高亮 |
 | 主题 / DPI | `AGB_SHELL_THEME=light\|dark\|auto`；Per-Monitor V2，`WM_DPICHANGED` 自动重排 |
 | 右键菜单 → 注入 vConsole | 从 exe 同目录读 `vconsole.min.js` 注入当前页（默认注入目标） |
 | 右键菜单 → 注入 inspector.js | 从 exe 同目录读 `inspector.js` 注入当前页：hover 高亮元素 + 信息浮层；在页面上再右键出页内菜单，可复制元素信息（JSON）/选择器/尺寸/文本/HTML |
@@ -129,8 +129,8 @@ pwsh -File tools\check_shell_frame.ps1   # 手动：隐藏窗口 + 真实 WM_NCC
   **不参与文档流**；Esc 退出（菜单开着时先关菜单）；再次注入等于关闭。
 - 它靠 `elementFromPoint` 命中元素，命中前把自己的浮层 `display:none`
   （本引擎的 HTML 不认 `pointer-events`，否则浮层会挡住 hover）。
-- **页内右键菜单**（不是 Win32 菜单）：右键先 `preventDefault`，引擎的默认 handler
-  被跳过，所以外壳的原生右键菜单不会同时弹出（`[probe] context menu at …` 不会出现）。
+- **页内右键菜单**（不是 Win32 菜单，也不是外壳菜单）：右键先 `preventDefault`，引擎的默认 handler
+  被跳过，所以外壳的右键菜单不会同时弹出（`[probe] context menu at …` 不会出现）。
   菜单项：`Copy element info`、`Copy selector`、`Copy bounds`、`Copy text`、
   `Copy HTML`、`Select parent`、`Exit inspector`；↑/↓ + Enter 也能选。
 - `Copy element info` 是一行 JSON，用来把"是哪个元素、放在哪儿"交给别人（或 agent）：
@@ -157,7 +157,7 @@ pwsh -File tools\check_shell_frame.ps1   # 手动：隐藏窗口 + 真实 WM_NCC
   `pwsh -File tools/run_inspector_tests.ps1`（进程内断言 + 真实右键/左键，26 项）。
 - 已知限制：监听挂在 `document` 上、按引擎的冒泡顺序执行；如果页面自己在更内层
   `stopPropagation()` 了 `contextmenu`（自定义右键菜单的站点），页内菜单不会出现
-  （此时原生右键菜单也不会被压低）。
+  （此时外壳右键菜单也不会被压低）。
 
 ## 踩过的坑
 

@@ -3,10 +3,12 @@
 # Regression for the browser shell's chrome (design-shell-ui.md):
 #   * light and dark renders of the offscreen DIB, written as PNG;
 #   * layout/hit-test/dpi assertions reported by `--ui-shot`;
-#   * every `ui-check` line and the aggregate `UI_SHOT PASS/FAIL`.
+#   * every `ui-check` line and the aggregate `UI_SHOT PASS/FAIL`;
+#   * the self-drawn menu (`--ui-menu`: hover, submenu, keyboard, pixels);
+#   * the focused address pill (`--ui-focus`: ring and fill pixels).
 #
 # No window, no engine, no profile and no desktop interaction: `--ui-shot`
-# builds a DIB, paints the same UiChrome the GUI uses and exits. The two theme
+# builds a DIB, paints the same UiChrome the GUI uses and exits. The theme
 # runs go in parallel; expected wall time < 3 s.
 #
 # Usage:
@@ -29,11 +31,15 @@ $run = New-TestRun -Suite 'shell-ui'
 
 $failures = 0
 $cases = @(
-    [pscustomobject]@{ Name = 'light'; Theme = 'light'; Dpi = 96;  Png = (Join-Path $run.Dir 'ui-light.png');
+    [pscustomobject]@{ Name = 'light'; Theme = 'light'; Dpi = 96;  Extra = ''; Png = (Join-Path $run.Dir 'ui-light.png');
                        Out = ''; Err = ''; Proc = $null; Started = $null; Timeout = $false },
-    [pscustomobject]@{ Name = 'dark';  Theme = 'dark';  Dpi = 96;  Png = (Join-Path $run.Dir 'ui-dark.png');
+    [pscustomobject]@{ Name = 'dark';  Theme = 'dark';  Dpi = 96;  Extra = ''; Png = (Join-Path $run.Dir 'ui-dark.png');
                        Out = ''; Err = ''; Proc = $null; Started = $null; Timeout = $false },
-    [pscustomobject]@{ Name = 'light-150'; Theme = 'light'; Dpi = 144; Png = (Join-Path $run.Dir 'ui-light-150.png');
+    [pscustomobject]@{ Name = 'light-150'; Theme = 'light'; Dpi = 144; Extra = ''; Png = (Join-Path $run.Dir 'ui-light-150.png');
+                       Out = ''; Err = ''; Proc = $null; Started = $null; Timeout = $false },
+    [pscustomobject]@{ Name = 'dark-menu'; Theme = 'dark'; Dpi = 96; Extra = '--ui-menu'; Png = (Join-Path $run.Dir 'ui-menu-dark.png');
+                       Out = ''; Err = ''; Proc = $null; Started = $null; Timeout = $false },
+    [pscustomobject]@{ Name = 'dark-focus'; Theme = 'dark'; Dpi = 96; Extra = '--ui-focus'; Png = (Join-Path $run.Dir 'ui-focus-dark.png');
                        Out = ''; Err = ''; Proc = $null; Started = $null; Timeout = $false }
 )
 
@@ -48,8 +54,8 @@ foreach ($case in $cases) {
     $case.Started = [Diagnostics.Stopwatch]::StartNew()
     $case.Proc = Start-Process -FilePath $exe -NoNewWindow -PassThru `
         -WorkingDirectory $run.Dir `
-        -ArgumentList ("--ui-shot `"{0}`" --ui-theme {1} --ui-dpi {2} --ui-size 1100x760" -f `
-            $case.Png, $case.Theme, $case.Dpi) `
+        -ArgumentList ("--ui-shot `"{0}`" --ui-theme {1} --ui-dpi {2} --ui-size 1100x760 {3}" -f `
+            $case.Png, $case.Theme, $case.Dpi, $case.Extra) `
         -RedirectStandardOutput $case.Out `
         -RedirectStandardError $case.Err
 }

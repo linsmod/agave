@@ -158,25 +158,49 @@ static void createFonts(UiTheme* theme)
 static void applyPalette(UiTheme* theme)
 {
     if (theme->kind == UI_THEME_DARK) {
-        theme->window = UI_RGB(0x20, 0x21, 0x24);
-        theme->chrome = UI_RGB(0x20, 0x21, 0x24);
-        theme->toolbar = UI_RGB(0x29, 0x2A, 0x2D);
-        theme->surface = UI_RGB(0x29, 0x2A, 0x2D);
-        theme->surface_alt = UI_RGB(0x20, 0x21, 0x24);
-        theme->hover = UI_RGB(0x35, 0x36, 0x3A);
-        theme->pressed = UI_RGB(0x3C, 0x40, 0x43);
-        theme->field = UI_RGB(0x20, 0x21, 0x24);
-        theme->field_hover = UI_RGB(0x35, 0x36, 0x3A);
-        theme->border = UI_RGB(0x3C, 0x40, 0x43);
-        theme->border_strong = UI_RGB(0x5F, 0x63, 0x68);
+        /* Chrome dark (incognito) sampled from the reference screenshots:
+         * frame #1F2020, tab/toolbar #3C3C3C, pill #282828, hover #474747,
+         * icon-button hover #505050, focus ring #A8C7FA. The toolbar is
+         * LIGHTER than the tab strip and the pill is DARKER than both, which
+         * is what gives Chrome's chrome its depth. */
+        theme->window = UI_RGB(0x3C, 0x3C, 0x3C);
+        theme->chrome = UI_RGB(0x1F, 0x20, 0x20);
+        theme->toolbar = UI_RGB(0x3C, 0x3C, 0x3C);
+        theme->surface = UI_RGB(0x3C, 0x3C, 0x3C);
+        theme->surface_alt = UI_RGB(0x1F, 0x1F, 0x1F);
+        theme->hover = UI_RGB(0x47, 0x47, 0x47);
+        theme->pressed = UI_RGB(0x56, 0x56, 0x56);
+        theme->field = UI_RGB(0x28, 0x28, 0x28);
+        theme->field_hover = UI_RGB(0x32, 0x32, 0x32);
+        theme->field_focus = UI_RGB(0x3C, 0x3C, 0x3C);
+        theme->border = UI_RGB(0x37, 0x37, 0x37);
+        theme->border_strong = UI_RGB(0x5A, 0x5A, 0x5A);
+        theme->icon = UI_RGB(0xC4, 0xC7, 0xC5);
         theme->text = UI_RGB(0xE8, 0xEA, 0xED);
         theme->text_muted = UI_RGB(0x9A, 0xA0, 0xA6);
-        theme->text_faint = UI_RGB(0x80, 0x86, 0x8B);
+        theme->text_faint = UI_RGB(0x7A, 0x7F, 0x85);
         theme->accent = UI_RGB(0x8A, 0xB4, 0xF8);
         theme->accent_soft = UI_RGB(0x1F, 0x3A, 0x5F);
         theme->danger = UI_RGB(0xF2, 0x8B, 0x82);
         theme->danger_soft = UI_RGB(0x3A, 0x24, 0x22);
         theme->shadow = UI_ARGB(0x80, 0x00, 0x00, 0x00);
+
+        theme->tab_hover = UI_RGB(0x47, 0x47, 0x47);
+        theme->tab_close_hover = UI_RGB(0x5A, 0x5A, 0x5A);
+        theme->button_hover = UI_RGB(0x50, 0x50, 0x50);
+        theme->button_pressed = UI_RGB(0x5A, 0x5A, 0x5A);
+        theme->close_hover = UI_RGB(0x4A, 0x4A, 0x4A);
+        theme->focus_ring = UI_RGB(0xA8, 0xC7, 0xFA);
+        theme->window_close_hover = UI_RGB(0xC4, 0x2B, 0x1C);
+
+        theme->menu_bg = UI_RGB(0x1F, 0x1F, 0x1F);
+        theme->menu_hover = UI_RGB(0x3C, 0x40, 0x43);
+        theme->menu_border = UI_RGB(0x37, 0x37, 0x37);
+        theme->menu_sep = UI_RGB(0x37, 0x37, 0x37);
+        theme->menu_text_disabled = UI_RGB(0x7A, 0x7A, 0x7A);
+        theme->menu_shortcut = UI_RGB(0x9A, 0xA0, 0xA6);
+        theme->menu_icon = UI_RGB(0xC8, 0xC8, 0xC8);
+        theme->menu_shadow = UI_ARGB(0x66, 0x00, 0x00, 0x00);
     } else {
         theme->window = UI_RGB(0xFF, 0xFF, 0xFF);
         theme->chrome = UI_RGB(0xDE, 0xE1, 0xE6);
@@ -187,8 +211,10 @@ static void applyPalette(UiTheme* theme)
         theme->pressed = UI_RGB(0xDA, 0xDC, 0xE0);
         theme->field = UI_RGB(0xF1, 0xF3, 0xF4);
         theme->field_hover = UI_RGB(0xE8, 0xEA, 0xED);
+        theme->field_focus = UI_RGB(0xFF, 0xFF, 0xFF);
         theme->border = UI_RGB(0xDA, 0xDC, 0xE0);
         theme->border_strong = UI_RGB(0xBD, 0xC1, 0xC6);
+        theme->icon = UI_RGB(0x5F, 0x63, 0x68);
         theme->text = UI_RGB(0x20, 0x21, 0x24);
         theme->text_muted = UI_RGB(0x5F, 0x63, 0x68);
         theme->text_faint = UI_RGB(0x80, 0x86, 0x8B);
@@ -197,15 +223,35 @@ static void applyPalette(UiTheme* theme)
         theme->danger = UI_RGB(0xD9, 0x30, 0x25);
         theme->danger_soft = UI_RGB(0xFC, 0xE8, 0xE6);
         theme->shadow = UI_ARGB(0x33, 0x00, 0x00, 0x00);
+
+        theme->tab_hover = UI_RGB(0xD3, 0xD6, 0xDB);
+        theme->tab_close_hover = UI_RGB(0xD0, 0xD3, 0xD8);
+        theme->button_hover = UI_RGB(0xF1, 0xF3, 0xF4);
+        theme->button_pressed = UI_RGB(0xE3, 0xE5, 0xE8);
+        theme->close_hover = UI_RGB(0xE8, 0xEA, 0xED);
+        theme->focus_ring = UI_RGB(0x1A, 0x73, 0xE8);
+        theme->window_close_hover = UI_RGB(0xE8, 0x11, 0x23);
+
+        theme->menu_bg = UI_RGB(0xFF, 0xFF, 0xFF);
+        theme->menu_hover = UI_RGB(0xF1, 0xF3, 0xF4);
+        theme->menu_border = UI_RGB(0xDA, 0xDC, 0xE0);
+        theme->menu_sep = UI_RGB(0xE8, 0xEA, 0xED);
+        theme->menu_text_disabled = UI_RGB(0xB0, 0xB4, 0xB8);
+        theme->menu_shortcut = UI_RGB(0x5F, 0x63, 0x68);
+        theme->menu_icon = UI_RGB(0x5F, 0x63, 0x68);
+        theme->menu_shadow = UI_ARGB(0x33, 0x00, 0x00, 0x00);
     }
 
     theme->field_color = toColorRef(theme->field);
+    theme->field_focus_color = toColorRef(theme->field_focus);
     theme->text_color = toColorRef(theme->text);
 
     if (theme->field_brush) { DeleteObject(theme->field_brush); theme->field_brush = NULL; }
+    if (theme->field_focus_brush) { DeleteObject(theme->field_focus_brush); theme->field_focus_brush = NULL; }
     if (theme->surface_brush) { DeleteObject(theme->surface_brush); theme->surface_brush = NULL; }
 
     theme->field_brush = CreateSolidBrush(theme->field_color);
+    theme->field_focus_brush = CreateSolidBrush(theme->field_focus_color);
     theme->surface_brush = CreateSolidBrush(toColorRef(theme->surface));
 }
 
@@ -234,6 +280,19 @@ static void applyMetrics(UiTheme* theme)
     theme->find_field_w = scalePx(dpi, 360);
     theme->status_pad = scalePx(dpi, 10);
     theme->content_top = 0;
+
+    /* Chrome menus: 30 px rows at 96 DPI, 12 px side padding, 8 px panel
+     * radius, 4 px item highlight radius. */
+    theme->menu_item_h = scalePx(dpi, 30);
+    theme->menu_sep_h = scalePx(dpi, 9);
+    theme->menu_pad_x = scalePx(dpi, 12);
+    theme->menu_pad_y = scalePx(dpi, 8);
+    theme->menu_radius = scalePx(dpi, 8);
+    theme->menu_item_radius = scalePx(dpi, 4);
+    theme->menu_icon_col = scalePx(dpi, 26);
+    theme->menu_min_w = scalePx(dpi, 180);
+    theme->menu_max_w = scalePx(dpi, 460);
+    theme->menu_gap = scalePx(dpi, 24);
 }
 
 void uiThemeInit(UiTheme* theme, UiThemeKind kind, unsigned dpi)
@@ -275,6 +334,7 @@ void uiThemeFree(UiTheme* theme)
     freeFonts(theme);
 
     if (theme->field_brush) { DeleteObject(theme->field_brush); theme->field_brush = NULL; }
+    if (theme->field_focus_brush) { DeleteObject(theme->field_focus_brush); theme->field_focus_brush = NULL; }
     if (theme->surface_brush) { DeleteObject(theme->surface_brush); theme->surface_brush = NULL; }
 }
 
@@ -340,6 +400,27 @@ int uiPainterBegin(UiPainter* p, HDC hdc, const UiTheme* theme, int width, int h
         return 0;
 
     p->hdc = hdc;
+    p->theme = theme;
+    p->width = width;
+    p->height = height;
+
+    GdipSetSmoothingMode(p->g, SmoothingModeAntiAlias);
+    GdipSetPixelOffsetMode(p->g, PixelOffsetModeHalf);
+    GdipSetTextRenderingHint(p->g, TextRenderingHintAntiAliasGridFit);
+    GdipSetCompositingQuality(p->g, CompositingQualityHighQuality);
+
+    return 1;
+}
+
+int uiPainterBeginGraphics(UiPainter* p, GpGraphics* graphics, const UiTheme* theme,
+                           int width, int height)
+{
+    if (!p || !graphics || !theme)
+        return 0;
+
+    memset(p, 0, sizeof(*p));
+
+    p->g = graphics;
     p->theme = theme;
     p->width = width;
     p->height = height;
@@ -567,6 +648,90 @@ void uiText(UiPainter* p, const char* utf8, UiRect r, GpFont* font,
     }
 
     uiTextW(p, wide, r, font, argb, align);
+}
+
+/* ------------------------------------------------------------------------- */
+/* text measurement                                                          */
+/* ------------------------------------------------------------------------- */
+
+static GpBitmap* g_measureBitmap;
+static GpGraphics* g_measureGraphics;
+
+static GpGraphics* measureGraphics(void)
+{
+    if (g_measureGraphics)
+        return g_measureGraphics;
+
+    if (!uiSpaceInit())
+        return NULL;
+
+    if (GdipCreateBitmapFromScan0(1, 1, 4, PixelFormat32bppPARGB, NULL,
+                                  &g_measureBitmap) != Ok || !g_measureBitmap)
+        return NULL;
+
+    if (GdipGetImageGraphicsContext(g_measureBitmap, &g_measureGraphics) != Ok ||
+        !g_measureGraphics)
+        return NULL;
+
+    GdipSetTextRenderingHint(g_measureGraphics, TextRenderingHintAntiAliasGridFit);
+
+    return g_measureGraphics;
+}
+
+int uiMeasureTextW(const UiTheme* theme, GpFont* font, const wchar_t* text,
+                   int* width, int* height)
+{
+    GpGraphics* graphics;
+    RectF box;
+    RectF bounds;
+
+    if (width)
+        *width = 0;
+    if (height)
+        *height = 0;
+
+    if (!theme || !font || !text || !text[0])
+        return 1;
+
+    graphics = measureGraphics();
+
+    if (!graphics)
+        return 0;
+
+    box.X = 0.0f;
+    box.Y = 0.0f;
+    box.Width = 100000.0f;
+    box.Height = 1000.0f;
+
+    if (GdipMeasureString(graphics, text, -1, font, &box, theme->fmt_left,
+                          &bounds, NULL, NULL) != Ok)
+        return 0;
+
+    if (width)
+        *width = (int)(bounds.Width + 0.999f);
+    if (height)
+        *height = (int)(bounds.Height + 0.999f);
+
+    return 1;
+}
+
+int uiMeasureText(const UiTheme* theme, GpFont* font, const char* utf8,
+                  int* width, int* height)
+{
+    wchar_t wide[1024];
+
+    if (width)
+        *width = 0;
+    if (height)
+        *height = 0;
+
+    if (!utf8 || !utf8[0])
+        return 1;
+
+    if (MultiByteToWideChar(CP_UTF8, 0, utf8, -1, wide, 1024) <= 0)
+        return 0;
+
+    return uiMeasureTextW(theme, font, wide, width, height);
 }
 
 /* ------------------------------------------------------------------------- */

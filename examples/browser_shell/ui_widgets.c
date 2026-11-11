@@ -95,13 +95,15 @@ static void paintTabClose(UiPainter* painter, const UiTheme* theme,
     UiRect icon = uiRectMake(cx - radius, cy - radius, radius * 2, radius * 2);
 
     if (hovered) {
-        uiFillCircle(painter, cx, cy, radius, theme->danger);
+        /* Chrome's tab close is a neutral chip; only the title-bar X turns
+         * red. */
+        uiFillCircle(painter, cx, cy, radius, theme->tab_close_hover);
         uiIcon(painter, UI_ICON_CLOSE, uiRectInset(icon, uiThemeScale(theme, 4),
-                                                  uiThemeScale(theme, 4)),
-               0xFFFFFFFF, (1.4f * theme->scale));
+                                                   uiThemeScale(theme, 4)),
+               theme->text, (1.4f * theme->scale));
     } else {
         uiIcon(painter, UI_ICON_CLOSE, uiRectInset(icon, uiThemeScale(theme, 4),
-                                                  uiThemeScale(theme, 4)),
+                                                   uiThemeScale(theme, 4)),
                theme->text_muted, (1.3f * theme->scale));
     }
 }
@@ -146,21 +148,21 @@ void uiButtonPaint(UiButton* button, const UiTheme* theme, UiPainter* painter)
     if (button->window_control) {
         /* Title-bar buttons run the full tab-strip height, like Chrome's. */
         if (button->danger && (button->pressed || hovered))
-            background = theme->danger;
+            background = theme->window_close_hover;
         else if (button->pressed && button->enabled)
-            background = theme->pressed;
+            background = theme->button_pressed;
         else if (hovered)
-            background = theme->hover;
+            background = theme->button_hover;
 
         if (background)
             uiFillRect(painter, button->rect, background);
 
-        if (button->danger && background == theme->danger)
+        if (button->danger && background == theme->window_close_hover)
             color = 0xFFFFFFFFu;
         else if (!button->enabled)
             color = theme->text_faint;
         else
-            color = theme->text_muted;
+            color = theme->icon;
 
         {
             int size = uiThemeScale(theme, 16);
@@ -174,22 +176,31 @@ void uiButtonPaint(UiButton* button, const UiTheme* theme, UiPainter* painter)
         return;
     }
 
+    /* Chrome's toolbar icon buttons get a circular tint, not a rounded
+     * square; the radius is the full button so the shape reads as a circle
+     * even at 125%/150%. */
     if (button->pressed && button->enabled)
-        background = theme->pressed;
+        background = theme->button_pressed;
     else if (button->toggled)
-        background = theme->accent_soft;
+        background = theme->button_pressed;
     else if (hovered)
-        background = theme->hover;
+        background = theme->button_hover;
 
-    if (background)
-        uiFillRoundRect(painter, button->rect, theme->button_radius, background);
+    if (background) {
+        int cx = button->rect.x + button->rect.w / 2;
+        int cy = button->rect.y + button->rect.h / 2;
+        int radius = (button->rect.w < button->rect.h ? button->rect.w
+                                                      : button->rect.h) / 2;
+
+        uiFillCircle(painter, cx, cy, radius, background);
+    }
 
     if (!button->enabled)
         color = theme->text_faint;
     else if (button->toggled)
-        color = theme->accent;
+        color = theme->text;
     else
-        color = theme->text_muted;
+        color = theme->icon;
 
     icon = uiRectInset(button->rect, uiThemeScale(theme, 8), uiThemeScale(theme, 8));
     uiIcon(painter, button->icon, icon, color, (1.7f * theme->scale));
@@ -395,7 +406,7 @@ static void paintTab(UiPainter* painter, const UiTheme* theme,
     if (active)
         fillTabShape(painter, rect, theme->tab_radius, theme->surface);
     else if (hovered)
-        fillTabShape(painter, rect, theme->tab_radius, theme->hover);
+        fillTabShape(painter, rect, theme->tab_radius, theme->tab_hover);
 
     if (show_favicon) {
         favicon = uiRectMake(rect.x + uiThemeScale(theme, 10),
@@ -423,9 +434,10 @@ static void paintTab(UiPainter* painter, const UiTheme* theme,
 
     if (title.w > 0) {
         const char* label = model->tabs[index].title[0] ? model->tabs[index].title : "New tab";
+        unsigned color = active ? theme->text
+                                : (hovered ? theme->text : theme->text_muted);
 
-        uiText(painter, label, title, theme->font_ui,
-               active ? theme->text : theme->text_muted, UI_ALIGN_LEFT);
+        uiText(painter, label, title, theme->font_ui, color, UI_ALIGN_LEFT);
     }
 
     if (show_close)
@@ -467,12 +479,13 @@ void uiTabStripPaint(UiTabStrip* strip, const UiTheme* theme,
 
         uiFillCircle(painter, strip->new_tab.x + strip->new_tab.w / 2,
                      strip->new_tab.y + strip->new_tab.h / 2,
-                     radius, strip->pressed_new_tab ? theme->pressed : theme->hover);
+                     radius, strip->pressed_new_tab ? theme->button_pressed
+                                                    : theme->button_hover);
     }
 
     uiIcon(painter, UI_ICON_PLUS,
            uiRectInset(strip->new_tab, uiThemeScale(theme, 9), uiThemeScale(theme, 9)),
-           theme->text_muted, (1.7f * theme->scale));
+           theme->icon, (1.7f * theme->scale));
 
     GdipResetClip(painter->g);
 }

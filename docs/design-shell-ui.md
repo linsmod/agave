@@ -54,6 +54,8 @@ UI 侧的具体症状：
 ├──────────────────────────────────────────────────────────────┤
 │ ui_chrome.c  组件：UiToolbar / UiFindBar / UiStatusBar        │
 │ ui_widgets.c 组件：UiButton / UiTabStrip                      │
+│ ui_menu.c    自绘菜单：模型/布局/绘制/命中/键盘/子菜单        │
+│ ui_menu_host.c 菜单宿主：分层弹出窗口 + 鼠标捕获 + 模态循环   │
 ├──────────────────────────────────────────────────────────────┤
 │ ui_theme.c   主题 token、字体、DPI 缩放、GDI+ painter、图标    │
 ├──────────────────────────────────────────────────────────────┤
@@ -91,12 +93,14 @@ UI 侧的具体症状：
 
 | 组件 | 边界 | 关键交互 |
 |---|---|---|
-| `UiButton` | 32×32@96，圆角 hover 底，图标居中，`enabled/toggled` | 命中 → `id` |
-| `UiTabStrip` | 标签条 + `+`；活动标签白底、上圆角；关闭按钮 16px 圆 | 命中标签/关闭/新标签 |
+| `UiButton` | 32×32@96，圆形 hover 底（Chrome 工具栏），图标居中，`enabled/toggled` | 命中 → `id` |
+| `UiTabStrip` | 标签条 + `+`；活动标签与工具栏同色、上圆角，非活动标签 hover 用 `tab_hover` | 命中标签/关闭/新标签 |
 | `UiToolbar` | 后退/前进/刷新-停止/地址胶囊/Go/菜单 | 命令 ID 与旧按钮完全一致 |
 | `UiFindBar` | 右对齐浮条：搜索图标 + 输入 + 上/下/关闭 | `ID_FIND_*` |
 | `UiStatusBar` | 24px 状态栏 + 进度线 + 缩放胶囊 | 纯绘制 |
 | `UiChrome` | 组合上述 + 内容区矩形 + 原生 EDIT 位置 | `uiChromeLayout/Paint/Mouse` |
+| `UiMenu` | Chrome 风格圆角面板：30px 行、可选图标列、右对齐快捷键、子菜单、禁用/分隔行 | hover/键盘/点击；`uiMenuSessionMove/Key/Click` |
+| `UiMenuHost` | 32bppPARGB 分层弹出窗口（自绘阴影/圆角），鼠标捕获 + 模态循环 | 点外关闭、Esc、Alt-Tab；返回命令 id |
 | 窗口按钮 | 标签条右侧 `_ □ X`，与 tab 同一行 | `HTMINBUTTON/HTMAXBUTTON/HTCLOSE` + NC 按下拦截 |
 
 几何（96 DPI 基准，全部经 `scale = dpi/96`）：
@@ -157,14 +161,52 @@ WM_NCMOUSEMOVE/LEAVE  → 只更新 hover
 原生控件只有两个 `EDIT`（地址栏、查找框），无边框、按主题设置
 `WM_CTLCOLOREDIT` 背景/文字色；它们在 chrome 里只是两个矩形，离屏模式下不创建。
 
+### 5.2 自绘菜单：Chrome 的 context menu 形状
+
+`TrackPopupMenu` 在 Win32 下只能画系统菜单（亮色、直角、无图标、ANSI 标签，
+中文曾不得不走 `AppendMenuW`），和 Chrome 的圆角深色菜单完全对不上。现在的做法：
+
+- **模型与宿主分离**。`ui_menu.c` 只有值语义的 `UiMenu`（行/快捷键/图标/禁用/
+  子菜单）和 `UiMenuSession`（面板、可见性、hover/键盘）：`uiMenuSessionBegin`
+  一次算好根面板与所有后代面板的位置（屏幕坐标，贴边时反向翻转），
+  `uiMenuSessionMove/Key/Click` 只改状态，`uiMenuSessionPaint` 用 `UiPainter`
+  画。因此 `--ui-shot --ui-menu` 能在 DIB 里复现击中/键盘/像素，不需要窗口。
+- **分层弹窗**（`ui_menu_host.c`）：窗口覆盖所有可见面板的并集 + 16px 阴影边距，
+  像素来自 32bppPARGB 的 GDI+ 位图（`GdipCreateBitmapFromScan0` 直接指向 DIB），
+  圆角、阴影、文字抗锯齿的 alpha 都保留，面板之间是真正的透明。面板以外填
+  alpha=1 的黑，不改变观感但让整块弹窗接住鼠标——点外面只会关菜单，不会穿透
+  到页面。窗口是 `WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST`。
+- **模态语义**：进入时 `SetCapture` + `SetFocus`，跑自己的 `GetMessage` 循环
+  （和 `TrackPopupMenu` 一样），Esc 关、点行选、点外关、滚轮/右键关、Alt-Tab 关；
+  结束后把焦点还给打开前的控件。`WM_KILLFOCUS` **不**作为关闭条件：弹窗是
+  `SW_SHOWNOACTIVATE`，隐藏窗口的测试里也拿不到焦点，靠 capture 已经足够。
+- **行模型**：分隔行、禁用行不参与 hover/键盘选择；子菜单在 hover 父项时立即
+  打开（无需延时），键盘 Right/Left 进出；面板有图标时整列缩进（Chrome 的 Lens
+  行就是这个效果）。应用菜单锚在 `☰` 按钮正下方、右边缘对齐；页面右键锚在
+  指针处，靠近屏幕边缘时向左/上翻转，并夹在显示器 work area 内。
+- **不做假的可用性**：引擎没有的能力（Lens、查看源代码、打印/另存）保持禁用并
+  在标签里写 `(not implemented)`，与 R75 的“死项要说明”约定一致。
+
 ## 6 主题 token
 
 浅色（Chrome 2023 风格）：tab strip `#DEE1E6`、toolbar `#FFFFFF`、
-活动标签 `#FFFFFF`、地址胶囊 `#F1F3F4`、文字 `#202124`、次要 `#5F6368`、
-边框 `#DADCE0`、强调 `#1A73E8`、危险 `#D93025`。
+活动标签 `#FFFFFF`、非活动标签 hover `#D3D6DB`、地址胶囊 `#F1F3F4`（focus 时
+`#FFFFFF` + 2px `#1A73E8` 焦点环）、工具栏图标 hover `#F1F3F4`、文字 `#202124`、
+次要 `#5F6368`、边框 `#DADCE0`、强调 `#1A73E8`、窗口关闭 hover `#E81123`。
 
-暗色：strip/toolbar `#202124`/`#292A2D`、胶囊 `#202124`、文字 `#E8EAED`、
-次要 `#9AA0A6`、边框 `#5F6368`、强调 `#8AB4F8`。
+暗色（对齐 Chrome 无痕窗口的实际截图，2026-11-11）：frame/tab strip `#1F2020`、
+toolbar/活动标签/content `#3C3C3C`、地址胶囊 `#282828`（focus 时 `#3C3C3C`）、
+非活动标签 hover `#474747`、工具栏图标 hover `#505050`、焦点环 `#A8C7FA`、
+文字 `#E8EAED`、次要 `#9AA0A6`、图标 `#C4C7C5`、边框 `#373737`、状态栏 `#1F1F1F`、
+窗口关闭 hover `#C42B1C`。**层次关系**是这组值的重点：strip 比 toolbar 暗、胶囊比
+toolbar 更暗；`--ui-shot` 用亮度关系断言它们（`dark-strip-darker` /
+`dark-pill-darker` / `dark-hover-lighter`）。
+
+自绘菜单 token：面板 `#1F1F1F`（浅色 `#FFFFFF`）、hover 行 `#3C4043`
+（浅色 `#F1F3F4`）、分隔线/边框 `#373737`（浅色 `#E8EAED`/`#DADCE0`）、
+禁用文字 `#7A7A7A`、快捷键 `#9AA0A6`、图标 `#C8C8C8`、阴影 `0x66000000`。
+菜单几何 @96：行高 30、分隔行 9、左右 padding 12、上下 padding 8、面板圆角 8、
+行高亮圆角 4、图标列 26、宽度 clamp 180..460。
 
 `AGB_SHELL_THEME=light|dark|auto`（默认 `auto`，只影响 chrome，不改页面
 `prefers-color-scheme`；页面仍由 `AGB_COLOR_SCHEME` 控制）。
@@ -177,24 +219,38 @@ WM_NCMOUSEMOVE/LEAVE  → 只更新 hover
 ```powershell
 build-zig-native\agave_shell.exe --ui-shot build-zig-native\ui-light.png --ui-theme light
 build-zig-native\agave_shell.exe --ui-shot build-zig-native\ui-dark.png  --ui-theme dark
-build-zig-native\agave_shell.exe --ui-shot build-zig-native\ui-150.png   --ui-dpi 144
+build-zig-native\agave_shell.exe --ui-shot build-zig-native\ui-150.png   --ui-theme light --ui-dpi 144
+build-zig-native\agave_shell.exe --ui-shot build-zig-native\ui-menu.png  --ui-theme dark --ui-menu
+build-zig-native\agave_shell.exe --ui-shot build-zig-native\ui-focus.png --ui-theme dark --ui-focus
 ```
 
 不建窗口、不启动引擎、不读 profile：创建 32bpp 离屏 DIB → 填样例模型
 （5 个标签、进度 42%、查找栏展开、缩放 110%）→ `uiChromeLayout/Paint` →
 自己写 PNG（复用探针的 `probeWritePng`）。`--ui-size 1100x760` 可换窗口尺寸。
+`--ui-menu` 额外在菜单按钮下画一份 Chrome 形状的应用菜单（Bookmarks 子菜单
+打开、hover 停在 Bookmarks、Reload 按钮显示圆形 hover），`--ui-focus` 把地址
+胶囊置为聚焦态。
 
-同一进程内断言（失败 exit 5，全部打 `ui-* ok=1/0`），共 **34 项**：
+同一进程内断言（失败 exit 5，全部打 `ui-* ok=1/0`）：
 
 1. 命中：标签/关闭/新标签/后退/菜单/地址胶囊/查找按钮/窗口 min-max-close；
-2. 事件：DOWN+UP 触发 `ID_BACK`、切换/关闭/新标签、最大化/关闭窗口回调；hover 更新；
+2. 事件：DOWN+UP 触发 `ID_BACK`、切换/关闭/新标签、最大化/关闭窗口回调、hover 更新；
 3. 布局：按钮在客户区内、地址胶囊宽度 > 120、内容区高度 > 80、标签不重叠；
 4. 像素：活动标签 = surface、工具栏 = toolbar、状态栏 = surface_alt、内容区 = window；
-5. 150% DPI：tabstrip 60 / toolbar 66 / content top = 126，菜单仍在窗口内。
+5. 150% DPI：tabstrip 60 / toolbar 66 / content top = 126，菜单仍在窗口内；
+6. 暗色层次：strip < toolbar、胶囊 < toolbar、hover > 活动标签、焦点环 =
+   `#A8C7FA`；
+7. `--ui-menu`（61 项）：菜单宽度/锚定、子菜单打开与反向翻转、行/分隔行命中、
+   Down 跳过分隔行与禁用行、Right/Left 进出子菜单、点击选中/点外取消、
+   hover/背景像素、圆形工具栏 hover；
+8. `--ui-focus`（43 项）：焦点字段、胶囊填充色、焦点环左右/上边像素与 token。
 
-回归 `tools/run_shell_ui_tests.ps1`：亮/暗/150% 三份并行，实测约 **1 s**（单份 ~0.85 s）。
-窗口框架/NC 点击不在离屏测试里（它需要真实 HWND）；用 `AGB_SHELL_HIDDEN=1`
-启动后发 `WM_NCHITTEST`/`WM_NCLBUTTONDOWN`/`WM_LBUTTONUP` 手工验证，见 §9。
+回归 `tools/run_shell_ui_tests.ps1`：亮/暗/亮-150%/暗-菜单/暗-焦点五份并行，
+实测约 **1.5 s**（单份 ~1.2–1.5 s，含进程启动）。
+**分层弹出窗口本身**（真实 HWND、鼠标捕获、模态循环、点外关闭）不在离屏测试里：
+`pwsh -File tools/check_shell_menu.ps1` 用 `AGB_SHELL_HIDDEN=1` 起真实壳，点菜单
+按钮/发右键，断言弹出窗口存在（WS_EX_LAYERED/TOOLWINDOW）、首行点击生效、
+Esc 关闭上下文菜单，然后 `WM_CLOSE` 退出。这是手动检查，不进默认套件。
 
 ## 8 兼容性
 
@@ -210,12 +266,18 @@ build-zig-native\agave_shell.exe --ui-shot build-zig-native\ui-150.png   --ui-dp
 
 ## 9 验收
 
-- `tools/build_project.ps1` 增量构建 0 error；
-- `run_shell_ui_tests.ps1` 全绿，亮/暗/150% PNG 目视无错位；
-- `run_all_tests.ps1` 全绿（新增套件计入并计时）；
+- `tools/build_project.ps1` 增量构建 0 error / 0 warning；
+- `run_shell_ui_tests.ps1` 全绿（亮/暗/亮-150%/暗-菜单/暗-焦点五份），
+  五张 PNG 目视无错位，暗色层次和焦点环符合 §6；
+- `run_all_tests.ps1` 全绿（新增 case 计入并计时）；
 - 手工 GUI：125%/150% DPI 下标签/地址栏不重叠，hover/点击正常，
-  `AGB_SHELL_THEME=dark` 标题栏与 chrome 一起变暗；
+  `AGB_SHELL_THEME=dark` 标题栏与 chrome 一起变暗；点 `☰` / 页面右键看到的
+  是自绘菜单（圆角/阴影/快捷键/子菜单），点外面和 Esc 都能关；
 - 窗口框架：`pwsh -File tools/check_shell_frame.ps1`（`AGB_SHELL_HIDDEN=1`，不显示窗口）
   → `FRAME=PASS`：client origin y=0、`WM_NCHITTEST` min=8/max=9/close=20、
   tab=1、空白=2，`WM_NCLBUTTONDOWN + WM_LBUTTONUP` 触发最大化/还原、最小化、关闭。
   这是**手动检查**，不进默认套件（需要真实 HWND）。
+- 菜单宿主：`pwsh -File tools/check_shell_menu.ps1`（`AGB_SHELL_HIDDEN=1`，不显示窗口）
+  → `MENU-HOST=PASS`：应用菜单弹窗存在且是 layered/toolwindow、首行点击生效，
+  页面右键上下文菜单能打开、Esc 能关，最后 `WM_CLOSE` 干净退出。同样是
+  **手动检查**，不进默认套件。
