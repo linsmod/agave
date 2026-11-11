@@ -312,8 +312,9 @@ static void paintAddress(UiChrome* chrome, UiPainter* painter)
     UiTheme* theme = &chrome->theme;
     UiToolbar* bar = &chrome->toolbar;
     UiRect pill = bar->address;
-    int focused = chrome->focus_field == 1;
-    int hovered = chrome->hover_part == UI_PART_ADDRESS || bar->go.hover;
+    int state = uiChromeFieldState(chrome, 1);
+    int focused = state == 2;
+    int hovered = state == 1;
     unsigned fill = focused ? theme->field_focus
                             : (hovered ? theme->field_hover : theme->field);
     int icon_size = scale(theme, 16);
@@ -397,8 +398,9 @@ static void paintFindBar(UiChrome* chrome, UiPainter* painter, int dx, int dy)
     UiButton prev = bar->prev;
     UiButton next = bar->next;
     UiButton close = bar->close;
-    int focused = chrome->focus_field == 2;
-    int hovered = chrome->hover_part == UI_PART_FIND_FIELD;
+    int state = uiChromeFieldState(chrome, 2);
+    int focused = state == 2;
+    int hovered = state == 1;
     int radius;
     UiRect card;
 
@@ -574,8 +576,16 @@ static UiRect partRect(UiChrome* chrome, UiPart part, int index)
     switch (part) {
     case UI_PART_TAB:
     case UI_PART_TAB_CLOSE:
-        if (index >= 0 && index < UI_MAX_TABS)
-            return strip->tab[index];
+        if (index >= 0 && index < UI_MAX_TABS) {
+            /* Grow sideways: the hairline separators that have to vanish next to
+             * a hovered tab live in the strip's gaps, i.e. just outside the tab
+             * rect. Without this they stayed painted until something else
+             * repainted the strip. */
+            int grow = chrome->theme.tab_gap + uiTabStripSeparatorWidth(&chrome->theme);
+            UiRect tab = strip->tab[index];
+
+            return uiRectMake(tab.x - grow, tab.y, tab.w + grow * 2, tab.h);
+        }
         return emptyRect();
 
     case UI_PART_TAB_NEW:
@@ -673,6 +683,36 @@ int uiChromeTabAt(UiChrome* chrome, int x, int y)
     uiTabStripHit(&chrome->tabstrip, x, y, &index);
 
     return index;
+}
+
+/* Which fill a text field's pill is currently painted with: 0 = normal,
+ * 1 = hovered, 2 = focused. The native EDIT asks this too, because it paints
+ * its own background and must land on exactly the pill's colour - hovering the
+ * Go button (part of the pill) used to highlight the pill while the EDIT kept
+ * `field`, so a differently-coloured rectangle appeared behind the text. */
+int uiChromeFieldState(const UiChrome* chrome, int field)
+{
+    int hovered;
+
+    if (!chrome)
+        return 0;
+
+    if (field == 1) {
+        if (chrome->focus_field == 1)
+            return 2;
+
+        hovered = chrome->hover_part == UI_PART_ADDRESS ||
+                  chrome->toolbar.go.hover;
+    } else if (field == 2) {
+        if (chrome->focus_field == 2)
+            return 2;
+
+        hovered = chrome->hover_part == UI_PART_FIND_FIELD;
+    } else {
+        return 0;
+    }
+
+    return hovered ? 1 : 0;
 }
 
 static int feedButtons(UiChrome* chrome, const UiMouseEvent* event)
@@ -821,6 +861,13 @@ int uiChromeMouse(UiChrome* chrome, const UiMouseEvent* event)
 
         if (part == UI_PART_TAB || part == UI_PART_TAB_CLOSE || part == UI_PART_TAB_NEW) {
             uiTabStripMouse(&chrome->tabstrip, &chrome->model, event, NULL);
+
+            /* The press switches tabs, not the release: the click on a tab body
+             * is the whole gesture. The close chip keeps waiting for the release
+             * so a slight drag cannot kill a page. */
+            if (part == UI_PART_TAB && index >= 0 && chrome->cb.activate_tab)
+                chrome->cb.activate_tab(chrome->cb.user, index);
+
             return 1;
         }
 
@@ -860,10 +907,11 @@ int uiChromeMouse(UiChrome* chrome, const UiMouseEvent* event)
             chrome->tabstrip.pressed_new_tab) {
             uiTabStripMouse(&chrome->tabstrip, &chrome->model, event, &action);
 
+            /* action.activate is deliberately ignored: the press switched the
+             * tab already (see UI_MOUSE_DOWN), and firing it here too would
+             * switch twice. */
             if (action.close >= 0 && chrome->cb.close_tab)
                 chrome->cb.close_tab(chrome->cb.user, action.close);
-            else if (action.activate >= 0 && chrome->cb.activate_tab)
-                chrome->cb.activate_tab(chrome->cb.user, action.activate);
             else if (action.new_tab && chrome->cb.new_tab)
                 chrome->cb.new_tab(chrome->cb.user);
 

@@ -61,8 +61,28 @@ int uiMenuAdd(UiMenu* menu, const char* label, const char* shortcut, int id,
 
 int uiMenuAddSeparator(UiMenu* menu)
 {
+    /* Collapse: a separator only separates, so one at the very top or right
+     * after another one is a layout bug the caller should not have to think
+     * about (the context menu is assembled from optional blocks). */
+    if (!menu || menu->count == 0)
+        return -1;
+
+    if (menu->items[menu->count - 1].flags & UI_MENU_ITEM_SEPARATOR)
+        return -1;
+
     return uiMenuAdd(menu, NULL, NULL, 0, UI_MENU_ITEM_SEPARATOR,
                      UI_MENU_ICON_NONE, NULL);
+}
+
+void uiMenuTrim(UiMenu* menu)
+{
+    if (!menu)
+        return;
+
+    /* Drop a trailing separator left over by a block that ended the menu. */
+    while (menu->count > 0 &&
+           (menu->items[menu->count - 1].flags & UI_MENU_ITEM_SEPARATOR))
+        --menu->count;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -725,6 +745,9 @@ static void paintMenuIcon(UiPainter* painter, const UiTheme* theme,
     }
     case UI_MENU_ICON_GLOBE:
         uiIcon(painter, UI_ICON_GLOBE, box, color, stroke);
+        break;
+    case UI_MENU_ICON_DOWNLOAD:
+        uiIcon(painter, UI_ICON_DOWNLOAD, box, color, stroke);
         break;
     default:
         break;

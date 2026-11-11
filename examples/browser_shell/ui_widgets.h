@@ -121,6 +121,9 @@ typedef struct {
     int new_tab;    /* 1 = the + button completed */
 } UiTabAction;
 
+/* Width (device px) of the hairline painted between two resting tabs. */
+int     uiTabStripSeparatorWidth(const UiTheme* theme);
+
 void    uiTabStripLayout(UiTabStrip* strip, const UiTheme* theme,
                          const UiChromeModel* model, UiRect area);
 void    uiTabStripPaint(UiTabStrip* strip, const UiTheme* theme,

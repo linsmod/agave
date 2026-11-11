@@ -56,18 +56,42 @@ static unsigned faviconColor(const char* url)
     return palette[hash % (sizeof(palette) / sizeof(palette[0]))];
 }
 
-static void fillTabShape(UiPainter* painter, UiRect rect, int radius, unsigned color)
+/* Where the active tab meets the toolbar, the silhouette flares outwards: the
+ * side turns into a quarter arc tangent to the toolbar's top edge, so the base
+ * is wider than the body (Chrome). The arc is the corner square minus a quarter
+ * circle centred on the square's outer corner.
+ *
+ * Painted BEFORE the tabs, never inside paintTab: the square reaches into the
+ * neighbouring tab's rect, and stamping the circle back after that neighbour's
+ * hover pill had been drawn bit a notch out of the pill. Under the tabs, the
+ * pill simply covers the flare where it overlaps. */
+static void paintTabBaseFlare(UiPainter* painter, const UiTheme* theme, UiRect rect,
+                              unsigned tab_color)
 {
-    UiRect bottom;
+    int flare = uiThemeScale(theme, 8);
+    int base = rect.y + rect.h;
 
-    if (rect.w <= 0 || rect.h <= 0)
+    if (rect.w <= flare * 2 || rect.h <= flare)
         return;
 
-    uiFillRoundRect(painter, rect, radius, color);
+    /* Left: square [x-flare, x] x [base-flare, base] minus the quarter circle
+     * centred on its outer (bottom-left) corner. */
+    uiFillRect(painter, uiRectMake(rect.x - flare, base - flare, flare, flare),
+               tab_color);
+    uiFillPie(painter, rect.x - flare, base - flare, flare, 0.0f, 90.0f,
+              theme->chrome);
 
-    /* Square off the bottom: an active tab merges into the toolbar. */
-    bottom = uiRectMake(rect.x, rect.y + rect.h / 2, rect.w, rect.h - rect.h / 2);
-    uiFillRect(painter, bottom, color);
+    /* Right: same, mirrored (quarter circle pointing left-down). */
+    uiFillRect(painter, uiRectMake(rect.x + rect.w, base - flare, flare, flare),
+               tab_color);
+    uiFillPie(painter, rect.x + rect.w + flare, base - flare, flare, 90.0f, 90.0f,
+              theme->chrome);
+}
+
+static void fillTabShape(UiPainter* painter, const UiTheme* theme, UiRect rect,
+                         unsigned color)
+{
+    uiFillTabShape(painter, rect, theme->tab_radius, 0, color);
 }
 
 /* Chrome's *inactive* tab hover/press is a rounded pill that floats inside the
@@ -324,9 +348,25 @@ void uiTabStripLayout(UiTabStrip* strip, const UiTheme* theme,
     int gap;
     int plus;
     int pad;
+    /* Hover/press are model indices, not slot positions, so a relayout must not
+     * throw them away: the pointer does not move when the window is resized, but
+     * the hover used to be wiped here and only came back on the next mouse move. */
+    int hover_tab;
+    int hover_close;
+    int pressed_tab;
+    int pressed_close;
+    int hover_new;
+    int pressed_new;
 
     if (!strip || !theme || !model)
         return;
+
+    hover_tab = strip->hover_tab;
+    hover_close = strip->hover_close;
+    pressed_tab = strip->pressed_tab;
+    pressed_close = strip->pressed_close;
+    hover_new = strip->hover_new_tab;
+    pressed_new = strip->pressed_new_tab;
 
     strip->rect = area;
     strip->count = 0;
@@ -357,13 +397,18 @@ void uiTabStripLayout(UiTabStrip* strip, const UiTheme* theme,
         if (available < strip->count)
             available = strip->count;
 
-        /* Shrink to fit: never let the last tab run under the window buttons.
-         * At the minimum window width (680 px) even 16 tabs still fit; only
-         * the title ellipsizes and the close button drops out. */
         slot_w = available / strip->count;
 
         if (slot_w > theme->tab_max_w)
             slot_w = theme->tab_max_w;
+
+        /* Floor at the minimum width: a tab keeps enough room for its icon plus
+         * a couple of title glyphs even with many tabs. Beyond that the strip
+         * overflows to the right and is clipped (no horizontal scrolling /
+         * overflow menu yet - Ctrl+T still works, the extra tabs are simply off
+         * screen, which is also what a browser without tab scrolling does). */
+        if (slot_w < theme->tab_min_w)
+            slot_w = theme->tab_min_w;
     }
 
     if (slot_w < 1)
@@ -412,6 +457,22 @@ void uiTabStripLayout(UiTabStrip* strip, const UiTheme* theme,
 
     if (strip->new_tab.x < area.x + pad)
         strip->new_tab.x = area.x + pad;
+
+    /* Re-apply what the pointer had before the relayout (see the saves above).
+     * A tab or chip that no longer exists is simply dropped. */
+    if (hover_tab >= 0 && tabVisible(model, hover_tab))
+        strip->hover_tab = hover_tab;
+    if (hover_close >= 0 && tabVisible(model, hover_close) &&
+        strip->close[hover_close].w > 0)
+        strip->hover_close = hover_close;
+    if (pressed_tab >= 0 && tabVisible(model, pressed_tab))
+        strip->pressed_tab = pressed_tab;
+    if (pressed_close >= 0 && tabVisible(model, pressed_close) &&
+        strip->close[pressed_close].w > 0)
+        strip->pressed_close = pressed_close;
+
+    strip->hover_new_tab = hover_new;
+    strip->pressed_new_tab = pressed_new;
 }
 
 UiPart uiTabStripHit(UiTabStrip* strip, int x, int y, int* model_index)
@@ -423,6 +484,11 @@ UiPart uiTabStripHit(UiTabStrip* strip, int x, int y, int* model_index)
 
     if (!strip || !uiRectContains(strip->rect, x, y))
         return UI_PART_NONE;
+
+    /* "+" before the tabs: with more tabs than fit it is pinned at the right
+     * edge and can overlap one, and it has to stay clickable there. */
+    if (uiRectContains(strip->new_tab, x, y))
+        return UI_PART_TAB_NEW;
 
     for (i = 0; i < strip->count; ++i) {
         int index = strip->slot_of[i];
@@ -468,7 +534,7 @@ static void paintTab(UiPainter* painter, const UiTheme* theme,
     show_favicon = 1;
 
     if (active)
-        fillTabShape(painter, rect, theme->tab_radius, theme->surface);
+        fillTabShape(painter, theme, rect, theme->surface);
     else if (pressed)
         fillTabPill(painter, theme, rect, theme->tab_radius, theme->tab_pressed);
     else if (hovered)
@@ -511,6 +577,13 @@ static void paintTab(UiPainter* painter, const UiTheme* theme,
                       close_pressed);
 }
 
+int uiTabStripSeparatorWidth(const UiTheme* theme)
+{
+    /* 2 px at 96 DPI ("a bit thicker"); the layout gap is tab_gap, so this fills
+     * the gap exactly instead of eating into a tab. */
+    return uiThemeScale(theme, 2);
+}
+
 /* A tab that merges into the strip visually: the active one (its shape is
  * squared off into the toolbar) and the one under the pointer (its pill already
  * separates itself). Separators never touch those. */
@@ -528,7 +601,7 @@ static int tabIsFlush(const UiChromeModel* model, const UiTabStrip* strip, int i
 static void paintTabSeparators(UiPainter* painter, const UiTheme* theme,
                                const UiChromeModel* model, UiTabStrip* strip)
 {
-    int width = uiThemeScale(theme, 1);
+    int width = uiTabStripSeparatorWidth(theme);
     int height = uiThemeScale(theme, 16);
     int i;
 
@@ -566,10 +639,18 @@ void uiTabStripPaint(UiTabStrip* strip, const UiTheme* theme,
 
     uiFillRect(painter, strip->rect, theme->chrome);
 
+    /* Clip out the window buttons: with more tabs than fit the strip overflows,
+     * and those tabs must not paint under the caption buttons. */
     GdipSetClipRectI(painter->g, strip->rect.x, strip->rect.y,
-                     strip->rect.w, strip->rect.h, CombineModeReplace);
+                     strip->rect.w - strip->right_reserved, strip->rect.h,
+                     CombineModeReplace);
 
     paintTabSeparators(painter, theme, model, strip);
+
+    /* Under every tab: the active tab's base flare reaches into its neighbours'
+     * rects, so it must be painted first or it eats a notch out of their pills. */
+    if (tabVisible(model, active))
+        paintTabBaseFlare(painter, theme, strip->tab[active], theme->surface);
 
     for (i = 0; i < strip->count; ++i) {
         int index = strip->slot_of[i];
@@ -588,14 +669,32 @@ void uiTabStripPaint(UiTabStrip* strip, const UiTheme* theme,
                  strip->pressed_tab == active, strip->pressed_close == active);
     }
 
-    /* "+" new tab */
-    if (strip->hover_new_tab || strip->pressed_new_tab) {
+    /* "+" new tab. When the strip overflows, the button is pinned at the right
+     * edge on top of a tab; a strip-coloured disc keeps the glyph readable. */
+    {
+        int overlaps = 0;
         int radius = uiThemeScale(theme, 12);
 
-        uiFillCircle(painter, strip->new_tab.x + strip->new_tab.w / 2,
-                     strip->new_tab.y + strip->new_tab.h / 2,
-                     radius, strip->pressed_new_tab ? theme->button_pressed
-                                                    : theme->button_hover);
+        for (i = 0; i < strip->count; ++i) {
+            UiRect tab = strip->tab[strip->slot_of[i]];
+
+            if (tab.w > 0 && tab.x < strip->new_tab.x + strip->new_tab.w &&
+                tab.x + tab.w > strip->new_tab.x) {
+                overlaps = 1;
+                break;
+            }
+        }
+
+        if (overlaps)
+            uiFillCircle(painter, strip->new_tab.x + strip->new_tab.w / 2,
+                         strip->new_tab.y + strip->new_tab.h / 2,
+                         radius, theme->chrome);
+
+        if (strip->hover_new_tab || strip->pressed_new_tab)
+            uiFillCircle(painter, strip->new_tab.x + strip->new_tab.w / 2,
+                         strip->new_tab.y + strip->new_tab.h / 2,
+                         radius, strip->pressed_new_tab ? theme->button_pressed
+                                                        : theme->button_hover);
     }
 
     uiIcon(painter, UI_ICON_PLUS,

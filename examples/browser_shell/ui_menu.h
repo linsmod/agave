@@ -28,7 +28,8 @@ typedef enum {
     UI_MENU_ICON_CHEVRON_RIGHT,
     UI_MENU_ICON_INCOGNITO,
     UI_MENU_ICON_GLOBE,
-    UI_MENU_ICON_LINK
+    UI_MENU_ICON_LINK,
+    UI_MENU_ICON_DOWNLOAD
 } UiMenuIcon;
 
 #define UI_MENU_ITEM_DISABLED  0x1u
@@ -79,7 +80,11 @@ void uiMenuInit(UiMenu* menu);
 /* Append a row; returns its index or -1 when the menu is full. */
 int  uiMenuAdd(UiMenu* menu, const char* label, const char* shortcut, int id,
                unsigned flags, UiMenuIcon icon, const UiMenu* submenu);
+/* No-op when the menu is empty or already ends with a separator. */
 int  uiMenuAddSeparator(UiMenu* menu);
+
+/* Removes trailing separators (menus are assembled from optional blocks). */
+void uiMenuTrim(UiMenu* menu);
 
 /* Panel size at 96-DPI-scaled metrics. 1 on success. */
 int  uiMenuMeasure(const UiMenu* menu, const UiTheme* theme,

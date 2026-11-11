@@ -239,7 +239,9 @@ static void applyPalette(UiTheme* theme)
         theme->hover = UI_RGB(0x47, 0x47, 0x47);
         theme->pressed = UI_RGB(0x56, 0x56, 0x56);
         theme->field = UI_RGB(0x28, 0x28, 0x28);
-        theme->field_hover = UI_RGB(0x32, 0x32, 0x32);
+        /* Hover fill == the pill's hover border colour ("背景色和边框一致"), so
+         * the pill reads as one flat shape while the pointer is on it. */
+        theme->field_hover = UI_RGB(0x5A, 0x5A, 0x5A);
         theme->field_focus = UI_RGB(0x3C, 0x3C, 0x3C);
         theme->border = UI_RGB(0x37, 0x37, 0x37);
         theme->border_strong = UI_RGB(0x5A, 0x5A, 0x5A);
@@ -282,7 +284,7 @@ static void applyPalette(UiTheme* theme)
         theme->hover = UI_RGB(0xE8, 0xEA, 0xED);
         theme->pressed = UI_RGB(0xDA, 0xDC, 0xE0);
         theme->field = UI_RGB(0xF1, 0xF3, 0xF4);
-        theme->field_hover = UI_RGB(0xE8, 0xEA, 0xED);
+        theme->field_hover = UI_RGB(0xBD, 0xC1, 0xC6);
         theme->field_focus = UI_RGB(0xFF, 0xFF, 0xFF);
         theme->border = UI_RGB(0xDA, 0xDC, 0xE0);
         theme->border_strong = UI_RGB(0xBD, 0xC1, 0xC6);
@@ -319,14 +321,17 @@ static void applyPalette(UiTheme* theme)
     }
 
     theme->field_color = toColorRef(theme->field);
+    theme->field_hover_color = toColorRef(theme->field_hover);
     theme->field_focus_color = toColorRef(theme->field_focus);
     theme->text_color = toColorRef(theme->text);
 
     if (theme->field_brush) { DeleteObject(theme->field_brush); theme->field_brush = NULL; }
+    if (theme->field_hover_brush) { DeleteObject(theme->field_hover_brush); theme->field_hover_brush = NULL; }
     if (theme->field_focus_brush) { DeleteObject(theme->field_focus_brush); theme->field_focus_brush = NULL; }
     if (theme->surface_brush) { DeleteObject(theme->surface_brush); theme->surface_brush = NULL; }
 
     theme->field_brush = CreateSolidBrush(theme->field_color);
+    theme->field_hover_brush = CreateSolidBrush(theme->field_hover_color);
     theme->field_focus_brush = CreateSolidBrush(theme->field_focus_color);
     theme->surface_brush = CreateSolidBrush(toColorRef(theme->surface));
 }
@@ -410,6 +415,7 @@ void uiThemeFree(UiTheme* theme)
     freeFonts(theme);
 
     if (theme->field_brush) { DeleteObject(theme->field_brush); theme->field_brush = NULL; }
+    if (theme->field_hover_brush) { DeleteObject(theme->field_hover_brush); theme->field_hover_brush = NULL; }
     if (theme->field_focus_brush) { DeleteObject(theme->field_focus_brush); theme->field_focus_brush = NULL; }
     if (theme->surface_brush) { DeleteObject(theme->surface_brush); theme->surface_brush = NULL; }
 }
@@ -637,6 +643,101 @@ void uiFillCircle(UiPainter* p, int cx, int cy, int radius, unsigned argb)
 
     if (brush)
         GdipFillEllipseI(p->g, brush, cx - radius, cy - radius, radius * 2, radius * 2);
+}
+
+/* Tab silhouette: rounded top corners (radius `topRadius`), rounded bottom
+ * corners (`bottomRadius`, 0 = classic squared base that merges into the
+ * toolbar) and straight sides. Built as one path so the bottom corners are real
+ * arcs - erasing a square corner with a pie leaves a visible blob. */
+void uiFillTabShape(UiPainter* p, UiRect r, int topRadius, int bottomRadius,
+                    unsigned argb)
+{
+    GpSolidFill* brush;
+    GpPath* path;
+    REAL x, y, w, h, dt, db;
+
+    if (!p || !p->g || r.w <= 0 || r.h <= 0)
+        return;
+
+    brush = fillColor(p, argb);
+
+    if (!brush)
+        return;
+
+    if (topRadius < 0)
+        topRadius = 0;
+    if (bottomRadius < 0)
+        bottomRadius = 0;
+    if (topRadius * 2 > r.w)
+        topRadius = r.w / 2;
+    if (bottomRadius * 2 > r.w)
+        bottomRadius = r.w / 2;
+    if (topRadius + bottomRadius > r.h) {
+        int total = topRadius + bottomRadius;
+
+        topRadius = total ? topRadius * r.h / total : 0;
+        bottomRadius = r.h - topRadius;
+    }
+
+    if (!p->path) {
+        if (GdipCreatePath(FillModeWinding, &p->path) != Ok)
+            return;
+    } else {
+        GdipResetPath(p->path);
+    }
+
+    path = p->path;
+    x = (REAL)r.x;
+    y = (REAL)r.y;
+    w = (REAL)r.w;
+    h = (REAL)r.h;
+    dt = (REAL)topRadius * 2.0f;
+    db = (REAL)bottomRadius * 2.0f;
+
+    /* Walk the outline clockwise with the straight edges spelled out. Adding
+     * only the arcs and closing the figure draws a line across the middle of the
+     * shape (that is how "rounded top + square base" turned into a sliver). */
+    if (topRadius > 0) {
+        GdipAddPathArc(path, x, y, dt, dt, 180.0f, 90.0f);            /* → (x + r, y) */
+        GdipAddPathArc(path, x + w - dt, y, dt, dt, 270.0f, 90.0f);   /* → (x + w, y + r) */
+        GdipAddPathLine(path, x + w, y + (REAL)topRadius,
+                        x + w, y + h - (REAL)bottomRadius);
+    } else {
+        GdipStartPathFigure(path);
+        GdipAddPathLine(path, x, y, x + w, y);
+        GdipAddPathLine(path, x + w, y, x + w, y + h - (REAL)bottomRadius);
+    }
+
+    if (bottomRadius > 0) {
+        GdipAddPathArc(path, x + w - db, y + h - db, db, db, 0.0f, 90.0f);
+        GdipAddPathLine(path, x + w - (REAL)bottomRadius, y + h,
+                        x + (REAL)bottomRadius, y + h);
+        GdipAddPathArc(path, x, y + h - db, db, db, 90.0f, 90.0f);
+        GdipAddPathLine(path, x, y + h - (REAL)bottomRadius,
+                        x, y + (REAL)topRadius);
+    } else {
+        GdipAddPathLine(path, x + w, y + h, x, y + h);
+        GdipAddPathLine(path, x, y + h, x, y + (REAL)topRadius);
+    }
+
+    GdipClosePathFigure(path);
+
+    GdipFillPath(p->g, brush, path);
+}
+
+void uiFillPie(UiPainter* p, int cx, int cy, int radius, float startAngle,
+               float sweep, unsigned argb)
+{
+    GpSolidFill* brush;
+
+    if (!p || !p->g || radius <= 0)
+        return;
+
+    brush = fillColor(p, argb);
+
+    if (brush)
+        GdipFillPie(p->g, brush, (REAL)(cx - radius), (REAL)(cy - radius),
+                    (REAL)(radius * 2), (REAL)(radius * 2), startAngle, sweep);
 }
 
 void uiStrokeCircle(UiPainter* p, int cx, int cy, int radius, unsigned argb, float stroke)

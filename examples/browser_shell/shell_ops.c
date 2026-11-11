@@ -301,10 +301,19 @@ static int win32_prepare_frame(void* user, void* hwnd)
     if (api->setAttribute) {
         int corner = 2;              /* DWMWCP_ROUND */
         DWORD border = 0xFFFFFFFEu;  /* DWMWA_COLOR_NONE */
+        BOOL noTransitions = TRUE;
 
         /* Optional: Win10 ignores both attributes. */
         api->setAttribute((HWND)hwnd, 33u, &corner, sizeof(corner));
         api->setAttribute((HWND)hwnd, 34u, &border, sizeof(border));
+
+        /* DWMWA_TRANSITIONS_FORCEDISABLED: the maximize/restore animation walks
+         * a custom-frame window through sizes where DWM renders its own frame,
+         * which is the classic glass edge that flashes during the animation.
+         * WM_NCCALCSIZE cannot paint over that state, so the window opts out of
+         * the transition instead of fighting it. Cost: maximize/restore is no
+         * longer animated for this window. */
+        api->setAttribute((HWND)hwnd, 3u, &noTransitions, sizeof(noTransitions));
     }
 
     return extended;

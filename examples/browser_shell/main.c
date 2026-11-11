@@ -1813,50 +1813,47 @@ static void onContextMenu(AgaveWebView* view, int x, int y,
     canForward = tab->view && agave_webview_can_forward(tab->view);
 
     /* The ids are the historical TrackPopupMenu ids: logs and the switch below
-     * stay exactly the same. */
+     * stay exactly the same.
+     *
+     * No disabled rows and no "not implemented" entries: an item either works
+     * here or is not in the menu. Grey rows only make sense for something that
+     * can become enabled later (nothing here can), and the page menu is read at
+     * a glance - a third of it being dead weight is worse than a shorter menu.
+     * Blocks are added conditionally, so separators are only inserted in front
+     * of a block that is actually present. */
     uiMenuInit(&menu);
-    uiMenuAdd(&menu, "Back", "Alt+Left", 1,
-              canBack ? 0 : UI_MENU_ITEM_DISABLED, UI_MENU_ICON_NONE, NULL);
-    uiMenuAdd(&menu, "Forward", "Alt+Right", 2,
-              canForward ? 0 : UI_MENU_ITEM_DISABLED, UI_MENU_ICON_NONE, NULL);
+
+    if (canBack)
+        uiMenuAdd(&menu, "Back", "Alt+Left", 1, 0, UI_MENU_ICON_NONE, NULL);
+    if (canForward)
+        uiMenuAdd(&menu, "Forward", "Alt+Right", 2, 0, UI_MENU_ICON_NONE, NULL);
     uiMenuAdd(&menu, "Reload", "Ctrl+R", 3, 0, UI_MENU_ICON_NONE, NULL);
-    uiMenuAddSeparator(&menu);
 
     if (linkUrl && linkUrl[0]) {
+        uiMenuAddSeparator(&menu);
         uiMenuAdd(&menu, "Open link in this tab", NULL, 4, 0,
                   UI_MENU_ICON_LINK, NULL);
         uiMenuAdd(&menu, "Open link in new tab", NULL, 5, 0,
                   UI_MENU_ICON_LINK, NULL);
         uiMenuAdd(&menu, "Copy link address", NULL, 6, 0,
                   UI_MENU_ICON_NONE, NULL);
-        uiMenuAddSeparator(&menu);
     }
 
-    if (imageUrl && imageUrl[0])
-        uiMenuAdd(&menu, "Save image (not implemented)", NULL, 7,
-                  UI_MENU_ITEM_DISABLED, UI_MENU_ICON_NONE, NULL);
+    if (hasSelection) {
+        uiMenuAddSeparator(&menu);
+        uiMenuAdd(&menu, "Copy", "Ctrl+C", 12, 0, UI_MENU_ICON_NONE, NULL);
+    }
 
-    /* Chrome's page menu carries the Lens entry here; without an engine hook
-     * it is an honest disabled row (and it exercises the icon column). */
     uiMenuAddSeparator(&menu);
-    uiMenuAdd(&menu, "Search with Google Lens (not implemented)", NULL, 10,
-              UI_MENU_ITEM_DISABLED, UI_MENU_ICON_LENS, NULL);
-    uiMenuAddSeparator(&menu);
-    uiMenuAdd(&menu, "Copy", "Ctrl+C", 12,
-              hasSelection ? 0 : UI_MENU_ITEM_DISABLED, UI_MENU_ICON_NONE, NULL);
     uiMenuAdd(&menu, "Select all", "Ctrl+A", 13, 0, UI_MENU_ICON_NONE, NULL);
-    uiMenuAddSeparator(&menu);
-
     uiMenuAdd(&menu, "Bookmark this page", "Ctrl+D", 8, 0,
               UI_MENU_ICON_NONE, NULL);
-    /* No view-source support yet: a document->string API does not exist, and the
-     * old "View page source (eval)" evaluated outerHTML into the void (eval
-     * results are discarded), so the item did nothing at all. Say so instead. */
-    uiMenuAdd(&menu, "View page source (not implemented)", "Ctrl+U", 9,
-              UI_MENU_ITEM_DISABLED, UI_MENU_ICON_NONE, NULL);
+
     uiMenuAddSeparator(&menu);
     uiMenuAdd(&menu, "注入 vConsole", NULL, 11, 0, UI_MENU_ICON_NONE, NULL);
     uiMenuAdd(&menu, "注入 inspector.js", NULL, 14, 0, UI_MENU_ICON_NONE, NULL);
+
+    uiMenuTrim(&menu);
 
     /* x,y are client coordinates of the control, not of the shell window: with
      * g_hwnd the menu was offset by the toolbar height, and on a multi-monitor
@@ -1944,8 +1941,6 @@ static void onContextMenu(AgaveWebView* view, int x, int y,
         }
         break;
     case 8: addBookmarkCurrent(); break;
-    case 9: agbLog(AGB_LOG_SHELL, "view source: not implemented"); break;
-    case 10: agbLog(AGB_LOG_SHELL, "google lens: not implemented"); break;
     case 11: injectVConsole(view); break;
     case 14: injectInspector(view); break;
     case 12:
@@ -2671,6 +2666,7 @@ static void showMainMenu(void)
     uiMenuAdd(&root, "Add bookmark", "Ctrl+D", 1, 0, UI_MENU_ICON_NONE, NULL);
     uiMenuAdd(&root, "Bookmarks", NULL, 0, 0, UI_MENU_ICON_NONE, &bookmarks);
     uiMenuAdd(&root, "History", NULL, 0, 0, UI_MENU_ICON_NONE, &history);
+    uiMenuAdd(&root, "Downloads", "Ctrl+J", 10, 0, UI_MENU_ICON_DOWNLOAD, NULL);
     uiMenuAddSeparator(&root);
     uiMenuAdd(&root, "Zoom in", "Ctrl+=", 2, 0, UI_MENU_ICON_NONE, NULL);
     uiMenuAdd(&root, "Zoom out", "Ctrl+-", 3, 0, UI_MENU_ICON_NONE, NULL);
@@ -2682,6 +2678,9 @@ static void showMainMenu(void)
     uiMenuAddSeparator(&root);
     uiMenuAdd(&root, "注入 vConsole", NULL, 8, 0, UI_MENU_ICON_NONE, NULL);
     uiMenuAdd(&root, "注入 inspector.js", NULL, 9, 0, UI_MENU_ICON_NONE, NULL);
+    uiMenuAddSeparator(&root);
+    /* Settings has no page yet; about:blank is the honest placeholder. */
+    uiMenuAdd(&root, "Settings", NULL, 11, 0, UI_MENU_ICON_NONE, NULL);
 
     /* Chrome anchors the app menu under the button, right edges aligned. */
     {
@@ -2743,6 +2742,10 @@ static void showMainMenu(void)
     case 7: reloadActive("menu"); break;
     case 8: injectVConsole(g_tabs[g_activeTab].view); break;
     case 9: injectInspector(g_tabs[g_activeTab].view); break;
+    /* Chrome opens both of these in a new tab; Ctrl+J does the same thing for
+     * downloads, so the menu entry and the shortcut cannot drift apart. */
+    case 10: navigateActive("agave://downloads", 1, "menu downloads"); break;
+    case 11: navigateActive("about:blank", 1, "menu settings"); break;
     default: break;
     }
 }
@@ -2797,6 +2800,13 @@ static void paintShell(HWND hwnd)
  * WM_MOUSEMOVE: the chrome lives in the HTCLIENT area, so Windows leaves the
  * window valid and hover feedback used to appear only when some other code
  * happened to invalidate it. */
+static int dirtyHits(UiRect dirty, UiRect area)
+{
+    return dirty.w > 0 && dirty.h > 0 && area.w > 0 && area.h > 0 &&
+           dirty.x < area.x + area.w && dirty.x + dirty.w > area.x &&
+           dirty.y < area.y + area.h && dirty.y + dirty.h > area.y;
+}
+
 static void invalidateChromeDirty(HWND hwnd)
 {
     UiRect dirty;
@@ -2811,6 +2821,91 @@ static void invalidateChromeDirty(HWND hwnd)
     rect.bottom = dirty.y + dirty.h;
 
     InvalidateRect(hwnd, &rect, FALSE);
+
+    /* The native fields paint their own background with the pill's current
+     * fill (WM_CTLCOLOREDIT), so a hover change has to reach them as well. */
+    if (g_address && dirtyHits(dirty, CHROME->toolbar.address))
+        InvalidateRect(g_address, NULL, TRUE);
+    if (g_findEdit && dirtyHits(dirty, CHROME->findbar.field))
+        InvalidateRect(g_findEdit, NULL, TRUE);
+}
+
+/* The address and find fields are native EDITs: mouse moves over the text go to
+ * the control, never to the shell, so the pill around it could not highlight.
+ * Forward those moves into the chrome's own state machine in shell client
+ * coordinates, and let the EDIT repaint when the fill changes. */
+static LRESULT CALLBACK pillEditProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    WNDPROC previous = (WNDPROC)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+    ShellWindow* win = windowForHwnd(hwnd);
+
+    (void)wParam;
+
+    if (win && (message == WM_MOUSEMOVE || message == WM_MOUSELEAVE)) {
+        UiMouseEvent event;
+        UiRect dirty;
+        POINT origin = { 0, 0 };
+        ShellWindow* saved;
+        int changed;
+
+        event.x = (short)LOWORD(lParam);
+        event.y = (short)HIWORD(lParam);
+        ClientToScreen(hwnd, &origin);
+        ScreenToClient(win->hwnd, &origin);
+        event.x += origin.x;
+        event.y += origin.y;
+
+        if (message == WM_MOUSELEAVE) {
+            event.type = UI_MOUSE_LEAVE;
+            event.x = 0;
+            event.y = 0;
+        } else {
+            event.type = UI_MOUSE_MOVE;
+        }
+
+        saved = g_cur;
+        g_cur = win;
+        uiChromeMouse(&win->chrome, &event);
+        changed = uiChromeTakeDirty(&win->chrome, &dirty);
+        g_cur = saved;
+
+        if (changed) {
+            RECT rect;
+
+            rect.left = dirty.x;
+            rect.top = dirty.y;
+            rect.right = dirty.x + dirty.w;
+            rect.bottom = dirty.y + dirty.h;
+
+            InvalidateRect(win->hwnd, &rect, FALSE);
+            InvalidateRect(hwnd, NULL, TRUE);
+        }
+
+        if (message == WM_MOUSEMOVE) {
+            TRACKMOUSEEVENT track;
+
+            memset(&track, 0, sizeof(track));
+            track.cbSize = sizeof(track);
+            track.dwFlags = TME_LEAVE;
+            track.hwndTrack = hwnd;
+            TrackMouseEvent(&track);
+        }
+    }
+
+    return CallWindowProcW(previous, hwnd, message, wParam, lParam);
+}
+
+static void installPillEditHandler(HWND edit)
+{
+    WNDPROC previous;
+
+    if (!edit)
+        return;
+
+    previous = (WNDPROC)SetWindowLongPtrW(edit, GWLP_WNDPROC, (LONG_PTR)pillEditProc);
+
+    if (previous)
+        SetWindowLongPtrW(edit, GWLP_USERDATA, (LONG_PTR)previous);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -3299,18 +3394,24 @@ static LRESULT CALLBACK shellProcInner(HWND hwnd, UINT message, WPARAM wParam, L
 
     case WM_CTLCOLOREDIT: {
         HDC control = (HDC)wParam;
+        HWND edit = (HWND)lParam;
 
-        if ((HWND)lParam == g_address || (HWND)lParam == g_findEdit) {
-            /* The pill's focus ring is painted by the chrome; keep the EDIT
-             * background equal to the pill so the corners stay round. Chrome
-             * lightens the dark pill while it owns focus. */
-            int focused = GetFocus() == (HWND)lParam;
+        if (edit == g_address || edit == g_findEdit) {
+            /* The EDIT paints its own background, so it has to be exactly the
+             * fill the chrome painted under and around it. Ask the chrome
+             * instead of guessing from the part: hovering the Go button (part
+             * of the pill, but not the pill's own part) highlights the pill just
+             * the same, and the text used to sit in a differently-coloured
+             * rectangle whenever it did. */
+            int state = uiChromeFieldState(CHROME, edit == g_address ? 1 : 2);
 
             SetTextColor(control, CHROME->theme.text_color);
-            SetBkColor(control, focused ? CHROME->theme.field_focus_color
-                                        : CHROME->theme.field_color);
-            return (LRESULT)(focused ? CHROME->theme.field_focus_brush
-                                     : CHROME->theme.field_brush);
+            SetBkColor(control, state == 2 ? CHROME->theme.field_focus_color
+                              : state == 1 ? CHROME->theme.field_hover_color
+                                           : CHROME->theme.field_color);
+            return (LRESULT)(state == 2 ? CHROME->theme.field_focus_brush
+                            : state == 1 ? CHROME->theme.field_hover_brush
+                                         : CHROME->theme.field_brush);
         }
         break;
     }
@@ -5822,6 +5923,17 @@ static int sameColor(unsigned got, unsigned want)
     return (got & 0x00FFFFFFu) == (want & 0x00FFFFFFu);
 }
 
+/* Squared RGB distance: antialiased arc pixels are blends, so "which of the two
+ * colours is this pixel closer to" is the only robust question to ask there. */
+static int colorDistance(unsigned a, unsigned b)
+{
+    int dr = (int)((a >> 16) & 0xFF) - (int)((b >> 16) & 0xFF);
+    int dg = (int)((a >> 8) & 0xFF) - (int)((b >> 8) & 0xFF);
+    int db = (int)(a & 0xFF) - (int)(b & 0xFF);
+
+    return dr * dr + dg * dg + db * db;
+}
+
 static int shotLuma(unsigned argb)
 {
     return (int)(((argb >> 16) & 0xFF) * 30 + ((argb >> 8) & 0xFF) * 59 +
@@ -5913,6 +6025,8 @@ static void shotBuildMenu(UiChrome* chrome, HDC dc, int width, int height)
                                     UI_MENU_ICON_NONE, &g_shotMenuBookmarks);
     uiMenuAdd(&g_shotMenuRoot, "History", NULL, 0, 0, UI_MENU_ICON_NONE,
               &g_shotMenuHistory);
+    uiMenuAdd(&g_shotMenuRoot, "Downloads", "Ctrl+J", 10, 0,
+              UI_MENU_ICON_DOWNLOAD, NULL);
     uiMenuAddSeparator(&g_shotMenuRoot);
     uiMenuAdd(&g_shotMenuRoot, "Zoom in", "Ctrl+=", 2, 0, UI_MENU_ICON_NONE, NULL);
     uiMenuAdd(&g_shotMenuRoot, "Zoom out", "Ctrl+-", 3, 0, UI_MENU_ICON_NONE, NULL);
@@ -5920,12 +6034,13 @@ static void shotBuildMenu(UiChrome* chrome, HDC dc, int width, int height)
     uiMenuAddSeparator(&g_shotMenuRoot);
     uiMenuAdd(&g_shotMenuRoot, "New tab", "Ctrl+T", 5, 0, UI_MENU_ICON_NONE, NULL);
     uiMenuAdd(&g_shotMenuRoot, "Find", "Ctrl+F", 6, 0, UI_MENU_ICON_NONE, NULL);
-    uiMenuAdd(&g_shotMenuRoot, "View page source (not implemented)", "Ctrl+U", 7,
-              UI_MENU_ITEM_DISABLED, UI_MENU_ICON_NONE, NULL);
+    uiMenuAdd(&g_shotMenuRoot, "Reload", "F5", 7, 0, UI_MENU_ICON_NONE, NULL);
     uiMenuAddSeparator(&g_shotMenuRoot);
     uiMenuAdd(&g_shotMenuRoot, "注入 vConsole", NULL, 8, 0, UI_MENU_ICON_NONE, NULL);
     uiMenuAdd(&g_shotMenuRoot, "注入 inspector.js", NULL, 9, 0,
               UI_MENU_ICON_NONE, NULL);
+    uiMenuAddSeparator(&g_shotMenuRoot);
+    uiMenuAdd(&g_shotMenuRoot, "Settings", NULL, 11, 0, UI_MENU_ICON_NONE, NULL);
 
     uiMenuSessionBegin(&g_shotMenu, &g_shotMenuRoot, &chrome->theme, ax, ay,
                        UI_MENU_ALIGN_RIGHT, &work);
@@ -6106,6 +6221,24 @@ static int uiShotMain(void)
               chrome.tabstrip.tab[2].y + chrome.tabstrip.tab[2].h / 2);
     uiCheck("click-tab", g_uiShotLog.activated == 2);
 
+    /* The press switches the tab; the release must not switch it again. */
+    {
+        UiMouseEvent press;
+
+        press.x = chrome.tabstrip.tab[3].x + chrome.tabstrip.tab[3].w / 2;
+        press.y = chrome.tabstrip.tab[3].y + chrome.tabstrip.tab[3].h / 2;
+
+        g_uiShotLog.activated = -1;
+        press.type = UI_MOUSE_DOWN;
+        uiChromeMouse(&chrome, &press);
+        uiCheck("tab-activates-on-press", g_uiShotLog.activated == 3);
+
+        g_uiShotLog.activated = -1;
+        press.type = UI_MOUSE_UP;
+        uiChromeMouse(&chrome, &press);
+        uiCheck("tab-activates-once", g_uiShotLog.activated == -1);
+    }
+
     if (chrome.tabstrip.close[2].w > 0) {
         shotClick(&chrome, chrome.tabstrip.close[2].x + chrome.tabstrip.close[2].w / 2,
                   chrome.tabstrip.close[2].y + chrome.tabstrip.close[2].h / 2);
@@ -6156,8 +6289,29 @@ static int uiShotMain(void)
                                                      2, chrome.theme.tabstrip_h + 2),
                                            chrome.theme.toolbar));
         uiCheck("pixel-active-tab", sameColor(shotPixel((const unsigned char*)bits, width, height,
-                                                        active.x + 3, active.y + active.h - 3),
+                                                        active.x + uiThemeScale(&chrome.theme, 3),
+                                                        active.y + active.h -
+                                                            uiThemeScale(&chrome.theme, 8)),
                                               chrome.theme.surface));
+        /* Chrome's active tab flares out where it meets the toolbar: one pixel
+         * left of the tab and one above the base is tab colour, while the same
+         * one pixel left, higher up, is still strip. */
+        {
+            unsigned low = shotPixel((const unsigned char*)bits, width, height,
+                                     active.x - uiThemeScale(&chrome.theme, 1),
+                                     active.y + active.h -
+                                         uiThemeScale(&chrome.theme, 1));
+            unsigned high = shotPixel((const unsigned char*)bits, width, height,
+                                      active.x - uiThemeScale(&chrome.theme, 1),
+                                      active.y + active.h -
+                                          uiThemeScale(&chrome.theme, 12));
+
+            uiCheck("pixel-tab-flare",
+                    colorDistance(low, chrome.theme.surface) <
+                        colorDistance(low, chrome.theme.chrome));
+            uiCheck("pixel-tab-no-outside-body",
+                    sameColor(high, chrome.theme.chrome));
+        }
         uiCheck("pixel-status", sameColor(shotPixel((const unsigned char*)bits, width, height,
                                                     2, height - 2),
                                           chrome.theme.surface_alt));
@@ -6233,9 +6387,9 @@ static int uiShotMain(void)
             i = -1;
             uiCheck("menu-hit-separator",
                     uiMenuSessionHit(&g_shotMenu, root->rect.x + 30,
-                                     (root->item_top[3] + root->item_bottom[3]) / 2,
-                                     &p, &i) && p == 0 && i == 3 &&
-                    (g_shotMenuRoot.items[3].flags & UI_MENU_ITEM_SEPARATOR));
+                                     (root->item_top[4] + root->item_bottom[4]) / 2,
+                                     &p, &i) && p == 0 && i == 4 &&
+                    (g_shotMenuRoot.items[4].flags & UI_MENU_ITEM_SEPARATOR));
         }
 
         /* Keyboard: Down starts at the first row and skips separators. */
@@ -6243,19 +6397,22 @@ static int uiShotMain(void)
         g_shotMenu.key_item = -1;
         uiMenuSessionKey(&g_shotMenu, &chrome.theme, VK_DOWN, &chosen);
 
-        for (guard = 0; guard < 3; ++guard)
+        for (guard = 0; guard < 4; ++guard)
             uiMenuSessionKey(&g_shotMenu, &chrome.theme, VK_DOWN, &chosen);
 
+        /* Down from Downloads (3) jumps the separator (4) onto Zoom in (5). */
         uiCheck("menu-key-skips-separator",
-                g_shotMenu.key_panel == 0 && g_shotMenu.key_item == 4);
+                g_shotMenu.key_panel == 0 && g_shotMenu.key_item == 5);
 
-        /* Walk to the disabled "View page source" (10): Down must land on 12. */
-        for (guard = 0; guard < 6 && g_shotMenu.key_item != 9; ++guard)
+        /* Walk to Find (10): one more Down steps onto Reload (11) - the sample
+         * menu has no disabled rows any more, the shell omits those entries
+         * instead of greying them out. */
+        for (guard = 0; guard < 8 && g_shotMenu.key_item != 10; ++guard)
             uiMenuSessionKey(&g_shotMenu, &chrome.theme, VK_DOWN, &chosen);
 
         uiMenuSessionKey(&g_shotMenu, &chrome.theme, VK_DOWN, &chosen);
-        uiCheck("menu-key-skips-disabled",
-                g_shotMenu.key_panel == 0 && g_shotMenu.key_item == 12);
+        uiCheck("menu-key-steps",
+                g_shotMenu.key_panel == 0 && g_shotMenu.key_item == 11);
 
         /* Right opens the focused submenu; Left closes it again. */
         while (g_shotMenu.key_item != g_shotMenuHoverItem)
@@ -6274,7 +6431,7 @@ static int uiShotMain(void)
         uiCheck("menu-click-chooses",
                 uiMenuSessionClick(&g_shotMenu, &chrome.theme,
                                    root->rect.x + 40,
-                                   (root->item_top[4] + root->item_bottom[4]) / 2,
+                                   (root->item_top[5] + root->item_bottom[5]) / 2,
                                    &chosen) == 1 && chosen == 2);
 
         /* Clicking outside every panel cancels. */
@@ -6397,6 +6554,24 @@ static int uiShotMain(void)
         uiCheck("dirty-hover-tab-rect", dirty.x <= tab3.x &&
                                         dirty.x + dirty.w >= tab3.x + tab3.w);
 
+        /* The separators that go away next to a hovered tab sit in the gaps, so
+         * the dirty rect has to reach past both edges of the tab. */
+        {
+            int sepw = uiTabStripSeparatorWidth(&chrome.theme);
+            int gapLeft = tab3.x - (chrome.theme.tab_gap + sepw) / 2;
+            int gapRight = chrome.tabstrip.tab[3].x -   /* tab3 is index 2 */
+                           (chrome.theme.tab_gap + sepw) / 2;
+
+            uiCheck("dirty-hover-tab-seps", dirty.x <= gapLeft &&
+                                            dirty.x + dirty.w >= gapRight + sepw);
+        }
+
+        /* A relayout (resize, theme switch) keeps the pointer's state: the
+         * fields are model indices, so nothing has to be recomputed - they used
+         * to be wiped here and only came back on the next mouse move. */
+        uiChromeLayout(&chrome, width, height);
+        uiCheck("layout-keeps-hover", chrome.tabstrip.hover_tab == 2);
+
         move.x = tab3.x + tab3.w / 2 + uiThemeScale(&chrome.theme, 2);
         uiChromeMouse(&chrome, &move);
         uiCheck("dirty-still", uiChromeTakeDirty(&chrome, &dirty) == 0);
@@ -6412,8 +6587,18 @@ static int uiShotMain(void)
                           chrome.theme.tab_hover));
         uiCheck("pixel-hover-pill-gap",
                 sameColor(shotPixel((const unsigned char*)bits, width, height,
-                                    tab3.x + pad, tab3.y + tab3.h - 1),
+                                    tab3.x + tab3.w - uiThemeScale(&chrome.theme, 4),
+                                    tab3.y + tab3.h - 1),
                           chrome.theme.chrome));
+
+        /* The pill's bottom-left corner must survive the active tab next door:
+         * that tab's base flare reaches into this rect, and stamping it after
+         * the pill bit a notch out of it. */
+        uiCheck("pixel-hover-pill-corner",
+                sameColor(shotPixel((const unsigned char*)bits, width, height,
+                                    tab3.x + uiThemeScale(&chrome.theme, 4),
+                                    tab3.y + tab3.h - uiThemeScale(&chrome.theme, 8)),
+                          chrome.theme.tab_hover));
 
         move.type = UI_MOUSE_DOWN;
         uiChromeMouse(&chrome, &move);
@@ -6450,6 +6635,46 @@ static int uiShotMain(void)
                     !sameColor(shotPixel((const unsigned char*)bits, width, height,
                                          cx + pad, cy + pad), chip));
         }
+
+        /* Hovering the address pill makes it one flat colour: the fill uses the
+         * same token as the hover border. */
+        move.type = UI_MOUSE_MOVE;
+        move.x = chrome.toolbar.address.x + uiThemeScale(&chrome.theme, 5);
+        move.y = chrome.toolbar.address.y + chrome.toolbar.address.h / 2;
+        uiChromeMouse(&chrome, &move);
+        uiChromePaint(&chrome, memory);
+        GdiFlush();
+        uiCheck("pixel-address-hover",
+                sameColor(shotPixel((const unsigned char*)bits, width, height,
+                                    chrome.toolbar.address.x +
+                                        uiThemeScale(&chrome.theme, 5),
+                                    chrome.toolbar.address.y +
+                                        chrome.toolbar.address.h / 2),
+                          /* focus wins over hover (--ui-focus case) */
+                          chrome.focus_field == 1 ? chrome.theme.field_focus
+                                                  : chrome.theme.border_strong));
+
+        /* The Go button is part of the pill: hovering it highlights the pill, so
+         * the native EDIT has to follow (it asks uiChromeFieldState for its
+         * background - this is the "hovering Go brings the text background
+         * back" case). */
+        move.type = UI_MOUSE_MOVE;
+        move.x = chrome.toolbar.go.rect.x + chrome.toolbar.go.rect.w / 2;
+        move.y = chrome.toolbar.go.rect.y + chrome.toolbar.go.rect.h / 2;
+        uiChromeMouse(&chrome, &move);
+        uiChromePaint(&chrome, memory);
+        GdiFlush();
+
+        uiCheck("field-state-go-hover",
+                uiChromeFieldState(&chrome, 1) == (chrome.focus_field == 1 ? 2 : 1));
+        uiCheck("pixel-address-go-hover",
+                sameColor(shotPixel((const unsigned char*)bits, width, height,
+                                    chrome.toolbar.address.x +
+                                        uiThemeScale(&chrome.theme, 5),
+                                    chrome.toolbar.address.y +
+                                        chrome.toolbar.address.h / 2),
+                          chrome.focus_field == 1 ? chrome.theme.field_focus
+                                                  : chrome.theme.field_hover));
 
         /* Park the pointer off the chrome again for the later samples. */
         move.type = UI_MOUSE_LEAVE;
@@ -6557,7 +6782,7 @@ static int uiShotMain(void)
         /* Separators: one hairline between resting neighbours, none where a tab
          * merges with the strip (active) or opens a pill (hovered). */
         {
-            int sep = uiThemeScale(&chrome.theme, 1);
+            int sep = uiTabStripSeparatorWidth(&chrome.theme);
             int sy = chrome.tabstrip.tab[3].y + chrome.tabstrip.tab[3].h / 2;
             int sx;
 
@@ -6673,6 +6898,29 @@ static int uiShotMain(void)
         }
 
         uiCheck("compact-tabs-no-overlap", !overlap);
+    }
+
+    /* --- minimum tab width: squeeze further and the strip overflows --------- */
+    {
+        int narrow_w = uiThemeScale(&chrome.theme, 420);
+        int slot;
+
+        uiChromeLayout(&chrome, narrow_w, uiThemeScale(&chrome.theme, 460));
+
+        slot = chrome.tabstrip.count > 1
+                   ? chrome.tabstrip.tab[chrome.tabstrip.slot_of[1]].x -
+                         chrome.tabstrip.tab[chrome.tabstrip.slot_of[0]].x
+                   : chrome.theme.tab_min_w;
+
+        uiCheck("tab-min-width", slot >= chrome.theme.tab_min_w);
+        /* Overflowing tabs stay clipped inside the strip and the "+" is pinned
+         * inside it rather than pushed under the window buttons. */
+        uiCheck("tab-min-plus-inside",
+                chrome.tabstrip.new_tab.x + chrome.tabstrip.new_tab.w <= narrow_w);
+
+        /* Restore the compact geometry the DPI block expects to start from. */
+        uiChromeLayout(&chrome, uiThemeScale(&chrome.theme, 700),
+                       uiThemeScale(&chrome.theme, 460));
     }
 
     /* --- 150% DPI: metrics scale, content still lands below the toolbar --- */
@@ -7434,6 +7682,10 @@ static ShellWindow* createShellWindow(const char* title)
     if (win->findEdit)
         SendMessageW(win->findEdit, EM_SETMARGINS,
                      EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(2, 2));
+
+    /* Hover over the text has to reach the pill as well (see pillEditProc). */
+    installPillEditHandler(win->address);
+    installPillEditHandler(win->findEdit);
 
     uiChromeSetNative(&win->chrome, win->hwnd, win->address, win->findEdit);
     uiChromeSetDpi(&win->chrome, shellOps()->dpi_for_window(NULL, win->hwnd));

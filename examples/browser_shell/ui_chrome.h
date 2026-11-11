@@ -126,6 +126,12 @@ void uiChromePaintFindOverlay(UiChrome* chrome, HDC hdc, int width, int height);
 /* Refresh derived widget state (enabled back/forward) after the model changed. */
 void uiChromeSync(UiChrome* chrome);
 
+/* Which fill a text field's pill is painted with: 0 normal, 1 hovered,
+ * 2 focused. `field` is 1 (address) or 2 (find). The shell asks for this when
+ * it answers WM_CTLCOLOREDIT, so the native EDIT's background always matches the
+ * pill it sits in. */
+int uiChromeFieldState(const UiChrome* chrome, int field);
+
 /* 1 = the event was consumed by the chrome. */
 int uiChromeMouse(UiChrome* chrome, const UiMouseEvent* event);
 

@@ -142,9 +142,11 @@ typedef struct UiTheme {
     int menu_gap;
 
     COLORREF field_color;
+    COLORREF field_hover_color;
     COLORREF field_focus_color;
     COLORREF text_color;
     HBRUSH   field_brush;
+    HBRUSH   field_hover_brush;
     HBRUSH   field_focus_brush;
     HBRUSH   surface_brush;
 
@@ -198,6 +200,13 @@ void uiFillRect(UiPainter* p, UiRect r, unsigned argb);
 void uiFillRoundRect(UiPainter* p, UiRect r, int radius, unsigned argb);
 void uiStrokeRoundRect(UiPainter* p, UiRect r, int radius, unsigned argb, float stroke);
 void uiFillCircle(UiPainter* p, int cx, int cy, int radius, unsigned argb);
+/* Tab silhouette: rounded top corners and (when bottomRadius > 0) rounded
+ * bottom corners; 0 gives the squared base that merges into the toolbar. */
+void uiFillTabShape(UiPainter* p, UiRect r, int topRadius, int bottomRadius,
+                    unsigned argb);
+/* Pie slice at (cx, cy): degrees, 0 = +x, positive = clockwise (y grows down). */
+void uiFillPie(UiPainter* p, int cx, int cy, int radius, float startAngle,
+               float sweep, unsigned argb);
 void uiStrokeCircle(UiPainter* p, int cx, int cy, int radius, unsigned argb, float stroke);
 void uiLine(UiPainter* p, int x1, int y1, int x2, int y2, unsigned argb, float stroke);
 void uiShadow(UiPainter* p, UiRect r, int radius, int spread, unsigned argb);
