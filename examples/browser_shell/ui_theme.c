@@ -4,6 +4,7 @@
 
 #include "ui_theme.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -15,6 +16,8 @@
 
 static ULONG_PTR g_gdiplusToken;
 static int g_gdiplusStarted;
+
+static void registerBundledFonts(void);
 
 void uiSpaceShutdown(void)
 {
@@ -31,6 +34,8 @@ int uiSpaceInit(void)
 
     if (g_gdiplusStarted)
         return 1;
+
+    registerBundledFonts();
 
     memset(&input, 0, sizeof(input));
     input.GdiplusVersion = 1;
@@ -72,11 +77,62 @@ static HFONT makeGdiFont(int pixelHeight, int weight, const wchar_t* face)
     lf.lfCharSet = DEFAULT_CHARSET;
     lf.lfOutPrecision = OUT_DEFAULT_PRECIS;
     lf.lfClipPrecision = CLIP_DEFAULT_PRECIS;
-    lf.lfQuality = CLEARTYPE_QUALITY;
+    /* Grayscale AA, matching the GDI+ side (TextRenderingHintAntiAliasGridFit,
+     * R167/#12). ClearType made the EDIT controls cluster-coloured while the
+     * self-drawn chrome next to them was grayscale. */
+    lf.lfQuality = ANTIALIASED_QUALITY;
     lf.lfPitchAndFamily = DEFAULT_PITCH | FF_DONTCARE;
     wcsncpy(lf.lfFaceName, face, LF_FACESIZE - 1);
 
     return CreateFontIndirectW(&lf);
+}
+
+/* The build copies `fonts/` next to the executable (fonts/NotoSansSC-*.ttf, the
+ * same files the engine registers in FontCachePS.cpp). Register them privately
+ * here too so the chrome gets the intended CJK face without depending on the
+ * engine having started (--ui-shot never starts one) or on the face being
+ * installed system-wide. Idempotent: AddFontResourceEx ref-counts. */
+static void registerBundledFonts(void)
+{
+    wchar_t exe[MAX_PATH];
+    wchar_t pattern[MAX_PATH];
+    WIN32_FIND_DATAW data;
+    HANDLE find;
+    DWORD len;
+
+    len = GetModuleFileNameW(NULL, exe, MAX_PATH);
+
+    if (!len || len >= MAX_PATH)
+        return;
+
+    {
+        wchar_t* slash = wcsrchr(exe, L'\\');
+
+        if (!slash)
+            return;
+
+        slash[1] = 0;
+    }
+
+    _snwprintf(pattern, MAX_PATH, L"%sfonts\\*.ttf", exe);
+    pattern[MAX_PATH - 1] = 0;
+
+    find = FindFirstFileW(pattern, &data);
+
+    if (find == INVALID_HANDLE_VALUE)
+        return;
+
+    do {
+        if (!(data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+            wchar_t path[MAX_PATH];
+
+            _snwprintf(path, MAX_PATH, L"%sfonts\\%s", exe, data.cFileName);
+            path[MAX_PATH - 1] = 0;
+            AddFontResourceExW(path, FR_PRIVATE, 0);
+        }
+    } while (FindNextFileW(find, &data));
+
+    FindClose(find);
 }
 
 static void freeFonts(UiTheme* theme)
@@ -123,7 +179,19 @@ static GpStringFormat* makeFormat(UiAlign align)
 
 static void createFonts(UiTheme* theme)
 {
-    static const wchar_t* const kFaces[] = { L"Segoe UI", L"Microsoft YaHei UI", L"Arial" };
+    /* One family has to cover Latin AND CJK: GDI+ DrawString does no
+     * cross-script family linking, so asking for Segoe UI and drawing Chinese
+     * gets GDI's substitute face (SimSun-ish) while the Latin runs stay Segoe -
+     * two different typefaces on one row, which is what "中英文字体不统一"
+     * looked like. Both YaHei and the bundled Noto Sans SC carry Latin + CJK,
+     * so whichever is installed keeps the chrome consistent. */
+    static const wchar_t* const kFaces[] = {
+        L"Microsoft YaHei UI",
+        L"Microsoft YaHei",
+        L"Noto Sans SC",
+        L"Segoe UI",
+        L"Arial"
+    };
     const wchar_t* face = kFaces[0];
     int dpi = (int)theme->dpi;
     int i;
@@ -186,7 +254,9 @@ static void applyPalette(UiTheme* theme)
         theme->shadow = UI_ARGB(0x80, 0x00, 0x00, 0x00);
 
         theme->tab_hover = UI_RGB(0x47, 0x47, 0x47);
+        theme->tab_pressed = UI_RGB(0x50, 0x50, 0x50);
         theme->tab_close_hover = UI_RGB(0x5A, 0x5A, 0x5A);
+        theme->tab_close_pressed = UI_RGB(0x6A, 0x6A, 0x6A);
         theme->button_hover = UI_RGB(0x50, 0x50, 0x50);
         theme->button_pressed = UI_RGB(0x5A, 0x5A, 0x5A);
         theme->close_hover = UI_RGB(0x4A, 0x4A, 0x4A);
@@ -225,7 +295,9 @@ static void applyPalette(UiTheme* theme)
         theme->shadow = UI_ARGB(0x33, 0x00, 0x00, 0x00);
 
         theme->tab_hover = UI_RGB(0xD3, 0xD6, 0xDB);
+        theme->tab_pressed = UI_RGB(0xC2, 0xC6, 0xCC);
         theme->tab_close_hover = UI_RGB(0xD0, 0xD3, 0xD8);
+        theme->tab_close_pressed = UI_RGB(0xB4, 0xB9, 0xC0);
         theme->button_hover = UI_RGB(0xF1, 0xF3, 0xF4);
         theme->button_pressed = UI_RGB(0xE3, 0xE5, 0xE8);
         theme->close_hover = UI_RGB(0xE8, 0xEA, 0xED);
@@ -854,7 +926,9 @@ void uiIcon(UiPainter* p, UiIcon icon, UiRect r, unsigned argb, float stroke)
         break;
     }
     case UI_ICON_CLOSE: {
-        float d = u * 0.50f;
+        /* 0.55u: a 16 px icon box then spans ~8.8 px, like Chrome's tab close.
+         * 0.50u read as a speck once the tab chip was already small. */
+        float d = u * 0.55f;
         float points1[] = { cx - d, cy - d, cx + d, cy + d };
         float points2[] = { cx + d, cy - d, cx - d, cy + d };
 

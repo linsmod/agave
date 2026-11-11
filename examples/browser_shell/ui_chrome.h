@@ -82,6 +82,13 @@ typedef struct UiChrome {
     int hover_part;         /* UiPart */
     int mouse_inside;
 
+    /* Union of the chrome areas whose pixels the last uiChromeMouse() changed.
+     * The shell turns this into one InvalidateRect() instead of repainting the
+     * whole window on every mouse move (the chrome is HTCLIENT, so WM_MOUSEMOVE
+     * used to change hover state with nothing invalidated at all). */
+    UiRect dirty;
+    int    dirty_pending;
+
     UiTabStrip tabstrip;
     UiToolbar toolbar;
     UiFindBar findbar;
@@ -115,6 +122,10 @@ void uiChromeSync(UiChrome* chrome);
 
 /* 1 = the event was consumed by the chrome. */
 int uiChromeMouse(UiChrome* chrome, const UiMouseEvent* event);
+
+/* Areas the last event needs repainted: 1 = *dirty is valid (the call clears
+ * it, so a caller that ignores it never accumulates stale rectangles). */
+int uiChromeTakeDirty(UiChrome* chrome, UiRect* dirty);
 
 /* For tests: which part is at (x,y), and which tab (model index, -1 if none). */
 UiPart uiChromeHitTest(UiChrome* chrome, int x, int y);

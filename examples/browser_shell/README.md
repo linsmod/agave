@@ -66,7 +66,7 @@ UI 不再由 `main.c` 里的一排原生 `BUTTON` 拼出来；`main.c` 只保留
 | 文件 | 职责 |
 |---|---|
 | `shell_ops.[ch]` | `shell_ops_t`（operations/callbacks interface）：profile 路径、下载目录、系统暗色、DPI、暗色标题栏、消息框、tick。Win32 默认实现 + mock（`AGB_SHELL_OPS=mock`） |
-| `ui_theme.[ch]` | 亮/暗 token、DPI 缩放、Segoe UI 字体、GDI+ painter、矢量图标 |
+| `ui_theme.[ch]` | 亮/暗 token、DPI 缩放、中英同族字体（YaHei/Noto，私有注册 `fonts/`）、GDI+ painter、矢量图标 |
 | `ui_widgets.[ch]` | `UiButton`、`UiTabStrip`（含 favicon chip、hover、关闭按钮、宽度自适应） |
 | `ui_chrome.[ch]` | 工具栏/地址胶囊/查找栏/状态栏/窗口按钮的组合、布局、绘制、命中与鼠标状态机 |
 
@@ -92,7 +92,7 @@ pwsh -File tools\check_shell_frame.ps1   # 手动：隐藏窗口 + 真实 WM_NCC
 |---|---|
 | 地址栏 + Enter | 导航；不含点号/协议时按搜索词处理 |
 | `+` / Ctrl+T | 新标签页 |
-| 点标签 | 切换；点标签右侧 `x` 关闭 |
+| 点标签 | 切换；点右侧 `x` 关闭；**中键**点标签也关闭（hover 内缩 pill、按下加深） |
 | `<` `>` / Alt+←→ | 后退 / 前进 |
 | `R` / F5 | 刷新（加载中同一个按钮变成停止 X） |
 | `X` / Esc | 停止 |

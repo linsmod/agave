@@ -2,11 +2,13 @@
  * ui_menu_host.c - a Chrome-style menu popup window.
  *
  * The menu is one layered window whose pixels come from a 32bppPARGB GDI+
- * bitmap: rounded panels, a soft shadow and antialiased text all keep their
- * alpha, and the empty area between the root panel and a submenu is visible
- * through it. A 1/255 black cover over the rest of the window makes the whole
- * popup receive the mouse (so a click outside a panel dismisses it instead of
- * reaching the page), while remaining visually invisible.
+ * bitmap: rounded panels and antialiased text keep their alpha, and the empty
+ * area between the root panel and a submenu is visible through it. A 1/255
+ * black cover over the rest of the window makes the whole popup receive the
+ * mouse (so a click outside a panel dismisses it instead of reaching the page),
+ * while remaining visually invisible. There is no drop shadow: the whole
+ * surface is repainted on every hover change, and ten nested rounded-rect
+ * blends per paint dominated that path.
  *
  * While open the host owns a modal message loop and mouse capture, the same
  * contract TrackPopupMenu had.
@@ -146,7 +148,10 @@ static void hostRender(UiMenuHost* host)
     if (bounds.w <= 0 || bounds.h <= 0)
         return;
 
-    margin = uiThemeScale(host->theme, 16);
+    /* No shadow any more (see uiMenuSessionPaint): the margin only has to keep
+     * the panels' antialiased border inside the surface, and every pixel of it
+     * is a blend the compositor has to run. */
+    margin = uiThemeScale(host->theme, 2);
     wx = bounds.x - margin;
     wy = bounds.y - margin;
     width = bounds.w + margin * 2;
@@ -381,7 +386,7 @@ int uiMenuHostRun(const UiTheme* theme, const UiMenu* root, int x, int y,
         return 0;
 
     bounds = uiMenuSessionBounds(&host.session);
-    margin = uiThemeScale(theme, 16);
+    margin = uiThemeScale(theme, 2);
     width = bounds.w + margin * 2;
     height = bounds.h + margin * 2;
 

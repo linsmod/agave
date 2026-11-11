@@ -837,21 +837,10 @@ void uiMenuSessionPaint(UiMenuSession* session, const UiTheme* theme,
     if (!session || !theme || !painter || !painter->g)
         return;
 
-    /* Shadows first so overlapping panels composite as one popup. */
-    for (p = 0; p < session->count; ++p) {
-        const UiMenuPanel* panel = &session->panels[p];
-        UiRect rect;
-
-        if (!session->visible[p])
-            continue;
-
-        rect = uiRectMake(panel->rect.x + dx, panel->rect.y + dy,
-                          panel->rect.w, panel->rect.h);
-
-        uiShadow(painter, rect, theme->menu_radius, scale(theme, 10),
-                 theme->menu_shadow);
-    }
-
+    /* No drop shadow: it was ten nested rounded-rect fills per repaint (the
+     * whole popup is re-rendered on every hover change), and that dominated the
+     * cost of a mouse move. The panels keep their 1 px border instead; the
+     * popup is still translucent outside them so clicks dismiss it. */
     for (p = 0; p < session->count; ++p) {
         const UiMenuPanel* panel = &session->panels[p];
         UiRect rect;

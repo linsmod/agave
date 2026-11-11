@@ -2730,6 +2730,26 @@ static void paintShell(HWND hwnd)
     EndPaint(hwnd, &ps);
 }
 
+/* Repaint only the chrome parts the last mouse event changed. Called from
+ * WM_MOUSEMOVE: the chrome lives in the HTCLIENT area, so Windows leaves the
+ * window valid and hover feedback used to appear only when some other code
+ * happened to invalidate it. */
+static void invalidateChromeDirty(HWND hwnd)
+{
+    UiRect dirty;
+    RECT rect;
+
+    if (!g_cur || !uiChromeTakeDirty(CHROME, &dirty))
+        return;
+
+    rect.left = dirty.x;
+    rect.top = dirty.y;
+    rect.right = dirty.x + dirty.w;
+    rect.bottom = dirty.y + dirty.h;
+
+    InvalidateRect(hwnd, &rect, FALSE);
+}
+
 /* ------------------------------------------------------------------------- */
 /* window procedure                                                          */
 /* ------------------------------------------------------------------------- */
@@ -3240,6 +3260,7 @@ static LRESULT CALLBACK shellProcInner(HWND hwnd, UINT message, WPARAM wParam, L
         event.x = (short)LOWORD(lParam);
         event.y = (short)HIWORD(lParam);
         uiChromeMouse(CHROME, &event);
+        invalidateChromeDirty(hwnd);
 
         memset(&track, 0, sizeof(track));
         track.cbSize = sizeof(track);
@@ -3257,7 +3278,7 @@ static LRESULT CALLBACK shellProcInner(HWND hwnd, UINT message, WPARAM wParam, L
         event.x = -1;
         event.y = -1;
         uiChromeMouse(CHROME, &event);
-        InvalidateRect(hwnd, NULL, FALSE);
+        invalidateChromeDirty(hwnd);
         return 0;
     }
 
@@ -3271,6 +3292,7 @@ static LRESULT CALLBACK shellProcInner(HWND hwnd, UINT message, WPARAM wParam, L
         event.x = point.x;
         event.y = point.y;
         uiChromeMouse(CHROME, &event);
+        invalidateChromeDirty(hwnd);
 
         memset(&track, 0, sizeof(track));
         track.cbSize = sizeof(track);
@@ -3278,7 +3300,6 @@ static LRESULT CALLBACK shellProcInner(HWND hwnd, UINT message, WPARAM wParam, L
         track.hwndTrack = hwnd;
         TrackMouseEvent(&track);
 
-        InvalidateRect(hwnd, NULL, FALSE);
         return 0;
     }
 
@@ -3289,7 +3310,7 @@ static LRESULT CALLBACK shellProcInner(HWND hwnd, UINT message, WPARAM wParam, L
         event.x = -1;
         event.y = -1;
         uiChromeMouse(CHROME, &event);
-        InvalidateRect(hwnd, NULL, FALSE);
+        invalidateChromeDirty(hwnd);
         return 0;
     }
 
@@ -3332,6 +3353,7 @@ static LRESULT CALLBACK shellProcInner(HWND hwnd, UINT message, WPARAM wParam, L
         event.y = (short)HIWORD(lParam);
 
         if (uiChromeMouse(CHROME, &event)) {
+            invalidateChromeDirty(hwnd);
             SetCapture(hwnd);
             return 0;
         }
@@ -3349,12 +3371,26 @@ static LRESULT CALLBACK shellProcInner(HWND hwnd, UINT message, WPARAM wParam, L
             ReleaseCapture();
 
         uiChromeMouse(CHROME, &event);
-        InvalidateRect(hwnd, NULL, FALSE);
+        invalidateChromeDirty(hwnd);
         return 0;
     }
 
+    /* Middle click closes the tab under the pointer, like Chrome. The engine
+     * only ever sees clicks that land on the page, so this lives in the shell's
+     * own tab strip (uiChromeTabAt also answers for the close chip). */
+    case WM_MBUTTONUP: {
+        int index = uiChromeTabAt(CHROME, (short)LOWORD(lParam), (short)HIWORD(lParam));
+
+        if (index >= 0) {
+            agbLog(AGB_LOG_SHELL, "middle click closes tab index=%d", index);
+            closeTab(index);
+            return 0;
+        }
+        break;
+    }
+
     case WM_SETCURSOR:
-        if (LOWORD(lParam) == HTCLIENT) {
+        if (LOWORD(lParam) == HTCLIENT && g_cur) {
             POINT point;
             UiPart part;
 
@@ -3362,10 +3398,16 @@ static LRESULT CALLBACK shellProcInner(HWND hwnd, UINT message, WPARAM wParam, L
             ScreenToClient(hwnd, &point);
             part = uiChromeHitTest(CHROME, point.x, point.y);
 
-            if (part != UI_PART_NONE && part != UI_PART_STATUS &&
-                part != UI_PART_WINDOW_MIN && part != UI_PART_WINDOW_MAX &&
-                part != UI_PART_WINDOW_CLOSE) {
-                SetCursor(LoadCursorA(NULL, (LPCSTR)IDC_HAND));
+            /* Chrome's chrome is not a web page: toolbar buttons and tabs keep
+             * the arrow. Only the two text fields ask for a caret - a hand
+             * cursor over an input read as a link. */
+            if (part == UI_PART_ADDRESS || part == UI_PART_FIND_FIELD) {
+                SetCursor(LoadCursorW(NULL, IDC_IBEAM));
+                return TRUE;
+            }
+
+            if (part != UI_PART_NONE) {
+                SetCursor(LoadCursorW(NULL, IDC_ARROW));
                 return TRUE;
             }
         }
@@ -6257,6 +6299,105 @@ static int uiShotMain(void)
                 GdipDisposeImage(bitmap);
             free(buffer);
         }
+    }
+
+    /* --- interaction states: dirty rects, hover pill, press, close glyph --- */
+    {
+        UiMouseEvent move;
+        UiRect dirty;
+        UiRect tab3 = chrome.tabstrip.tab[2];
+        unsigned chip;
+        int cx;
+        int cy;
+        int pad;
+
+        pad = uiThemeScale(&chrome.theme, 3);
+
+        /* Moving onto an inactive tab has to schedule a repaint, and that
+         * repaint has to stay inside the tab strip: hover feedback used to be
+         * painted only when some unrelated code invalidated the window. */
+        uiChromeTakeDirty(&chrome, &dirty);   /* drop the shot's leftovers */
+        move.type = UI_MOUSE_MOVE;
+        move.x = tab3.x + tab3.w / 2;
+        move.y = tab3.y + tab3.h / 2;
+        uiChromeMouse(&chrome, &move);
+
+        uiCheck("dirty-hover-tab", uiChromeTakeDirty(&chrome, &dirty) &&
+                                   dirty.w > 0 && dirty.h > 0 &&
+                                   dirty.y + dirty.h <= chrome.theme.tabstrip_h + 1);
+        uiCheck("dirty-hover-tab-rect", dirty.x <= tab3.x &&
+                                        dirty.x + dirty.w >= tab3.x + tab3.w);
+
+        move.x = tab3.x + tab3.w / 2 + uiThemeScale(&chrome.theme, 2);
+        uiChromeMouse(&chrome, &move);
+        uiCheck("dirty-still", uiChromeTakeDirty(&chrome, &dirty) == 0);
+
+        uiChromePaint(&chrome, memory);
+        GdiFlush();
+
+        /* The pill floats: filled just inside the top, strip at the bottom. */
+        uiCheck("pixel-hover-pill",
+                sameColor(shotPixel((const unsigned char*)bits, width, height,
+                                    tab3.x + pad,
+                                    tab3.y + tab3.h / 2),
+                          chrome.theme.tab_hover));
+        uiCheck("pixel-hover-pill-gap",
+                sameColor(shotPixel((const unsigned char*)bits, width, height,
+                                    tab3.x + pad, tab3.y + tab3.h - 1),
+                          chrome.theme.chrome));
+
+        move.type = UI_MOUSE_DOWN;
+        uiChromeMouse(&chrome, &move);
+        uiChromePaint(&chrome, memory);
+        GdiFlush();
+        uiCheck("pixel-tab-pressed",
+                sameColor(shotPixel((const unsigned char*)bits, width, height,
+                                    tab3.x + pad, tab3.y + tab3.h / 2),
+                          chrome.theme.tab_pressed));
+        uiCheck("dirty-press",
+                uiChromeTakeDirty(&chrome, &dirty) && dirty.w >= width);
+
+        move.type = UI_MOUSE_UP;
+        uiChromeMouse(&chrome, &move);
+
+        /* Close chip: 20 px circle with a 16 px glyph. The old code left the
+         * X 4x4 device pixels, so the point on the new diagonal was plain chip. */
+        chip = chrome.theme.tab_close_hover;
+        cx = chrome.tabstrip.close[2].x + chrome.tabstrip.close[2].w / 2;
+        cy = chrome.tabstrip.close[2].y + chrome.tabstrip.close[2].h / 2;
+
+        move.type = UI_MOUSE_MOVE;
+        move.x = cx;
+        move.y = cy;
+        uiChromeMouse(&chrome, &move);
+        uiChromePaint(&chrome, memory);
+        GdiFlush();
+
+        uiCheck("pixel-close-chip",
+                sameColor(shotPixel((const unsigned char*)bits, width, height,
+                                    cx + pad + 1, cy), chip));
+        uiCheck("pixel-close-glyph",
+                !sameColor(shotPixel((const unsigned char*)bits, width, height,
+                                     cx + pad, cy + pad), chip));
+
+        /* Park the pointer off the chrome again for the later samples. */
+        move.type = UI_MOUSE_LEAVE;
+        move.x = -1;
+        move.y = -1;
+        uiChromeMouse(&chrome, &move);
+        uiChromeTakeDirty(&chrome, &dirty);
+        uiChromePaint(&chrome, memory);
+        GdiFlush();
+
+        /* Cursor policy lives in WM_SETCURSOR (main.c); this is the part it
+         * keys off: the two text fields must be the only IBeam parts. */
+        uiCheck("cursor-ibeam-address",
+                uiChromeHitTest(&chrome, chrome.toolbar.address.x + 4,
+                                chrome.toolbar.address.y + 4) == UI_PART_ADDRESS);
+        uiCheck("cursor-ibeam-find",
+                chrome.model.find_visible &&
+                uiChromeHitTest(&chrome, chrome.findbar.field.x + 4,
+                                chrome.findbar.field.y + 4) == UI_PART_FIND_FIELD);
     }
 
     /* --- focused address pill (--ui-focus) -------------------------------- */

@@ -70,6 +70,30 @@ static void fillTabShape(UiPainter* painter, UiRect rect, int radius, unsigned c
     uiFillRect(painter, bottom, color);
 }
 
+/* Chrome's *inactive* tab hover/press is a rounded pill that floats inside the
+ * tab slot and leaves a hairline of strip at the bottom; only the active tab
+ * merges into the toolbar (fillTabShape squares that one off). Reusing
+ * fillTabShape here made the hover read as a box welded to the toolbar. */
+static void fillTabPill(UiPainter* painter, const UiTheme* theme, UiRect rect,
+                        int radius, unsigned color)
+{
+    UiRect pill;
+    int inset;
+
+    if (rect.w <= 0 || rect.h <= 0)
+        return;
+
+    inset = uiThemeScale(theme, 1);
+
+    if (rect.h - inset * 3 < 2) {
+        uiFillRoundRect(painter, rect, radius, color);
+        return;
+    }
+
+    pill = uiRectMake(rect.x, rect.y + inset, rect.w, rect.h - inset * 3);
+    uiFillRoundRect(painter, pill, radius, color);
+}
+
 static void paintFavicon(UiPainter* painter, const UiTheme* theme,
                          UiRect rect, const char* url, const char* title)
 {
@@ -87,25 +111,33 @@ static void paintFavicon(UiPainter* painter, const UiTheme* theme,
 }
 
 static void paintTabClose(UiPainter* painter, const UiTheme* theme,
-                          UiRect hit, int hovered)
+                          UiRect hit, int hovered, int pressed)
 {
-    int radius = uiThemeScale(theme, 8);
+    /* 20 px chip with the full 16 px glyph box inside it. The old code used a
+     * 16 px chip *and* inset the icon by another 4 px on each side, so the
+     * glyph box was 8 px and the X itself 4x4 device pixels - the "× 太小"
+     * report. */
+    int chip = uiThemeScale(theme, 10);
+    int glyph = uiThemeScale(theme, 16);
     int cx = hit.x + hit.w / 2;
     int cy = hit.y + hit.h / 2;
-    UiRect icon = uiRectMake(cx - radius, cy - radius, radius * 2, radius * 2);
+    unsigned color = (hovered || pressed) ? theme->text : theme->text_muted;
+    UiRect icon;
 
-    if (hovered) {
+    if (glyph > hit.w)
+        glyph = hit.w;
+
+    icon = uiRectMake(cx - glyph / 2, cy - glyph / 2, glyph, glyph);
+
+    if (hovered || pressed) {
         /* Chrome's tab close is a neutral chip; only the title-bar X turns
          * red. */
-        uiFillCircle(painter, cx, cy, radius, theme->tab_close_hover);
-        uiIcon(painter, UI_ICON_CLOSE, uiRectInset(icon, uiThemeScale(theme, 4),
-                                                   uiThemeScale(theme, 4)),
-               theme->text, (1.4f * theme->scale));
-    } else {
-        uiIcon(painter, UI_ICON_CLOSE, uiRectInset(icon, uiThemeScale(theme, 4),
-                                                   uiThemeScale(theme, 4)),
-               theme->text_muted, (1.3f * theme->scale));
+        uiFillCircle(painter, cx, cy, chip,
+                     pressed ? theme->tab_close_pressed : theme->tab_close_hover);
     }
+
+    uiIcon(painter, UI_ICON_CLOSE, icon, color,
+           ((hovered || pressed) ? 1.5f : 1.4f) * theme->scale);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -202,7 +234,23 @@ void uiButtonPaint(UiButton* button, const UiTheme* theme, UiPainter* painter)
     else
         color = theme->icon;
 
-    icon = uiRectInset(button->rect, uiThemeScale(theme, 8), uiThemeScale(theme, 8));
+    /* A fixed 8 px inset was only right for the 32 px toolbar buttons; the
+     * 24 px find-bar buttons were left with an 8 px glyph box (chevrons ~3 px
+     * wide). Size the box off the button instead, capped at Chrome's 16 px. */
+    {
+        int side = button->rect.w < button->rect.h ? button->rect.w : button->rect.h;
+        int box = side - uiThemeScale(theme, 8);
+        int cx = button->rect.x + button->rect.w / 2;
+        int cy = button->rect.y + button->rect.h / 2;
+
+        if (box > uiThemeScale(theme, 16))
+            box = uiThemeScale(theme, 16);
+        if (box < uiThemeScale(theme, 10))
+            box = uiThemeScale(theme, 10);
+
+        icon = uiRectMake(cx - box / 2, cy - box / 2, box, box);
+    }
+
     uiIcon(painter, button->icon, icon, color, (1.7f * theme->scale));
 }
 
@@ -386,7 +434,8 @@ UiPart uiTabStripHit(UiTabStrip* strip, int x, int y, int* model_index)
 
 static void paintTab(UiPainter* painter, const UiTheme* theme,
                      const UiChromeModel* model, UiTabStrip* strip,
-                     int index, int active, int hovered, int close_hovered)
+                     int index, int active, int hovered, int close_hovered,
+                     int pressed, int close_pressed)
 {
     UiRect rect = strip->tab[index];
     UiRect favicon;
@@ -405,8 +454,10 @@ static void paintTab(UiPainter* painter, const UiTheme* theme,
 
     if (active)
         fillTabShape(painter, rect, theme->tab_radius, theme->surface);
+    else if (pressed)
+        fillTabPill(painter, theme, rect, theme->tab_radius, theme->tab_pressed);
     else if (hovered)
-        fillTabShape(painter, rect, theme->tab_radius, theme->tab_hover);
+        fillTabPill(painter, theme, rect, theme->tab_radius, theme->tab_hover);
 
     if (show_favicon) {
         favicon = uiRectMake(rect.x + uiThemeScale(theme, 10),
@@ -441,7 +492,8 @@ static void paintTab(UiPainter* painter, const UiTheme* theme,
     }
 
     if (show_close)
-        paintTabClose(painter, theme, strip->close[index], close_hovered);
+        paintTabClose(painter, theme, strip->close[index], close_hovered,
+                      close_pressed);
 }
 
 void uiTabStripPaint(UiTabStrip* strip, const UiTheme* theme,
@@ -465,12 +517,14 @@ void uiTabStripPaint(UiTabStrip* strip, const UiTheme* theme,
             continue;
 
         paintTab(painter, theme, model, strip, index, 0,
-                 strip->hover_tab == index, strip->hover_close == index);
+                 strip->hover_tab == index, strip->hover_close == index,
+                 strip->pressed_tab == index, strip->pressed_close == index);
     }
 
     if (tabVisible(model, active)) {
         paintTab(painter, theme, model, strip, active, 1,
-                 strip->hover_tab == active, strip->hover_close == active);
+                 strip->hover_tab == active, strip->hover_close == active,
+                 strip->pressed_tab == active, strip->pressed_close == active);
     }
 
     /* "+" new tab */

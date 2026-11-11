@@ -484,6 +484,112 @@ static int buttonAt(UiButton* button, int x, int y)
     return button && button->visible && uiRectContains(button->rect, x, y);
 }
 
+/* ------------------------------------------------------------------------- */
+/* dirty rectangles                                                          */
+/* ------------------------------------------------------------------------- */
+
+static UiRect emptyRect(void)
+{
+    return uiRectMake(0, 0, 0, 0);
+}
+
+static int rectIsEmpty(UiRect r)
+{
+    return r.w <= 0 || r.h <= 0;
+}
+
+static UiRect rectUnion(UiRect a, UiRect b)
+{
+    int left;
+    int top;
+    int right;
+    int bottom;
+
+    if (rectIsEmpty(a))
+        return b;
+    if (rectIsEmpty(b))
+        return a;
+
+    left = a.x < b.x ? a.x : b.x;
+    top = a.y < b.y ? a.y : b.y;
+    right = a.x + a.w > b.x + b.w ? a.x + a.w : b.x + b.w;
+    bottom = a.y + a.h > b.y + b.h ? a.y + a.h : b.y + b.h;
+
+    return uiRectMake(left, top, right - left, bottom - top);
+}
+
+static void chromeMarkDirty(UiChrome* chrome, UiRect rect)
+{
+    if (!chrome || rectIsEmpty(rect))
+        return;
+
+    chrome->dirty = chrome->dirty_pending ? rectUnion(chrome->dirty, rect) : rect;
+    chrome->dirty_pending = 1;
+}
+
+/* Screen-independent rect a part occupies. Deliberately generous: a tab maps
+ * to the whole tab slot (the close chip changes the title's ellipsis width and
+ * the chip itself lives inside it), a find-bar control to the whole pill (the
+ * chevrons sit inside its border). */
+static UiRect partRect(UiChrome* chrome, UiPart part, int index)
+{
+    UiTabStrip* strip = &chrome->tabstrip;
+    UiToolbar* bar = &chrome->toolbar;
+    UiFindBar* find = &chrome->findbar;
+
+    switch (part) {
+    case UI_PART_TAB:
+    case UI_PART_TAB_CLOSE:
+        if (index >= 0 && index < UI_MAX_TABS)
+            return strip->tab[index];
+        return emptyRect();
+
+    case UI_PART_TAB_NEW:
+        return strip->new_tab;
+
+    case UI_PART_BACK:     return bar->back.rect;
+    case UI_PART_FORWARD:  return bar->forward.rect;
+    case UI_PART_RELOAD:   return bar->reload.rect;
+    /* The Go button lives inside the pill and hovering it also tints the pill
+     * (paintAddress keys its hover off go.hover), so the pill is the unit. */
+    case UI_PART_GO:       return bar->address;
+    case UI_PART_MENU:     return bar->menu.rect;
+    case UI_PART_ADDRESS:  return bar->address;
+
+    case UI_PART_FIND_FIELD:
+    case UI_PART_FIND_PREV:
+    case UI_PART_FIND_NEXT:
+    case UI_PART_FIND_CLOSE:
+        return find->field;
+
+    case UI_PART_STATUS:       return chrome->statusbar.rect;
+    case UI_PART_WINDOW_MIN:   return chrome->win_min.rect;
+    case UI_PART_WINDOW_MAX:   return chrome->win_max.rect;
+    case UI_PART_WINDOW_CLOSE: return chrome->win_close.rect;
+
+    default:
+        return emptyRect();
+    }
+}
+
+int uiChromeTakeDirty(UiChrome* chrome, UiRect* dirty)
+{
+    int pending;
+
+    if (!chrome)
+        return 0;
+
+    pending = chrome->dirty_pending;
+
+    if (dirty)
+        *dirty = pending ? chrome->dirty : emptyRect();
+
+    chrome->dirty = emptyRect();
+    chrome->dirty_pending = 0;
+
+    return pending;
+}
+
 UiPart uiChromeHitTest(UiChrome* chrome, int x, int y)
 {
     UiPart part;
@@ -620,11 +726,18 @@ static void updateToolbarModel(UiChrome* chrome)
 int uiChromeMouse(UiChrome* chrome, const UiMouseEvent* event)
 {
     UiPart part;
+    UiPart before_part;
+    int before_index;
+    int index;
 
     if (!chrome || !event)
         return 0;
 
+    before_part = chrome->hover_part;
+    before_index = chrome->tabstrip.hover_tab;
+
     part = uiChromeHitTest(chrome, event->x, event->y);
+    index = uiChromeTabAt(chrome, event->x, event->y);
 
     switch (event->type) {
     case UI_MOUSE_MOVE:
@@ -633,6 +746,14 @@ int uiChromeMouse(UiChrome* chrome, const UiMouseEvent* event)
         uiTabStripMouse(&chrome->tabstrip, &chrome->model, event, NULL);
         feedButtons(chrome, event);
         feedFindButtons(chrome, event);
+
+        /* Only a change of part needs repainting: moving inside one part leaves
+         * the dirty rect empty and costs no paint at all. */
+        if (before_part != part || before_index != index) {
+            chromeMarkDirty(chrome, partRect(chrome, before_part, before_index));
+            chromeMarkDirty(chrome, partRect(chrome, part, index));
+        }
+
         return chrome->mouse_inside;
 
     case UI_MOUSE_LEAVE:
@@ -647,10 +768,22 @@ int uiChromeMouse(UiChrome* chrome, const UiMouseEvent* event)
         uiButtonReset(&chrome->findbar.prev);
         uiButtonReset(&chrome->findbar.next);
         uiButtonReset(&chrome->findbar.close);
+        /* The window buttons never fire a LEAVE of their own; without this a
+         * red close button stayed red after the pointer went into the page. */
+        uiButtonReset(&chrome->win_min);
+        uiButtonReset(&chrome->win_max);
+        uiButtonReset(&chrome->win_close);
+        chromeMarkDirty(chrome, uiRectMake(0, 0, chrome->width, chrome->height));
         return 0;
 
     case UI_MOUSE_DOWN:
         chrome->hover_part = part;
+        /* Press changes can touch a part that is no longer under the pointer
+         * (press here, drag there), so clicks repaint the whole chrome. They
+         * are rare; mouse moves are not. A press that hits nothing (toolbar
+         * background) changes nothing and stays clean. */
+        if (part != UI_PART_NONE)
+            chromeMarkDirty(chrome, uiRectMake(0, 0, chrome->width, chrome->height));
 
         if (part == UI_PART_TAB || part == UI_PART_TAB_CLOSE || part == UI_PART_TAB_NEW) {
             uiTabStripMouse(&chrome->tabstrip, &chrome->model, event, NULL);
@@ -681,6 +814,8 @@ int uiChromeMouse(UiChrome* chrome, const UiMouseEvent* event)
     case UI_MOUSE_UP: {
         UiTabAction action;
         int handled = 0;
+
+        chromeMarkDirty(chrome, uiRectMake(0, 0, chrome->width, chrome->height));
 
         memset(&action, 0, sizeof(action));
         action.activate = -1;

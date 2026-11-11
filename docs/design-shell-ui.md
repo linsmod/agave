@@ -93,14 +93,14 @@ UI 侧的具体症状：
 
 | 组件 | 边界 | 关键交互 |
 |---|---|---|
-| `UiButton` | 32×32@96，圆形 hover 底（Chrome 工具栏），图标居中，`enabled/toggled` | 命中 → `id` |
-| `UiTabStrip` | 标签条 + `+`；活动标签与工具栏同色、上圆角，非活动标签 hover 用 `tab_hover` | 命中标签/关闭/新标签 |
+| `UiButton` | 32×32@96，圆形 hover 底（Chrome 工具栏），图标盒按按钮尺寸算（上限 16px），`enabled/toggled/pressed` | 命中 → `id` |
+| `UiTabStrip` | 标签条 + `+`；活动标签削底与工具栏融合，非活动标签 hover/press 是**内缩 pill**，关闭 chip 20px + 16px glyph；中键关闭 | 命中标签/关闭/新标签 |
 | `UiToolbar` | 后退/前进/刷新-停止/地址胶囊/Go/菜单 | 命令 ID 与旧按钮完全一致 |
 | `UiFindBar` | 右对齐浮条：搜索图标 + 输入 + 上/下/关闭 | `ID_FIND_*` |
 | `UiStatusBar` | 24px 状态栏 + 进度线 + 缩放胶囊 | 纯绘制 |
 | `UiChrome` | 组合上述 + 内容区矩形 + 原生 EDIT 位置 | `uiChromeLayout/Paint/Mouse` |
 | `UiMenu` | Chrome 风格圆角面板：30px 行、可选图标列、右对齐快捷键、子菜单、禁用/分隔行 | hover/键盘/点击；`uiMenuSessionMove/Key/Click` |
-| `UiMenuHost` | 32bppPARGB 分层弹出窗口（自绘阴影/圆角），鼠标捕获 + 模态循环 | 点外关闭、Esc、Alt-Tab；返回命令 id |
+| `UiMenuHost` | 32bppPARGB 分层弹出窗口（自绘圆角/边框，**无阴影**），鼠标捕获 + 模态循环 | 点外关闭、Esc、Alt-Tab；返回命令 id |
 | 窗口按钮 | 标签条右侧 `_ □ X`，与 tab 同一行 | `HTMINBUTTON/HTMAXBUTTON/HTCLOSE` + NC 按下拦截 |
 
 几何（96 DPI 基准，全部经 `scale = dpi/96`）：
@@ -194,11 +194,14 @@ chrome 自身的亮暗 token 不受影响。
   一次算好根面板与所有后代面板的位置（屏幕坐标，贴边时反向翻转），
   `uiMenuSessionMove/Key/Click` 只改状态，`uiMenuSessionPaint` 用 `UiPainter`
   画。因此 `--ui-shot --ui-menu` 能在 DIB 里复现击中/键盘/像素，不需要窗口。
-- **分层弹窗**（`ui_menu_host.c`）：窗口覆盖所有可见面板的并集 + 16px 阴影边距，
+- **分层弹窗**（`ui_menu_host.c`）：窗口覆盖所有可见面板的并集 + 2px 边距，
   像素来自 32bppPARGB 的 GDI+ 位图（`GdipCreateBitmapFromScan0` 直接指向 DIB），
-  圆角、阴影、文字抗锯齿的 alpha 都保留，面板之间是真正的透明。面板以外填
+  圆角、文字抗锯齿的 alpha 都保留，面板之间是真正的透明。面板以外填
   alpha=1 的黑，不改变观感但让整块弹窗接住鼠标——点外面只会关菜单，不会穿透
   到页面。窗口是 `WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST`。
+- **没有投影**：整块 surface 每次 hover 变化都要重画，10 层嵌套圆角填充的阴影
+  是那次重画里最贵的一项；面板用 1px 边框把边界交代清楚。要恢复就先给阴影做
+  位图缓存，别回到"每次 paint 都重新叠 10 层"。
 - **模态语义**：进入时 `SetCapture` + `SetFocus`，跑自己的 `GetMessage` 循环
   （和 `TrackPopupMenu` 一样），Esc 关、点行选、点外关、滚轮/右键关、Alt-Tab 关；
   结束后把焦点还给打开前的控件。`WM_KILLFOCUS` **不**作为关闭条件：弹窗是
@@ -210,6 +213,23 @@ chrome 自身的亮暗 token 不受影响。
 - **不做假的可用性**：引擎没有的能力（Lens、查看源代码、打印/另存）保持禁用并
   在标签里写 `(not implemented)`，与 R75 的“死项要说明”约定一致。
 
+### 5.3 交互状态、脏矩形与光标
+
+chrome 全部落在 `HTCLIENT` 里（只有标签条空白处是 `HTCAPTION`），所以 Windows
+**不会**因为鼠标移动让窗口失效：`WM_MOUSEMOVE` 只更新 `UiChrome` 里的 hover/press
+状态时必须由壳自己 `InvalidateRect`，否则 hover 反馈只在别的东西碰巧重绘时闪一下。
+
+- `uiChromeMouse()` 记录"事件前/后命中到哪个 part（以及哪个标签）"，
+  用 `partRect()` 把两者并成 `chrome.dirty`；**同一 part 内移动不产生脏矩形**，
+  真的一次都不重绘。`uiChromeTakeDirty()` 取走并清空。
+- `WM_MOUSEMOVE` / `WM_NCMOUSEMOVE` / `WM_MOUSELEAVE` 只 invalidate 这个矩形；
+  按下/抬起（press 可能发生在指针已经离开的 part 上）整窗重绘，次数本来就少。
+- 三种状态都有像素：`tab_hover` / `tab_pressed`（内缩 pill，底部留 1~2px 让 strip
+  透出来）、`tab_close_hover` / `tab_close_pressed`、`button_hover` /
+  `button_pressed`、`window_close_hover`。活动标签按下不额外变色（Chrome 同）。
+- 光标：`IDC_IBEAM` 只给地址胶囊与查找框，其余 part 一律 `IDC_ARROW`——chrome 不是
+  网页，工具栏按钮不该出现手型。
+
 ## 6 主题 token
 
 浅色（Chrome 2023 风格）：tab strip `#DEE1E6`、toolbar `#FFFFFF`、
@@ -219,7 +239,7 @@ chrome 自身的亮暗 token 不受影响。
 
 暗色（对齐 Chrome 无痕窗口的实际截图，2026-11-11）：frame/tab strip `#1F2020`、
 toolbar/活动标签/content `#3C3C3C`、地址胶囊 `#282828`（focus 时 `#3C3C3C`）、
-非活动标签 hover `#474747`、工具栏图标 hover `#505050`、焦点环 `#A8C7FA`、
+非活动标签 hover `#474747` / 按下 `#505050`、工具栏图标 hover `#505050`、焦点环 `#A8C7FA`、
 文字 `#E8EAED`、次要 `#9AA0A6`、图标 `#C4C7C5`、边框 `#373737`、状态栏 `#1F1F1F`、
 窗口关闭 hover `#C42B1C`。**层次关系**是这组值的重点：strip 比 toolbar 暗、胶囊比
 toolbar 更暗；`--ui-shot` 用亮度关系断言它们（`dark-strip-darker` /
@@ -227,14 +247,21 @@ toolbar 更暗；`--ui-shot` 用亮度关系断言它们（`dark-strip-darker` /
 
 自绘菜单 token：面板 `#1F1F1F`（浅色 `#FFFFFF`）、hover 行 `#3C4043`
 （浅色 `#F1F3F4`）、分隔线/边框 `#373737`（浅色 `#E8EAED`/`#DADCE0`）、
-禁用文字 `#7A7A7A`、快捷键 `#9AA0A6`、图标 `#C8C8C8`、阴影 `0x66000000`。
+禁用文字 `#7A7A7A`、快捷键 `#9AA0A6`、图标 `#C8C8C8`。菜单**不画投影**
+（`menu_shadow` token 保留但不再使用，理由见 5.2）。
 菜单几何 @96：行高 30、分隔行 9、左右 padding 12、上下 padding 8、面板圆角 8、
 行高亮圆角 4、图标列 26、宽度 clamp 180..460。
 
 `AGB_SHELL_THEME=light|dark|auto`（默认 `auto`，只影响 chrome，不改页面
 `prefers-color-scheme`；页面仍由 `AGB_COLOR_SCHEME` 控制）。
 
-字体：Segoe UI（回退 Microsoft YaHei UI / Arial），GDI+ 抗锯齿；
+字体：**一个 family 同时覆盖中英**——按 `Microsoft YaHei UI → Microsoft YaHei →
+Noto Sans SC → Segoe UI → Arial` 取第一个装得上的。GDI+ 的 `DrawString` 不做跨
+脚本 family 链接，指定 Segoe UI 画中文会掉到系统替换字体，同一行里英文一个样、
+中文另一个样；YaHei 和随构建拷贝的 Noto Sans SC 都是全字库。`uiSpaceInit()` 还会
+私有注册 `<exe>\fonts\*.ttf`（和引擎 `FontCachePS.cpp` 同一批文件），所以
+`--ui-shot`（不启引擎）和没装中文字体的系统也一致。GDI（`EDIT` 控件）与 GDI+ 都用
+灰度抗锯齿（`ANTIALIASED_QUALITY` / `AntiAliasGridFit`）。
 标签 13px、地址 14px、状态 11px（@96，随 DPI 缩放）。
 
 ## 7 无头 UI 验证（`--ui-shot`）
@@ -260,13 +287,19 @@ build-zig-native\agave_shell.exe --ui-shot build-zig-native\ui-focus.png --ui-th
 2. 事件：DOWN+UP 触发 `ID_BACK`、切换/关闭/新标签、最大化/关闭窗口回调、hover 更新；
 3. 布局：按钮在客户区内、地址胶囊宽度 > 120、内容区高度 > 80、标签不重叠；
 4. 像素：活动标签 = surface、工具栏 = toolbar、状态栏 = surface_alt、内容区 = window；
-5. 150% DPI：tabstrip 60 / toolbar 66 / content top = 126，菜单仍在窗口内；
-6. 暗色层次：strip < toolbar、胶囊 < toolbar、hover > 活动标签、焦点环 =
+5. 交互状态（5.3）：hover 到非活动标签产生的脏矩形落在标签条内且覆盖该标签、
+   同一 part 内移动**不产生**脏矩形、hover pill 与底部透出的 strip 像素、
+   按下 = `tab_pressed`、press 整窗脏、关闭 chip 20px 圆与 16px glyph（对角线像素）、
+   `IDC_IBEAM` 的两个 part；
+6. 150% DPI：tabstrip 60 / toolbar 66 / content top = 126，菜单仍在窗口内；
+7. 暗色层次：strip < toolbar、胶囊 < toolbar、hover > 活动标签、焦点环 =
    `#A8C7FA`；
-7. `--ui-menu`（61 项）：菜单宽度/锚定、子菜单打开与反向翻转、行/分隔行命中、
+8. `--ui-menu`（72 项）：菜单宽度/锚定、子菜单打开与反向翻转、行/分隔行命中、
    Down 跳过分隔行与禁用行、Right/Left 进出子菜单、点击选中/点外取消、
    hover/背景像素、圆形工具栏 hover；
-8. `--ui-focus`（43 项）：焦点字段、胶囊填充色、焦点环左右/上边像素与 token。
+9. `--ui-focus`（54 项）：焦点字段、胶囊填充色、焦点环左右/上边像素与 token。
+
+各项计数（2026-11-11）：亮 45 / 暗 49 / 亮-150% 45 / 暗-菜单 72 / 暗-焦点 54。
 
 回归 `tools/run_shell_ui_tests.ps1`：亮/暗/亮-150%/暗-菜单/暗-焦点五份并行，
 实测约 **1.5 s**（单份 ~1.2–1.5 s，含进程启动）。

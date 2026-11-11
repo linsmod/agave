@@ -86,7 +86,9 @@ typedef struct UiTheme {
      * design doc): tabs and toolbar glyphs get their own neutral grays, the
      * focused address pill a light-blue ring, window close a Windows red. */
     unsigned tab_hover;          /* inactive tab under the pointer */
+    unsigned tab_pressed;        /* inactive tab while the button is held */
     unsigned tab_close_hover;    /* circular close chip inside a tab */
+    unsigned tab_close_pressed;  /* close chip while the button is held */
     unsigned button_hover;       /* circular hover behind toolbar icons */
     unsigned button_pressed;
     unsigned close_hover;        /* find-bar close / neutral chips */
