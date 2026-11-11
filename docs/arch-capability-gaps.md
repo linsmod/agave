@@ -151,6 +151,11 @@ qsChild=3 qsDesc=3 qsAdj=1 qsSib=2 qsNth=1 qsOdd=2 qsNot=2 qsFirst=1 qsList2=4 q
 **`indexedDB` 是桩**（见 §1 `indexedDB.open` 行）：请求对象没有 `addEventListener`，deepseek 的
 `n=indexedDB.deleteDatabase(t); n.addEventListener("blocked",…)` 会抛 `undefined is not a function`（issues #20）。
 
+**已知差异：`JSON.stringify(DOM 节点)` 会抛 `Converting circular structure to JSON`**（2026-11-11 R188 探针
+发现），Chrome 返回 `{}`——节点 wrapper 的 catch-all 让序列化看到了互相引用的 DOM 属性。错误上报 / 日志里直接
+序列化节点会因此进入 catch 分支；建议后续给 Node 原型加 `toJSON() { return {} }`（或让 catch-all 不出现在
+own-enumerable 集合里）。不影响本轮的 Shadow DOM/TreeWalker 功能。
+
 **媒体元素（`<video>`/`<audio>`/`<source>`/`<track>`）已有实现**：元素类、常用 API、
 容器头元数据（MP4/WebM/MKV）、`textTracks` + WebVTT cue，尺寸与 Chrome 对齐；
 **真实播放**用 ffmpeg + waveOut（音频出声、视频逐帧绘制、时钟/暂停/seek/ended 都由媒体时钟驱动，
