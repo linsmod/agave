@@ -17,7 +17,7 @@
 ### 全部跑一遍
 
 ```powershell
-pwsh -File tools/run_all_tests.ps1                          # 21 个离线套件，默认全并行 ≈28 s，退出码 0 = 全绿
+pwsh -File tools/run_all_tests.ps1                          # 22 个离线套件，默认全并行 ≈28 s，退出码 0 = 全绿
 pwsh -File tools/run_all_tests.ps1 -Sequential              # 套件一个一个跑（≈2 min，调试输出用）
 pwsh -File tools/run_all_tests.ps1 -Parallel 8              # 套件间并发度（1..32，缺省=逻辑核数）
 pwsh -File tools/run_all_tests.ps1 -Only process            # 名字含 process 的
@@ -26,7 +26,7 @@ pwsh -File tools/run_all_tests.ps1 -IncludeNetwork -IncludeReal   # 加上真站
 pwsh -File tools/run_all_tests.ps1 -KeepLogs                # 保留每个套件的 stdout/stderr
 ```
 
-默认**全并行**（`-Parallel` 缺省 = 本机逻辑核数，上限 16）：21 个套件同时起，每个套件是独立的
+默认**全并行**（`-Parallel` 缺省 = 本机逻辑核数，上限 16）：22 个套件同时起，每个套件是独立的
 
 > ⚠ **16 路并发下的时序抖动**（2026-11-10 实测）：`run_window_tests`（process 命名 target）、
 > `run_process_backend_tests`（early-eval-after-load-html）、`run_hidden_view_tests`、`run_image_tests` 偶尔各失败 1 条，
@@ -83,7 +83,9 @@ pwsh -File tools/run_all_tests.ps1 -KeepLogs                # 保留每个套件
 | `run_worker_tests` | 6 s | `run_media_tests` | 5 s |
 | `run_sticky_tests` | 3.5 s | `run_encoding_tests` | 5 s |
 | `run_selection_tests` | 8 s | `run_binding_semantics_tests` | 3 s |
-| **20 套件整批（默认并行）** | **~23–28 s** | **`-Sequential`（套件逐个）** | **~2 min** |
+| `run_shadow_tests` | 2 s | `run_webp_tests` | 2 s |
+| `run_singleton_tests` | 2 s | | |
+| **23 套件整批（默认并行）** | **~25 s** | **`-Sequential`（套件逐个）** | **~2 min** |
 
 规则（软基线，靠人/Agent 判断，不做程序化对比）：集中跑时除了看 PASS，还看每套件秒数——
 **单套件比基线慢 30 s 以上、或整批慢于 ~45 s 就在对话里提示**（AGENTS rule 9），顺带查一下是
@@ -115,10 +117,12 @@ pwsh -File tools/run_all_tests.ps1 -KeepLogs                # 保留每个套件
 | `run_script_mode_tests.ps1` | classic script 语义（顶层 `var`/`function` 进 `window`，R66）+ 热点循环性能 + `document.readyState`/`currentScript`；**模块侧**：frame 模块入口 / 每 realm `import()`、`import(` 开头的 classic 脚本、**HTML import map**（精确 + 前缀 + 相对 + 未映射 reject）、**`document.baseURI`/`Node.baseURI`**（含 `<base href>`）、**URLSearchParams 包装类迭代 + frame realm 的 web 全局**（R176） | 无（Chrome 数值为注释里的基准） | `ALL SCRIPT MODE CHECKS PASSED`（11 组，约 18 s） |
 | `run_webp_tests.ps1` | WebP 解码（issues #19）：`tools/pages/fixtures/webp_{lossy,lossless,alpha}.webp`（各 40×30，Pillow `method=0` 生成）经 `new Image()` 走真实资源加载路径，断言 `naturalWidth/Height`。~2 s。⚠ 只解**首帧**，动画 WebP 与 AVIF 未做 | fixture 在 `tools/pages/fixtures/` |
 | `run_binding_semantics_tests.ps1` | DOM 绑定语义（B1 + B2）：每接口一个 class + 真实原型链、构造器、`@@toStringTag`、`instanceof` 正反例、`constructor`/`Object.prototype.toString`、方法按接口归属、接口对象描述符（`prototype` 不可写、`constructor` 非枚举）、非法构造器抛 `TypeError`、门面（id/class/value/onclick）不回归、polyfill 落在 `Element`/`CharacterData` 原型上、CSSOM/Selection/Range/Canvas 的既有类可 `instanceof`；**B2-1**：`window` 是 `Window` 实例（原型/构造器/`[object Window]`/`instanceof EventTarget`）、事件层级（`MouseEvent → UIEvent → Event`、`KeyboardEvent`/`FocusEvent`/`InputEvent`/`WheelEvent`/`CustomEvent`）、引擎派发 click 是 `MouseEvent` 且 `target`/`currentTarget`/`eventPhase` 在 handler 内正确、冒泡到父节点、派发后复位、页面 `dispatchEvent` 的 `isTrusted=false` 与可取消返回值；**B2-2**：`querySelectorAll` 是静态 `NodeList`（非数组、`item`/`forEach`/迭代器）、`children`/`childNodes`/`getElementsByTagName` 是 live 集合且 identity 稳定、`getElementsByClassName` 按 token 匹配、`document.forms` 是 live `HTMLCollection`、`namedItem`、`new NodeList()` 抛 `Illegal constructor`；**B2-3**：常见属性在接口原型上是 WebIDL accessor（descriptor 形状、`in`、`for-in`、读写仍落到 DOM、只读属性不产生 own prop、expando 仍可写）；已知缺口（`element.style` 的值仍是 shim）单独断言。**A1/A2 生成表**：`AGB_BINDING_CHECK=1` 再跑一次探针，断言 6 个接口（Node/Element/HTMLElement/Document/HTMLCollection/NodeList）的成员数与 `0 missing owner(s)`；页面另断言成员**归属**（`id` 在 Element、`style` 在 HTMLElement、`attributes` 在 Element 而非 Node，Chrome 对拍值） | 无（`tools/pages/cap_binding_semantics.html`） | `ALL BINDING SEMANTICS CHECKS PASSED`（200 条断言 + generated tables，约 3 s） |
+| `run_shadow_tests.ps1` | Shadow DOM / DOM2 Traversal / Fullscreen（R188）：shadow 内样式不泄漏、页面样式不进组件树、`:host`/`:host(...)`/`::slotted()`/`::part()`、`assignedNodes`/`assignedSlot`、`host.innerHTML` 只换 light DOM、`shadowRoot.innerHTML` 只换组件树、closed root；`slotchange` 与 `fullscreenchange` 的异步语义（第二个探针读 `window.__asyncResult`）；`createTreeWalker` 的 SHOW/FILTER/REJECT/SKIP/root/currentNode | 无（`tools/pages/cap_shadow_dom.html` + `cap_shadow_async.html`） | `ALL SHADOW CHECKS PASSED`（25 + 8 条断言，约 2 s） |
 | `run_realm_tests.ps1` | 每 frame 一个 realm（`design-per-frame-realm.md`）：先编译 `tools/ant_realm_probe.c` 直接测桥（一 isolate 三 realm），再走 iframe 页面；**B2-4** 断言 `child.HTMLElement !== parent.HTMLElement`、`child.HTMLElement.prototype !== parent.HTMLElement.prototype`（每 realm 一套接口类） | 本机编译器（脚本自己编 `ant_realm_probe.exe`） | `ALL REALM CHECKS PASSED` |
 | `run_tab_lifecycle_tests.ps1` | 关 view/tab 的生命周期（R141，`design-tab-teardown.md`）：teardown 顺序 `pagehide → visibilitychange → unload → realm stop`、每个 `realm start` 都有 `realm stop`、**JS 创建的节点不 pin 住 Document**（无 `LEAK:` 行）、`window.open` popup 是独立 view context 且同样拆除、字体下载在途时销毁 view 不崩且 `documentDetached` 命中 | 自起 `tools/tab_lifecycle_server.py`（8979，`/slow.ttf` 延迟 1.5s） | `ALL TAB LIFECYCLE CHECKS PASSED (n cases)` |
 | `run_process_backend_tests.ps1` | `process` 渲染后端（S3 B2a/B2b），26 个用例；含 `callback-thread`（R185：状态回调必须在拥有窗口的线程上到达，否则宿主会跨线程碰 Win32 窗口）：'一个 view 一个 `agave_render_host.exe`，协议走命名共享段（canvas + 命令环 + 事件环 + 文本 arena + 大载荷共享段）。**全部用例并行**（缺省 `-Parallel 16`，并受全局 `AGB_TEST_MAX_PROBES` 约束；每个用例独立 `AGB_USERDATA`、cwd、`AGB_DIAG_DIR`、`AGB_CLIPBOARD_FILE`、`AGB_RENDER_TAG`，产物落在 `process-tests-*`，成功后删除）。crash/respawn/crash-report 不再串行（`agb_crash.txt` 在各自 cwd）；protocol stats / multiview 的延迟阈值放宽为“只抓通道坏了或极慢”，最后做一次聚合的 renderer 残留检查。断言页面 JS/title/定时器、`--shot` 像素（共享 canvas → mirror）、`--keys` 输入跨边界、**32 KB 注入资产整段到达**（`--inject inspector`，`window.__agaveInspector` 存在且 `inspectAt` 命中：R169 的大载荷通道）、**300 KiB `--eval-file` 首尾标记都在**（不再有 4 KB/8 KB/32 KB 的静默截断）、**286 KB vConsole 注入、挂载并点开面板**（同时覆盖 R170 的 focus-after-DOM-mutation 和 R172 的 `document.createEvent`）、**页面复制到 OS 剪贴板**（R171）、**back/forward 计数跨进程**、渲染进程崩溃报 load error（probe 立即退出 5，不等到 timeout）、**双 view：A 卡死时 B 的命令 31 ms 回答、`agave_webview_interrupt(A)` 31 ms 生效**、local 对照 `blocked=1`、崩溃后视图可 respawn、**关掉卡死 tab 立即生效（destroy_ms=0）**、`--backend process` 参数与 launcher（`tools/agave.ps1`，默认 process）走同一条路、未知后端被拒绝、默认 local 后端不退化、**命令不会静默消失**（无页面时的 eval 报 `dropped`；navigate 刚返回就 eval 要么执行要么报错；`AGB_IPC_STALE_EPOCH=1` 下渲染进程拒收过期代数命令，宿主收到 `on_command_dropped`）；**崩溃页报告**（`AGB_RENDER_CRASH_AV` 制造真 AV：环境/异常码/符号栈进共享段，`on_crashed` 把它交给宿主，sad tab 的 HTML 落盘再加载读回）、**右键菜单跨进程**（`--right-click`：渲染进程 `cb_context_menu` → `CONTEXT_MENU` 事件 → 宿主 `on_context_menu`，断言 `[ctx] menu … link=…`）、**内部页跨进程**（`agave://downloads` 导航 + `--reload 2` 仍是 `title=下载`：scheme provider 让 reload 走 loader 而不是网络）、**P1-ac**（`AGB_PROBE_CRASH_EVAL=1`：`load_html` 后立刻 eval 只报 `dropped`，不得 ASSERT/崩溃）、每例后不得残留 renderer 进程（25 例，全并行约 14 s） | 无（`tools/pages/cap_hidden_view.html` / `cap_typing.html` / `inspector_demo.html` / `window_links.html`） | `ALL PROCESS BACKEND CHECKS PASSED` |
 | `run_window_tests.ps1` | 窗口生命周期（R158），**local 与 process 两个后端各跑一遍**：普通链接同 tab 跳转；`target="_blank"` 开新 tab 并加载出标题、主 tab 不变；`window.open(url)` 同样开 tab、页面拿到窗口对象；具名 target 点两次只开**一个**窗口，第二次导航它并回调 `on_activate_view`（宿主切 tab）；popup 里 `window.close()` 到达宿主。每例后不得残留**自己 tag 的** renderer（`AGB_RENDER_TAG`，别人的壳不受影响，R159） | 无（`tools/pages/window_*.html`） | `ALL WINDOW CHECKS PASSED` |
+| `run_singleton_tests.ps1` | 单实例壳的**逻辑**（不是 UI，`design-shell-singleton.md`；全部 `--probe`，经 `TestParallel.psm1` 并行）：profile 身份（`X`/`X\`/`X\.` 同一 key、不同目录不同 key）、接力决策（无 URL → focus、裸 URL/`--new-tab` → new-tab、`--new-window` → new-window）、ack 处理（ok / `starting` 重试 / error → exit 3 / 无 ack 快速失败）；运行中的壳用 `AGB_HANDOFF_MOCK_DIR` 文件 mock（与 `AGB_CLIPBOARD_FILE` 同一手法），不创建任何窗口/控制台/壳进程。真 WM_COPYDATA/多窗口 UI 路径不在此套件（见设计记录 §9） | 无 | `SINGLETON=PASS`，约 2 s |
 | `run_hidden_view_tests.ps1` | 隐藏 view（后台 tab / 最小化窗口）跳过布局与绘制（R150）：`--hide-after` 后定时器继续跑、`document.hidden`/`visibilitychange` 正确、`AGB_LOOP_DEBUG` 的 `[loop] paints=/skips=` 证明 paint 冻结而 skip 增长；无隐藏的对照跑 paint 持续增长；`--hide-after`+`--show-after`+`--shot` 证明回到可见后首帧整幅重绘（隐藏期间改色的方块在截图里必须是新色） | 无（`tools/pages/cap_hidden_view.html`） | `ALL HIDDEN VIEW CHECKS PASSED` |
 | `run_sticky_tests.ps1` | `position:sticky`：视口/内层滚动容器/containing block 边界、命中跟随（R82），几何 + 像素 | 无（期望值来自 Chrome） | `STICKY=PASS` |
 | `run_image_tests.ps1` | 图片解码（R136–R140）：切片解码与一次性解码**逐字节同像素**（JPEG + PNG）、**工作线程解出的帧与内联帧逐字节一致**且 paint 里不再解码、大图不再单帧停摆（paint 上限 / rAF gap）、L3 缩放解码的加速比、**拆文档时进行中的解码不崩且队列排空**、**零字节图片资源（204 / `Content-Length: 0` / 截断头）只算坏图不崩、且不会每帧重解**、`AGB_IMG_DECODE_MS=0`/`AGB_IMG_NO_SCALE`/`AGB_IMG_SAMPLE_MAX` 开关有效 | 无（脚本自己用 System.Drawing 生成 4000×3000 JPEG / 3000×2000 PNG 到 `build-zig-native/img_test`；零字节那组自起 `tools/empty_image_server.py`，随机空闲端口） | `IMAGE=PASS` |
@@ -143,6 +147,7 @@ pwsh -File tools/run_all_tests.ps1 -KeepLogs                # 保留每个套件
 | 卡死 / 中断 / 销毁时序 | `run_hang_recovery_tests` |
 | Worker / wasm | `run_worker_tests` |
 | 改 ant 内核或桥 | 先 `pwsh -File tools/build_antjsb.ps1`，再上面相关组 + **在 ant 仓库 `H:\ant-v16` 补测试并提交**（铁律 2） |
+| 宿主壳 / 启动流程 / 单实例 / 多窗口 / `--userdata` 语义 | `run_singleton_tests`、`run_window_tests`、`run_process_backend_tests`（launcher 用例） |
 
 ## 3. 依赖与坑
 

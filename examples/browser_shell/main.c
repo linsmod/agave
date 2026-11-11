@@ -57,6 +57,8 @@
 #define BUTTON_W      34
 #define TAB_W         172
 
+struct ShellWindow;
+
 typedef struct {
     AgaveWebView* view;
     HWND          hwnd;          /* the control's HWND */
@@ -75,25 +77,123 @@ typedef struct {
     /* Last Page Visibility value handed to the control (-1 = never sent), so a
      * resize/minimize does not queue a visibility command per WM_SIZE. */
     int           visibilitySent;
+    /* Callbacks arrive with the Tab* as their user pointer and no window; the
+     * back pointer is how they find the window whose UI they may touch. */
+    struct ShellWindow* window;
 } Tab;
-
-static HWND  g_hwnd;
-static HWND  g_back, g_forward, g_reload, g_stop, g_address, g_go, g_newtab, g_menu;
-static HWND  g_findEdit, g_findNext, g_findPrev, g_findClose;
-static HINSTANCE g_instance;
-
-static Tab   g_tabs[MAX_TABS];
-static int   g_activeTab;
-static int   g_zoom = 100;
-static int   g_findVisible;
-static int   g_minimized;      /* the top-level window is minimized */
-static char  g_status[1024];
 
 /* Closed tabs, so ctrl+shift+T can bring the last one back. */
 #define MAX_CLOSED_TABS 16
 typedef struct { char url[MAX_PATH_CHARS]; char title[256]; } ClosedTab;
-static ClosedTab g_closed[MAX_CLOSED_TABS];
-static int       g_closedCount;
+
+/* One top-level shell window. The shell used to keep all of this in file-scope
+ * globals; one process may now own several windows (Chrome's
+ * "--new-window hands off, the browser process opens it"), so every window
+ * has its own copy and the rest of this file reaches it through the macros
+ * below. */
+#define MAX_SHELL_WINDOWS 8
+
+typedef struct ShellWindow {
+    int           used;
+    HWND          hwnd;
+    HWND          back, forward, reload, stop, address, go, newtab, menu;
+    HWND          findEdit, findNext, findPrev, findClose;
+    Tab           tabs[MAX_TABS];
+    int           activeTab;
+    int           zoom;
+    int           findVisible;
+    int           minimized;     /* this window is minimized */
+    char          status[1024];
+    ClosedTab     closed[MAX_CLOSED_TABS];
+    int           closedCount;
+} ShellWindow;
+
+static HINSTANCE    g_instance;
+static ShellWindow  g_windows[MAX_SHELL_WINDOWS];
+static ShellWindow* g_cur;          /* window the UI thread is acting on */
+static ShellWindow* g_lastActive;   /* handoff target = last active window */
+static int          g_shellWindows; /* used entries in g_windows */
+
+#define g_hwnd        (g_cur->hwnd)
+#define g_back        (g_cur->back)
+#define g_forward     (g_cur->forward)
+#define g_reload      (g_cur->reload)
+#define g_stop        (g_cur->stop)
+#define g_address     (g_cur->address)
+#define g_go          (g_cur->go)
+#define g_newtab      (g_cur->newtab)
+#define g_menu        (g_cur->menu)
+#define g_findEdit    (g_cur->findEdit)
+#define g_findNext    (g_cur->findNext)
+#define g_findPrev    (g_cur->findPrev)
+#define g_findClose   (g_cur->findClose)
+#define g_tabs        (g_cur->tabs)
+#define g_activeTab   (g_cur->activeTab)
+#define g_zoom        (g_cur->zoom)
+#define g_findVisible (g_cur->findVisible)
+#define g_minimized   (g_cur->minimized)
+#define g_status      (g_cur->status)
+#define g_closed      (g_cur->closed)
+#define g_closedCount (g_cur->closedCount)
+
+/* Window lookup helpers: a message's hwnd (or a view, in a control callback)
+ * names the window whose state may be touched, and also selects the context. */
+static ShellWindow* windowForHwnd(HWND hwnd)
+{
+    HWND root;
+    ShellWindow* win;
+
+    if (!hwnd)
+        return NULL;
+
+    root = GetAncestor(hwnd, GA_ROOT);
+
+    if (!root)
+        root = hwnd;
+
+    win = (ShellWindow*)GetWindowLongPtrA(root, GWLP_USERDATA);
+
+    return (win && win->used) ? win : NULL;
+}
+
+static ShellWindow* windowForView(AgaveWebView* view)
+{
+    int i, t;
+
+    for (i = 0; i < MAX_SHELL_WINDOWS; ++i) {
+        ShellWindow* win = &g_windows[i];
+
+        if (!win->used)
+            continue;
+
+        for (t = 0; t < MAX_TABS; ++t) {
+            if (win->tabs[t].used && win->tabs[t].view == view)
+                return win;
+        }
+    }
+
+    return NULL;
+}
+
+static ShellWindow* firstUsedWindow(void)
+{
+    int i;
+
+    for (i = 0; i < MAX_SHELL_WINDOWS; ++i) {
+        if (g_windows[i].used)
+            return &g_windows[i];
+    }
+
+    return NULL;
+}
+
+/* Control callbacks run on the UI thread but outside shellProc, so they carry
+ * a Tab* and must switch the context themselves. */
+static void enterTabWindow(Tab* tab)
+{
+    if (tab && tab->window)
+        g_cur = (ShellWindow*)tab->window;
+}
 
 #define AGW_MAX_BOOKMARKS 64
 #define AGW_MAX_HISTORY   200
@@ -417,7 +517,7 @@ static void saveSession(void)
 {
     char path[MAX_PATH_CHARS];
     FILE* file;
-    int i;
+    int i, w;
     int saved = 0;
 
     statePath(path, sizeof(path), "session.txt");
@@ -428,10 +528,20 @@ static void saveSession(void)
         return;
     }
 
-    for (i = 0; i < MAX_TABS; ++i) {
-        if (g_tabs[i].used && g_tabs[i].url[0]) {
-            fprintf(file, "%s\n", g_tabs[i].url);
-            ++saved;
+    /* Flat on purpose: every window's tabs go into one list, so a restart
+     * restores one window with all of them (the window structure itself is not
+     * persisted yet; see design-shell-singleton.md). */
+    for (w = 0; w < MAX_SHELL_WINDOWS; ++w) {
+        ShellWindow* win = &g_windows[w];
+
+        if (!win->used)
+            continue;
+
+        for (i = 0; i < MAX_TABS; ++i) {
+            if (win->tabs[i].used && win->tabs[i].url[0]) {
+                fprintf(file, "%s\n", win->tabs[i].url);
+                ++saved;
+            }
         }
     }
 
@@ -847,6 +957,8 @@ static void onTitle(AgaveWebView* view, const char* title, void* user)
     if (!tab)
         return;
 
+    enterTabWindow(tab);
+
     strncpy(tab->title, title ? title : "", sizeof(tab->title) - 1);
     tab->title[sizeof(tab->title) - 1] = 0;
 
@@ -868,6 +980,8 @@ static void onUrl(AgaveWebView* view, const char* url, void* user)
 
     if (!tab || !url)
         return;
+
+    enterTabWindow(tab);
 
     strncpy(tab->url, url, MAX_PATH_CHARS - 1);
     tab->url[MAX_PATH_CHARS - 1] = 0;
@@ -893,6 +1007,8 @@ static void onProgress(AgaveWebView* view, int percent, int finished, void* user
     if (!tab)
         return;
 
+    enterTabWindow(tab);
+
     tab->progress = percent;
     tab->loading = finished ? 0 : 1;
 
@@ -908,6 +1024,8 @@ static void onStatus(AgaveWebView* view, const char* text, void* user)
 
     if (!tab)
         return;
+
+    enterTabWindow(tab);
 
     strncpy(tab->status, text ? text : "", sizeof(tab->status) - 1);
     tab->status[sizeof(tab->status) - 1] = 0;
@@ -949,6 +1067,8 @@ static void onCrashed(AgaveWebView* view, int code, const char* report, void* us
 
     if (!view)
         return;
+
+    enterTabWindow(tab);
 
     if (tab && tab->url[0])
         target = tab->url;
@@ -1022,6 +1142,8 @@ static void onError(AgaveWebView* view, int code, const char* url, void* user)
     if (!tab)
         return;
 
+    enterTabWindow(tab);
+
     _snprintf(text, sizeof(text), "Failed to load (%d): %s", code, url ? url : "");
     text[sizeof(text) - 1] = 0;
     strncpy(tab->status, text, sizeof(tab->status) - 1);
@@ -1037,8 +1159,12 @@ static int onDialog(AgaveWebView* view, int type, const char* message,
     static const char* const names[] = { "alert", "confirm", "prompt" };
     int answer = 1;
 
+    Tab* tab = (Tab*)user;
+
     (void)view;
     (void)user;
+
+    enterTabWindow(tab);
 
     /* A modal box on the engine thread looks exactly like a hang in the log, so
      * say which page called what before opening it. */
@@ -1068,9 +1194,21 @@ static int onDialog(AgaveWebView* view, int type, const char* message,
 static int onNewWindow(AgaveWebView* from, AgaveWebView* popup,
                        const char* url, void* user)
 {
-    int index = nextFreeTab();
-    (void)from;
-    (void)user;
+    Tab* tab = (Tab*)user;
+    ShellWindow* win = tab ? (ShellWindow*)tab->window : windowForView(from);
+    int index;
+
+    if (!win)
+        win = firstUsedWindow();
+
+    if (!win) {
+        agbLog(AGB_LOG_SHELL, "new window rejected (no shell window)");
+        agave_webview_destroy(popup);
+        return 0;
+    }
+
+    g_cur = win;
+    index = nextFreeTab();
 
     if (index < 0 || !url || !url[0]) {
         agbLog(AGB_LOG_SHELL, "new window rejected (index=%d url=%s)", index,
@@ -1083,6 +1221,7 @@ static int onNewWindow(AgaveWebView* from, AgaveWebView* popup,
 
     g_tabs[index].used = 1;
     g_tabs[index].view = popup;
+    g_tabs[index].window = win;
     g_tabs[index].hwnd = (HWND)agave_webview_hwnd(popup);
     strncpy(g_tabs[index].url, url, MAX_PATH_CHARS - 1);
     strncpy(g_tabs[index].title, url, sizeof(g_tabs[index].title) - 1);
@@ -1114,6 +1253,8 @@ static void onDownload(AgaveWebView* view, const MC_DOWNLOAD_INFO* info, void* u
 
     if (!tab || !info)
         return;
+
+    enterTabWindow(tab);
 
     if (slash && slash[1])
         name = slash + 1;
@@ -1294,22 +1435,30 @@ static int showHangPrompt(int tabIndex, unsigned int busyMs, const char* stackPa
 
     EnableWindow(g_hwnd, FALSE);
 
-    for (;;) {
-        BOOL got = GetMessageW(&msg, NULL, 0, 0);
+    {
+        /* The prompt's own loop dispatches messages for every window, so the
+         * context must be put back before the caller touches this tab. */
+        ShellWindow* previous = g_cur;
 
-        if (got <= 0) {
-            /* The shell was asked to quit while the prompt was up: keep the
-             * quit request for the outer loop instead of swallowing it. */
-            if (got == 0)
-                PostQuitMessage((int)msg.wParam);
-            break;
+        for (;;) {
+            BOOL got = GetMessageW(&msg, NULL, 0, 0);
+
+            if (got <= 0) {
+                /* The shell was asked to quit while the prompt was up: keep the
+                 * quit request for the outer loop instead of swallowing it. */
+                if (got == 0)
+                    PostQuitMessage((int)msg.wParam);
+                break;
+            }
+
+            if (!IsWindow(dialog))
+                break;
+
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
         }
 
-        if (!IsWindow(dialog))
-            break;
-
-        TranslateMessage(&msg);
-        DispatchMessageW(&msg);
+        g_cur = previous;
     }
 
     EnableWindow(g_hwnd, TRUE);
@@ -1338,6 +1487,8 @@ static void onCommandDropped(AgaveWebView* view, const char* kind,
            kind ? kind : "?", reason ? reason : "?");
 
     if (tab) {
+        enterTabWindow(tab);
+
         _snprintf(tab->status, sizeof(tab->status) - 1, "dropped %s: %s",
                   kind ? kind : "?", reason ? reason : "?");
         tab->status[sizeof(tab->status) - 1] = 0;
@@ -1359,6 +1510,8 @@ static void onUnresponsive(AgaveWebView* view, const char* reason,
 
     if (!tab)
         return;
+
+    enterTabWindow(tab);
 
     for (i = 0; i < MAX_TABS; ++i) {
         if (&g_tabs[i] == tab) {
@@ -1481,7 +1634,9 @@ static int injectScriptAsset(AgaveWebView* view, const char* fileName,
     char* script = NULL;
     size_t length = 0;
     size_t fileLength = 0;
-    Tab* tab = &g_tabs[g_activeTab];
+    /* Probe mode has no tabs/window context: injection still has to work
+     * (--inject is a probe flag), it just has no status bar to write to. */
+    Tab* tab = g_cur ? &g_tabs[g_activeTab] : NULL;
 
     if (!view)
         return 0;
@@ -1525,7 +1680,7 @@ static int injectScriptAsset(AgaveWebView* view, const char* fileName,
     }
 
     if (!script) {
-        if (tab->used) {
+        if (tab && tab->used) {
             _snprintf(tab->status, sizeof(tab->status),
                       "Cannot read %s (put it next to agave_shell.exe)", fileName);
             tab->status[sizeof(tab->status) - 1] = 0;
@@ -1560,7 +1715,7 @@ static int injectScriptAsset(AgaveWebView* view, const char* fileName,
     agbLog(AGB_LOG_SHELL, "inject: %s (%lu bytes, eval %lu)",
            fileName, (unsigned long)fileLength, (unsigned long)length);
 
-    if (tab->used && tab->view == view) {
+    if (tab && tab->used && tab->view == view) {
         _snprintf(tab->status, sizeof(tab->status),
                   "Injected %s (%lu bytes)", fileName, (unsigned long)fileLength);
         tab->status[sizeof(tab->status) - 1] = 0;
@@ -1617,6 +1772,8 @@ static void onContextMenu(AgaveWebView* view, int x, int y,
         agbLog(AGB_LOG_SHELL, "context menu without a tab, ignored");
         return;
     }
+
+    enterTabWindow(tab);
 
     /* Chrome shows Copy enabled only when something is selected; the engine
      * hands us the selection text with the event. */
@@ -2139,9 +2296,9 @@ static void normalizeUrl(const char* input, char* out, size_t outSize)
 
 static void createTab(const char* url)
 {
-    int index = nextFreeTab();
     AgaveWebViewCallback callbacks;
     Tab* tab;
+    int index = nextFreeTab();
 
     if (index < 0) {
         agbLog(AGB_LOG_SHELL, "tab create failed: no free slot (max %d)", MAX_TABS);
@@ -2168,6 +2325,7 @@ static void createTab(const char* url)
     callbacks.on_activate_view = onActivateView;
 
     tab->used = 1;
+    tab->window = g_cur;
     tab->view = agave_webview_create(g_hwnd, 0, TAB_HEIGHT + TOOLBAR_H,
                                      800, 400, &callbacks, tab);
 
@@ -2424,8 +2582,17 @@ static void showMainMenu(void)
     appendMenuUtf8(menu, MF_STRING, 9, "注入 inspector.js");
 
     GetCursorPos(&point);
-    choice = (int)TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN,
-                                 point.x, point.y, 0, g_hwnd, NULL);
+
+    {
+        /* TrackPopupMenu runs its own message loop; restore the context so the
+         * menu actions above/below always act on this window. */
+        ShellWindow* previous = g_cur;
+
+        choice = (int)TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN,
+                                     point.x, point.y, 0, g_hwnd, NULL);
+        g_cur = previous;
+    }
+
     DestroyMenu(menu);
 
     if (choice >= 200) {
@@ -2549,9 +2716,15 @@ static void paintStatus(HDC hdc, int width, int height)
 
 static void onCloseWindow(AgaveWebView* view, void* user)
 {
-    (void)user;
+    Tab* tab = (Tab*)user;
+    ShellWindow* win = tab ? (ShellWindow*)tab->window : windowForView(view);
 
     agbLog(AGB_LOG_SHELL, "window.close() -> close tab");
+
+    if (!win)
+        return;
+
+    g_cur = win;
 
     if (g_hwnd)
         PostMessageA(g_hwnd, AGW_SHELL_CLOSE_TAB, (WPARAM)view, 0);
@@ -2564,7 +2737,8 @@ static void onCloseWindow(AgaveWebView* view, void* user)
 
 static void onActivateView(AgaveWebView* view, void* user)
 {
-    (void)user;
+    Tab* tab = (Tab*)user;
+    ShellWindow* win = tab ? (ShellWindow*)tab->window : windowForView(view);
 
     agbLog(AGB_LOG_SHELL, "activate view (named window target)");
 
@@ -2574,11 +2748,18 @@ static void onActivateView(AgaveWebView* view, void* user)
         return;
     }
 
+    if (!win)
+        return;
+
+    g_cur = win;
+
     if (g_hwnd)
         PostMessageA(g_hwnd, AGW_SHELL_ACTIVATE_TAB, 0, (LPARAM)view);
 }
 
-static LRESULT CALLBACK shellProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+static LRESULT CALLBACK shellProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
+
+static LRESULT CALLBACK shellProcInner(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
     switch (message) {
     case AGW_SHELL_CLOSE_TAB: {
@@ -2634,6 +2815,14 @@ static LRESULT CALLBACK shellProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM
     case WM_CREATE:
         g_hwnd = hwnd;
         return 0;
+
+    /* Which window a handoff targets: Chrome appends tabs to the most recently
+     * active window. Hidden test windows never activate, so creation and
+     * handoff also set g_lastActive. */
+    case WM_ACTIVATE:
+        if (LOWORD(wParam) != WA_INACTIVE && g_cur)
+            g_lastActive = g_cur;
+        break;
 
     case WM_SIZE:
         /* Minimized: every view is hidden (Page Visibility + no layout/paint);
@@ -2717,16 +2906,69 @@ static LRESULT CALLBACK shellProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM
         return 0;
     }
 
-    case WM_DESTROY:
-        saveSession();
-        PostQuitMessage(0);
+    case WM_DESTROY: {
+        /* Several windows share the process now: only the last one ends it.
+         * Session state is flat (all windows' tabs), so a restart restores one
+         * window with every tab; noted in the design doc. */
+        int last = (g_shellWindows <= 1);
+
+        if (last)
+            saveSession();
+
+        SetWindowLongPtrA(hwnd, GWLP_USERDATA, 0);
+        g_cur->used = 0;
+
+        if (g_lastActive == g_cur)
+            g_lastActive = NULL;
+
+        if (g_shellWindows > 0)
+            --g_shellWindows;
+
+        if (last)
+            PostQuitMessage(0);
+        else
+            saveSession();
+
         return 0;
+    }
 
     default:
         break;
     }
 
     return DefWindowProcA(hwnd, message, wParam, lParam);
+}
+
+/* Every shell message selects the window it belongs to and restores the
+ * previous context afterwards: handlers (and modal loops inside them) may
+ * dispatch messages for another window. */
+static LRESULT CALLBACK shellProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    ShellWindow* previous = g_cur;
+    ShellWindow* win;
+
+    if (message == WM_NCCREATE) {
+        CREATESTRUCTA* create = (CREATESTRUCTA*)lParam;
+
+        win = create ? (ShellWindow*)create->lpCreateParams : NULL;
+
+        if (win)
+            SetWindowLongPtrA(hwnd, GWLP_USERDATA, (LONG_PTR)win);
+    } else {
+        win = (ShellWindow*)GetWindowLongPtrA(hwnd, GWLP_USERDATA);
+    }
+
+    if (win) {
+        g_cur = win;
+        win->hwnd = hwnd;
+    }
+
+    {
+        LRESULT result = shellProcInner(hwnd, message, wParam, lParam);
+
+        g_cur = previous;
+        return result;
+    }
 }
 
 /* ------------------------------------------------------------------------- */
@@ -2989,11 +3231,20 @@ static LONG WINAPI shellCrashFilter(EXCEPTION_POINTERS* ep)
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
+static int g_exitTraceSuppressed;   /* the hand-off client is a utility exit */
+
 static void shellExitTrace(void)
 {
-    unsigned long long exe = (unsigned long long)GetModuleHandleA(NULL);
-    unsigned long long av  = (unsigned long long)GetModuleHandleA("libagave.dll");
-    unsigned long long ab  = (unsigned long long)GetModuleHandleA("antjsb.dll");
+    unsigned long long exe;
+    unsigned long long av;
+    unsigned long long ab;
+
+    if (g_exitTraceSuppressed)
+        return;
+
+    exe = (unsigned long long)GetModuleHandleA(NULL);
+    av  = (unsigned long long)GetModuleHandleA("libagave.dll");
+    ab  = (unsigned long long)GetModuleHandleA("antjsb.dll");
 
     agbLog(AGB_LOG_SHELL, "atexit fired, bases exe=%llx agave=%llx ant=%llx", exe, av, ab);
     shellPrintFrames(1, 32);
@@ -4774,7 +5025,16 @@ static void probeUsage(void)
             "            (no network; warm the cache with a normal run first)\n"
             "  --userdata <dir>  profile root for this run (cookies, localStorage,\n"
             "            module/HTTP caches, shell session). --probe defaults to\n"
-            "            %%LOCALAPPDATA%%\\Agave\\probe so tests never touch the GUI profile\n");
+            "            %%LOCALAPPDATA%%\\Agave\\probe so tests never touch the GUI profile\n"
+            "  --new-tab [URL]   GUI only, with a shell already running on this\n"
+            "            profile: open URL (or a blank tab) in a new tab and exit;\n"
+            "            a bare URL already means this (Chrome's default)\n"
+            "  --new-window [URL]  same, but the running shell opens a new window in\n"
+            "            its own process (no second browser process is started)\n"
+            "\n"
+            "GUI: one shell per profile root. A second launch\n"
+            "hands its URL to the running shell and exits; give a different\n"
+            "--userdata to run two instances side by side.\n");
 }
 
 /* Parses the raw command line into argv/argc in place, honoring double quotes.
@@ -4818,6 +5078,11 @@ static int parseCommandLine(char* cmdline, char** argv, int maxArgs)
  * the CRT's copy (R153), so the switch is put in through the CRT here. */
 static char g_backendArg[64] = "local";
 static int  g_backendArgSet;   /* --backend was given: only then override the env */
+
+/* Second-instance intent (Chrome's --new-tab / --new-window). A bare URL means
+ * --new-tab; with no URL at all the existing window is only activated. */
+static int  g_newTabArg;
+static int  g_newWindowArg;
 
 static void applyBackendArg(void)
 {
@@ -4886,6 +5151,10 @@ static void parseShellArgv(void)
             g_backendArgSet = 1;
         } else if (!strcmp(argv[i], "--eval-retry")) {
             g_probeEvalRetry = 1;
+        } else if (!strcmp(argv[i], "--new-tab")) {
+            g_newTabArg = 1;
+        } else if (!strcmp(argv[i], "--new-window")) {
+            g_newWindowArg = 1;
         } else if (!strcmp(argv[i], "--probe")) {
             g_probeMode = 1;
         } else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
@@ -5112,7 +5381,8 @@ static void parseShellArgv(void)
         applyBackendArg();
     }
 
-    if (g_probeMode && !g_startupUrl[0] && !g_showUsage) {
+    if (g_probeMode && !g_startupUrl[0] && !g_showUsage &&
+        !getenv("AGB_PROBE_HANDOFF")) {
         agbLog(AGB_LOG_PROBE, "missing URL");
         probeUsage();
         g_argError = 1;
@@ -5153,10 +5423,612 @@ static void applySystemColorScheme(void)
     SetEnvironmentVariableA("AGB_COLOR_SCHEME", light ? "light" : "dark");
 }
 
+/* ------------------------------------------------------------------------- */
+/* shell windows (one process, several windows)                               */
+/* ------------------------------------------------------------------------- */
+
+/* AGB_SHELL_HIDDEN=1 creates the windows without showing them and never steals
+ * the foreground: automation needs the real UI thread and the real handoff
+ * path, not a flashing window. */
+static int g_shellHidden;
+
+static void registerShellWindowClass(void)
+{
+    static int registered;
+    WNDCLASSA wc;
+
+    if (registered)
+        return;
+
+    memset(&wc, 0, sizeof(wc));
+    wc.lpfnWndProc = shellProc;
+    wc.hInstance = g_instance;
+    wc.hCursor = LoadCursorA(NULL, (LPCSTR)IDC_ARROW);
+    wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+    wc.lpszClassName = "AgaveShellWindow";
+    RegisterClassA(&wc);
+    registered = 1;
+}
+
+/* One top-level window with its toolbar and an empty tab strip. The caller
+ * decides the first tab (URL, restored session) or leaves it empty when a
+ * handoff is about to add one. */
+static ShellWindow* createShellWindow(const char* title)
+{
+    ShellWindow* win = NULL;
+    int i;
+
+    for (i = 0; i < MAX_SHELL_WINDOWS; ++i) {
+        if (!g_windows[i].used) {
+            win = &g_windows[i];
+            break;
+        }
+    }
+
+    if (!win) {
+        agbLog(AGB_LOG_SHELL, "new window refused: already %d windows", MAX_SHELL_WINDOWS);
+        return NULL;
+    }
+
+    memset(win, 0, sizeof(*win));
+    win->used = 1;
+    win->zoom = 100;
+    ++g_shellWindows;
+    g_cur = win;
+
+    win->hwnd = CreateWindowExA(0, "AgaveShellWindow",
+                                title ? title : "BrowserShell - Agave",
+                                WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+                                CW_USEDEFAULT, CW_USEDEFAULT, 1100, 800,
+                                NULL, NULL, g_instance, win);
+
+    if (!win->hwnd) {
+        agbLog(AGB_LOG_SHELL, "CreateWindowEx failed: %lu", (unsigned long)GetLastError());
+        win->used = 0;
+        --g_shellWindows;
+        return NULL;
+    }
+
+    g_lastActive = win;
+
+    win->back = makeButton("<", ID_BACK);
+    win->forward = makeButton(">", ID_FORWARD);
+    win->reload = makeButton("R", ID_RELOAD);
+    win->stop = makeButton("X", ID_STOP);
+    win->go = makeButton("Go", ID_GO);
+    win->newtab = makeButton("+", ID_NEWTAB);
+    win->menu = makeButton("=", ID_MENU);
+
+    /* Unicode edit controls: CreateWindowExW + L"EDIT" (the ANSI variant would
+     * push typed paths through the ANSI code page, and GetWindowTextA with it). */
+    win->address = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+                                   WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
+                                   0, 0, 0, 0, win->hwnd, (HMENU)(INT_PTR)ID_ADDRESS,
+                                   g_instance, NULL);
+
+    win->findEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+                                    WS_CHILD | ES_AUTOHSCROLL,
+                                    0, 0, 0, 0, win->hwnd, (HMENU)(INT_PTR)ID_FIND_EDIT,
+                                    g_instance, NULL);
+    win->findNext = CreateWindowW(L"BUTTON", L"v", WS_CHILD | BS_PUSHBUTTON,
+                                  0, 0, 0, 0, win->hwnd, (HMENU)(INT_PTR)ID_FIND_NEXT,
+                                  g_instance, NULL);
+    win->findPrev = CreateWindowW(L"BUTTON", L"^", WS_CHILD | BS_PUSHBUTTON,
+                                  0, 0, 0, 0, win->hwnd, (HMENU)(INT_PTR)ID_FIND_PREV,
+                                  g_instance, NULL);
+    win->findClose = CreateWindowW(L"BUTTON", L"x", WS_CHILD | BS_PUSHBUTTON,
+                                   0, 0, 0, 0, win->hwnd, (HMENU)(INT_PTR)ID_FIND_CLOSE,
+                                   g_instance, NULL);
+
+    ShowWindow(win->findEdit, SW_HIDE);
+    ShowWindow(win->findNext, SW_HIDE);
+    ShowWindow(win->findPrev, SW_HIDE);
+    ShowWindow(win->findClose, SW_HIDE);
+
+    agbLog(AGB_LOG_SHELL, "window ready hwnd=%p (windows=%d)", (void*)win->hwnd, g_shellWindows);
+
+    return win;
+}
+
+/* ------------------------------------------------------------------------- */
+/* single instance per profile: lock + handoff                               */
+/* ------------------------------------------------------------------------- */
+/* Chrome's model: one browser process per user-data-dir. The second launch
+ * does not open a window; it hands "open this URL (in a tab / new window)" to
+ * the running process and exits. The lock is a named mutex (authoritative,
+ * released by the OS when the process dies); the hand-off address is a hidden
+ * window whose title carries the profile hash (FindWindow finds it). */
+
+#define SHELL_HANDOFF_CLASS "AgaveShellHandoff"
+#define SHELL_HANDOFF_MAGIC 0x53484F31u   /* 'SHO1' */
+#define SHELL_HANDOFF_VERSION 1
+#define SHELL_ACK_BYTES 4096
+
+typedef struct {
+    DWORD size;
+    DWORD version;
+    DWORD op;                    /* 0 = focus, 1 = new tab, 2 = new window */
+    DWORD pid;                   /* sender, for logs */
+    char  ackName[64];
+    char  url[MAX_PATH_CHARS];
+} ShellHandoff;
+
+static char   g_profileKey[32];      /* hex hash of the normalized profile root */
+static char   g_handoffTitle[64];    /* window title = "agave-shell-<key>" */
+static HWND   g_handoffWnd;
+static int    g_handoffReady;        /* window created; requests may run */
+
+/* FNV-1a 64 of the normalized profile root. The root is what --userdata /
+ * AGB_USERDATA names, so "X", "X\" and "X\." all map to the same instance. */
+static void profileKeyInit(void)
+{
+    char full[MAX_PATH_CHARS];
+    char normalized[MAX_PATH_CHARS];
+    const char* source = g_dataDir[0] ? g_dataDir : ".";
+    DWORD got;
+    unsigned long long hash = 1469598103934665603ULL;
+    size_t i, n;
+
+    got = GetFullPathNameA(source, (DWORD)sizeof(full), full, NULL);
+
+    if (!got || got >= sizeof(full))
+        _snprintf(full, sizeof(full), "%s", source);
+
+    full[sizeof(full) - 1] = 0;
+
+    n = strlen(full);
+
+    while (n > 3 && (full[n - 1] == '\\' || full[n - 1] == '/'))
+        full[--n] = 0;
+
+    for (i = 0; i <= n && i < sizeof(normalized); ++i)
+        normalized[i] = (char)tolower((unsigned char)full[i]);
+
+    for (i = 0; normalized[i]; ++i) {
+        hash ^= (unsigned char)normalized[i];
+        hash *= 1099511628211ULL;
+    }
+
+    _snprintf(g_profileKey, sizeof(g_profileKey), "%016llx", hash);
+    _snprintf(g_handoffTitle, sizeof(g_handoffTitle), "agave-shell-%s", g_profileKey);
+
+    agbLog(AGB_LOG_SHELL, "profile key=%s root=%s", g_profileKey, normalized);
+}
+
+/* The sender creates a one-shot section and passes its name; the receiver
+ * writes the result there. SendMessage is synchronous, so the sender reads it
+ * as soon as WM_COPYDATA is handled. */
+static void handoffWriteAck(const char* section, const char* text)
+{
+    HANDLE map;
+    char* view;
+
+    if (!section || !section[0] || !text)
+        return;
+
+    map = OpenFileMappingA(FILE_MAP_WRITE, FALSE, section);
+
+    if (!map)
+        return;
+
+    view = (char*)MapViewOfFile(map, FILE_MAP_WRITE, 0, 0, SHELL_ACK_BYTES);
+
+    if (view) {
+        size_t n = strlen(text);
+
+        if (n >= SHELL_ACK_BYTES)
+            n = SHELL_ACK_BYTES - 1;
+
+        memcpy(view, text, n);
+        view[n] = 0;
+        UnmapViewOfFile(view);
+    }
+
+    CloseHandle(map);
+}
+
+static int handoffTabCount(ShellWindow* win)
+{
+    int i, count = 0;
+
+    if (!win)
+        return 0;
+
+    for (i = 0; i < MAX_TABS; ++i) {
+        if (win->tabs[i].used)
+            ++count;
+    }
+
+    return count;
+}
+
+static void handoffDescribe(char* out, size_t cap, const char* state,
+                            const char* op, ShellWindow* target)
+{
+    char line[600];
+    int i;
+
+    if (cap == 0)
+        return;
+
+    _snprintf(out, cap, "state=%s pid=%lu op=%s windows=%d target=0x%p tabs=%d\n",
+              state, (unsigned long)GetCurrentProcessId(), op ? op : "?",
+              g_shellWindows, target ? (void*)target->hwnd : (void*)0,
+              handoffTabCount(target));
+    out[cap - 1] = 0;
+
+    for (i = 0; i < MAX_SHELL_WINDOWS; ++i) {
+        ShellWindow* win = &g_windows[i];
+        Tab* active;
+
+        if (!win->used)
+            continue;
+
+        active = &win->tabs[win->activeTab];
+
+        _snprintf(line, sizeof(line), "win%d hwnd=0x%p tabs=%d active=%s\n",
+                  i, (void*)win->hwnd, handoffTabCount(win),
+                  (active->used && active->url[0]) ? active->url : "(blank)");
+        line[sizeof(line) - 1] = 0;
+        strncat(out, line, cap - strlen(out) - 1);
+    }
+}
+
+/* Runs on the shell's UI thread, inside SendMessage from the second process. */
+static LRESULT CALLBACK handoffProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    if (message == WM_COPYDATA) {
+        const COPYDATASTRUCT* data = (const COPYDATASTRUCT*)lParam;
+        ShellHandoff request;
+        ShellWindow* target;
+        char ack[SHELL_ACK_BYTES];
+        const char* opName = "focus";
+
+        if (!data || data->dwData != SHELL_HANDOFF_MAGIC ||
+            data->cbData < sizeof(request) || !data->lpData)
+            return 0;
+
+        memcpy(&request, data->lpData, sizeof(request));
+
+        if (request.size != sizeof(request) || request.version != SHELL_HANDOFF_VERSION) {
+            handoffWriteAck(request.ackName, "state=error err=version\n");
+            return 0;
+        }
+
+        if (!g_handoffReady) {
+            handoffWriteAck(request.ackName, "state=starting\n");
+            return 0;
+        }
+
+        if (request.op == 1)
+            opName = "new-tab";
+        else if (request.op == 2)
+            opName = "new-window";
+
+        target = (g_lastActive && g_lastActive->used) ? g_lastActive : firstUsedWindow();
+
+        if (request.op == 2)
+            target = createShellWindow(NULL);
+
+        if (!target) {
+            handoffWriteAck(request.ackName, "state=error err=no-window\n");
+            return 0;
+        }
+
+        g_cur = target;
+
+        if (request.op != 0) {
+            const char* url = request.url[0] ? request.url : "about:blank";
+
+            createTab(url);
+        }
+
+        if (!g_shellHidden) {
+            if (IsIconic(target->hwnd))
+                ShowWindow(target->hwnd, SW_RESTORE);
+            else
+                ShowWindow(target->hwnd, SW_SHOW);
+
+            SetForegroundWindow(target->hwnd);
+        }
+
+        g_lastActive = target;
+
+        handoffDescribe(ack, sizeof(ack), "ok", opName, target);
+        handoffWriteAck(request.ackName, ack);
+
+        agbLog(AGB_LOG_SHELL, "handoff from pid=%lu: %s url=%s windows=%d tabs=%d",
+               (unsigned long)request.pid, opName,
+               request.url[0] ? request.url : "(none)",
+               g_shellWindows, handoffTabCount(target));
+        return 0;
+    }
+
+    return DefWindowProcA(hwnd, message, wParam, lParam);
+}
+
+static void createHandoffWindow(void)
+{
+    static int registered;
+    WNDCLASSA wc;
+
+    if (!registered) {
+        memset(&wc, 0, sizeof(wc));
+        wc.lpfnWndProc = handoffProc;
+        wc.hInstance = g_instance;
+        wc.lpszClassName = SHELL_HANDOFF_CLASS;
+        RegisterClassA(&wc);
+        registered = 1;
+    }
+
+    g_handoffWnd = CreateWindowExA(WS_EX_TOOLWINDOW, SHELL_HANDOFF_CLASS, g_handoffTitle,
+                                   WS_POPUP, 0, 0, 0, 0,
+                                   NULL, NULL, g_instance, NULL);
+
+    if (!g_handoffWnd)
+        agbLog(AGB_LOG_SHELL, "handoff window failed: %lu", (unsigned long)GetLastError());
+}
+
+/* Second instance: find the running shell, send the request, print the ack and
+ * exit. Failure is reported, never silent (exit 3). */
+static int handoffClient(void)
+{
+    char ackName[64];
+    char ack[SHELL_ACK_BYTES];
+    static int ackCounter;
+    HANDLE map = NULL;
+    char* view = NULL;
+    HWND target = NULL;
+    ShellHandoff request;
+    COPYDATASTRUCT data;
+    DWORD_PTR result = 0;
+    ULONGLONG deadline;
+    const char* opName;
+    int op;
+
+    if (g_newWindowArg)
+        op = 2;
+    else if (g_newTabArg || g_startupUrl[0])
+        op = 1;
+    else
+        op = 0;
+
+    opName = (op == 2) ? "new-window" : (op == 1) ? "new-tab" : "focus";
+
+    /* A forwarder exits as a utility, not as a shell: the atexit forensics
+     * stack dump would be pure noise on the console. */
+    g_exitTraceSuppressed = 1;
+
+    _snprintf(ackName, sizeof(ackName), "Local\\agave_shell_ack_%lu_%d",
+              (unsigned long)GetCurrentProcessId(), ++ackCounter);
+    ackName[sizeof(ackName) - 1] = 0;
+
+    map = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0,
+                             SHELL_ACK_BYTES, ackName);
+
+    if (map)
+        view = (char*)MapViewOfFile(map, FILE_MAP_ALL_ACCESS, 0, 0, SHELL_ACK_BYTES);
+
+    if (view)
+        view[0] = 0;
+
+    deadline = GetTickCount64() + 15000;
+
+    while (!target) {
+        target = FindWindowA(SHELL_HANDOFF_CLASS, g_handoffTitle);
+
+        if (target)
+            break;
+
+        if (GetTickCount64() >= deadline)
+            break;
+
+        Sleep(50);
+    }
+
+    if (!target) {
+        fprintf(stderr, "[shell] another instance owns profile %s but is not answering\n",
+                g_dataDir);
+        if (view)
+            UnmapViewOfFile(view);
+        if (map)
+            CloseHandle(map);
+        return 3;
+    }
+
+    memset(&request, 0, sizeof(request));
+    request.size = (DWORD)sizeof(request);
+    request.version = SHELL_HANDOFF_VERSION;
+    request.op = (DWORD)op;
+    request.pid = GetCurrentProcessId();
+    _snprintf(request.ackName, sizeof(request.ackName), "%s", ackName);
+
+    if (g_startupUrl[0]) {
+        strncpy(request.url, g_startupUrl, sizeof(request.url) - 1);
+        request.url[sizeof(request.url) - 1] = 0;
+    }
+
+    memset(&data, 0, sizeof(data));
+    data.dwData = SHELL_HANDOFF_MAGIC;
+    data.cbData = (DWORD)sizeof(request);
+    data.lpData = &request;
+
+    agbLog(AGB_LOG_SHELL, "handoff %s url=%s -> hwnd=%p", opName,
+           g_startupUrl[0] ? g_startupUrl : "(none)", (void*)target);
+
+    for (;;) {
+        if (view)
+            view[0] = 0;
+
+        if (!SendMessageTimeoutA(target, WM_COPYDATA, 0, (LPARAM)&data,
+                                 SMTO_ABORTIFHUNG | SMTO_BLOCK, 10000, &result)) {
+            fprintf(stderr, "[shell] handoff to pid %lu failed: error %lu\n",
+                    (unsigned long)GetWindowThreadProcessId(target, NULL),
+                    (unsigned long)GetLastError());
+            if (view)
+                UnmapViewOfFile(view);
+            if (map)
+                CloseHandle(map);
+            return 3;
+        }
+
+        if (view) {
+            _snprintf(ack, sizeof(ack), "%s", view);
+            ack[sizeof(ack) - 1] = 0;
+        } else {
+            ack[0] = 0;
+        }
+
+        if (strncmp(ack, "state=starting", 14) != 0)
+            break;
+
+        if (GetTickCount64() >= deadline) {
+            fprintf(stderr, "[shell] instance in profile %s is still starting\n", g_dataDir);
+            UnmapViewOfFile(view);
+            CloseHandle(map);
+            return 3;
+        }
+
+        Sleep(100);
+    }
+
+    if (strncmp(ack, "state=error", 11) == 0) {
+        fprintf(stderr, "[shell] handoff rejected: %s", ack);
+        if (view)
+            UnmapViewOfFile(view);
+        if (map)
+            CloseHandle(map);
+        return 3;
+    }
+
+    fputs(ack, stdout);
+
+    if (ack[0] && ack[strlen(ack) - 1] != '\n')
+        fputc('\n', stdout);
+
+    fflush(stdout);
+
+    if (view)
+        UnmapViewOfFile(view);
+    if (map)
+        CloseHandle(map);
+
+    return 0;
+}
+
+/* Probe-mode logic check for the single-instance hand-off (chrome's singleton
+ * handoff is process/UI behaviour, so its *logic* is tested headlessly here
+ * instead of by launching a browser window):
+ *
+ *   AGB_PROBE_HANDOFF=1        run this check; print "[handoff] key=… op=… url=…"
+ *   AGB_HANDOFF_MOCK_DIR=<d>   mock the running shell with files: the request
+ *                              is written to <d>\request.txt and the answer is
+ *                              read from <d>\ack.txt (the same trick as
+ *                              AGB_CLIPBOARD_FILE — no Win32 window/transport)
+ *   AGB_HANDOFF_WAIT_MS=<n>    ack wait cap (default 15000; tests use ~1 s)
+ *
+ * No window, mutex or WM_COPYDATA is involved. Exit 0 = ack printed, 3 = no
+ * ack / rejected, so the tests can assert the decision and the ack handling. */
+static int handoffProbeMain(void)
+{
+    const char* mockDir = getenv("AGB_HANDOFF_MOCK_DIR");
+    const char* waitText = getenv("AGB_HANDOFF_WAIT_MS");
+    int waitMs = (waitText && atoi(waitText) > 0) ? atoi(waitText) : 15000;
+    int op = g_newWindowArg ? 2 : (g_newTabArg || g_startupUrl[0] ? 1 : 0);
+    const char* opName = (op == 2) ? "new-window" : (op == 1) ? "new-tab" : "focus";
+    char requestPath[MAX_PATH_CHARS];
+    char ackPath[MAX_PATH_CHARS];
+    char ack[512];
+    ULONGLONG deadline;
+    int gotAck = 0;
+
+    probeUserDataInit();
+    shellStateInit();
+    profileKeyInit();
+
+    /* A logic check exits as a utility: no atexit forensics noise. */
+    g_exitTraceSuppressed = 1;
+
+    if (!mockDir || !mockDir[0]) {
+        printf("[handoff] key=%s title=%s op=%s url=%s\n",
+               g_profileKey, g_handoffTitle, opName,
+               g_startupUrl[0] ? g_startupUrl : "(none)");
+        fflush(stdout);
+        return 0;
+    }
+
+    _snprintf(requestPath, sizeof(requestPath), "%s\\request.txt", mockDir);
+    requestPath[sizeof(requestPath) - 1] = 0;
+
+    {
+        FILE* file = fopen(requestPath, "wb");
+
+        if (!file) {
+            fprintf(stderr, "[handoff] cannot write %s\n", requestPath);
+            return 3;
+        }
+
+        fprintf(file, "key=%s\ntitle=%s\nop=%d\nopname=%s\nurl=%s\npid=%lu\n",
+                g_profileKey, g_handoffTitle, op, opName,
+                g_startupUrl[0] ? g_startupUrl : "",
+                (unsigned long)GetCurrentProcessId());
+        fclose(file);
+    }
+
+    _snprintf(ackPath, sizeof(ackPath), "%s\\ack.txt", mockDir);
+    ackPath[sizeof(ackPath) - 1] = 0;
+    ack[0] = 0;
+
+    deadline = GetTickCount64() + (ULONGLONG)waitMs;
+
+    for (;;) {
+        FILE* file = fopen(ackPath, "rb");
+
+        if (file) {
+            size_t n;
+
+            ack[0] = 0;
+            if (fgets(ack, sizeof(ack), file)) {
+                n = strlen(ack);
+                while (n && (ack[n - 1] == '\n' || ack[n - 1] == '\r'))
+                    ack[--n] = 0;
+            }
+            fclose(file);
+        }
+
+        /* "starting" means the mock shell is not ready yet; retry, exactly
+         * like the real client does (bounded by AGB_HANDOFF_WAIT_MS). */
+        if (ack[0] && strncmp(ack, "state=starting", 14) != 0) {
+            gotAck = 1;
+            break;
+        }
+
+        if (GetTickCount64() >= deadline)
+            break;
+
+        Sleep(50);
+    }
+
+    if (!gotAck) {
+        fprintf(stderr, "[handoff] no ack from the mock shell within %d ms\n", waitMs);
+        return 3;
+    }
+
+    if (strncmp(ack, "state=error", 11) == 0) {
+        fprintf(stderr, "[handoff] rejected: %s\n", ack);
+        return 3;
+    }
+
+    printf("%s\n", ack);
+    fflush(stdout);
+    return 0;
+}
+
+
 int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, int show)
 {
-    WNDCLASSA wc;
     MSG msg;
+    ShellWindow* primary;
     char initial[MAX_PATH_CHARS];
     static char session[8][MAX_PATH_CHARS];
     int restored = 0;
@@ -5203,59 +6075,60 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
            (int)strlen(g_probeScript),
            g_probeKeys[0] ? 1 : 0);
 
-    if (g_probeMode)
+    if (g_probeMode) {
+        if (getenv("AGB_PROBE_HANDOFF"))
+            return handoffProbeMain();
+
         return probeRun(g_startupUrl);
-
-    memset(&wc, 0, sizeof(wc));
-    wc.lpfnWndProc = shellProc;
-    wc.hInstance = instance;
-    wc.hCursor = LoadCursorA(NULL, (LPCSTR)IDC_ARROW);
-    wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
-    wc.lpszClassName = "AgaveShellWindow";
-
-    RegisterClassA(&wc);
-
-    g_hwnd = CreateWindowExA(0, "AgaveShellWindow", "BrowserShell - Agave",
-                             WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT,
-                             1100, 800, NULL, NULL, instance, NULL);
-
-    if (!g_hwnd) {
-        agbLog(AGB_LOG_SHELL, "CreateWindowEx failed: %lu", (unsigned long)GetLastError());
-        return 1;
     }
 
-    agbLog(AGB_LOG_SHELL, "window ready hwnd=%p", (void*)g_hwnd);
-
+    /* The GUI shares the profile root with the engine (cookies, caches) and
+     * with bookmarks/session; settle it before the lock, which is keyed on it. */
     shellStateInit();
 
-    g_back = makeButton("<", ID_BACK);
-    g_forward = makeButton(">", ID_FORWARD);
-    g_reload = makeButton("R", ID_RELOAD);
-    g_stop = makeButton("X", ID_STOP);
-    g_go = makeButton("Go", ID_GO);
-    g_newtab = makeButton("+", ID_NEWTAB);
-    g_menu = makeButton("=", ID_MENU);
+    {
+        char mutexName[96];
+        HANDLE profileMutex;
 
-    /* Unicode edit controls: CreateWindowExW + L"EDIT" (the ANSI variant would
-     * push typed paths through the ANSI code page, and GetWindowTextA with it). */
-    g_address = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
-                                WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
-                                0, 0, 0, 0, g_hwnd, (HMENU)(INT_PTR)ID_ADDRESS, instance, NULL);
+        profileKeyInit();
 
-    g_findEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
-                                 WS_CHILD | ES_AUTOHSCROLL,
-                                 0, 0, 0, 0, g_hwnd, (HMENU)(INT_PTR)ID_FIND_EDIT, instance, NULL);
-    g_findNext = makeButton("v", ID_FIND_NEXT);
-    g_findPrev = makeButton("^", ID_FIND_PREV);
-    g_findClose = makeButton("x", ID_FIND_CLOSE);
+        _snprintf(mutexName, sizeof(mutexName), "Local\\agave_shell_profile_%s", g_profileKey);
+        mutexName[sizeof(mutexName) - 1] = 0;
 
-    ShowWindow(g_findEdit, SW_HIDE);
-    ShowWindow(g_findNext, SW_HIDE);
-    ShowWindow(g_findPrev, SW_HIDE);
-    ShowWindow(g_findClose, SW_HIDE);
+        profileMutex = CreateMutexA(NULL, FALSE, mutexName);
 
-    ShowWindow(g_hwnd, SW_SHOW);
-    UpdateWindow(g_hwnd);
+        if (profileMutex && GetLastError() == ERROR_ALREADY_EXISTS) {
+            int rc = handoffClient();
+
+            CloseHandle(profileMutex);
+            return rc;
+        }
+
+        /* Keep the handle for the life of the process: closing it would drop
+         * the lock, and the OS releases it anyway when the process dies. */
+        if (!profileMutex)
+            agbLog(AGB_LOG_SHELL, "profile mutex failed (err %lu); single instance is not enforced",
+                   (unsigned long)GetLastError());
+    }
+
+    {
+        const char* hidden = getenv("AGB_SHELL_HIDDEN");
+
+        g_shellHidden = hidden && hidden[0] && !(hidden[0] == '0' && hidden[1] == 0);
+    }
+
+    registerShellWindowClass();
+
+    primary = createShellWindow("BrowserShell - Agave");
+
+    if (!primary)
+        return 1;
+
+    /* Created before any tab: a second launch must be able to ask before the
+     * first page has finished loading. Until g_handoffReady the receiver
+     * answers "state=starting" and the client retries. */
+    createHandoffWindow();
+    g_handoffReady = 1;
 
     /* The command line was already parsed in parseShellArgv(): g_startupUrl
      * wins over the restored session. */
@@ -5280,9 +6153,21 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
         createTab(initial);
     }
 
+    if (!g_shellHidden) {
+        ShowWindow(g_hwnd, SW_SHOW);
+        UpdateWindow(g_hwnd);
+    }
+
     agbLog(AGB_LOG_SHELL, "entering message loop");
 
     while (GetMessageW(&msg, NULL, 0, 0)) {
+        ShellWindow* win = windowForHwnd(msg.hwnd);
+
+        /* Keyboard shortcuts below read the window's tab strip; every message
+         * must select the window that owns the focused control. */
+        if (win)
+            g_cur = win;
+
         if (msg.message == WM_KEYDOWN) {
             if (msg.hwnd == g_address && msg.wParam == VK_RETURN) {
                 char text[MAX_PATH_CHARS];

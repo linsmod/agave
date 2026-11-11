@@ -1,6 +1,6 @@
 # agave 现状：能力、已知限制与验证入口
 
-> 状态：**当前态，最后核对 2026-11-10**。本文只回答"现在能做什么、哪些是已知限制"。
+> 状态：**当前态，最后核对 2026-11-11**。本文只回答"现在能做什么、哪些是已知限制"。
 > 架构与所有权见 [arch-overview.md](arch-overview.md)；待办与验收标准见 [plan-roadmap.md](plan-roadmap.md)；
 > 历史根因与设计取舍见 [hist-lessons.md](hist-lessons.md)；API 级缺口见
 > [arch-capability-gaps.md](arch-capability-gaps.md)；函数级锚点见 [ref-code-index.md](ref-code-index.md)。
@@ -11,12 +11,13 @@
 |---|---|---|
 | 页面与导航 | HTTP(S)/`file:` 加载、HTML/CSS 解析、`defer`/`async`/ESM、301/302、`about:blank`、iframe、`agave://` 内部页、前进后退；文档编码按 **BOM > HTTP `Content-Type` charset > `<meta charset>` > 默认** 决定（R164） | R44–R49；[hist-lessons.md](hist-lessons.md) |
 | JS / DOM | ant VM、DOM 桥、事件（鼠标/键盘/IME/输入）、computed style、选择器、`history` state、真实 DOM 集合、每 frame 一个 Window 代理；页面脚本按 **classic script** 语义执行（顶层 `var`/`function` 落到 `window`，R66）；**每 frame 一个 realm**（iframe 独立全局/intrinsics/wrapper，`var` 不串帧；`AGB_PER_FRAME_REALM=0` 回退旧模型）；`location`/`history` 是 document-scoped（R132：子 frame 读自己的 URL/历史，`document.location === window.location`，`parent.location` 读父文档）；文档生命周期 `document.readyState` 是真实状态（`loading`/`interactive`/`complete`，R93），`document.currentScript` 指向正在执行的 `<script>`（R95） | R27/R31/R34–R37/R45/R66/R67/R93/R95/R132 + [design-per-frame-realm.md](design-per-frame-realm.md) |
+| Web Components / Shadow DOM | `customElements`（define/get/whenDefined/upgrade + 构造器执行 + 生命周期）、`HTMLTemplateElement.content`、`attachShadow`/`ShadowRoot`（open/closed）、构造式 `CSSStyleSheet` + `adoptedStyleSheets`；**样式作用域**（页面/组件规则互不进入，`:host`/`:host(...)`/`::slotted()`/`::part()`）；**slot 分发**（`assignedNodes`/`assignedElements`/`assignedSlot`、`slotchange` 微任务合并、未分配 light 节点不渲染）；`document.createTreeWalker`（SHOW/FILTER/REJECT/SKIP）；`requestFullscreen`/`exitFullscreen`（`fullscreenElement` + `fullscreenchange`，窗口级全屏未接） | R188；限制见 [arch-capability-gaps.md](arch-capability-gaps.md) §1.1；`run_shadow_tests.ps1`（33 断言） |
 | 模块加载 | 入口 module 单槽等待（等待期间到达的数据不提前解析，R50）、解析调用栈内求值、延迟模块 flush；三条泳道时序 | [arch-module-loading.md](arch-module-loading.md) |
 | CSS | 自定义属性/`var()`、`display:flex`/blockify、`gap`、`aspect-ratio`、`:is()`/`:where()`、媒体查询与深色模式、`box-shadow`、常量 `calc()`、圆角裁剪、长度单位含 `rem`/`em`（R165） | R39–R43；能力矩阵见 [arch-capability-gaps.md](arch-capability-gaps.md) §2 |
 | 网络 | WinHTTP 后端、HTTP 缓存、代理解析、重定向、MIME/下载决策、`[netlog]` | [dev-debugging.md](dev-debugging.md) |
 | Worker / wasm | 真 Worker（独立线程 + isolate）、wasm 解释执行（导入/内存/表/全局/SIMD） | R19/R22 |
 | 下载 | 进程级 `DownloadManager`、`.part` 后 rename、三层状态 API、`agave://downloads` 面板 | [arch-downloads.md](arch-downloads.md) |
-| 宿主 / UI | 标签页、地址栏、查找、书签、popup、下载面板、无头探针与无头截图、Unicode/IME、灰度文字抗锯齿（R167，`AGB_FONT_AA=0` 回退 1-bit mono）、默认字体 Noto Sans SC（R168，`fonts/` 随构建拷贝并进程内注册） | `examples/browser_shell`、[dev-debugging.md](dev-debugging.md) |
+| 宿主 / UI | 标签页、地址栏、查找、书签、popup、下载面板、**单实例 + 命令接力**（一个 profile 一个壳；第二次启动把 URL 交给已有实例，`--new-tab` 默认 / `--new-window` 同进程新窗口 / 无 URL 激活）、同进程多窗口（关最后一个窗口才退出）、无头探针与无头截图、Unicode/IME、灰度文字抗锯齿（R167，`AGB_FONT_AA=0` 回退 1-bit mono）、默认字体 Noto Sans SC（R168，`fonts/` 随构建拷贝并进程内注册） | `examples/browser_shell`、[design-shell-singleton.md](design-shell-singleton.md)、`run_singleton_tests.ps1`、[dev-debugging.md](dev-debugging.md) |
 | 文本选区与剪贴板 | 鼠标拖选（含拖出窗口）、双击选词、三击选段、Shift+点击/Shift+方向键扩展；Ctrl+A/C/X/V、Ctrl+Insert、Shift+Insert；`window.getSelection()` / `document.getSelection()` / `document.createRange()` / `Range` 一族 / `document.execCommand` / `queryCommandSupported/Enabled`；document 的 `selectionchange`；`user-select`（无前缀与 `-webkit-`，嵌套 `text` 覆盖 `none`）；右键菜单 Copy / Select all；选区配色与 Chrome 一致（active `#3367D1` + 白字，失焦灰） | R175；`tools/run_selection_tests.ps1`（31 例，local + process） |
 
 **已经被检查过、别再当缺陷重开**：ant 的 Worker 是真的（R22）、wasm 是真的（R19）、

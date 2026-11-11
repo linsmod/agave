@@ -5,10 +5,17 @@
 # shell itself still defaults to `local`; this launcher is what makes process
 # mode the easy path.
 #
+# One shell per profile (Chrome's model): if a shell already runs on this
+# profile, this command hands the URL to it and exits. A bare URL means "new
+# tab"; -NewWindow asks the running shell to open another window in the same
+# process. Use -UserData to run a second, independent instance.
+#
 # Usage:
 #   pwsh -File tools/agave.ps1                       # process backend, blank tab
 #   pwsh -File tools/agave.ps1 https://chat.deepseek.com/
+#   pwsh -File tools/agave.ps1 -NewWindow https://chat.deepseek.com/
 #   pwsh -File tools/agave.ps1 -Local                # one engine thread (old path)
+#   pwsh -File tools/agave.ps1 -UserData D:\tmp\p2 https://example.com
 #   pwsh -File tools/agave.ps1 -DryRun -Url x        # print the command, do not run
 #   pwsh -File tools/agave.ps1 -Help
 
@@ -17,6 +24,9 @@ param(
     [string]$Backend = 'process',
     # Position 0 so a bare URL works; every other parameter is named-only.
     [Parameter(Position = 0)][string]$Url = '',
+    [string]$UserData = '',
+    [switch]$NewTab,
+    [switch]$NewWindow,
     [switch]$Local,
     [switch]$DryRun,
     [switch]$Help,
@@ -37,9 +47,14 @@ if ($Help) {
     Write-Host '  -Backend <name>   local | process (default process)'
     Write-Host '  -Local            same as -Backend local'
     Write-Host '  -Url <url>        page to open (or pass it as the first spare argument)'
+    Write-Host '  -NewTab           open the URL in a new tab of the running shell (default)'
+    Write-Host '  -NewWindow        open the URL in a new window of the running shell'
+    Write-Host '                    (same browser process, like chrome --new-window)'
+    Write-Host '  -UserData <dir>   profile root; a different dir runs a separate instance'
     Write-Host '  -DryRun           print the command line instead of starting it'
     Write-Host ''
-    Write-Host '  `process` needs agave_render_host.exe next to agave_shell.exe'
+    Write-Host '  One shell per profile: a second launch hands the URL to the running'
+    Write-Host '  shell and exits. `process` needs agave_render_host.exe next to the exe.'
     exit 0
 }
 
@@ -63,6 +78,9 @@ if ($Backend -eq 'process' -and -not (Test-Path $renderer)) {
 # Not $args: that is PowerShell's automatic argument array (a previous script
 # in this repo lost its arguments to exactly that).
 $shellArgs = @('--backend', $Backend)
+if ($NewWindow) { $shellArgs += '--new-window' }
+elseif ($NewTab) { $shellArgs += '--new-tab' }
+if ($UserData) { $shellArgs += @('--userdata', $UserData) }
 if ($Url) { $shellArgs += $Url }
 if ($Rest.Count -gt 0) { $shellArgs += $Rest }
 

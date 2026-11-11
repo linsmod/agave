@@ -169,6 +169,13 @@ pwsh -File tools\gen_bindings.ps1 -Generator QJS -Idl Node.idl -OutDir $env:TEMP
 - **跑 GUI**：`pwsh -File tools/agave.ps1 [url]`（默认 `process` 后端，每个 tab 一个引擎进程；
   `-Local` 回到单引擎线程，`-DryRun` 只打印命令行）。壳本身默认 local：
   `agave_shell.exe [url]` 与 `agave_shell.exe --backend process [url]` 都可用，`--backend` 也给 `--probe` 用。
+- **一个 profile 一个壳（Chrome 模型）**：再启动一次不会开第二个浏览器进程，而是把 URL 交给
+  已在跑的壳：裸 URL 或 `--new-tab` = 在最近活跃窗口里加 tab；`--new-window` = 同一个进程里再开
+  一个窗口；没有 URL = 只把已有窗口调到前台。想真正并行两个实例，给不同的 `--userdata`
+  （`tools/agave.ps1 -UserData D:\tmp\p2`）。`--probe` 永远不参与这把锁。
+  设计/协议见 [design-shell-singleton.md](design-shell-singleton.md)。
+  手动排查 UI 路径时可用 `AGB_SHELL_HIDDEN=1`：窗口照建（真实的 UI 线程、真实的接力路径），
+  但不显示、不抢前台。自动化回归只用 `--probe` + 文件 mock（见该设计文档 §9），不启动 GUI 壳。
 - 可选宿主：`test/`（`OPT_EXAMPLES=ON` 时构建 `agave_test`）、`examples/touchweb`（手机 UI，单独构建）。
 - 单元测试：`unit_tests/` 存在，但默认 `OPT_UNITTEST=OFF` 不构建；打开它会在 configure 阶段
   从网络拉 googletest（`FetchContent`），离线环境会失败。

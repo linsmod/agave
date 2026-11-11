@@ -628,6 +628,30 @@
   PostMessage 的虚拟按键骗不过它），只能测按钮/菜单路径。
 - 验收：脚本退出码 0/1，覆盖 tab 三连 + 查找 + 右键选择。
 
+### P2 单实例壳的剩余项（2026-11-11 起步）
+
+- 现状：一个 profile 一个浏览器进程、第二次启动的接力（`--new-tab`/`--new-window`/激活）与
+  同进程多窗口已实现，见 [design-shell-singleton.md](design-shell-singleton.md)。
+  回归 `tools/run_singleton_tests.ps1` 只测**逻辑**（probe + `AGB_HANDOFF_MOCK_DIR` 文件 mock，
+  约 2 s）；真实接力/多窗口的 UI 路径仍是手动（`AGB_SHELL_HIDDEN=1`）。
+  想把 UI 路径也自动化：把 `ShellWindow` 的窗口操作抽成可替换的接口（mock 窗口），
+  再按同样的 probe 方式驱动。
+- 未做：
+  1. **session 只有扁平列表**：重启后所有 tab 合成一个窗口；先关掉的窗口的 tab 不保留。
+     动作：`session.txt` 加窗口分隔行（`window` 头 + tab 行），恢复时按窗口重建，`saveSession` 保留
+     关闭窗口的策略可选（Chrome 有 restore-on-startup 开关）。
+  2. **`window.open` / `target=_blank` 仍是新 tab**，不是新窗口。动作：`onNewWindow` 调
+     `createShellWindow()`（现成的），并更新 `run_window_tests` 的期望。
+  3. **锁是 `Local\`（会话内）**：快速用户切换的两个会话可以同时跑同一 profile，仍会互相写
+     cookies/localStorage。动作：profile 内 lockfile（Chrome 的做法）+ 启动时检查，或把写盘改成
+     temp+rename 原子替换（对多开也安全）。
+  4. **第二实例的开关不透传**：`--backend`/`--zoom`/`--offline` 被忽略（stderr 有提示）。动作：
+     在请求里带 flags 位，接收方按需应用（或明确拒绝并说明）。
+  5. **没有 takeover**：已有实例崩溃后新实例从零启动，不恢复它的窗口（session 会由崩溃实例的
+     WM_DESTROY 之前的保存决定，可能落后）。
+- 验收：①两个窗口重启后仍是两个窗口；②`window.open` 出窗口且 `run_window_tests` 绿；
+  ③跨会话测试（两个登录会话、同一 profile）不产生半截文件。
+
 ### P2 view-source
 
 - 现状：右键菜单这一项是灰的 —— 引擎没有"把当前文档序列化成字符串交给宿主"的 API，

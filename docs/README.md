@@ -35,6 +35,7 @@
 | [design-select-popup.md](design-select-popup.md) | **`<select>` 下拉菜单**（设计记录）：为什么画在 view 自己的 surface 上、PopupMenu 双模式、输入路由、已知限制 | 改下拉菜单 / 表单控件输入 / 加原生 popup |
 | [design-tab-teardown.md](design-tab-teardown.md) | **关 tab / view 拆除生命周期**（设计记录）：引擎线程独占、reap 队列、realm teardown 统一入口、文档级资源清理（字体） | 改关闭/销毁路径、页面资源清理、`agave_webview_destroy` |
 | [design-render-backend.md](design-render-backend.md) | **S3：多 tab 并行与可插拔渲染后端**（设计记录）：local/进程/RVVM 三后端、渲染后端协议 v1（命令/事件/帧/服务）、逐调用 GL 转发实测（`bench_ecall`）、B0–B5 分批与验收 | 做多 tab 并行/隔离、跨进程或 RVVM 渲染后端、评估 GL 合成 |
+| [design-shell-singleton.md](design-shell-singleton.md) | **单实例 shell**（设计记录）：一个 profile 一个浏览器进程、第二次启动的命令接力协议（`--new-tab`/`--new-window`）、同进程多窗口模型、失败模式 | 改启动流程/多窗口/`--userdata` 语义、加第二个实例才发现的行为 |
 | [dev-onboarding.md](dev-onboarding.md) | 代码在哪、**我要改 X 去哪**、症状→先查哪 | 第一次改代码，或换子系统 |
 | [dev-build-and-run.md](dev-build-and-run.md) | 工具链、构建路径、改什么重编什么、产物拓扑、环境坑 | 编不动 / 跑不起来 |
 | [dev-debugging.md](dev-debugging.md) | 无头探针、日志、环境变量全表、cdb、噪音对照、A/B、Chrome 对拍 | 页面不对、崩了、卡住、想查 Chrome 怎么算 |

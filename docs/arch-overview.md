@@ -49,12 +49,21 @@
   [design-render-backend.md](design-render-backend.md) §4.1.1；每 view 一条引擎线程因为要拆
   桥/运行时的进程级无锁全局（含 WebCore 的全局 `AtomicString` 表），已降级为备选。
   待办与验收见 [plan-roadmap.md](plan-roadmap.md) 的 "P2 多 tab 并行"。
+- **宿主壳是单实例（Chrome 模型，2026-11-11）**：一个 profile 根一把命名互斥体
+  （`Local\agave_shell_profile_<hash>`）+ 一个隐藏窗口（类 `AgaveShellHandoff`，标题带同一个
+  hash）。第二次启动不建窗口，把 `WM_COPYDATA` 请求交给已有壳（`--new-tab`/裸 URL → 最近活跃
+  窗口加 tab；`--new-window` → **同一进程**再开一个窗口；无 URL → 只激活），拿到 ack 后退出。
+  壳进程内最多 `MAX_SHELL_WINDOWS` 个窗口，每个窗口有自己的 tab 列表/工具栏/缩放/查找状态
+  （`ShellWindow` + UI 线程上下文 `g_cur`），关掉最后一个窗口才退出；session 扁平保存打开的
+  窗口的 tab。`--probe` 不建窗、不参与单例。设计、协议与边缘情况见
+  [design-shell-singleton.md](design-shell-singleton.md)；回归 `tools/run_singleton_tests.ps1`
+  （`--probe` + 文件 mock，只测身份/决策/ack 逻辑，约 2 s；真实窗口路径手动验证）。
 
 ## 2. 代码层
 
 | 层 | 位置 | 职责 |
 |---|---|---|
-| 宿主壳 | `examples/browser_shell/main.c` | 标签页/地址栏/查找/书签；`--probe` 真无头探针。只做 UI，不碰引擎 |
+| 宿主壳 | `examples/browser_shell/main.c` | 标签页/地址栏/查找/书签；单实例接力（第二次启动只投递 URL）与同进程多窗口；`--probe` 真无头探针。只做 UI，不碰引擎 |
 | Win32 控件 | `src/webview_control/AgaveWebView.c` | 控件窗口、引擎线程、`AGW_CMD_*` 队列、剪贴板/IME、下载表；编进 `libagave.dll` |
 | 渲染后端 seam | `src/webview_control/AgwViewBackend.h/.c`、`AgwViewBackendProcess.c` | 控件与"谁在跑页面"之间的接口（`local` = 进程内 macross；`process` = 每 view 一个 `agave_render_host.exe`，协议 `AgwViewIpc.h`）；`AGB_VIEW_BACKEND` 选后端，设计见 [design-render-backend.md](design-render-backend.md) |
 | 视图适配 | `src/webview/` | MaCross `Page`/`Frame`/`WebView`、帧泵、`FrameLoaderClientMC`（willClose/commit/DCL/load）、`DownloadManager`、内部页、`AgbLog.h` |
