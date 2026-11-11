@@ -221,7 +221,7 @@ static String rewriteBareMediaQueries(const String& css);
 static String rewriteMediaQueryRem(const String& css, double initialFontPx);
 static double initialMediaFontPx();
 static String rewriteIsWhereSelectors(const String& css);
-static String rewriteWebkitScrollbarRules(const String& css);
+static String rewriteShadowScopedSelectors(const String& css, int shadowScope);static String rewriteWebkitScrollbarRules(const String& css);
 static String foldCalcConstants(const String& css, double emPx = 0, double remPx = 0);
 static String substituteCalcVariables(const String& css);
 
@@ -1280,7 +1280,12 @@ void CSSParser::parseSheet(CSSStyleSheet* sheet, const String& string)
     AGA_CSS_TIME("rewriteCustomPropertyNames", s5);
     String s6 = rewriteBareMediaQueries(s5);
     AGA_CSS_TIME("rewriteBareMediaQueries", s6);
-    String s7 = rewriteMediaQueryRem(s6, initialMediaFontPx());
+    String sScope = rewriteShadowScopedSelectors(s6, sheet ? sheet->shadowScope() : 0);
+    AGA_CSS_TIME("rewriteShadowScopedSelectors", sScope);
+    if (getenv("AGB_SHADOW_DEBUG") && sheet && sheet->shadowScope() > 0)
+        fprintf(stderr, "[shadow] scoped css (scope %d): %s\n", sheet->shadowScope(),
+                sScope.utf8().data());
+    String s7 = rewriteMediaQueryRem(sScope, initialMediaFontPx());
     AGA_CSS_TIME("rewriteMediaQueryRem", s7);
     String s8 = rewriteIsWhereSelectors(s7);
     AGA_CSS_TIME("rewriteIsWhereSelectors", s8);
@@ -2018,6 +2023,226 @@ static String rewriteIsWhereSelectors(const String& css)
         out.push_back(text[k]);
 
     return out.empty() ? css : String(&out[0], (unsigned)out.size());
+}
+
+/* ---- Shadow DOM selector scope (issues #27) ----------------------------- *
+ * The 2008 grammar knows neither :host nor ::slotted/::part, and unknown
+ * pseudo selectors drop the whole rule. Express them with selectors the
+ * existing matcher understands:
+ *
+ *   :host(<compound>)     -> :host<compound>
+ *   ::slotted(<compound>) -> <compound>[data-agb-slotted]
+ *   X::part(name)         -> X [part~="name"]
+ *
+ * The physical tree is host <- shadow content, and slotted light nodes are
+ * moved next to their slot, so the part rewrite is a real descendant selector
+ * (X < part) and slotted matches the light node itself via the marker. */
+static String rewriteShadowScopedSelectors(const String& css, int shadowScope)
+{
+    if (shadowScope <= 0 && !css.contains("::part("))
+        return css;
+    if (shadowScope > 0 && !css.contains(":host") && !css.contains("::slotted("))
+        return css;
+
+    std::vector<UChar> out;
+    const UChar* text = css.characters();
+    unsigned i = 0;
+    unsigned length = css.length();
+    int braceDepth = 0;
+    int parenDepth = 0;
+    UChar quote = 0;
+    unsigned compoundStart = 0;
+
+    out.reserve(length + 32);
+
+    while (i < length) {
+        UChar c = text[i];
+
+        if (quote) {
+            out.push_back(c);
+            if (c == quote)
+                quote = 0;
+            ++i;
+            continue;
+        }
+        if (c == '"' || c == '\'') {
+            quote = c;
+            out.push_back(c);
+            ++i;
+            continue;
+        }
+        if (c == '{') {
+            ++braceDepth;
+            out.push_back(c);
+            ++i;
+            compoundStart = (unsigned)out.size();
+            continue;
+        }
+        if (c == '}') {
+            if (braceDepth > 0)
+                --braceDepth;
+            out.push_back(c);
+            ++i;
+            compoundStart = (unsigned)out.size();
+            continue;
+        }
+
+        if (braceDepth == 0) {
+            if (c == '(')
+                ++parenDepth;
+            else if (c == ')' && parenDepth > 0)
+                --parenDepth;
+
+            if (parenDepth == 0 && (c == ' ' || c == '\t' || c == '\n' || c == '\r' ||
+                                    c == ',' || c == '>' || c == '+' || c == '~')) {
+                out.push_back(c);
+                ++i;
+                compoundStart = (unsigned)out.size();
+                continue;
+            }
+
+            if (shadowScope > 0 && i + 6 <= length && css.substring(i, 6) == String(":host(")) {
+                unsigned close = i + 6;
+                int depth = 1;
+
+                while (close < length) {
+                    UChar d = text[close];
+
+                    if (d == '(')
+                        ++depth;
+                    else if (d == ')') {
+                        if (--depth == 0)
+                            break;
+                    }
+                    ++close;
+                }
+                if (close < length) {
+                    String inner = css.substring(i + 6, close - (i + 6)).stripWhiteSpace();
+                    bool simple = !inner.isEmpty();
+                    bool list = inner.contains(',');
+                    unsigned k;
+
+                    for (k = 0; k < inner.length(); ++k) {
+                        UChar d = inner[k];
+
+                        if (d == '\t' || d == '\n' || d == '\r' ||
+                            d == '>' || d == '+' || d == '~' || d == ' ') {
+                            simple = false;
+                            list = false;
+                            break;
+                        }
+                    }
+                    if (simple) {
+                        static const char hostText[] = ":host";
+
+                        out.insert(out.end(), hostText, hostText + 5);
+                        for (k = 0; k < inner.length(); ++k)
+                            out.push_back(inner[k]);
+                        i = close + 1;
+                        compoundStart = (unsigned)out.size();
+                        continue;
+                    }
+                    if (list) {
+                        /* :host(.a, .b) -> :host:is(.a, .b); the :is() pass
+                         * expands this into :host.a, :host.b. */
+                        static const char hostIsText[] = ":host:is(";
+
+                        out.insert(out.end(), hostIsText, hostIsText + 9);
+                        for (k = 0; k < inner.length(); ++k)
+                            out.push_back(inner[k]);
+                        out.push_back(')');
+                        i = close + 1;
+                        compoundStart = (unsigned)out.size();
+                        continue;
+                    }
+                }
+            }
+
+            if (shadowScope > 0 && i + 10 <= length &&
+                css.substring(i, 10) == String("::slotted(")) {
+                unsigned close = i + 10;
+                int depth = 1;
+
+                while (close < length) {
+                    UChar d = text[close];
+
+                    if (d == '(')
+                        ++depth;
+                    else if (d == ')') {
+                        if (--depth == 0)
+                            break;
+                    }
+                    ++close;
+                }
+                if (close < length) {
+                    String arg = css.substring(i + 10, close - (i + 10)).stripWhiteSpace();
+                    String expanded = arg.isEmpty() ? String("*") : arg;
+                    static const char marker[] = "[data-agb-slotted]";
+                    unsigned k;
+
+                    out.resize(compoundStart);
+                    if (expanded.contains(',')) {
+                        static const char isOpen[] = ":is(";
+
+                        out.insert(out.end(), isOpen, isOpen + 4);
+                        for (k = 0; k < expanded.length(); ++k)
+                            out.push_back(expanded[k]);
+                        out.push_back(')');
+                    } else {
+                        for (k = 0; k < expanded.length(); ++k)
+                            out.push_back(expanded[k]);
+                    }
+                    out.insert(out.end(), marker, marker + 18);
+                    i = close + 1;
+                    compoundStart = (unsigned)out.size();
+                    continue;
+                }
+            }
+
+            if (shadowScope == 0 && i + 7 <= length && css.substring(i, 7) == String("::part(")) {
+                unsigned close = i + 7;
+                int depth = 1;
+
+                while (close < length) {
+                    UChar d = text[close];
+
+                    if (d == '(')
+                        ++depth;
+                    else if (d == ')') {
+                        if (--depth == 0)
+                            break;
+                    }
+                    ++close;
+                }
+                if (close < length) {
+                    String name = css.substring(i + 7, close - (i + 7)).stripWhiteSpace();
+                    bool needSpace = !out.empty() && out.back() != ' ' && out.back() != '\t' &&
+                                     out.back() != '\n' && out.back() != '\r' && out.back() != '>' &&
+                                     out.back() != '+' && out.back() != '~' && out.back() != ',';
+                    static const char pre[] = "[part~=\"";
+                    static const char post[] = "\"]";
+                    unsigned k;
+
+                    if (needSpace)
+                        out.push_back(' ');
+                    out.insert(out.end(), pre, pre + 8);
+                    for (k = 0; k < name.length(); ++k)
+                        out.push_back(name[k]);
+                    out.insert(out.end(), post, post + 2);
+                    i = close + 1;
+                    compoundStart = (unsigned)out.size();
+                    continue;
+                }
+            }
+        }
+
+        out.push_back(c);
+        ++i;
+    }
+
+    if (out.empty())
+        return css;
+    return String(&out[0], (unsigned)out.size());
 }
 
 /* The media-query grammar requires a media type before the first expression

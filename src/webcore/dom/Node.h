@@ -154,6 +154,14 @@ public:
     virtual Node* shadowParentNode() { return 0; }
     Node* shadowAncestorNode();
 
+    /* Shadow tree scope (issues #27): 0 = the document tree; a positive id
+     * identifies the shadow root whose tree this node lives in. Shadow content
+     * is physically inside the host in this port, so CSS and slot distribution
+     * use this marker to tell light nodes (the host's real children) from the
+     * component's own nodes. */
+    int shadowScope() const { return m_shadowScope; }
+    void setShadowScope(int scope) { m_shadowScope = scope; }
+
     // The node's parent for the purpose of event capture and bubbling.
     virtual Node* eventParentNode() { return parentNode(); }
 
@@ -467,6 +475,8 @@ protected:
     NodeListsNodeData* m_nodeLists;
 
     short m_tabIndex;
+
+    int m_shadowScope;
 
     // make sure we don't use more than 16 bits here -- adding more would increase the size of all Nodes
 

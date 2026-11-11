@@ -83,6 +83,9 @@ void StyleElement::createSheet(Element* e, const String& text)
             document->addPendingSheet();
             setLoading(true);
             m_sheet = new CSSStyleSheet(e, String(), document->inputEncoding());
+            /* A <style> inside a shadow tree scopes its rules to that root
+             * (issues #27); the parser rewrites :host / ::slotted for it. */
+            m_sheet->setShadowScope(e->shadowScope());
             m_sheet->parseString(text, !document->inCompatMode());
             m_sheet->setMedia(mediaList.get());
             m_sheet->setTitle(e->title());

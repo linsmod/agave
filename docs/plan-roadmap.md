@@ -942,7 +942,7 @@
 - [x] 片段解析的 `<style>` 建表（`HTMLStyleElement::insertedIntoDocument`）
 - [x] `--shot` 抓最终帧而不是第一帧（探针把页面标可见）
 - [ ] GitHub 首页截图复测（R187 修复后）
-- [ ] shadow DOM：`::part()`/`::slotted()`/shadow 内样式作用域
-- [ ] `slot` 分发 + `slotchange`
-- [ ] `createTreeWalker`、`requestFullscreen`
+- [x] shadow DOM：`::part()`/`::slotted()`/shadow 内样式作用域（R188；`run_shadow_tests`）
+- [x] `slot` 分发 + `slotchange`（R188；`assignedNodes/assignedSlot`、微任务合并）
+- [x] `createTreeWalker`、`requestFullscreen`（R188；全屏只做 DOM 语义，窗口级另立）
 - [ ] 像素级回归：把"后到样式表"场景加进 `run_layout_tests`

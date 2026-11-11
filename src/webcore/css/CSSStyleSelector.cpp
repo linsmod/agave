@@ -194,9 +194,9 @@ public:
     
     void addRulesFromSheet(CSSStyleSheet*, MediaQueryEvaluator*, CSSStyleSelector* = 0);
     
-    void addRule(CSSStyleRule* rule, CSSSelector* sel);
+    void addRule(CSSStyleRule* rule, CSSSelector* sel, int scope = 0, bool partRule = false);
     void addToRuleSet(AtomicStringImpl* key, AtomRuleMap& map,
-                      CSSStyleRule* rule, CSSSelector* sel);
+                      CSSStyleRule* rule, CSSSelector* sel, int scope = 0, bool partRule = false);
     
     CSSRuleDataList* getIDRules(AtomicStringImpl* key) { return m_idRules.get(key); }
     CSSRuleDataList* getClassRules(AtomicStringImpl* key) { return m_classRules.get(key); }
@@ -289,6 +289,7 @@ CSSStyleSelector::CSSStyleSelector(Document* doc, const String& userStyleSheet, 
 void CSSStyleSelector::init()
 {
     element = 0;
+    m_currentShadowHost = 0;
     m_matchedDecls.clear();
     m_ruleList = 0;
     m_collectRulesOnly = false;
@@ -328,6 +329,9 @@ static CSSStyleSheet* parseUASheet(const char* characters, unsigned size)
 {
     CSSStyleSheet* const parent = 0;
     CSSStyleSheet* sheet = new CSSStyleSheet(parent);
+    /* -1: the UA sheet applies in every tree scope (shadow content still gets
+     * default display/margin rules); 0 is a document author sheet. */
+    sheet->setShadowScope(-1);
     sheet->ref(); // leak the sheet on purpose since it will be stored in a global variable
     sheet->parseString(String(characters, size));
     return sheet;
@@ -410,6 +414,76 @@ void CSSStyleSelector::matchRules(CSSRuleSet* rules, int& firstRuleIndex, int& l
     }
 }
 
+bool CSSStyleSelector::selectorHasAttribute(CSSSelector* sel, const AtomicString& name)
+{
+    for (; sel; sel = sel->m_tagHistory) {
+        if (sel->m_attr.localName() == name)
+            return true;
+        /* Stop after the subject compound: `X [part~=a] .y` must not be treated
+         * as a rule on the part element. */
+        if (sel->relation() != CSSSelector::SubSelector)
+            break;
+    }
+    return false;
+}
+
+bool CSSStyleSelector::selectorHasHostPseudo(CSSSelector* sel)
+{
+    for (; sel; sel = sel->m_tagHistory) {
+        if (sel->m_match == CSSSelector::PseudoClass &&
+            sel->pseudoType() == CSSSelector::PseudoHost)
+            return true;
+        if (sel->relation() != CSSSelector::SubSelector)
+            break;
+    }
+    return false;
+}
+
+bool CSSStyleSelector::ruleScopeMatches(CSSRuleData* d)
+{
+    static const AtomicString partName("part");
+    static const AtomicString slottedName("data-agb-slotted");
+    int elementScope = element->shadowScope();
+    int ruleScope = d->scope();
+
+    /* UA sheets (-1) style every tree, the document included. */
+    if (ruleScope < 0)
+        return true;
+
+    if (ruleScope == 0 && elementScope == 0)
+        return true;
+
+    /* A document sheet may only style a shadow node through ::part(). */
+    if (ruleScope == 0)
+        return d->partRule() && element->hasAttribute(partName) &&
+               selectorHasAttribute(d->selector(), partName);
+
+    if (elementScope == ruleScope)
+        return true;
+
+    /* A shadow sheet's :host rule targets the host, which lives one tree out
+     * (this also covers a host that is itself inside another shadow tree). */
+    {
+        Element* host = element->document() ? element->document()->shadowHostForScope(ruleScope) : 0;
+
+        if (host && host == element && selectorHasHostPseudo(d->selector()))
+            return true;
+    }
+
+    /* ::slotted(): the light node carries the root id of the sheet that styles it. */
+    if (element->hasAttribute(slottedName)) {
+        bool attr = selectorHasAttribute(d->selector(), slottedName);
+
+        if (getenv("AGB_SHADOW_DEBUG"))
+            fprintf(stderr, "[shadow] slotted? el=%s scope=%d rule=%d val=%s attr=%d\n",
+                    element->localName().domString().utf8().data(), elementScope, ruleScope,
+                    element->getAttribute(slottedName).domString().utf8().data(), attr ? 1 : 0);
+        if (element->getAttribute(slottedName) == String::number(ruleScope))
+            return attr;
+    }
+    return false;
+}
+
 void CSSStyleSelector::matchRulesForList(CSSRuleDataList* rules, int& firstRuleIndex, int& lastRuleIndex)
 {
     if (!rules)
@@ -419,7 +493,19 @@ void CSSStyleSelector::matchRulesForList(CSSRuleDataList* rules, int& firstRuleI
         CSSStyleRule* rule = d->rule();
         const AtomicString& localName = element->localName();
         const AtomicString& selectorLocalName = d->selector()->m_tag.localName();
-        if ((localName == selectorLocalName || selectorLocalName == starAtom) && checkSelector(d->selector())) {
+        Element* savedHost = m_currentShadowHost;
+        bool matched;
+
+        if (!ruleScopeMatches(d))
+            continue;
+
+        m_currentShadowHost = d->scope() && element->document()
+            ? element->document()->shadowHostForScope(d->scope()) : 0;
+        matched = (localName == selectorLocalName || selectorLocalName == starAtom) &&
+                  checkSelector(d->selector());
+        m_currentShadowHost = savedHost;
+
+        if (matched) {
             // If the rule has no properties to apply, then ignore it.
             CSSMutableStyleDeclaration* decl = rule->declaration();
             if (!decl || !decl->length())
@@ -1659,6 +1745,12 @@ bool CSSStyleSelector::checkOneSelector(CSSSelector* sel, Element* e, bool isAnc
                 if (e == e->document()->documentElement())
                     return true;
                 break;
+            case CSSSelector::PseudoHost:
+                /* Only a shadow sheet rule can carry :host; the matcher set the
+                 * rule's host before checkSelector(). */
+                if (m_currentShadowHost && e == m_currentShadowHost)
+                    return true;
+                break;
             case CSSSelector::PseudoLang: {
                 const AtomicString& value = e->getAttribute(langAttr);
                 if (value.isEmpty() || !value.startsWith(sel->m_argument, false))
@@ -1758,39 +1850,53 @@ CSSRuleSet::~CSSRuleSet()
 
 
 void CSSRuleSet::addToRuleSet(AtomicStringImpl* key, AtomRuleMap& map,
-                              CSSStyleRule* rule, CSSSelector* sel)
+                              CSSStyleRule* rule, CSSSelector* sel, int scope, bool partRule)
 {
     if (!key) return;
     CSSRuleDataList* rules = map.get(key);
     if (!rules) {
-        rules = new CSSRuleDataList(m_ruleCount++, rule, sel);
+        rules = new CSSRuleDataList(m_ruleCount++, rule, sel, scope, partRule);
         map.set(key, rules);
     } else
-        rules->append(m_ruleCount++, rule, sel);
+        rules->append(m_ruleCount++, rule, sel, scope, partRule);
 }
 
-void CSSRuleSet::addRule(CSSStyleRule* rule, CSSSelector* sel)
+/* Does the subject compound carry a [part] attribute selector? Only rules
+ * produced by the ::part() rewrite do; they are the one document-sheet rule
+ * kind allowed to style a shadow node (issues #27). */
+static bool selectorSubjectHasPart(CSSSelector* sel)
+{
+    for (; sel; sel = sel->m_tagHistory) {
+        if (sel->m_attr.localName() == AtomicString("part"))
+            return true;
+        if (sel->relation() != CSSSelector::SubSelector)
+            break;
+    }
+    return false;
+}
+
+void CSSRuleSet::addRule(CSSStyleRule* rule, CSSSelector* sel, int scope, bool partRule)
 {
     if (sel->m_match == CSSSelector::Id) {
-        addToRuleSet(sel->m_value.impl(), m_idRules, rule, sel);
+        addToRuleSet(sel->m_value.impl(), m_idRules, rule, sel, scope, partRule);
         return;
     }
     if (sel->m_match == CSSSelector::Class) {
-        addToRuleSet(sel->m_value.impl(), m_classRules, rule, sel);
+        addToRuleSet(sel->m_value.impl(), m_classRules, rule, sel, scope, partRule);
         return;
     }
      
     const AtomicString& localName = sel->m_tag.localName();
     if (localName != starAtom) {
-        addToRuleSet(localName.impl(), m_tagRules, rule, sel);
+        addToRuleSet(localName.impl(), m_tagRules, rule, sel, scope, partRule);
         return;
     }
     
     // Just put it in the universal rule set.
     if (!m_universalRules)
-        m_universalRules = new CSSRuleDataList(m_ruleCount++, rule, sel);
+        m_universalRules = new CSSRuleDataList(m_ruleCount++, rule, sel, scope, partRule);
     else
-        m_universalRules->append(m_ruleCount++, rule, sel);
+        m_universalRules->append(m_ruleCount++, rule, sel, scope, partRule);
 }
 
 void CSSRuleSet::addRulesFromSheet(CSSStyleSheet* sheet,  MediaQueryEvaluator* medium, CSSStyleSelector* styleSelector)
@@ -1804,13 +1910,14 @@ void CSSRuleSet::addRulesFromSheet(CSSStyleSheet* sheet,  MediaQueryEvaluator* m
         return; // the style sheet doesn't apply
 
     int len = sheet->length();
+    int scope = sheet->shadowScope();
 
     for (int i = 0; i < len; i++) {
         StyleBase* item = sheet->item(i);
         if (item->isStyleRule()) {
             CSSStyleRule* rule = static_cast<CSSStyleRule*>(item);
             for (CSSSelector* s = rule->selector(); s; s = s->next())
-                addRule(rule, s);
+                addRule(rule, s, scope, scope == 0 && selectorSubjectHasPart(s));
         }
         else if(item->isImportRule()) {
             CSSImportRule* import = static_cast<CSSImportRule*>(item);
@@ -1829,7 +1936,7 @@ void CSSRuleSet::addRulesFromSheet(CSSStyleSheet* sheet,  MediaQueryEvaluator* m
                         // It is a StyleRule, so append it to our list
                         CSSStyleRule* rule = static_cast<CSSStyleRule*>(childItem);
                         for (CSSSelector* s = rule->selector(); s; s = s->next())
-                            addRule(rule, s);
+                            addRule(rule, s, scope, scope == 0 && selectorSubjectHasPart(s));
                     } else if (item->isFontFaceRule() && styleSelector) {
                         // Add this font face to our set.
                         const CSSFontFaceRule* fontFaceRule = static_cast<CSSFontFaceRule*>(item);

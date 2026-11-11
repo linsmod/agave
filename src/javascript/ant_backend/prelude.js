@@ -291,15 +291,19 @@
         if (typeof g.__agbInstallAdopted === 'function') g.__agbInstallAdopted();
         var mode = init && init.mode;
         var tag = String(this.localName || this.tagName || '').toLowerCase();
-        var root = g.__agbAttachShadow(this, mode === 'closed' ? 'closed' : 'open');
+
+        /* Validate before creating anything: an invalid mode or a forbidden
+         * host must not leave a half-attached root behind. */
+        if (mode !== 'open' && mode !== 'closed')
+          throw domError('TypeError', '"' + mode + '" is not a valid shadow root mode');
+        if (FORBIDDEN[tag])
+          throw domError('NotSupportedError', '<' + tag + '> cannot host a shadow root');
+
+        var root = g.__agbAttachShadow(this, mode);
 
         if (!root)
           throw domError('NotSupportedError',
                          'attachShadow is not supported on <' + tag + '> (or a shadow root is already attached)');
-        if (mode !== undefined && mode !== 'open' && mode !== 'closed')
-          throw domError('TypeError', '"' + mode + '" is not a valid shadow root mode');
-        if (FORBIDDEN[tag])
-          throw domError('NotSupportedError', '<' + tag + '> cannot host a shadow root');
         return root;
       };
     }());
@@ -1016,6 +1020,86 @@
     install('DOMTokenList', true);
     install('RadioNodeList', false);
     install('NamedNodeMap', true);
+
+  /* --- NodeFilter constants (DOM2 Traversal) ------------------------------- *
+   * The walker itself is a real C++ interface now (issues #27): document.
+   * createTreeWalker()/TreeWalker come from buildANT, and the filter callback is
+   * invoked by WebCore's traversal engine. Only the constants object remains
+   * here, because Chrome exposes NodeFilter as a function with enumerable
+   * FILTER_ACCEPT / SHOW_ELEMENT constants. */
+  if (typeof g.NodeFilter === 'undefined') {
+    var nodeFilterCtor = function NodeFilter() {};
+    var nodeFilterConstants = {
+      FILTER_ACCEPT: 1, FILTER_REJECT: 2, FILTER_SKIP: 3,
+      SHOW_ALL: 0xFFFFFFFF, SHOW_ELEMENT: 1, SHOW_ATTRIBUTE: 2, SHOW_TEXT: 4,
+      SHOW_CDATA_SECTION: 8, SHOW_ENTITY_REFERENCE: 16, SHOW_ENTITY: 32,
+      SHOW_PROCESSING_INSTRUCTION: 64, SHOW_COMMENT: 128, SHOW_DOCUMENT: 256,
+      SHOW_DOCUMENT_TYPE: 512, SHOW_DOCUMENT_FRAGMENT: 1024, SHOW_NOTATION: 2048
+    };
+    for (var nodeFilterKey in nodeFilterConstants)
+      nodeFilterCtor[nodeFilterKey] = nodeFilterConstants[nodeFilterKey];
+    g.NodeFilter = nodeFilterCtor;
+  }
+
+  /* requestFullscreen()/exitFullscreen(): state and fullscreenchange are C++
+   * (issues #27). Chrome applies the transition and resolves the Promise in a
+   * task, so the deferred state change lives here; a page that attaches its
+   * listener after the call still sees the event. */
+  (function () {
+    var installedElement = null, installedDocument = null;
+
+    function installFullscreen() {
+      var elementProto = g.Element && g.Element.prototype;
+      var documentProto = g.Document && g.Document.prototype;
+
+      if (elementProto && elementProto !== installedElement && !elementProto.requestFullscreen) {
+        installedElement = elementProto;
+        var request = function () {
+          var element = this;
+
+          return new Promise(function (resolve, reject) {
+            setTimeout(function () {
+              if (g.__agbRequestFullscreen && g.__agbRequestFullscreen(element)) resolve();
+              else reject(new TypeError("Failed to execute 'requestFullscreen' on 'Element': the element is not connected"));
+            }, 0);
+          });
+        };
+
+        Object.defineProperty(elementProto, 'requestFullscreen',
+                              { value: request, writable: true, configurable: true });
+        Object.defineProperty(elementProto, 'webkitRequestFullscreen',
+                              { value: request, writable: true, configurable: true });
+      }
+
+      if (documentProto && documentProto !== installedDocument && !documentProto.exitFullscreen) {
+        installedDocument = documentProto;
+        var exit = function () {
+          var doc = this;
+
+          return new Promise(function (resolve, reject) {
+            setTimeout(function () {
+              if (g.__agbExitFullscreen && g.__agbExitFullscreen(doc)) resolve();
+              else reject(new TypeError("Failed to execute 'exitFullscreen' on 'Document'"));
+            }, 0);
+          });
+        };
+
+        Object.defineProperty(documentProto, 'exitFullscreen',
+                              { value: exit, writable: true, configurable: true });
+        Object.defineProperty(documentProto, 'webkitExitFullscreen',
+                              { value: exit, writable: true, configurable: true });
+      }
+    }
+
+    installFullscreen();
+    try { setTimeout(installFullscreen, 0); } catch (e) { /* no timers yet */ }
+    g.__agbInstallFullscreen = installFullscreen;
+  })();
+
+  /* Fullscreen: requestFullscreen()/exitFullscreen()/document.fullscreenElement
+   * are C++ (issues #27): state + fullscreenchange live in the engine, so a page
+   * that awaits the Promise and reads the document state behaves like Chrome.
+   * The shell window itself is not resized yet (roadmap). */
   })();
   g.__agbMakeClassList = function (el) {
     return {

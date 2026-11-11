@@ -268,6 +268,7 @@ Document::Document(DOMImplementation* impl, Frame* frame, bool isXHTML)
     : ContainerNode(0)
     , m_implementation(impl)
     , m_domtree_version(0)
+    , m_nextShadowScope(1)
     , m_styleSheets(new StyleSheetList(this))
     , m_title("")
     , m_titleSetExplicitly(false)
@@ -506,6 +507,28 @@ Element* Document::documentElement() const
     }
 
     return m_documentElement.get();
+}
+
+int Document::registerShadowRoot(Element* host)
+{
+    int id;
+
+    if (!host)
+        return 0;
+    id = m_nextShadowScope++;
+    m_shadowHosts.set(id, host);
+    return id;
+}
+
+Element* Document::shadowHostForScope(int scope) const
+{
+    if (scope <= 0)
+        return 0;
+    {
+        HashMap<int, Element*>::const_iterator it = m_shadowHosts.find(scope);
+
+        return it == m_shadowHosts.end() ? 0 : it->second;
+    }
 }
 
 PassRefPtr<Element> Document::createElement(const String &name, ExceptionCode& ec)

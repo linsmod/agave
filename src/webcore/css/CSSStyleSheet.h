@@ -74,11 +74,18 @@ public:
 
     bool loadCompleted() const { return m_loadCompleted; }
 
+    /* Shadow tree scope (issues #27): 0 for a document sheet, otherwise the id
+     * of the shadow root the owning <style> lives in. The selector uses it to
+     * keep page rules out of component trees and vice versa. */
+    int shadowScope() const { return m_shadowScope; }
+    void setShadowScope(int scope) { m_shadowScope = scope; }
+
 protected:
     Document* m_doc;
     CSSNamespace* m_namespaces;
     String m_charset;
     bool m_loadCompleted;
+    int m_shadowScope;
 };
 
 } // namespace

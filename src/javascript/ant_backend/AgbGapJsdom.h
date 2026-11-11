@@ -57,7 +57,6 @@ static const AgbJsdomGap agbJsdomGaps[] = {
     /* --- element: reflected attributes ----------------------------------- */
 
     /* --- element: geometry / scrolling ----------------------------------- */
-    { "requestFullscreen",    "dom", "undefined; no fullscreen" },
 
     /* --- form ------------------------------------------------------------- */
 
@@ -66,7 +65,6 @@ static const AgbJsdomGap agbJsdomGaps[] = {
     /* --- frame ------------------------------------------------------------ */
 
     /* --- document --------------------------------------------------------- */
-    { "createTreeWalker",     "doc", "undefined; recursive querySelectorAll works" },
 
     /* --- history ---------------------------------------------------------- *
      * history.state/length are real now (R36): the state objects live in the

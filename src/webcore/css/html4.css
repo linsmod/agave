@@ -658,3 +658,10 @@ iframe {
 }
 
 /* noscript is handled internally, as it depends on settings */
+
+/* Shadow DOM (issues #27): while a slot has assigned nodes, the light nodes are
+ * placed next to it (the flat tree); the slot box itself must disappear so it
+ * does not add a line box or become a flex/grid item. */
+slot[data-agb-slot-filled] {
+    display: none
+}

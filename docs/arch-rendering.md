@@ -61,6 +61,27 @@ DOM attach（Element::attach / Text::attach）
 | 绘制 | `WebView::paintView()`、`ScrollView::paint()`、`Frame::paint()`、`RenderLayer::paintLayer()` | `src/webview/WebView.cpp`、`src/webview/ScrollViewMC.cpp`、`src/webcore/page/Frame.cpp`、`src/webcore/platform/picasso/GraphicsContextPS.cpp` | 残影、clip、渐变/背景、后端坐标 |
 | 命中测试 | `EventHandler::hitTestResultAtPoint()` | `src/webcore/page/EventHandler.cpp`、`RenderLayer.cpp`、`RenderBox.cpp` | 点不中、点错元素（和布局共用几何） |
 
+### 2.1 Shadow DOM 样式作用域与 slot 分发（R188）
+
+这棵树没有独立的 shadow 渲染树：shadow 内容在物理上仍是宿主元素的子节点。区分组件树 / light DOM 靠
+`Node::shadowScope()`（0 = 文档树，>0 = 某个 shadow root 的 id；`Document::registerShadowRoot()` 分配 id 并
+记录 host）。样式侧：
+
+- `<style>` 建 sheet 时把 owner 的 scope 写进 `CSSStyleSheet::shadowScope()`（UA sheet 是 -1，两层树都生效）。
+- `CSSRuleSet::addRulesFromSheet` 把 scope（以及"是否 `::part` 规则"）带进 `CSSRuleData`；
+  `CSSStyleSelector::ruleScopeMatches()` 在匹配前过滤：文档规则只匹配 scope 0（`::part` 例外），组件规则只匹配
+  同一 root，`:host` 用 `PseudoHost` 命中 host，`::slotted` 用 light 节点上的 `data-agb-slotted=<root id>` 命中。
+- 选择器文本在 `CSSParser::parseSheet` 里改写：`:host(<compound>)` → `:host<compound>`、
+  `::slotted(<compound>)` → `<compound>[data-agb-slotted]`、`::part(name)` → `[part~="name"]`（物理树里 part 是
+  host 的后代，所以带前缀的 `X::part()` 仍是真正的后代选择器）。
+- 分发：`AntRuntime` 的 `distributeShadowHost()` 把每个 light 节点按 `slot` 属性分到同名 `<slot>`（默认 slot 收
+  没有 slot 属性的节点），已分发节点放在 slot 之后的兄弟位置（等价于 flat tree），slot 自身在有分配时用
+  `slot[data-agb-slot-filled]{display:none}` 隐藏；未分配节点移进隐藏 fragment。`slotchange` 按 microtask 每
+  slot 一次；`host.innerHTML` 只换 light DOM，`shadowRoot.innerHTML` 只换组件树。
+
+已知边界：`host.childNodes` / `document.querySelectorAll` 仍能看到组件节点；`slot` 不是 `display: contents`；
+`:host-context()` 和跨组件同名 `::part` 的精确作用域未做。
+
 ## 3. 布局内部
 
 ### 3.1 display → RenderObject

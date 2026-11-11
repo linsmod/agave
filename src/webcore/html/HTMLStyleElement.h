@@ -44,6 +44,9 @@ public:
     virtual void insertedIntoDocument();
     virtual void removedFromDocument();
     virtual void childrenChanged();
+    /* Re-parses the sheet after the element's shadow scope was assigned (the
+     * fragment parser created it before the shadow marking ran). */
+    void rebuildSheet() { if (inDocument()) StyleElement::process(this); }
 
     void setCreatedByParser(bool createdByParser) { m_createdByParser = createdByParser; }
     virtual void finishedParsing();

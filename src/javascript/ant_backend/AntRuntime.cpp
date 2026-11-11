@@ -75,6 +75,9 @@ static AgbConstructHookFn g_constructHookFn = NULL;
 #include "FrameView.h"
 #include "DOMSelection.h"
 #include "Range.h"
+#include "TreeWalker.h"
+#include "NodeFilter.h"
+#include "NodeFilterCondition.h"
 #include "Editor.h"
 #include "AtomicString.h"
 #include "FrameTree.h"
@@ -84,6 +87,7 @@ static AgbConstructHookFn g_constructHookFn = NULL;
 #include "DocumentFragment.h"
 #include "editing/markup.h"
 #include "HTMLImageElement.h"
+#include "HTMLStyleElement.h"
 #include "HTMLFormElement.h"
 #include "HTMLCollection.h"
 #include "HTMLFrameOwnerElement.h"
@@ -186,6 +190,7 @@ struct CssomRef {
  * RuntimeState; the forward declaration keeps the view struct independent of
  * the document details. */
 struct DocumentRuntime;
+struct AgbShadowRoot;
 struct Listener;
 
 struct RealmInterfaces;
@@ -220,6 +225,7 @@ struct RuntimeState {
     AntbClass*         namedNodeMapIface;
     AntbClass*         attrIface;
     AntbClass*         shadowRootIface;
+    AntbClass*         treeWalkerIface;
     std::map<std::string, AntbClass*>* tagClasses;   /* tag -> element interface */
     /* Engine-scoped aux interfaces (not part of the DOM tree; shared by every
      * realm of this view). They were statics too, so the same cross-engine
@@ -249,9 +255,8 @@ struct RuntimeState {
     /* HTMLTemplateElement.content (issues #18 phase B): one fragment per template,
      * created lazily and owned by the document, so it dies with it. */
     std::map<WebCore::Node*, WebCore::DocumentFragment*>* templateContents;
-    /* attachShadow() (issues #18 phase C): host element -> mode (1 open, 2 closed).
-     * The shadow children are the host's real children, so nothing else is kept. */
-    std::map<WebCore::Node*, int>* shadowRoots;
+    /* attachShadow() (issues #18 phase C, #27): see DocumentRuntime's copy. */
+    std::map<WebCore::Node*, AgbShadowRoot*>* shadowRoots;
     AntbValue*         docObj;          /* the JS document object (rooted) */
     bool               documentBound;
     void*              listeners;       /* std::vector<Listener>* (see below) */
@@ -342,6 +347,7 @@ struct RealmInterfaces {
     AntbClass* namedNodeMapIface;
     AntbClass* attrIface;
     AntbClass* shadowRootIface;
+    AntbClass* treeWalkerIface;
     AntbClass* windowClass;
     AntbClass* nodeListClass;
     AntbClass* htmlCollectionClass;
@@ -351,7 +357,7 @@ struct RealmInterfaces {
           elementIface(NULL), htmLElementIface(NULL), svgElementIface(NULL), svgSvgIface(NULL),
           documentFragmentIface(NULL), characterDataIface(NULL), textIface(NULL),
           commentIface(NULL), unknownElementIface(NULL), namedNodeMapIface(NULL),
-          attrIface(NULL), shadowRootIface(NULL), windowClass(NULL),
+          attrIface(NULL), shadowRootIface(NULL), treeWalkerIface(NULL), windowClass(NULL),
           nodeListClass(NULL), htmlCollectionClass(NULL) {}
 };
 
@@ -359,6 +365,16 @@ struct RealmInterfaces {
 /* DocumentRuntime: one bound document (== one realm)                        */
 /* ------------------------------------------------------------------------- */
 struct AgbCollection;
+struct AgbTreeWalker;
+/* One attached shadow root (issues #27). The shadow content is physically part
+ * of the host subtree in this port; `light` keeps the host's original children
+ * (which slot distribution moves next to their slot) so they can be told apart
+ * from component-owned nodes (marked with Node::shadowScope() == id). */
+struct AgbShadowRoot {
+    int mode;                              /* 1 open, 2 closed */
+    int id;                                /* shadow scope id, >= 1 */
+    std::vector<WebCore::Node*>* light;    /* host's light children */
+};
 
 /* Everything that used to live on RuntimeState but belongs to the document:
  * the DOM document, its JS object, its listeners, its CSSOM refs and its
@@ -390,9 +406,18 @@ struct DocumentRuntime {
     /* HTMLTemplateElement.content (issues #18 phase B): one fragment per template,
      * created lazily and owned by the document, so it dies with it. */
     std::map<WebCore::Node*, WebCore::DocumentFragment*>* templateContents;
-    /* attachShadow() (issues #18 phase C): host element -> mode (1 open, 2 closed).
-     * The shadow children are the host's real children, so nothing else is kept. */
-    std::map<WebCore::Node*, int>* shadowRoots;
+    /* attachShadow() (issues #18 phase C, #27): host element -> shadow root.
+     * The shadow children are physically host children; `light` and the scope
+     * marker tell them apart. Slot assignment state lives per document too. */
+    std::map<WebCore::Node*, AgbShadowRoot*>* shadowRoots;
+    std::map<WebCore::Node*, WebCore::Node*>* slotOf;              /* light node -> slot */
+    std::map<WebCore::Node*, std::vector<WebCore::Node*>*>* slotAssignments;
+    WebCore::DocumentFragment* unassignedLight;                    /* detached light nodes */
+    int distributingShadow;
+    /* slotchange is a microtask in Chrome (a synchronous probe sees no event);
+     * slots whose assignment changed wait here until the queued callback. */
+    std::vector<WebCore::Node*>* pendingSlotChanges;
+    int slotChangeScheduled;
     /* DOM Selection API: one live DOMSelection per document (a view over the
      * frame's selection) and the Range objects handed to JS. Ranges are ref'd
      * when wrapped and released with the document (see selectionReleaseRefs);
@@ -410,6 +435,10 @@ struct DocumentRuntime {
      * releaseDocumentRuntime, so a navigation never resolves a specifier
      * through the previous page's map. NULL when the document has no map. */
     void* importMap;
+    /* document.createTreeWalker() results (issues #27): the walker is ref'd and
+     * released with the document. The filter handle it captured is retained on
+     * the AgbTreeWalker, so the JS callback survives GC like a listener. */
+    std::vector<AgbTreeWalker*>* treeWalkers;
 };
 
 /* Every realm (one document) gets a fresh id. Resources that can outlive
@@ -436,7 +465,8 @@ static RuntimeState* g_currentState = &g_emptyState;
  * document is bound (startup, teardown) reads the empty document's fields
  * instead of dereferencing a null pointer. */
 static DocumentRuntime  g_emptyDocument = {
-    &g_emptyState, NULL, NULL, NULL, NULL, false, false, -1, 0, NULL, NULL, NULL, NULL, NULL
+    &g_emptyState, NULL, NULL, NULL, NULL, false, false, -1, 0, NULL, NULL, NULL, NULL, NULL,
+    NULL, NULL, NULL, NULL, NULL
 };
 static DocumentRuntime* g_currentDocument = &g_emptyDocument;
 
@@ -648,6 +678,7 @@ static void activateState(RuntimeState* state)
 #define g_namedNodeMapIface     (g_currentState->namedNodeMapIface)
 #define g_attrIface             (g_currentState->attrIface)
 #define g_shadowRootIface       (g_currentState->shadowRootIface)
+#define g_treeWalkerIface       (g_currentState->treeWalkerIface)
 #define g_textIface             (g_currentState->textIface)
 #define g_commentIface          (g_currentState->commentIface)
 #define g_unknownElementIface   (g_currentState->unknownElementIface)
@@ -824,6 +855,7 @@ static std::vector<DocumentRuntime*>& documentsFor(RuntimeState* state)
 struct Listener;   /* the listener table is per realm (defined below) */
 static void cssomReleaseRefs(DocumentRuntime* document);
 static void selectionReleaseRefs(DocumentRuntime* document);
+static void destroyTreeWalkers(DocumentRuntime* document);
 static void releaseAllRealmListeners(RuntimeState* state);
 static void releaseRealmListeners(RuntimeState* state, AntbRealm* realm);
 
@@ -974,8 +1006,44 @@ static void releaseDocumentRuntime(DocumentRuntime* document, bool releaseValues
     delete document->upgradedCustom;
     document->upgradedCustom = NULL;
 
-    delete document->shadowRoots;
-    document->shadowRoots = NULL;
+    if (document->shadowRoots) {
+        for (std::map<WebCore::Node*, AgbShadowRoot*>::iterator it = document->shadowRoots->begin();
+             it != document->shadowRoots->end(); ++it) {
+            if (it->second) {
+                delete it->second->light;
+                delete it->second;
+            }
+        }
+        delete document->shadowRoots;
+        document->shadowRoots = NULL;
+    }
+    if (document->slotAssignments) {
+        for (std::map<WebCore::Node*, std::vector<WebCore::Node*>*>::iterator it =
+                 document->slotAssignments->begin(); it != document->slotAssignments->end(); ++it)
+            delete it->second;
+        delete document->slotAssignments;
+        document->slotAssignments = NULL;
+    }
+    delete document->slotOf;
+    document->slotOf = NULL;
+    if (document->pendingSlotChanges) {
+        for (size_t i = 0; i < document->pendingSlotChanges->size(); ++i) {
+            if ((*document->pendingSlotChanges)[i])
+                (*document->pendingSlotChanges)[i]->deref();
+        }
+        delete document->pendingSlotChanges;
+        document->pendingSlotChanges = NULL;
+    }
+    document->slotChangeScheduled = 0;
+    if (document->unassignedLight) {
+        document->unassignedLight->deref();
+        document->unassignedLight = NULL;
+    }
+
+    /* TreeWalkers hold a RefPtr on their WebCore walker (which refs the root
+     * node and the filter); drop them with the document. The retained JS filter
+     * handle itself leaks by design (antb_retain has no counterpart). */
+    destroyTreeWalkers(document);
 
     if (document->templateContents) {
         for (std::map<WebCore::Node*, WebCore::DocumentFragment*>::iterator it =
@@ -1227,6 +1295,20 @@ int nodeReplaceWith(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*
 int nodeAssignedNodes(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalAttachShadow(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeAssignedElements(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int docCreateTreeWalker(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int treeWalkerMethod(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int treeWalkerGetter(AntbEngine*, AntbValue*, const char*, AntbValue*, void*);
+int treeWalkerSetter(AntbEngine*, AntbValue*, const char*, const AntbValue*, void*);
+int elementRequestFullscreen(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int docExitFullscreen(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+
+/* Shadow DOM helpers (defined with the shadow code below). */
+static WebCore::Element* shadowHostOfWrapper(AntbValue* self);
+static AgbShadowRoot* shadowInfo(WebCore::Node* host);
+static void markShadowSubtree(WebCore::Node* node, int scope);
+static void shadowAfterInsert(AntbValue* selfValue, WebCore::Node* parent, WebCore::Node* child);
+static void shadowAfterRemove(AntbValue* selfValue, WebCore::Node* parent, WebCore::Node* child);
+static void replaceShadowChildren(WebCore::Element* host, AntbValue** args, int argc);
 int namedMapItemFn(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int namedMapGetNamedItemFn(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int namedMapSetNamedItem(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
@@ -1236,6 +1318,7 @@ int namedMapSetNamedItemNS(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*
 int namedMapRemoveNamedItemNS(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeGetBoundingClientRect(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeGetRootNode(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+AntbValue* wrapShadowRoot(AntbEngine*, WebCore::Element*);
 int nodeGetAttributeNames(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeToggleAttribute(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int nodeGetAttributeNode(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
@@ -2492,6 +2575,17 @@ static int assignNull(AntbEngine* engine, AntbValue* out)
     return 1;
 }
 
+static int assignBoolean(AntbEngine* engine, AntbValue* out, int value)
+{
+    AntbValue* v = antb_make_boolean(engine, value);
+
+    if (!v)
+        return 0;
+    antb_value_assign(out, v);
+    antb_value_release(v);
+    return 1;
+}
+
 /* document.title */
 int titleGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue* out, void*)
 {
@@ -2501,6 +2595,32 @@ int titleGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue
 
     if (!name || !d)
         return 0;
+
+    if (!strcmp(name, "fullscreenElement") || !strcmp(name, "webkitFullscreenElement")) {
+        WebCore::Element* fullscreen = d->fullscreenElement();
+
+        if (!fullscreen)
+            return assignNull(engine, out);
+        {
+            AntbValue* v = wrapNode(engine, fullscreen);
+
+            if (!v)
+                return assignNull(engine, out);
+            antb_value_assign(out, v);
+            antb_value_release(v);
+        }
+        return 1;
+    }
+
+    if (!strcmp(name, "fullscreenEnabled") || !strcmp(name, "webkitFullscreenEnabled")) {
+        AntbValue* v = antb_make_boolean(engine, 1);
+
+        if (!v)
+            return 0;
+        antb_value_assign(out, v);
+        antb_value_release(v);
+        return 1;
+    }
 
     if (!strcmp(name, "title")) {
         WebCore::String title = d->title();
@@ -6490,6 +6610,11 @@ static void installGlobalApi(AntbEngine* engine, AntbValue* global)
         antb_define_method(g_engine, global, "__agbCEDefine", globalCEDefine, NULL);
         antb_define_method(g_engine, global, "__agbCEUpgrade", globalCEUpgrade, NULL);
         antb_define_method(g_engine, global, "__agbAttachShadow", globalAttachShadow, NULL);
+        /* Fullscreen state transitions (issues #27): prelude wraps these in the
+         * Promise + task deferral Chrome has; the engine owns the state and the
+         * fullscreenchange event. */
+        antb_define_method(g_engine, global, "__agbRequestFullscreen", elementRequestFullscreen, NULL);
+        antb_define_method(g_engine, global, "__agbExitFullscreen", docExitFullscreen, NULL);
         /* Custom element constructors run through this hook (issues #18/#22). */
         antb_set_construct_hook(g_engine, g_constructHookFn);
         antb_define_method(g_engine, global, "__agbViewportWidth", globalViewportSize, (void*)0);
@@ -8608,6 +8733,21 @@ int nodeGetRootNode(AntbEngine* engine, AntbValue* self, AntbValue**, int, AntbV
     if (!n)
         return 1;
 
+    /* A shadow node's root is the ShadowRoot object, not the document. */
+    if (n->shadowScope() > 0 && n->document()) {
+        WebCore::Element* host = n->document()->shadowHostForScope(n->shadowScope());
+
+        if (host) {
+            AntbValue* v = wrapShadowRoot(engine, host);
+
+            if (v) {
+                antb_value_assign(out, v);
+                antb_value_release(v);
+            }
+            return 1;
+        }
+    }
+
     top = n;
     while (top->parent())
         top = top->parent();
@@ -8945,6 +9085,15 @@ int nodeReplaceChildren(AntbEngine* engine, AntbValue* self, AntbValue** args, i
     if (!n)
         return 1;
 
+    {
+        WebCore::Element* shadowHost = shadowHostOfWrapper(self);
+
+        if (shadowHost) {
+            replaceShadowChildren(shadowHost, args, argc);
+            return 1;
+        }
+    }
+
     while (n->firstChild()) {
         RefPtr<WebCore::Node> child = n->firstChild();
 
@@ -9055,10 +9204,24 @@ static int mixinInsert(AntbValue* self, AntbValue** args, int argc, int op)
         else
             parent->appendChild(node, ec);
         ec = 0;
+
+        /* append()/prepend() on a ShadowRoot wrapper add component nodes, not
+         * light DOM (issues #27). */
+        if ((op == 0 || op == 1) && shadowHostOfWrapper(self)) {
+            AgbShadowRoot* info = shadowInfo(shadowHostOfWrapper(self));
+
+            if (info)
+                markShadowSubtree(node, info->id);
+        }
+        shadowAfterInsert(self, parent, node);
     }
 
-    if (op == 4 && receiver->parentNode())
-        receiver->parentNode()->removeChild(receiver, ec);
+    if (op == 4 && receiver->parentNode()) {
+        WebCore::Node* oldParent = receiver->parentNode();
+
+        oldParent->removeChild(receiver, ec);
+        shadowAfterRemove(self, oldParent, receiver);
+    }
 
     return 1;
 }
@@ -9103,35 +9266,55 @@ int nodeReplaceWith(AntbEngine*, AntbValue* self, AntbValue** args, int argc,
  * shadow-root tag (host/mode) and the node tag (everything else delegates to the
  * host through the normal node machinery), and its children ARE the host's
  * children, so component output renders through the normal layout path. */
-static int shadowRootMode(WebCore::Node* host)
+static AgbShadowRoot* shadowInfo(WebCore::Node* host)
 {
     DocumentRuntime* runtime;
 
     if (!host || !g_currentState || !host->document())
-        return 0;
+        return NULL;
     runtime = documentRuntimeFor(g_currentState, host->document());
     if (!runtime || !runtime->shadowRoots)
-        return 0;
-
+        return NULL;
     {
-        std::map<WebCore::Node*, int>::iterator it = runtime->shadowRoots->find(host);
+        std::map<WebCore::Node*, AgbShadowRoot*>::iterator it = runtime->shadowRoots->find(host);
 
-        return it == runtime->shadowRoots->end() ? 0 : it->second;
+        return it == runtime->shadowRoots->end() ? NULL : it->second;
     }
+}
+
+static int shadowRootMode(WebCore::Node* host)
+{
+    AgbShadowRoot* info = shadowInfo(host);
+
+    return info ? info->mode : 0;
 }
 
 static void rememberShadowRoot(WebCore::Node* host, int mode)
 {
     DocumentRuntime* runtime;
 
-    if (!host || !host->document() || !g_currentState)
+    if (!host || !host->document() || !g_currentState || shadowInfo(host))
         return;
     runtime = documentRuntimeFor(g_currentState, host->document());
     if (!runtime)
         return;
     if (!runtime->shadowRoots)
-        runtime->shadowRoots = new std::map<WebCore::Node*, int>();
-    (*runtime->shadowRoots)[host] = mode;
+        runtime->shadowRoots = new std::map<WebCore::Node*, AgbShadowRoot*>();
+
+    {
+        AgbShadowRoot* info = new AgbShadowRoot();
+
+        info->mode = mode;
+        info->id = host->document()->registerShadowRoot(static_cast<WebCore::Element*>(host));
+        info->light = new std::vector<WebCore::Node*>();
+
+        /* Everything that is currently a child of the host is light DOM. */
+        for (WebCore::Node* child = host->firstChild(); child; child = child->nextSibling()) {
+            if (child->shadowScope() == host->shadowScope())
+                info->light->push_back(child);
+        }
+        (*runtime->shadowRoots)[host] = info;
+    }
 }
 
 /* One wrapper per host (the bridge cache keys on pointer + tag), so
@@ -9153,6 +9336,651 @@ static AntbValue* wrapShadowRoot(AntbEngine* engine, WebCore::Element* host)
     antb_set_native(v, host, AGB_TAG_NODE);
     return v;
 }
+
+/* ---- Shadow DOM: scope marking, slot distribution, slotchange (#27) ----- */
+
+static bool isSlotElement(WebCore::Node* node)
+{
+    return node && node->isElementNode() &&
+           static_cast<WebCore::Element*>(node)->localName() == WebCore::AtomicString("slot");
+}
+
+static WebCore::Element* shadowHostOfWrapper(AntbValue* self)
+{
+    return self ? static_cast<WebCore::Element*>(antb_get_native(self, AGB_TAG_SHADOWROOT)) : NULL;
+}
+
+/* The nearest ancestor (or the node itself) that hosts a shadow root. */
+static WebCore::Element* nearestShadowHost(WebCore::Node* node, bool includeSelf = true)
+{
+    for (WebCore::Node* n = node; n; n = n->parentNode()) {
+        if (n != node || includeSelf) {
+            if (shadowInfo(n))
+                return static_cast<WebCore::Element*>(n);
+        }
+    }
+    return NULL;
+}
+
+static void markShadowSubtree(WebCore::Node* node, int scope)
+{
+    if (!node || scope <= 0)
+        return;
+    node->setShadowScope(scope);
+    for (WebCore::Node* child = node->firstChild(); child; child = child->nextSibling())
+        markShadowSubtree(child, scope);
+}
+
+/* A <style> created before the subtree was marked still carries scope 0; its
+ * sheet has to be parsed again now that the scope is known. */
+static void rebuildShadowStyleSheets(WebCore::Node* node)
+{
+    if (!node)
+        return;
+    if (node->isElementNode()) {
+        WebCore::Element* element = static_cast<WebCore::Element*>(node);
+
+        if (element->isHTMLElement() && element->localName() == WebCore::AtomicString("style"))
+            static_cast<WebCore::HTMLStyleElement*>(element)->rebuildSheet();
+    }
+    for (WebCore::Node* child = node->firstChild(); child; child = child->nextSibling())
+        rebuildShadowStyleSheets(child);
+}
+
+static void collectShadowSlots(WebCore::Node* parent, int scope,
+                               std::vector<WebCore::Element*>& slots)
+{
+    for (WebCore::Node* child = parent->firstChild(); child; child = child->nextSibling()) {
+        if (child->shadowScope() != scope)
+            continue;
+        if (!child->isElementNode())
+            continue;
+
+        {
+            WebCore::Element* element = static_cast<WebCore::Element*>(child);
+
+            if (element->localName() == WebCore::AtomicString("slot"))
+                slots.push_back(element);
+            collectShadowSlots(element, scope, slots);
+        }
+    }
+}
+
+static void fireSlotChange(WebCore::Element* slot)
+{
+    WebCore::ExceptionCode ec = 0;
+
+    if (slot)
+        slot->dispatchEvent(new WebCore::Event(WebCore::AtomicString("slotchange"), true, false), ec);
+}
+
+struct SlotChangeFlushJob {
+    WebCore::Document* document;
+};
+
+static int slotChangeFlush(AntbEngine* engine, AntbValue*, AntbValue**, int,
+                           AntbValue*, void* user)
+{
+    SlotChangeFlushJob* job = (SlotChangeFlushJob*)user;
+    DocumentRuntime* runtime;
+
+    (void)engine;
+    if (!job)
+        return 1;
+
+    runtime = (job->document && g_currentState)
+        ? documentRuntimeFor(g_currentState, job->document) : NULL;
+
+    if (getenv("AGB_SHADOW_DEBUG"))
+        agbLog(AGB_LOG_EVT, "[shadow] flush slotchange runtime=%p pending=%p",
+               (void*)runtime, runtime ? (void*)runtime->pendingSlotChanges : NULL);
+
+    if (runtime && runtime->pendingSlotChanges) {
+        std::vector<WebCore::Node*>* slots = runtime->pendingSlotChanges;
+        size_t i;
+
+        runtime->pendingSlotChanges = NULL;
+        runtime->slotChangeScheduled = 0;
+        for (i = 0; i < slots->size(); ++i) {
+            WebCore::Node* node = (*slots)[i];
+
+            if (node && node->document() && node->inDocument() && node->isElementNode())
+                fireSlotChange(static_cast<WebCore::Element*>(node));
+            if (node)
+                node->deref();
+        }
+        delete slots;
+    } else if (runtime) {
+        runtime->slotChangeScheduled = 0;
+    }
+
+    delete job;
+    return 1;
+}
+
+/* One microtask per batch, like the spec's "signal a slot change". */
+static void scheduleSlotChanges(DocumentRuntime* runtime)
+{
+    SlotChangeFlushJob* job;
+    AntbValue* global;
+    AntbValue* queue = NULL;
+    AntbValue* holder = NULL;
+    AntbValue* fn = NULL;
+
+    if (!runtime || !runtime->pendingSlotChanges || runtime->pendingSlotChanges->empty())
+        return;
+    if (runtime->slotChangeScheduled)
+        return;
+
+    runtime->slotChangeScheduled = 1;
+    job = new SlotChangeFlushJob();
+    job->document = runtime->document;
+    if (getenv("AGB_SHADOW_DEBUG"))
+        agbLog(AGB_LOG_EVT, "[shadow] schedule slotchange doc=%p pending=%d",
+               (void*)runtime->document, (int)runtime->pendingSlotChanges->size());
+
+    global = g_engine ? antb_global(g_engine) : NULL;
+    if (!global) {
+        delete job;
+        runtime->slotChangeScheduled = 0;
+        if (runtime->pendingSlotChanges) {
+            for (size_t i = 0; i < runtime->pendingSlotChanges->size(); ++i) {
+                if ((*runtime->pendingSlotChanges)[i])
+                    (*runtime->pendingSlotChanges)[i]->deref();
+            }
+            delete runtime->pendingSlotChanges;
+            runtime->pendingSlotChanges = NULL;
+        }
+        return;
+    }
+
+    queue = antb_get_prop(g_engine, global, "queueMicrotask");
+    holder = antb_make_object(g_engine);
+    if (holder) {
+        antb_define_method(g_engine, holder, "run", slotChangeFlush, job);
+        fn = antb_get_prop(g_engine, holder, "run");
+    }
+    if (queue && fn)
+        antb_call(g_engine, queue, global, &fn, 1, NULL);
+    else {
+        AntbValue* timer = antb_get_prop(g_engine, global, "setTimeout");
+
+        if (timer && fn) {
+            AntbValue* args[2];
+            AntbValue* delay = antb_make_number(g_engine, 0.0);
+
+            args[0] = fn;
+            args[1] = delay;
+            antb_call(g_engine, timer, global, args, 2, NULL);
+            if (delay)
+                antb_value_release(delay);
+        } else {
+            /* No scheduling facility: fire synchronously (better than losing
+             * the notification). */
+            slotChangeFlush(g_engine, NULL, NULL, 0, NULL, job);
+            job = NULL;
+        }
+        if (timer)
+            antb_value_release(timer);
+    }
+
+    if (fn)
+        antb_value_release(fn);
+    if (holder)
+        antb_value_release(holder);
+    if (queue)
+        antb_value_release(queue);
+    antb_value_release(global);
+}
+
+static void addLightNode(WebCore::Node* host, WebCore::Node* child)
+{
+    AgbShadowRoot* info = shadowInfo(host);
+
+    if (!info || !child)
+        return;
+    for (size_t i = 0; i < info->light->size(); ++i)
+        if ((*info->light)[i] == child)
+            return;
+    info->light->push_back(child);
+}
+
+static void removeLightNode(WebCore::Node* host, WebCore::Node* child)
+{
+    AgbShadowRoot* info = shadowInfo(host);
+
+    if (!info || !child)
+        return;
+    for (size_t i = 0; i < info->light->size(); ++i) {
+        if ((*info->light)[i] == child) {
+            info->light->erase(info->light->begin() + i);
+            return;
+        }
+    }
+}
+
+static void clearSlottedMarker(WebCore::Node* node, DocumentRuntime* runtime)
+{
+    if (!node)
+        return;
+    if (node->isElementNode()) {
+        WebCore::ExceptionCode ec = 0;
+
+        static_cast<WebCore::Element*>(node)->removeAttribute(
+            WebCore::String("data-agb-slotted"), ec);
+    }
+    if (runtime && runtime->slotOf)
+        runtime->slotOf->erase(node);
+}
+
+/* Recompute which light node goes to which slot, move the assigned nodes next
+ * to their slot (the physical flat tree), and fire slotchange on the slots
+ * whose assignment changed. Reentrancy: moving nodes fires the DOM mutation
+ * hooks again, which is what distributingShadow guards. */
+static void distributeShadowHost(WebCore::Element* host)
+{
+    AgbShadowRoot* info = shadowInfo(host);
+    DocumentRuntime* runtime;
+    std::vector<WebCore::Element*> slots;
+    std::map<WebCore::Node*, std::vector<WebCore::Node*> > next;
+    std::vector<WebCore::Node*> unassigned;
+    std::vector<WebCore::Element*> changed;
+    size_t i;
+
+    if (!info || !host || !host->document() || !g_currentState)
+        return;
+    runtime = documentRuntimeFor(g_currentState, host->document());
+    if (!runtime || runtime->distributingShadow)
+        return;
+
+    runtime->distributingShadow = 1;
+    if (!runtime->slotAssignments)
+        runtime->slotAssignments = new std::map<WebCore::Node*, std::vector<WebCore::Node*>*>();
+    if (!runtime->slotOf)
+        runtime->slotOf = new std::map<WebCore::Node*, WebCore::Node*>();
+
+    collectShadowSlots(host, info->id, slots);
+
+    for (i = 0; i < info->light->size(); ++i) {
+        WebCore::Node* light = (*info->light)[i];
+        WebCore::String slotName;
+        WebCore::Element* target = NULL;
+        size_t s;
+
+        if (!light || light->document() != host->document())
+            continue;
+        if (light->isElementNode())
+            slotName = static_cast<WebCore::Element*>(light)->getAttribute("slot");
+
+        for (s = 0; s < slots.size(); ++s) {
+            if (slots[s]->getAttribute("name") == slotName) {
+                target = slots[s];
+                break;
+            }
+        }
+
+        if (target)
+            next[target].push_back(light);
+        else
+            unassigned.push_back(light);
+    }
+
+    /* Markers/assignments of nodes that are no longer assigned. */
+    for (i = 0; i < slots.size(); ++i) {
+        std::map<WebCore::Node*, std::vector<WebCore::Node*>*>::iterator old =
+            runtime->slotAssignments->find(slots[i]);
+        std::vector<WebCore::Node*>& now = next[slots[i]];
+
+        if (old != runtime->slotAssignments->end() && old->second) {
+            size_t k;
+
+            for (k = 0; k < old->second->size(); ++k) {
+                WebCore::Node* node = (*old->second)[k];
+                bool still = false;
+                size_t j;
+
+                for (j = 0; j < now.size(); ++j)
+                    if (now[j] == node) { still = true; break; }
+                if (!still)
+                    clearSlottedMarker(node, runtime);
+            }
+        }
+    }
+    for (i = 0; i < unassigned.size(); ++i)
+        clearSlottedMarker(unassigned[i], runtime);
+
+    /* Place the assigned nodes immediately after their slot, in light order. */
+    for (i = 0; i < slots.size(); ++i) {
+        WebCore::Element* slot = slots[i];
+        std::vector<WebCore::Node*>& nodes = next[slot];
+        WebCore::Node* parent = slot->parentNode();
+        WebCore::Node* anchor = slot;
+        WebCore::ExceptionCode ec = 0;
+        size_t k;
+
+        if (nodes.empty()) {
+            if (!slot->getAttribute(WebCore::String("data-agb-slot-filled")).isNull())
+                slot->removeAttribute(WebCore::String("data-agb-slot-filled"), ec);
+        } else {
+            if (slot->getAttribute(WebCore::String("data-agb-slot-filled")).isNull())
+                slot->setAttribute(WebCore::String("data-agb-slot-filled"), WebCore::String(""), ec);
+
+            for (k = 0; k < nodes.size(); ++k) {
+                WebCore::Node* node = nodes[k];
+
+                if (parent && (node->parentNode() != parent || node->previousSibling() != anchor)) {
+                    if (anchor->nextSibling() != node) {
+                        RefPtr<WebCore::Node> keep(node);
+
+                        parent->insertBefore(keep.release(), anchor->nextSibling(), ec);
+                    }
+                }
+                anchor = node;
+                if (node->isElementNode())
+                    static_cast<WebCore::Element*>(node)->setAttribute(
+                        WebCore::String("data-agb-slotted"),
+                        WebCore::String::number(info->id), ec);
+                (*runtime->slotOf)[node] = slot;
+            }
+        }
+
+        {
+            std::map<WebCore::Node*, std::vector<WebCore::Node*>*>::iterator old =
+                runtime->slotAssignments->find(slot);
+            bool differs = (old == runtime->slotAssignments->end() || !old->second ||
+                            *old->second != nodes);
+
+            if (differs)
+                changed.push_back(slot);
+            if (old != runtime->slotAssignments->end() && old->second)
+                delete old->second;
+            (*runtime->slotAssignments)[slot] = new std::vector<WebCore::Node*>(nodes);
+        }
+    }
+
+    /* Unassigned light nodes do not render at all. Keep them in a fragment so
+     * their owner document and listeners stay intact. */
+    for (i = 0; i < unassigned.size(); ++i) {
+        WebCore::Node* node = unassigned[i];
+
+        if (!node->parentNode())
+            continue;
+        if (!runtime->unassignedLight) {
+            PassRefPtr<WebCore::DocumentFragment> fragment =
+                host->document()->createDocumentFragment();
+
+            runtime->unassignedLight = fragment.releaseRef();
+        }
+        {
+            WebCore::ExceptionCode ec = 0;
+            RefPtr<WebCore::Node> keep(node);
+
+            runtime->unassignedLight->appendChild(keep.release(), ec);
+        }
+    }
+
+    runtime->distributingShadow = 0;
+
+    if (getenv("AGB_SHADOW_DEBUG"))
+        agbLog(AGB_LOG_EVT, "[shadow] distribute host=%p slots=%d light=%d changed=%d",
+               (void*)host, (int)slots.size(), (int)info->light->size(), (int)changed.size());
+
+    if (!changed.empty()) {
+        if (!runtime->pendingSlotChanges)
+            runtime->pendingSlotChanges = new std::vector<WebCore::Node*>();
+        for (i = 0; i < changed.size(); ++i) {
+            bool queued = false;
+            size_t q;
+
+            /* Chrome signals a slot once per microtask even if its assignment
+             * changed twice; the handler reads the final assignedNodes(). */
+            for (q = 0; q < runtime->pendingSlotChanges->size(); ++q) {
+                if ((*runtime->pendingSlotChanges)[q] == changed[i]) {
+                    queued = true;
+                    break;
+                }
+            }
+            if (queued)
+                continue;
+            changed[i]->ref();
+            runtime->pendingSlotChanges->push_back(changed[i]);
+        }
+        if (!runtime->slotChangeScheduled)
+            scheduleSlotChanges(runtime);
+    }
+}
+
+/* Mutations through a shadow-root wrapper: the inserted nodes are the
+ * component's own, so they get the root's scope before elementDidInsert. */
+static void shadowAfterInsert(AntbValue* selfValue, WebCore::Node* parent, WebCore::Node* child)
+{
+    AgbShadowRoot* selfInfo;
+
+    if (!g_currentDocument || !g_currentDocument->shadowRoots ||
+        g_currentDocument->distributingShadow || !child)
+        return;
+
+    selfInfo = selfValue ? shadowInfo(shadowHostOfWrapper(selfValue)) : NULL;
+    if (selfInfo) {
+        markShadowSubtree(child, selfInfo->id);
+        rebuildShadowStyleSheets(child);
+        distributeShadowHost(shadowHostOfWrapper(selfValue));
+        return;
+    }
+
+    if (parent) {
+        int scope = parent->shadowScope();
+
+        if (scope > 0) {
+            markShadowSubtree(child, scope);
+            rebuildShadowStyleSheets(child);
+        }
+        if (shadowInfo(parent))
+            addLightNode(parent, child);
+    }
+
+    {
+        WebCore::Element* host = nearestShadowHost(parent);
+
+        if (host)
+            distributeShadowHost(host);
+    }
+}
+
+static void shadowAfterRemove(AntbValue* selfValue, WebCore::Node* parent, WebCore::Node* child)
+{
+    (void)selfValue;
+
+    if (!g_currentDocument || !g_currentDocument->shadowRoots ||
+        g_currentDocument->distributingShadow || !child)
+        return;
+
+    if (parent && shadowInfo(parent))
+        removeLightNode(parent, child);
+
+    {
+        WebCore::Element* host = nearestShadowHost(parent);
+
+        if (!host)
+            host = nearestShadowHost(child);
+        if (host)
+            distributeShadowHost(host);
+    }
+}
+
+/* Detach every light node from the shadow tree (it may sit next to a slot) and
+ * hand it back to the host as a direct child. */
+static void collectLightChildren(WebCore::Element* host)
+{
+    AgbShadowRoot* info = shadowInfo(host);
+    WebCore::ExceptionCode ec = 0;
+    size_t i;
+
+    if (!info)
+        return;
+    for (i = 0; i < info->light->size(); ++i) {
+        WebCore::Node* node = (*info->light)[i];
+
+        if (node && node->parentNode() && node->parentNode() != host) {
+            RefPtr<WebCore::Node> keep(node);
+
+            host->appendChild(keep.release(), ec);
+            ec = 0;
+        }
+    }
+}
+
+static void removeShadowContent(WebCore::Element* host)
+{
+    AgbShadowRoot* info = shadowInfo(host);
+    WebCore::ExceptionCode ec = 0;
+    WebCore::Node* child;
+
+    if (!info || !g_currentDocument)
+        return;
+    g_currentDocument->distributingShadow = 1;
+    collectLightChildren(host);
+    child = host->firstChild();
+    while (child) {
+        WebCore::Node* next = child->nextSibling();
+
+        if (child->shadowScope() == info->id) {
+            RefPtr<WebCore::Node> keep(child);
+
+            host->removeChild(keep.get(), ec);
+            ec = 0;
+        }
+        child = next;
+    }
+    g_currentDocument->distributingShadow = 0;
+}
+
+/* shadowRoot.innerHTML = html: replace only the component's own nodes; the
+ * host's light children survive and are re-distributed afterwards. */
+static void setShadowInnerHTML(WebCore::Element* host, const WebCore::String& html)
+{
+    AgbShadowRoot* info = shadowInfo(host);
+    WebCore::Document* document = host ? host->document() : NULL;
+    WebCore::ExceptionCode ec = 0;
+    RefPtr<WebCore::Element> scratch;
+
+    if (!info || !document)
+        return;
+
+    removeShadowContent(host);
+
+    scratch = document->createElement("div", ec);
+    if (!scratch)
+        return;
+    static_cast<WebCore::HTMLElement*>(scratch.get())->setInnerHTML(html, ec);
+
+    if (g_currentDocument)
+        g_currentDocument->distributingShadow = 1;
+    while (scratch->firstChild()) {
+        RefPtr<WebCore::Node> child = scratch->firstChild();
+
+        scratch->removeChild(child.get(), ec);
+        ec = 0;
+        markShadowSubtree(child.get(), info->id);
+        host->appendChild(child.release(), ec);
+        ec = 0;
+    }
+    if (g_currentDocument)
+        g_currentDocument->distributingShadow = 0;
+
+    distributeShadowHost(host);
+}
+
+/* shadowRoot.replaceChildren(...): replace the component's own tree, keep the
+ * host's light children. */
+static void replaceShadowChildren(WebCore::Element* host, AntbValue** args, int argc)
+{
+    AgbShadowRoot* info = shadowInfo(host);
+    WebCore::Document* document = host ? host->document() : NULL;
+    WebCore::ExceptionCode ec = 0;
+    int i;
+
+    if (!info || !document)
+        return;
+
+    removeShadowContent(host);
+    if (g_currentDocument)
+        g_currentDocument->distributingShadow = 1;
+    for (i = 0; i < argc; ++i) {
+        RefPtr<WebCore::Node> hold;
+        WebCore::Node* node = mixinArgNode(args[i], document, hold);
+
+        if (!node)
+            continue;
+        if (node->parentNode())
+            node->parentNode()->removeChild(node, ec);
+        ec = 0;
+        markShadowSubtree(node, info->id);
+        if (hold)
+            host->appendChild(hold.release(), ec);
+        else {
+            RefPtr<WebCore::Node> keep(node);
+
+            host->appendChild(keep.release(), ec);
+        }
+        ec = 0;
+    }
+    if (g_currentDocument)
+        g_currentDocument->distributingShadow = 0;
+    distributeShadowHost(host);
+}
+
+
+static void setLightInnerHTML(WebCore::Element* host, const WebCore::String& html)
+{
+    AgbShadowRoot* info = shadowInfo(host);
+    WebCore::Document* document = host ? host->document() : NULL;
+    WebCore::ExceptionCode ec = 0;
+    RefPtr<WebCore::Element> scratch;
+    size_t i;
+
+    if (!info || !document)
+        return;
+
+    if (!g_currentDocument)
+        return;
+    g_currentDocument->distributingShadow = 1;
+    for (i = 0; i < info->light->size(); ++i) {
+        WebCore::Node* node = (*info->light)[i];
+
+        if (node && node->parentNode()) {
+            RefPtr<WebCore::Node> keep(node);
+
+            node->parentNode()->removeChild(keep.get(), ec);
+            ec = 0;
+        }
+    }
+    info->light->clear();
+    g_currentDocument->distributingShadow = 0;
+
+    scratch = document->createElement("div", ec);
+    if (!scratch)
+        return;
+    static_cast<WebCore::HTMLElement*>(scratch.get())->setInnerHTML(html, ec);
+
+    if (g_currentDocument)
+        g_currentDocument->distributingShadow = 1;
+    while (scratch->firstChild()) {
+        RefPtr<WebCore::Node> child = scratch->firstChild();
+
+        scratch->removeChild(child.get(), ec);
+        ec = 0;
+        child->setShadowScope(host->shadowScope());
+        host->appendChild(child.release(), ec);
+        ec = 0;
+        addLightNode(host, host->lastChild());
+    }
+    if (g_currentDocument)
+        g_currentDocument->distributingShadow = 0;
+
+    distributeShadowHost(host);
+}
+
 
 static int shadowRootGetter(AntbEngine* engine, AntbValue* self, const char* name,
                             AntbValue* out, void*)
@@ -10038,33 +10866,420 @@ int globalAttachShadow(AntbEngine* engine, AntbValue*, AntbValue** args, int arg
     if (!root)
         return 0;
 
+    /* No slots yet: the host's existing children become unassigned light DOM
+     * (they render again as soon as the shadow tree has slots for them). */
+    distributeShadowHost(static_cast<WebCore::Element*>(n));
+
     antb_value_assign(out, root);
     antb_value_release(root);
     return 1;
 }
-/* slot.assignedNodes()/assignedElements(): no distribution yet, so the documented
- * empty answer. Kept so component code does not throw. */
-int nodeAssignedNodes(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
+/* slot.assignedNodes({flatten}) / assignedElements(): the light nodes that
+ * distribution placed next to this slot (issues #27). */
+int nodeAssignedNodes(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
                       AntbValue* out, void*)
 {
+    WebCore::Node* slot = nodeOf(self);
     AntbValue* list = antb_make_array(engine);
-    bool flatten;
+    std::vector<WebCore::Node*>* assigned = NULL;
 
     (void)argc;
-    flatten = (argc > 0 && args[0]) && antb_to_boolean(args[0]);
-    (void)flatten;
+    (void)args;
 
     if (!list)
         return 0;
+
+    if (slot && g_currentDocument && g_currentDocument->slotAssignments) {
+        std::map<WebCore::Node*, std::vector<WebCore::Node*>*>::iterator it =
+            g_currentDocument->slotAssignments->find(slot);
+
+        if (it != g_currentDocument->slotAssignments->end())
+            assigned = it->second;
+    }
+
+    if (assigned) {
+        for (size_t i = 0; i < assigned->size(); ++i) {
+            AntbValue* wrapped = wrapNode(engine, (*assigned)[i]);
+
+            if (!wrapped)
+                continue;
+            antb_array_push(engine, list, wrapped);
+            antb_value_release(wrapped);
+        }
+    }
+
     antb_value_assign(out, list);
     antb_value_release(list);
     return 1;
 }
 
-int nodeAssignedElements(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
+int nodeAssignedElements(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
                          AntbValue* out, void*)
 {
-    return nodeAssignedNodes(engine, NULL, args, argc, out, NULL);
+    WebCore::Node* slot = nodeOf(self);
+    AntbValue* list = antb_make_array(engine);
+    std::vector<WebCore::Node*>* assigned = NULL;
+
+    (void)argc;
+    (void)args;
+
+    if (!list)
+        return 0;
+
+    if (slot && g_currentDocument && g_currentDocument->slotAssignments) {
+        std::map<WebCore::Node*, std::vector<WebCore::Node*>*>::iterator it =
+            g_currentDocument->slotAssignments->find(slot);
+
+        if (it != g_currentDocument->slotAssignments->end())
+            assigned = it->second;
+    }
+
+    if (assigned) {
+        for (size_t i = 0; i < assigned->size(); ++i) {
+            AntbValue* wrapped;
+
+            if (!(*assigned)[i]->isElementNode())
+                continue;
+            wrapped = wrapNode(engine, (*assigned)[i]);
+            if (!wrapped)
+                continue;
+            antb_array_push(engine, list, wrapped);
+            antb_value_release(wrapped);
+        }
+    }
+
+    antb_value_assign(out, list);
+    antb_value_release(list);
+    return 1;
+}
+
+/* ---- TreeWalker (DOM2 Traversal, issues #27) ---------------------------- *
+ * WebCore 2008 already ships the traversal engine (Document::createTreeWalker,
+ * TreeWalker, NodeFilter). Only the ant binding was missing, so library code
+ * (highlighters, relative-time, Markdown renderers) recursed over childNodes by
+ * hand or took its "no TreeWalker" branch. The filter is a host object: either
+ * a function or { acceptNode }, called back through the bridge on every node.
+ *
+ * Lifetime: the walker is ref'd by the document record and released with it;
+ * the filter handle is retained (like an event listener), because ant's GC has
+ * no finalizers to tell us when the JS walker is gone. */
+struct AgbTreeWalker {
+    RefPtr<WebCore::TreeWalker> walker;
+    AntbValue* filter;
+};
+
+static void destroyTreeWalkers(DocumentRuntime* document)
+{
+    if (!document || !document->treeWalkers)
+        return;
+
+    for (size_t i = 0; i < document->treeWalkers->size(); ++i)
+        delete (*document->treeWalkers)[i];
+    delete document->treeWalkers;
+    document->treeWalkers = NULL;
+}
+
+class AntNodeFilterCondition : public WebCore::NodeFilterCondition {
+public:
+    AntNodeFilterCondition(AntbValue* filter) : m_filter(filter) { }
+    virtual ~AntNodeFilterCondition() { }
+
+    virtual short acceptNode(WebCore::Node* node) const
+    {
+        AntbEngine* engine = g_engine;
+        AntbValue* fn = NULL;
+        AntbValue* argument;
+        AntbValue* result;
+        char* error = NULL;
+        short verdict;
+
+        if (!engine || !m_filter || !node)
+            return WebCore::NodeFilter::FILTER_REJECT;
+
+        fn = antb_is_function(m_filter) ? m_filter : antb_get_prop(engine, m_filter, "acceptNode");
+        if (!fn)
+            return WebCore::NodeFilter::FILTER_REJECT;
+
+        argument = wrapNode(engine, node);
+        if (!argument) {
+            if (fn != m_filter)
+                antb_value_release(fn);
+            return WebCore::NodeFilter::FILTER_REJECT;
+        }
+
+        result = antb_call(engine, fn, m_filter, &argument, 1, &error);
+        antb_value_release(argument);
+        if (fn != m_filter)
+            antb_value_release(fn);
+
+        if (error) {
+            antb_free(error);
+            if (result)
+                antb_value_release(result);
+            return WebCore::NodeFilter::FILTER_REJECT;
+        }
+
+        verdict = (short)antb_to_number(result);
+        if (result)
+            antb_value_release(result);
+        return verdict;
+    }
+
+    virtual void mark() { }
+
+private:
+    AntbValue* m_filter;
+};
+
+static AgbTreeWalker* treeWalkerRecord(AntbValue* self)
+{
+    return self ? (AgbTreeWalker*)antb_get_native(self, AGB_TAG_TREEWALKER) : NULL;
+}
+
+static WebCore::TreeWalker* treeWalkerOf(AntbValue* self)
+{
+    AgbTreeWalker* record = treeWalkerRecord(self);
+
+    return record ? record->walker.get() : NULL;
+}
+
+static AntbValue* wrapTreeWalker(AntbEngine* engine, AgbTreeWalker* record)
+{
+    if (!engine || !record || !g_treeWalkerIface)
+        return NULL;
+    return antb_wrap_native_as_owner(engine, g_treeWalkerIface, record,
+                                     AGB_TAG_TREEWALKER, g_document);
+}
+
+/* document.createTreeWalker(root, whatToShow, filter) */
+int docCreateTreeWalker(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                        AntbValue* out, void*)
+{
+    WebCore::Document* document = documentOf(self);
+    WebCore::Node* root = (argc > 0 && args[0]) ? nodeOf(args[0]) : NULL;
+    unsigned whatToShow = WebCore::NodeFilter::SHOW_ALL;
+    RefPtr<WebCore::NodeFilter> filter;
+    WebCore::ExceptionCode ec = 0;
+    AgbTreeWalker* record;
+    AntbValue* wrapper;
+
+    if (!document || !root)
+        return 0;
+
+    if (argc > 1 && args[1] && antb_is_number(args[1]))
+        whatToShow = (unsigned)antb_to_number(args[1]);
+
+    if (argc > 2 && args[2]) {
+        AntbValue* accept = antb_is_function(args[2])
+            ? args[2] : antb_get_prop(engine, args[2], "acceptNode");
+
+        if (accept) {
+            filter = new WebCore::NodeFilter(
+                new AntNodeFilterCondition(antb_retain(args[2])));
+            if (accept != args[2])
+                antb_value_release(accept);
+        }
+    }
+
+    {
+        PassRefPtr<WebCore::TreeWalker> created =
+            document->createTreeWalker(root, whatToShow, filter.get(), false, ec);
+
+        if (!created)
+            return 0;
+
+        record = new AgbTreeWalker();
+        record->walker = created;
+        record->filter = (argc > 2 && args[2]) ? antb_retain(args[2]) : NULL;
+        if (!g_currentDocument->treeWalkers)
+            g_currentDocument->treeWalkers = new std::vector<AgbTreeWalker*>();
+        g_currentDocument->treeWalkers->push_back(record);
+    }
+
+    wrapper = wrapTreeWalker(engine, record);
+    if (!wrapper)
+        return 0;
+    antb_value_assign(out, wrapper);
+    antb_value_release(wrapper);
+    return 1;
+}
+
+enum {
+    TW_PARENT_NODE, TW_FIRST_CHILD, TW_LAST_CHILD, TW_PREVIOUS_SIBLING,
+    TW_NEXT_SIBLING, TW_PREVIOUS_NODE, TW_NEXT_NODE
+};
+
+int treeWalkerMethod(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
+                     AntbValue* out, void* user)
+{
+    WebCore::TreeWalker* walker = treeWalkerOf(self);
+    WebCore::Node* result = NULL;
+
+    (void)args;
+    (void)argc;
+
+    if (!walker)
+        return 0;
+
+    switch ((intptr_t)user) {
+        case TW_PARENT_NODE:     result = walker->parentNode(); break;
+        case TW_FIRST_CHILD:     result = walker->firstChild(); break;
+        case TW_LAST_CHILD:      result = walker->lastChild(); break;
+        case TW_PREVIOUS_SIBLING: result = walker->previousSibling(); break;
+        case TW_NEXT_SIBLING:    result = walker->nextSibling(); break;
+        case TW_PREVIOUS_NODE:   result = walker->previousNode(); break;
+        case TW_NEXT_NODE:       result = walker->nextNode(); break;
+        default:                 return 0;
+    }
+
+    if (!result)
+        return assignNull(engine, out);
+    {
+        AntbValue* wrapper = wrapNode(engine, result);
+
+        if (!wrapper)
+            return assignNull(engine, out);
+        antb_value_assign(out, wrapper);
+        antb_value_release(wrapper);
+    }
+    return 1;
+}
+
+int treeWalkerGetter(AntbEngine* engine, AntbValue* self, const char* name,
+                     AntbValue* out, void*)
+{
+    AgbTreeWalker* record = treeWalkerRecord(self);
+    WebCore::TreeWalker* walker = record ? record->walker.get() : NULL;
+
+    if (!walker || !name)
+        return 0;
+
+    if (!strcmp(name, "root")) {
+        AntbValue* value = wrapNode(engine, walker->root());
+
+        if (!value)
+            return assignNull(engine, out);
+        antb_value_assign(out, value);
+        antb_value_release(value);
+        return 1;
+    }
+    if (!strcmp(name, "whatToShow")) {
+        AntbValue* value = antb_make_number(engine, (double)walker->whatToShow());
+
+        if (!value)
+            return 0;
+        antb_value_assign(out, value);
+        antb_value_release(value);
+        return 1;
+    }
+    if (!strcmp(name, "filter")) {
+        if (!record->filter)
+            return assignNull(engine, out);
+        antb_value_assign(out, record->filter);
+        return 1;
+    }
+    if (!strcmp(name, "expandEntityReferences")) {
+        AntbValue* value = antb_make_boolean(engine, 0);
+
+        if (!value)
+            return 0;
+        antb_value_assign(out, value);
+        antb_value_release(value);
+        return 1;
+    }
+    if (!strcmp(name, "currentNode")) {
+        AntbValue* value = wrapNode(engine, walker->currentNode());
+
+        if (!value)
+            return assignNull(engine, out);
+        antb_value_assign(out, value);
+        antb_value_release(value);
+        return 1;
+    }
+    return 0;
+}
+
+int treeWalkerSetter(AntbEngine* engine, AntbValue* self, const char* name,
+                     const AntbValue* value, void*)
+{
+    WebCore::TreeWalker* walker = treeWalkerOf(self);
+    WebCore::Node* node;
+
+    (void)engine;
+
+    if (!walker || !name || strcmp(name, "currentNode"))
+        return 1;
+
+    node = value ? nodeOf(const_cast<AntbValue*>(value)) : NULL;
+    if (!node)
+        return 0;                    /* Chrome throws TypeError for null/non-node */
+    {
+        WebCore::ExceptionCode ec = 0;
+
+        walker->setCurrentNode(node, ec);
+    }
+    return 1;
+}
+
+/* ---- Fullscreen (issues #27) -------------------------------------------- *
+ * The shell has no borderless-window hook, so requestFullscreen() implements
+ * the document-visible contract Chrome exposes to pages: state
+ * (document.fullscreenElement), a Promise (players .catch() it), and
+ * fullscreenchange on the document. The window itself is unchanged; a host
+ * that wants real fullscreen can listen for the event (roadmap: fullscreen
+ * window API). */
+static void fireFullscreenChange(WebCore::Document* document)
+{
+    WebCore::ExceptionCode ec = 0;
+
+    if (!document)
+        return;
+    document->dispatchEvent(new WebCore::Event(WebCore::AtomicString("fullscreenchange"),
+                                               false, false), ec);
+}
+
+/* A pending fullscreen transition. Chrome applies requestFullscreen()/
+ * exitFullscreen() in a task and fires fullscreenchange from there, so a page
+ * that attaches its listener after the call still sees the event. The job is
+ * the user data of a setTimeout(0) callback; it refs the element for the wait
+ * and retains the promise settle functions. */
+int elementRequestFullscreen(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
+                             AntbValue* out, void*)
+{
+    WebCore::Node* node = (argc > 0 && args[0]) ? nodeOf(args[0]) : NULL;
+    WebCore::Element* element = (node && node->isElementNode())
+        ? static_cast<WebCore::Element*>(node) : NULL;
+    WebCore::Document* document = element ? element->document() : NULL;
+    AntbValue* value;
+
+    if (!document || !element->inDocument())
+        return assignBoolean(engine, out, 0);
+
+    if (document->fullscreenElement() != element) {
+        document->setFullscreenElement(element);
+        fireFullscreenChange(document);
+    }
+    value = antb_make_boolean(engine, 1);
+    if (!value)
+        return 0;
+    antb_value_assign(out, value);
+    antb_value_release(value);
+    return 1;
+}
+
+int docExitFullscreen(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
+                      AntbValue* out, void*)
+{
+    WebCore::Document* document = (argc > 0 && args[0]) ? documentOf(args[0]) : NULL;
+
+    if (!document)
+        return assignBoolean(engine, out, 0);
+
+    if (document->fullscreenElement()) {
+        document->setFullscreenElement(NULL);
+        fireFullscreenChange(document);
+    }
+    return assignBoolean(engine, out, 1);
 }
 
 int nodeScrollIntoView(AntbEngine* engine, AntbValue* self, AntbValue** args, int argc,
@@ -11566,8 +12781,26 @@ int nodeGetter(AntbEngine* engine, AntbValue* self, const char* name, AntbValue*
         }
         return 1;
     } else if (!strcmp(name, "assignedSlot")) {
-        /* No light-DOM distribution in this version: nothing is assigned. */
-        return assignNull(engine, out);
+        WebCore::Node* slot = NULL;
+
+        if (g_currentDocument && g_currentDocument->slotOf) {
+            std::map<WebCore::Node*, WebCore::Node*>::iterator it =
+                g_currentDocument->slotOf->find(n);
+
+            if (it != g_currentDocument->slotOf->end())
+                slot = it->second;
+        }
+        if (!slot)
+            return assignNull(engine, out);
+        {
+            AntbValue* wrapped = wrapNode(engine, slot);
+
+            if (!wrapped)
+                return assignNull(engine, out);
+            antb_value_assign(out, wrapped);
+            antb_value_release(wrapped);
+        }
+        return 1;
     } else if (!strcmp(name, "content") && n->isElementNode()
                && isTemplateElement(static_cast<WebCore::Element*>(n))) {
         /* HTMLTemplateElement.content: the lazily created fragment. */
@@ -12193,6 +13426,20 @@ int nodeSetter(AntbEngine* engine, AntbValue* self, const char* name, const Antb
         if (!element->isHTMLElement() || !text) {
             antb_free(text);
             return 0;
+        }
+        {
+            WebCore::Element* shadowHost = shadowHostOfWrapper(self);
+
+            if (shadowHost) {
+                setShadowInnerHTML(shadowHost, WebCore::String::fromUTF8(text));
+                antb_free(text);
+                return 1;
+            }
+        }
+        if (shadowInfo(element)) {
+            setLightInnerHTML(element, WebCore::String::fromUTF8(text));
+            antb_free(text);
+            return 1;
         }
         if (isTemplateElement(element)) {
             setTemplateInnerHTML(element, text);
@@ -12937,6 +14184,8 @@ int nodeAppendChild(AntbEngine* engine, AntbValue* self, AntbValue** args, int a
     if (ec)
         return 1;
 
+    shadowAfterInsert(self, parent, child);
+
     {
         AntbValue* v = wrapNode(engine, child);
         if (v) {
@@ -12961,6 +14210,7 @@ int nodeRemoveChild(AntbEngine* engine, AntbValue* self, AntbValue** args, int a
 
     child->ref();                 /* removal may drop the last reference */
     parent->removeChild(child, ec);
+    shadowAfterRemove(self, parent, child);
 
     /* Chrome returns the removed node; callers chain on it. */
     {
@@ -12987,6 +14237,7 @@ int nodeInsertBefore(AntbEngine* engine, AntbValue* self, AntbValue** args, int 
         return 1;
 
     parent->insertBefore(child, before, ec);
+    shadowAfterInsert(self, parent, child);
 
     {
         AntbValue* v = wrapNode(engine, child);
@@ -13079,6 +14330,10 @@ int nodeReplaceChild(AntbEngine* engine, AntbValue* self, AntbValue** args, int 
     child->ref();
     old->ref();                   /* the replaced node is handed back to JS */
     parent->replaceChild(child, old, ec);
+    if (!ec) {
+        shadowAfterRemove(self, parent, old);
+        shadowAfterInsert(self, parent, child);
+    }
 
     {
         AntbValue* v = wrapNode(engine, old);
@@ -16993,6 +18248,7 @@ static const DomIfaceDef kDomIfaces[] = {
     { "HTMLDocument",           "Document" },
     { "NamedNodeMap",           NULL },
     { "ShadowRoot",             "DocumentFragment" },
+    { "TreeWalker",             NULL },
     { "HTMLTemplateElement",    "HTMLElement" },
     { "Attr",                   "Node" },
     { "Element",                "Node" },
@@ -17225,6 +18481,7 @@ static const DomMethodImpl kDomMethodImpls[] = {
     { "createHTMLDocument"        , docCreateHTMLDocument },
     { "createRange"               , docCreateRange },
     { "createTextNode"            , docCreateTextNode },
+    { "createTreeWalker"          , docCreateTreeWalker },
     { "dispatchEvent"             , nodeDispatchEvent },
     { "elementFromPoint"          , nodeDocumentElementFromPoint },
     { "execCommand"               , docExecCommand },
@@ -17388,6 +18645,7 @@ void resetInterfaceClasses(RuntimeState* state)
     state->namedNodeMapIface = NULL;
     state->attrIface = NULL;
     state->shadowRootIface = NULL;
+    state->treeWalkerIface = NULL;
     state->textIface = NULL;
     state->commentIface = NULL;
     state->unknownElementIface = NULL;
@@ -17543,6 +18801,10 @@ static const DomAttrDef kExtraAttributes[] = {
     { "Document", "compatMode",       0 },
     { "Document", "hidden",           0 },
     { "Document", "visibilityState",  0 },
+    { "Document", "fullscreenElement", 0 },
+    { "Document", "fullscreenEnabled", 0 },
+    { "Document", "webkitFullscreenElement", 0 },
+    { "Document", "webkitFullscreenEnabled", 0 },
     { "HTMLInputElement", "placeholder",      1 },
     { "HTMLInputElement", "required",         1 },
     { "HTMLInputElement", "min",              1 },
@@ -17704,6 +18966,7 @@ static void applyRealmInterfacesFor(RuntimeState* state, AntbRealm* realm)
     state->namedNodeMapIface     = set ? set->namedNodeMapIface : NULL;
     state->attrIface             = set ? set->attrIface : NULL;
     state->shadowRootIface       = set ? set->shadowRootIface : NULL;
+    state->treeWalkerIface       = set ? set->treeWalkerIface : NULL;
     state->textIface             = set ? set->textIface : NULL;
     state->commentIface          = set ? set->commentIface : NULL;
     state->unknownElementIface   = set ? set->unknownElementIface : NULL;
@@ -17895,6 +19158,7 @@ void ensureInterfaceClasses(AntbEngine* engine)
         g_namedNodeMapIface     = byName["NamedNodeMap"];
         g_attrIface             = byName["Attr"];
         g_shadowRootIface       = byName["ShadowRoot"];
+        g_treeWalkerIface       = byName["TreeWalker"];
         g_textIface             = byName["Text"];
         g_commentIface          = byName["Comment"];
         g_unknownElementIface   = byName["HTMLUnknownElement"];
@@ -17976,6 +19240,37 @@ void ensureInterfaceClasses(AntbEngine* engine)
          * getter, everything else (innerHTML, childNodes, ...) by the node one. */
         if (g_shadowRootIface)
             antb_class_set_property_rw(engine, g_shadowRootIface, "", shadowRootGetter, nodeSetter, NULL);
+        /* TreeWalker: the walker's own attributes and DOM2 traversal methods;
+         * its receiver is an AgbTreeWalker, not a node, so it has its own
+         * getter (currentNode is writable, the rest read-only). */
+        if (g_treeWalkerIface) {
+            static const struct { const char* name; int op; } kWalkerMethods[] = {
+                { "parentNode",      TW_PARENT_NODE },
+                { "firstChild",      TW_FIRST_CHILD },
+                { "lastChild",       TW_LAST_CHILD },
+                { "previousSibling", TW_PREVIOUS_SIBLING },
+                { "nextSibling",     TW_NEXT_SIBLING },
+                { "previousNode",    TW_PREVIOUS_NODE },
+                { "nextNode",        TW_NEXT_NODE }
+            };
+            size_t w;
+
+            antb_class_set_property_rw(engine, g_treeWalkerIface, "",
+                                       treeWalkerGetter, treeWalkerSetter, NULL);
+            antb_class_define_attribute(engine, g_treeWalkerIface, "root",
+                                        treeWalkerGetter, NULL, NULL);
+            antb_class_define_attribute(engine, g_treeWalkerIface, "whatToShow",
+                                        treeWalkerGetter, NULL, NULL);
+            antb_class_define_attribute(engine, g_treeWalkerIface, "filter",
+                                        treeWalkerGetter, NULL, NULL);
+            antb_class_define_attribute(engine, g_treeWalkerIface, "expandEntityReferences",
+                                        treeWalkerGetter, NULL, NULL);
+            antb_class_define_attribute(engine, g_treeWalkerIface, "currentNode",
+                                        treeWalkerGetter, treeWalkerSetter, NULL);
+            for (w = 0; w < sizeof(kWalkerMethods) / sizeof(kWalkerMethods[0]); ++w)
+                antb_class_add_method(engine, g_treeWalkerIface, kWalkerMethods[w].name,
+                                      treeWalkerMethod, (void*)(intptr_t)kWalkerMethods[w].op);
+        }
         /* Collections answer length/numeric indices through the same catch-all
          * mechanism; item()/namedItem()/forEach/iterators stay on the prototype. */
         if (g_nodeListClass)
@@ -18033,6 +19328,7 @@ void ensureInterfaceClasses(AntbEngine* engine)
     set->namedNodeMapIface  = g_namedNodeMapIface;
     set->attrIface          = g_attrIface;
     set->shadowRootIface    = g_shadowRootIface;
+    set->treeWalkerIface    = g_treeWalkerIface;
         set->textIface = g_textIface;
         set->commentIface = g_commentIface;
         set->unknownElementIface = g_unknownElementIface;
@@ -19187,16 +20483,65 @@ namespace AntRuntime {
 void elementDidInsert(void* element)
 {
     customElementDidInsert(element);
+
+    /* A node inserted into a shadow subtree inherits that tree's scope; this is
+     * the path for component code that appends to a shadow element (the
+     * ShadowRoot wrapper marks the subtree before insertion itself). */
+    if (g_currentDocument && g_currentDocument->shadowRoots &&
+        !g_currentDocument->distributingShadow && element) {
+        WebCore::Node* node = static_cast<WebCore::Node*>(element);
+        WebCore::Node* parent = node->parentNode();
+
+        if (parent) {
+            int scope = parent->shadowScope();
+
+            if (scope > 0 && node->shadowScope() != scope) {
+                markShadowSubtree(node, scope);
+                rebuildShadowStyleSheets(node);
+            }
+            {
+                WebCore::Element* host = nearestShadowHost(parent);
+
+                if (host)
+                    distributeShadowHost(host);
+            }
+        }
+    }
 }
 
 void elementDidRemove(void* element)
 {
     customElementDidRemove(element);
+
+    if (g_currentDocument && g_currentDocument->shadowRoots &&
+        !g_currentDocument->distributingShadow && element) {
+        WebCore::Node* node = static_cast<WebCore::Node*>(element);
+        WebCore::Element* host = nearestShadowHost(node);
+
+        if (host) {
+            removeLightNode(host, node);
+            distributeShadowHost(host);
+        }
+    }
 }
 
 void elementAttributeChanged(void* element, const char* name)
 {
     customElementAttributeHook(element, name);
+
+    if (!g_currentDocument || !g_currentDocument->shadowRoots ||
+        g_currentDocument->distributingShadow || !element || !name)
+        return;
+
+    /* <slot name> changes which light nodes it takes; a light node's slot=""
+     * changes which slot takes it. */
+    if (!strcmp(name, "slot") || !strcmp(name, "name")) {
+        WebCore::Node* node = static_cast<WebCore::Node*>(element);
+        WebCore::Element* host = nearestShadowHost(node);
+
+        if (host)
+            distributeShadowHost(host);
+    }
 }
 
 } /* namespace AntRuntime */

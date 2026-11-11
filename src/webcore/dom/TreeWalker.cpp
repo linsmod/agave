@@ -59,7 +59,17 @@ void TreeWalker::setCurrentNode(Node* node)
 Node* TreeWalker::parentNode()
 {
     Node* result = 0;
-    for (Node* node = currentNode()->parentNode(); node && node != root(); node = node->parentNode()) {
+    Node* parent = currentNode()->parentNode();
+
+    /* The root itself is a valid result (Chrome does this, the DOM2 spec says
+     * "the parent, if it is within root"); only ancestors above the root are
+     * out of bounds. The 2008 loop started one level up unconditionally, so
+     * `currentNode = aChildOfRoot; parentNode()` returned null. */
+    if (parent && parent == root()) {
+        setCurrentNode(parent);
+        return parent;
+    }
+    for (Node* node = parent; node && node != root(); node = node->parentNode()) {
         if (acceptNode(node) == NodeFilter::FILTER_ACCEPT) {
             setCurrentNode(node);
             result = node;

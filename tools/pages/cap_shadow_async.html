@@ -1,0 +1,71 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>shadow-async</title></head>
+<body>
+<div id="host"><span id="a" slot="named">a</span><b id="b">b</b></div>
+<div id="box" style="width:40px;height:20px;background:#123456"></div>
+<script>
+(function () {
+  var pass = 0, fail = [];
+  function ok(name, cond) { if (cond) pass++; else fail.push(name); }
+
+  var host = document.getElementById('host');
+  var root = host.attachShadow({ mode: 'open' });
+  root.innerHTML = '<slot name="named"></slot><slot></slot>';
+  var slots = root.querySelectorAll('slot');
+  var events = [];
+
+  slots[0].addEventListener('slotchange', function () {
+    events.push('named:' + slots[0].assignedNodes().map(function (n) { return n.id; }).join(','));
+  });
+  slots[1].addEventListener('slotchange', function () {
+    events.push('default:' + slots[1].assignedNodes().map(function (n) { return n.id; }).join(','));
+  });
+
+  var c = document.createElement('i');
+  c.id = 'c';
+  c.setAttribute('slot', 'named');
+  host.appendChild(c);
+
+  var fsEvents = [];
+  document.addEventListener('fullscreenchange', function () {
+    fsEvents.push(document.fullscreenElement ? document.fullscreenElement.id : 'null');
+  });
+  var box = document.getElementById('box');
+  var request = box.requestFullscreen();
+
+  var detachedError = null;
+  var detached = document.createElement('div');
+  detached.requestFullscreen().catch(function (e) { detachedError = e && e.name; });
+
+  setTimeout(function () {
+    ok('slotchange named once', events.filter(function (e) { return e.indexOf('named:') === 0; }).length === 1);
+    ok('slotchange named final', events.indexOf('named:a,c') >= 0);
+    ok('slotchange default', events.indexOf('default:b') >= 0);
+    ok('detached request rejects', detachedError === 'TypeError');
+    request.then(function () {
+      ok('fullscreen promise resolved', true);
+      ok('fullscreenElement set', document.fullscreenElement === box);
+      ok('fullscreenchange fired', fsEvents.length === 1 && fsEvents[0] === 'box');
+      document.exitFullscreen().then(function () {
+        ok('exit clears state', document.fullscreenElement === null);
+        document.exitFullscreen().then(function () {
+          ok('exit again resolves', true);
+        }, function () {
+          fail.push('second exit rejected');
+        });
+        setTimeout(function () {
+          ok('exit event', fsEvents.length === 2 && fsEvents[1] === 'null');
+          window.__asyncResult = { pass: pass, total: pass + fail.length, fail: fail };
+        }, 80);
+      }, function () {
+        fail.push('exit rejected');
+        window.__asyncResult = { pass: pass, total: pass + fail.length, fail: fail };
+      });
+    }, function () {
+      fail.push('request rejected');
+      window.__asyncResult = { pass: pass, total: pass + fail.length, fail: fail };
+    });
+  }, 100);
+}());
+</script>
+</body></html>

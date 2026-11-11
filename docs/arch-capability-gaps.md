@@ -106,6 +106,8 @@ qsChild=3 qsDesc=3 qsAdj=1 qsSib=2 qsNth=1 qsOdd=2 qsNot=2 qsFirst=1 qsList2=4 q
 | `navigator.clipboard.writeText` / `document.execCommand` | **writeText 已支持**（2026-11-07）：prelude polyfill → 宿主全局 `__agbClipboardSetText`（`AntRuntime.cpp`）→ 控件 `cb_clipboard_set_data`（`CF_UNICODETEXT`，与 Ctrl+C 同一条路，跑在引擎线程）。**execCommand 已支持（R175）**：`selectAll/copy/cut/paste/delete` 和 `Move*` 系列走 `Editor::execCommand`，命令名大小写不敏感（Chrome 的 `'copy'` 也能命中）；`queryCommandSupported/Enabled` 从同一张命令表回答（不再谎报），`queryCommandState` 恒 `false`（没有富文本样式状态）。`write()` 恒 reject（没有 DataTransfer/Blob 路径）；`readText()` / `read()` 仍没有 | 站点「复制」「全选」按钮现在能用；页面**主动读**剪贴板（「粘贴」按钮）仍不可用（键盘 / `execCommand('paste')` 可以） | 部分支持 |
 | `window.getSelection` / `document.getSelection` / `Selection` | **已支持（R175）**：`AntRuntime.cpp` 把 WebCore 的 `DOMSelection` 包成 live wrapper（与 `CSSStyleSheet` 同类），每次读都是当前选区；`toString/type/rangeCount/isCollapsed/anchorNode/anchorOffset/focusNode/focusOffset`、`getRangeAt/addRange/removeAllRanges/empty/collapse/collapseToStart/collapseToEnd/extend/setBaseAndExtent/setPosition/selectAllChildren/containsNode/deleteFromDocument/modify` 全有，`window.getSelection() === document.getSelection()` | **限制**：只有单 range（2008 的选择模型不支持不连续选区，`addRange` 只合并/替换）；中文双击按 UAX#29 每字一段（Chrome 有 ICU 词典，通常选 2 个字词）；`modify()` 的粒度与 Chrome 有细微差异 | 已支持 |
 | `document.createRange` / `Range` | **已支持（R175）**：真正的 `WebCore::Range`。`startContainer/startOffset/endContainer/endOffset/collapsed/commonAncestorContainer`、`setStart/setEnd/setStartBefore/setStartAfter/setEndBefore/setEndAfter`、`selectNode/selectNodeContents/collapse/cloneRange/detach/toString/compareBoundaryPoints/createContextualFragment/insertNode/surroundContents`、`getBoundingClientRect/getClientRects`（视口坐标，取行盒高度，与 Chrome 的 Range 矩形一致；宽高随字体度量） | **限制**：Range 的生命周期由文档托管（ant GC 没有 finalizer，文档卸载时统一 deref）；没有全局 `Range` 构造器，`document.createRange() instanceof Range` 为 false（polyfills 的桩还在） | 已支持 |
+| `document.createTreeWalker` / `TreeWalker` / `NodeFilter` | **已支持（R188）**：直接用 WebCore 2008 的遍历引擎（`Document::createTreeWalker` + `TreeWalker`/`NodeFilter`）；ant 侧只补接口类与绑定，filter 支持函数或 `{acceptNode}`（`AntNodeFilterCondition` 回调 JS），`root/whatToShow/filter/currentNode/expandEntityReferences`、`parentNode/firstChild/lastChild/previousSibling/nextSibling/previousNode/nextNode` 齐全；`NodeFilter` 常量对象由 prelude 提供（`typeof NodeFilter === 'function'`、`FILTER_*`/`SHOW_*`）。顺带修了 WebCore `parentNode()` 不返回 root 的问题（Chrome 返回） | 已知：`currentNode = null` 不抛 TypeError（setter 返回值被桥忽略） | 已支持（`run_shadow_tests`） |
+| `Element.requestFullscreen` / `document.exitFullscreen` | **已支持（R188，DOM 语义）**：`document.fullscreenElement`/`fullscreenEnabled` 真状态，成功时设置/清空并派发 `fullscreenchange`；Promise 由 prelude 包装，状态变更放在 task 里（与 Chrome 一样，调用后同步读仍是 null）；`webkitRequestFullscreen`/`webkitExitFullscreen` 别名 | **限制**：壳没有无边框窗口回调，窗口本身不进入全屏（宿主可监听 `fullscreenchange` 自行处理）；权限策略永远 `fullscreenEnabled=true` | 已支持（`run_shadow_tests`） |
 | `user-select`（无前缀）/ `-webkit-user-select` | **已支持（R175）**：无前缀写法进 `CSSGrammar` 别名表；`Node::canStartSelection()` 按渲染样式拒绝 `none`，而 `user-select:none` 容器里 `user-select:text` 的子元素仍可选；`none` 的文字既不能起选也进不了 `Ctrl+C` | 拖拽**跨过** `user-select:none` 段落时选区仍把那一段文字包括进来（Chrome 会跳过）——已知差异 | 部分支持 |
 | `window.open` / `<a target>` / `window.close` | **已支持（R158，local 与 process 两个后端）**：`<a target="…">` 由 `HTMLAnchorElement` 决定同 tab 还是新窗口（中键/ctrl/cmd 等同 `_blank`），`_document.baseTarget` 兜底；具名 target（`target="foo"`、`window.open(url,"foo")`、`<form target>`）在**控件的窗口注册表**里查，命中就往那个 tab 导航并回调 `on_activate_view` 让宿主切过去，没命中才建新窗口；`window.open` 返回一个 stub 窗口对象（`closed`/`focus`/`close`/`postMessage`），`window.close()` → `on_close_window` | 没有 `window.opener`（S4 WindowProxy），也没有 `rel=noopener/noreferrer` 语义；`window.open` 的 features/尺寸不生效（宿主自己决定 tab 还是窗口）；具名窗口不跨进程重启保留 | 部分支持（opener 是缺口，见 [plan-roadmap.md](plan-roadmap.md)） |
 | `el.onload = fn` 等事件处理属性 | **已修（R27）**：`hits=11`（属性 + addEventListener 都触发）；此前只有 `addEventListener` 生效，`onload` 是静默 expando | —— | 已支持 |
@@ -125,13 +127,21 @@ qsChild=3 qsDesc=3 qsAdj=1 qsSib=2 qsNth=1 qsOdd=2 qsNot=2 qsFirst=1 qsList2=4 q
 非构造式 sheet 抛 `TypeError`）。⚠ 没有样式作用域引擎：adopted 样式对目标文档/宿主全局生效，`cssRules` 在**构造式** sheet 上不可读。GitHub 首页原先的
 `ReferenceError: 'customElements' is not defined` 已消失。
 
-**`attachShadow` / `ShadowRoot` 已支持（2026-11-11，issues #18 phase C，务实版）**：`attachShadow({mode})` 返回
+**`attachShadow` / `ShadowRoot` 已支持（2026-11-11，issues #18 phase C + #27）**：`attachShadow({mode})` 返回
 真 `ShadowRoot`（`instanceof ShadowRoot`/`DocumentFragment`、`[object ShadowRoot]`），`host`/`mode`/`innerHTML`/
-`querySelector(All)`/`appendChild`/`childNodes` 可用；`host.shadowRoot` 只在 open 模式暴露；重复 attach →
-`NotSupportedError`、非法 mode → `TypeError`、`<a>/<img>/<input>…` 泊位 → `NotSupportedError`；`<slot>.assignedNodes()`
-返回 `[]`、`assignedSlot` 为 `null`。⚠ **实现方式**：这棵树没有 shadow tree，wrapper 绑定在宿主元素上、它的子节点就是宿主的
-真实子节点（组件渲染什么就画什么）；因此**没有样式封装**（shadow 内的 `<style>` 会全局生效）、**没有 light-DOM 分发**、
-`document.querySelectorAll` 也能看到 shadow 内容。
+`querySelector(All)`/`appendChild`/`replaceChildren`/`childNodes` 可用；`host.shadowRoot` 只在 open 模式暴露；
+重复 attach → `NotSupportedError`、非法 mode → `TypeError`、`<a>/<img>/<input>…` 泊位 → `NotSupportedError`。
+**样式作用域 / 分发（#27）**：`<style>` sheet 记住所在 shadow 树的 scope（`CSSStyleSheet::shadowScope`），
+规则只匹配同一棵树；页面规则进不了组件树、组件规则出不去，UA 规则（scope -1）两边都生效。
+`:host`/`:host(...)`、`::slotted(...)`、`::part(...)` 在选择器文本里改写后参与匹配（`:host` 走 PseudoHost，
+`::slotted` 给已分发节点加 `data-agb-slotted`，`::part` 改写成 `[part~="name"]`）。**slot 分发**：`assignedNodes()`/
+`assignedElements()`/`assignedSlot` 返回真实分配，未分配的 light 节点移入隐藏 fragment，`slotchange` 在微任务里
+每 slot 一次；`host.innerHTML` 只换 light DOM，`shadowRoot.innerHTML` 只换组件树。⚠ **仍与 Chrome 不同的地方**：
+①shadow 内容在物理上仍是宿主的子节点（渲染路径不新建 shadow tree），所以 `host.childNodes` 能看到组件节点、
+`document.querySelectorAll` 也能命中它们；②`slot` 本身不是 `display: contents`（有分配时用
+`slot[data-agb-slot-filled]{display:none}` 藏掉它，把已分发节点放在 slot 之后的兄弟位置）；③`::part` 依赖
+`[part~=]` 后代改写，跨组件同名 part 会串扰；④`:host-context()` 未实现；⑤窗口级全屏没有接（见
+`requestFullscreen`）。回归：`run_shadow_tests`（39 条断言）。
 
 **`HTMLTemplateElement` 已支持（2026-11-11，issues #18 phase B）**：真接口类（IDL 表 + `tag→class` 映射），
 `content` 是懒创建的 `DocumentFragment`（解析器塞进元素的子节点在首次访问时搬进 content，和 Chrome 的模板内容一致），

@@ -1,0 +1,128 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+  .inside { color: rgb(9, 9, 9); }
+  span.x { font-style: italic; }
+  #h::part(p1) { color: rgb(10, 20, 30); }
+</style></head>
+<body>
+<div id="h" class="accent">
+  <span id="s1" class="x" slot="named">one</span>
+  <span id="s2" class="x">two</span>
+</div>
+<div id="h2"></div>
+<div id="box" style="width:40px;height:20px;background:#123456"></div>
+<script>
+(function () {
+  var pass = 0, fail = [];
+  function ok(name, cond) { if (cond) pass++; else fail.push(name); }
+  function color(el) { return el ? getComputedStyle(el).color : ''; }
+  function ids(list) { return list.map(function (n) { return n.id || n.nodeName; }).join(','); }
+
+  try {
+    var host = document.getElementById('h');
+    var root = host.attachShadow({ mode: 'open' });
+    root.innerHTML =
+      '<style>' +
+      ':host { display: block; }' +
+      ':host(.accent) { outline-color: rgb(4, 5, 6); }' +
+      '.inside { color: rgb(0, 128, 0); }' +
+      '::slotted(span.x) { color: rgb(0, 0, 255); font-weight: 700; }' +
+      '</style>' +
+      '<div class="inside" id="si">shadow</div>' +
+      '<slot name="named"></slot>' +
+      '<slot></slot>' +
+      '<span part="p1" id="p1">part</span>';
+
+    var s1 = document.getElementById('s1');
+    var s2 = document.getElementById('s2');
+    var slots = root.querySelectorAll('slot');
+
+    ok('shadow style wins inside', color(root.querySelector('#si')) === 'rgb(0, 128, 0)');
+    ok('page style does not leak in', color(root.querySelector('#si')) !== 'rgb(9, 9, 9)');
+    ok(':host display', getComputedStyle(host).display === 'block');
+    ok(':host(.accent)', getComputedStyle(host).outlineColor === 'rgb(4, 5, 6)');
+    ok('::slotted style', color(s1) === 'rgb(0, 0, 255)');
+    ok('::slotted weight', getComputedStyle(s1).fontWeight === '700' ||
+                           getComputedStyle(s1).fontWeight === 'bold');
+    ok('::slotted default slot', color(s2) === 'rgb(0, 0, 255)');
+    ok('::part style', color(root.querySelector('#p1')) === 'rgb(10, 20, 30)');
+    ok('page style keeps light node', getComputedStyle(s1).fontStyle === 'italic');
+    ok('assigned named', ids(slots[0].assignedNodes()) === 's1');
+    ok('assigned default', ids(slots[1].assignedNodes()).indexOf('s2') >= 0);
+    ok('assignedSlot', s1.assignedSlot === slots[0] && s2.assignedSlot === slots[1]);
+    ok('shadowRoot identity', host.shadowRoot === root && root.mode === 'open');
+
+    host.removeChild(s1);
+    ok('remove updates assignment', slots[0].assignedNodes().length === 0);
+    host.innerHTML = '<b id="s3" slot="named">three</b>';
+    ok('host.innerHTML replaces light only', ids(slots[0].assignedNodes()) === 's3' &&
+                                              !!root.querySelector('#si'));
+
+    var extra = document.createElement('u');
+    extra.id = 'u1';
+    root.append(extra);
+    ok('shadow append is component node', extra.getRootNode() === root &&
+                                           root.querySelector('#u1') === extra);
+    var s3node = host.querySelector('#s3');
+    root.replaceChildren();
+    ok('shadow replaceChildren', root.querySelector('slot') === null && s3node !== null);
+
+    var badMode = document.createElement('div');
+    document.body.appendChild(badMode);
+    var modeError = null;
+    try { badMode.attachShadow({}); } catch (e) { modeError = e.name; }
+    ok('attachShadow mode required', modeError === 'TypeError' && badMode.shadowRoot === null);
+
+    var badHost = document.createElement('img');
+    document.body.appendChild(badHost);
+    var hostError = null;
+    try { badHost.attachShadow({ mode: 'open' }); } catch (e) { hostError = e.name; }
+    ok('attachShadow forbidden tag', hostError === 'NotSupportedError' && badHost.shadowRoot === null);
+
+    var closedHost = document.getElementById('h2');
+    var closedRoot = closedHost.attachShadow({ mode: 'closed' });
+    closedRoot.innerHTML = '<i id="ci">closed</i>';
+    ok('closed root hidden', closedHost.shadowRoot === null);
+    ok('closed root works', closedRoot.querySelector('#ci') !== null);
+
+    /* TreeWalker */
+    var container = document.createElement('div');
+    container.innerHTML = '<p id="a">a<span id="b">b</span></p><p id="c">c</p>';
+    var tw = document.createTreeWalker(container, NodeFilter.SHOW_ELEMENT, {
+      acceptNode: function (n) { return n.id === 'b' ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT; }
+    });
+    var seq = [];
+    while (tw.nextNode()) seq.push(tw.currentNode.id);
+    ok('treewalker REJECT', seq.join(',') === 'a,c');
+    ok('treewalker ctor', tw instanceof TreeWalker && tw.root === container);
+    var tw2 = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+    var texts = [];
+    while (tw2.nextNode()) texts.push(tw2.currentNode.nodeValue);
+    ok('treewalker text', texts.join(',') === 'a,b,c');
+    var tw3 = document.createTreeWalker(container, NodeFilter.SHOW_ELEMENT,
+                                        function (n) { return n.id === 'b' ? 3 : 1; });
+    var skipped = [];
+    while (tw3.nextNode()) skipped.push(tw3.currentNode.id);
+    ok('treewalker SKIP', skipped.join(',') === 'a,c');
+    ok('treewalker parentNode', (function () {
+      var w = document.createTreeWalker(container, NodeFilter.SHOW_ELEMENT);
+      w.firstChild();
+      return w.parentNode() === container;
+    })());
+
+    /* Fullscreen: the state is applied in a task, like Chrome. */
+    var box = document.getElementById('box');
+    ok('fullscreen initial', document.fullscreenElement === null && document.fullscreenEnabled === true);
+    var request = box.requestFullscreen();
+    ok('fullscreen promise', request && typeof request.then === 'function');
+    ok('fullscreen async apply', document.fullscreenElement === null);
+    window.__fsRequest = request;
+    window.__fsBox = box;
+  } catch (e) {
+    fail.push('threw: ' + (e && e.message));
+  }
+
+  window.__shadowResult = { pass: pass, total: pass + fail.length, fail: fail };
+}());
+</script>
+</body></html>

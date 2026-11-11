@@ -147,6 +147,7 @@ Node::Node(Document *doc)
       m_renderer(0),
       m_nodeLists(0),
       m_tabIndex(0),
+      m_shadowScope(0),
       m_hasId(false),
       m_hasClass(false),
       m_attached(false),

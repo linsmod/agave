@@ -159,6 +159,15 @@ class StyledElement;
         void matchRulesForList(CSSRuleDataList* rules, int& firstRuleIndex, int& lastRuleIndex);
         void sortMatchedRules(unsigned start, unsigned end);
 
+        /* Shadow DOM rule scoping (issues #27): rules from a shadow sheet only
+         * match that tree, rules from a document sheet only match the document
+         * tree (except ::part). m_currentShadowHost is the host of the rule
+         * being matched, so :host can be answered in checkOneSelector. */
+        bool ruleScopeMatches(CSSRuleData*);
+        static bool selectorHasAttribute(CSSSelector*, const AtomicString&);
+        static bool selectorHasHostPseudo(CSSSelector*);
+        Element* m_currentShadowHost;
+
         void applyDeclarations(bool firstPass, bool important, int startIndex, int endIndex);
 
         /* Custom properties ('--x') are resolved for the element before any
@@ -263,33 +272,41 @@ class StyledElement;
 
     class CSSRuleData {
     public:
-        CSSRuleData(unsigned pos, CSSStyleRule* r, CSSSelector* sel, CSSRuleData* prev = 0)
-        :m_position(pos), m_rule(r), m_selector(sel), m_next(0) { if (prev) prev->m_next = this; }
+        CSSRuleData(unsigned pos, CSSStyleRule* r, CSSSelector* sel, int scope = 0,
+                    bool partRule = false, CSSRuleData* prev = 0)
+        :m_position(pos), m_rule(r), m_selector(sel), m_next(0), m_scope(scope), m_partRule(partRule)
+        { if (prev) prev->m_next = this; }
         ~CSSRuleData() { delete m_next; }
 
         unsigned position() { return m_position; }
         CSSStyleRule* rule() { return m_rule; }
         CSSSelector* selector() { return m_selector; }
         CSSRuleData* next() { return m_next; }
+        int scope() const { return m_scope; }
+        bool partRule() const { return m_partRule; }
         
     private:
         unsigned m_position;
         CSSStyleRule* m_rule;
         CSSSelector* m_selector;
         CSSRuleData* m_next;
+        int m_scope;
+        bool m_partRule;
     };
 
     class CSSRuleDataList {
     public:
-        CSSRuleDataList(unsigned pos, CSSStyleRule* rule, CSSSelector* sel)
-        { m_first = m_last = new CSSRuleData(pos, rule, sel); }
+        CSSRuleDataList(unsigned pos, CSSStyleRule* rule, CSSSelector* sel, int scope = 0,
+                        bool partRule = false)
+        { m_first = m_last = new CSSRuleData(pos, rule, sel, scope, partRule); }
         ~CSSRuleDataList() { delete m_first; }
 
         CSSRuleData* first() { return m_first; }
         CSSRuleData* last() { return m_last; }
         
-        void append(unsigned pos, CSSStyleRule* rule, CSSSelector* sel) {
-            m_last = new CSSRuleData(pos, rule, sel, m_last);
+        void append(unsigned pos, CSSStyleRule* rule, CSSSelector* sel, int scope = 0,
+                    bool partRule = false) {
+            m_last = new CSSRuleData(pos, rule, sel, scope, partRule, m_last);
         }
         
     private:

@@ -141,6 +141,7 @@ namespace WebCore {
             PseudoLang,
             PseudoNot,
             PseudoRoot,
+            PseudoHost,
             PseudoSelection,
             PseudoFileUploadButton,
             PseudoSliderThumb,

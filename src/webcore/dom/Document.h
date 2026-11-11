@@ -175,6 +175,13 @@ public:
     DOMImplementation* implementation() const;
     virtual void childrenChanged();
     Element* documentElement() const;
+
+    /* Shadow tree scope registry (issues #27): ids are allocated per document
+     * and map back to the host element, which is what lets the selector
+     * matcher answer `:host` and the rule-scope filter decide whether a rule
+     * may style a shadow node. */
+    int registerShadowRoot(Element* host);
+    Element* shadowHostForScope(int scope) const;
     virtual PassRefPtr<Element> createElement(const String& tagName, ExceptionCode&);
     PassRefPtr<DocumentFragment> createDocumentFragment ();
     PassRefPtr<Text> createTextNode(const String& data);
@@ -633,6 +640,12 @@ public:
     HTMLElement* body();
     void setBody(PassRefPtr<HTMLElement>, ExceptionCode&);
 
+    /* Fullscreen API state (issues #27). The shell has no borderless-window
+     * hook yet, so this is the document-visible half of the API: the element
+     * that owns the fullscreen state plus fullscreenchange events. */
+    Element* fullscreenElement() const { return m_fullscreenElement.get(); }
+    void setFullscreenElement(Element* element) { m_fullscreenElement = element; }
+
     HTMLHeadElement* head();
 
     String toString() const;
@@ -804,8 +817,11 @@ private:
     RefPtr<Node> m_hoverNode;
     RefPtr<Node> m_activeNode;
     mutable RefPtr<Element> m_documentElement;
+    RefPtr<Element> m_fullscreenElement;
 
     unsigned m_domtree_version;
+    HashMap<int, Element*> m_shadowHosts;
+    int m_nextShadowScope;
     
     HashSet<NodeIterator*> m_nodeIterators;
 
