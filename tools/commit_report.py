@@ -34,7 +34,7 @@ import sys
 try:
     import jieba
     jieba.setLogLevel(20)
-except ImportError:  # Chinese terms are skipped without jieba.
+except ImportError:  # Chinese terms fall back to n-grams.
     jieba = None
 
 # --------------------------------------------------------------------------
@@ -434,13 +434,25 @@ def term_words(text, stop=TERM_STOP_EN, compound_weight=1, split_compounds=True)
 
 
 def term_cn(text):
-    if not jieba:
-        return []
+    """Chinese terms: jieba when available, else 2/3-gram fallback.
+
+    The fallback is noisier but keeps Chinese terms in the list on Pythons
+    without jieba (the report must not silently lose a whole language).
+    """
+    if jieba:
+        out = []
+        for w in jieba.cut(text):
+            w = w.strip()
+            if len(w) >= 2 and CJK_RE.search(w) and w not in TERM_STOP_CN:
+                out.append(w)
+        return out
     out = []
-    for w in jieba.cut(text):
-        w = w.strip()
-        if len(w) >= 2 and CJK_RE.search(w) and w not in TERM_STOP_CN:
-            out.append(w)
+    for run in re.findall(r"[\u4e00-\u9fff]{2,}", text):
+        for n in (2, 3):
+            for i in range(len(run) - n + 1):
+                w = run[i:i + n]
+                if w not in TERM_STOP_CN:
+                    out.append(w)
     return out
 
 
@@ -494,6 +506,23 @@ def rank_terms(df, tf, n, score=None):
     return sorted(df.items(), key=lambda kv: (-score.get(kv[0], 0), -kv[1], -tf.get(kv[0], 0), kv[0]))[:n]
 
 
+def prune_cn_substrings(df):
+    """Drop CJK n-grams that are covered by a longer CJK term of equal df.
+
+    The n-gram fallback would otherwise list 上下/下文 alongside 上下文.
+    """
+    items = sorted(((t, n) for t, n in df.items() if CJK_RE.search(t)),
+                   key=lambda kv: (-len(kv[0]), -kv[1]))
+    kept = {}
+    for term, n in items:
+        if any(term in longer and df[longer] >= n for longer in kept):
+            continue
+        kept[term] = n
+    out = {t: n for t, n in df.items() if not CJK_RE.search(t)}
+    out.update(kept)
+    return out
+
+
 def format_terms(items, per_line=8):
     cells = [f"{t}({n})" for t, n in items]
     lines = []
@@ -535,7 +564,14 @@ def main():
                     help="also count commits that only touch docs/tests/build/vendor files")
     ap.add_argument("--terms", type=int, default=100,
                     help="terms per category in the two term lists (0 disables the extraction)")
+    ap.add_argument("--no-jieba", action="store_true",
+                    help=argparse.SUPPRESS)  # test the n-gram fallback
     args = ap.parse_args()
+    if args.no_jieba:
+        global jieba
+        jieba = None
+    if args.terms and not jieba:
+        print("warning: jieba not installed, Chinese terms fall back to 2/3-grams", file=sys.stderr)
     if not args.since:
         today = datetime.date.today()
         args.since = today.replace(day=1).isoformat()
@@ -646,7 +682,7 @@ def main():
                 for t in set(s):
                     sdf[t] += 1
             add(f"Top {args.terms} Related terms of Commit Messages：")
-            lines.extend(format_terms(rank_terms(mdf, mtf, args.terms)))
+            lines.extend(format_terms(rank_terms(prune_cn_substrings(mdf), mtf, args.terms)))
             add(f"Top {args.terms} Related terms of Source Codes：")
             lines.extend(format_terms(rank_terms(sdf, stf, args.terms, stf)))
         add("")

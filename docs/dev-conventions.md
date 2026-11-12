@@ -83,3 +83,5 @@ python tools/commit_report.py --json rows.json                 # 逐提交的分
 - 每个分类小节自带两行关键词：`Top N Related terms of Commit Messages`（提交主题词）与
   `Top N Related terms of Source Codes`（只取 **diff 新增行**，注释/字符串先剥掉；驼峰、下划线
   标识符**保留原大小写**并加权，同时给出小写子词）。`--terms 0` 关闭，`--terms N` 调数量（默认 100）。
+  中文词优先用 jieba；环境里没有 jieba 时自动退回 2/3-gram（裁掉被更长词覆盖的子串），
+  只在 stderr 提示，不会让中文整段消失。
