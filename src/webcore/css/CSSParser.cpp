@@ -125,6 +125,7 @@ CSSParser::CSSParser(bool strictParsing)
     kdDebug(6080) << "CSSParser::CSSParser this=" << this << endl;
 #endif
     strict = strictParsing;
+    m_rejectSvgBackground = false;
 
     parsedProperties = (CSSProperty **)fastMalloc(32 * sizeof(CSSProperty *));
     numParsedProperties = 0;
@@ -4157,7 +4158,12 @@ bool CSSParser::parseValue(int propId, bool important)
     case CSS_PROP_BACKGROUND_REPEAT: {
         CSSValue *val1 = 0, *val2 = 0;
         int propId1, propId2;
-        if (parseBackgroundProperty(propId, propId1, propId2, val1, val2)) {
+        bool rejectSvg = (propId == CSS_PROP_BACKGROUND_IMAGE);
+        if (rejectSvg)
+            m_rejectSvgBackground = true;
+        bool parsed = parseBackgroundProperty(propId, propId1, propId2, val1, val2);
+        m_rejectSvgBackground = false;
+        if (parsed) {
             addProperty(propId1, val1, important);
             if (val2)
                 addProperty(propId2, val2, important);
@@ -5731,6 +5737,21 @@ bool CSSParser::parseBackgroundImage(CSSValue*& value)
     if (val->unit == CSSPrimitiveValue::CSS_URI) {
         String uri = parseURL(domString(val->string));
         if (!uri.isEmpty()) {
+            /* TEMPORARY until SVGImage lands (phase C in
+             * docs/design-ksvg2-revival.md): SVG-as-image has no raster path,
+             * so the declaration would draw nothing. Rejecting it here lets an
+             * earlier declaration in the same rule keep its PNG fallback -
+             * netease's nav sprite declares the PNG first and the SVG second. */
+            String path = uri;
+            int cut = path.find('?');
+            if (cut >= 0)
+                path = path.left(cut);
+            cut = path.find('#');
+            if (cut >= 0)
+                path = path.left(cut);
+            if (m_rejectSvgBackground && path.lower().endsWith(".svg"))
+                return false;
+
             /* A var()-expanded value is parsed by a parser without a style
              * element; fall back to the document base so relative URLs still
              * resolve (an empty base made the image URL empty and the image

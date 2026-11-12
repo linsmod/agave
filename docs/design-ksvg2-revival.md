@@ -63,6 +63,16 @@ NanoSVG 顶 SVG-as-image。
   本机无 gperf，先记 roadmap，A 阶段只依赖 presentation 属性。
 - **B**：HTMLParser 外来内容支持 inline `<svg>`；**C**：`SVGImage`（img/background-image），
   复用 A 的渲染树。
+- **C 的临时回退（2026-11-12）**：`SVGImage` 还没落地，先让 CSS 不丢图标——`CSSParser::parseBackgroundImage`
+  把 `url(*.svg)` 判为不支持，同一规则里更早的声明因此保留（网易 `commonnav` 的 sprite 是
+  `background-image:url(...png24.png)` 后面再写 `url(...products_sprites.svg),none`，PNG 回退立即显示）。
+  代价：只声明 SVG 的页面仍然没有背景图；这是过渡方案，`SVGImage` 落地后删除。
+- **C 的实现顺序**：①离屏文档需要 `Page` 的 5 个 client 与 `FrameLoaderClient`（~215 个纯虚函数），
+  要么生成空实现，要么复用当前 `Page` 并抑制主 frame 回调（后者省桩但图像生命周期绑定页面）；
+  ②`Frame + FrameView` 以 `SubstituteData(buffer, "image/svg+xml")` 加载；③按 `width/height`/`viewBox`
+  定尺寸并 `layout()`；④`FrameView::paint` 进 `ImageBuffer`，编码 PNG 交给内嵌 `BitmapImage`
+  （复用现有裁剪/缩放），或按 scale 缓存 `ps_image`；⑤`CachedImage` 按 MIME/内容选型，文档销毁时失效；
+  ⑥回归 `<img>`、CSS 背景、网易导航图标（`tools/pages/svg_bg_fallback.html` 先用回退语义兜住）。
 
 ## 风险
 

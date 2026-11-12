@@ -292,6 +292,10 @@ namespace WebCore {
 
         int m_inParseShorthand;
         int m_currentShorthand;
+        /* True only while parsing the longhand background-image declaration:
+         * SVG URLs are rejected so an earlier PNG declaration in the same rule
+         * survives (SVG-as-image is phase C; see design-ksvg2-revival.md). */
+        bool m_rejectSvgBackground;
         bool m_implicitShorthand;
 
         AtomicString defaultNamespace;

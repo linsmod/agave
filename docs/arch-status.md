@@ -61,7 +61,9 @@ ant 的反直觉行为（字面量属性名、`typeof`、`delete` 等）见 [ref
 - **SVG**：只有 **JS 建树**的 inline `<svg>`（`createElementNS`）会走 ksvg2 渲染；HTML 静态标记里的
   `<svg>` 仍被当成普通未知元素（HTMLParser 没有外来内容分支，B2）。SVG 根现在参与布局首选宽（R119，
   flex/shrink-to-fit 容器不再塌成 0 宽），但页面缩放 ≠100% 时内容相对盒子仍有偏移；
-  `<img src=*.svg>` / CSS `url(*.svg)` 背景仍不渲染（阶段 C）。细节见
+  `<img src=*.svg>` / CSS `url(*.svg)` 背景仍不渲染（阶段 C）。2026-11-12 起 CSS `background-image`
+  的 `url(*.svg)` 声明在解析期被拒，让同一规则里更早的 PNG 声明生效（网易导航图标靠这个回退）；
+  只给 SVG、没有 PNG 回退的页面仍然没有背景图。细节见
   [design-ksvg2-revival.md](design-ksvg2-revival.md)。
 - **wasm 是解释执行**：导出函数跨界约 3.9µs/次，适合"一次调用跑大循环"（R19）。
 - **worker 无网络 / 无 `SharedWorker`/`ServiceWorker`**：worker 里 `fetch`/`XHR` 不可用，
