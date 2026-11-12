@@ -169,6 +169,10 @@ pwsh -File tools\gen_bindings.ps1 -Generator QJS -Idl Node.idl -OutDir $env:TEMP
 - **跑 GUI**：`pwsh -File tools/agave.ps1 [url]`（默认 `process` 后端，每个 tab 一个引擎进程；
   `-Local` 回到单引擎线程，`-DryRun` 只打印命令行）。壳本身默认 local：
   `agave_shell.exe [url]` 与 `agave_shell.exe --backend process [url]` 都可用，`--backend` 也给 `--probe` 用。
+- **双击启动**：仓库根目录的 `agave.bat`（等价 `--backend process`，缺 `agave_render_host.exe` 时回退
+  `local`）。它从 cmd 用 `CreateProcess` 起 exe：双击 `agave_shell.exe` 会走 Explorer→ShellExecute，
+  未签名构建可能被 SmartScreen 拦成“发布者未知”，双击 bat 不会。URL/`--new-tab`/`--userdata` 等
+  参数原样转发（`agave.bat https://…`）；探针仍用命令行，`start` 会脱离控制台。
 - **一个 profile 一个壳（Chrome 模型）**：再启动一次不会开第二个浏览器进程，而是把 URL 交给
   已在跑的壳：裸 URL 或 `--new-tab` = 在最近活跃窗口里加 tab；`--new-window` = 同一个进程里再开
   一个窗口；没有 URL = 只把已有窗口调到前台。想真正并行两个实例，给不同的 `--userdata`
