@@ -80,3 +80,6 @@ python tools/commit_report.py --json rows.json                 # 逐提交的分
   纯文档/测试夹具/发布件提交直接排除；混在同一个提交里的文档改动也不计。
 - 组件映射规则在脚本顶部的 `COMPONENT_RULES`：先按目录，再按目录内文件名细分；媒体、Frame、SVG、
   表单、Ant 绑定这类**跨目录组件**用固定文件集合合并。文件计数按“提交×组件”去重，不按文件数。
+- 每个分类小节自带两行关键词：`Top N Related terms of Commit Messages`（提交主题词）与
+  `Top N Related terms of Source Codes`（只取 **diff 新增行**，注释/字符串先剥掉；驼峰、下划线
+  标识符**保留原大小写**并加权，同时给出小写子词）。`--terms 0` 关闭，`--terms N` 调数量（默认 100）。

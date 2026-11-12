@@ -26,9 +26,16 @@ import argparse
 import collections
 import datetime
 import json
+import os
 import re
 import subprocess
 import sys
+
+try:
+    import jieba
+    jieba.setLogLevel(20)
+except ImportError:  # Chinese terms are skipped without jieba.
+    jieba = None
 
 # --------------------------------------------------------------------------
 # Components: (path regex, component id), first match wins.
@@ -334,6 +341,167 @@ def is_source(path):
     return bool(SOURCE_FILE.match(path)) and not path.endswith(".md") and not BUILD_FILE.search(path)
 
 
+# --------------------------------------------------------------------------
+# Terms for the per-category "top terms" lists. English identifiers/words are
+# split into sub-words (RenderFlexibleBox -> render/flexible/box); Chinese
+# words use jieba when installed. Source terms come from added diff lines only,
+# with comments and string literals stripped first.
+# --------------------------------------------------------------------------
+CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+TERM_WORD = re.compile(r"[A-Za-z][A-Za-z0-9_+\-]{1,}")
+CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])|_+")
+STRING_RE = re.compile(r'"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\'')
+LINE_COMMENT_RE = re.compile(r"//.*$")
+
+TERM_STOP_EN = set("""a an the and or but if then else for with without to of in on at by from into over under
+is are was were be been being do does did done doing have has had having not no nor so as than that this
+these those it its they them their we our you your he she his her i me my
+fix fixes fixed feat add adds added support supports make makes made use uses using
+after before when while where which who whom what how why all any some more most other
+up down out off again further once here there just only very too also now new old still same
+per via vs etc r1 r2 r3 r4 r5 r6 r7 r8 r9 r10
+also into like first one two three may can should would could
+every never own instead through whole both keeps keep goes going get gets got
+needs need see seen base based hold holds next last real step steps issues issue runs run
+agb antb
+verified verify suite suites assertion assertions regression expected actual diff output exit
+""".split())
+
+TERM_STOP_CN = set("""了 的 和 与 在 是 把 被 让 给 从 到 为 对 而 也 都 就 还 又 再 已 并 且 但 或 一个 一种
+这个 那个 我们 你们 他们 这 那 有 没有 不是 可以 需要 应该 现在 之前 之后 已经 还是 只是 因为 所以
+如果 这样 那样 时候 里面 一些 这些 那些 依然 仍然 属于 用于 通过 使用 支持 实现 改为 变成 修复 解决
+问题 情况 以及 其中 每个 所有 不会 不再 不能 可能 部分 直接 导致 造成 使得 起来 出来 下来 上来 进来
+一下 一样 进行 采用 提供 增加 新增 改成 这次 本次 同时 然后 目前 没有 两个 三个 当前""".split())
+
+TERM_STOP_SRC = set("""int char void bool long short float double unsigned signed const static struct class public
+private protected virtual inline explicit template typename namespace using return if else for while do switch
+case break continue default new delete this nullptr true false include define ifdef ifndef endif pragma error
+warning size sizeof typedef union enum extern mutable friend operator throw try catch goto volatile register
+wchar auto decltype noexcept constexpr thread_local aligned alignas static_assert
+std string vector map set list pair hash unique shared make cout endl printf fprintf sprintf snprintf vprintf
+memset memcpy memmove strcmp strncmp strcpy strncpy strlen strstr strchr atoi atol strtol strtoul malloc
+calloc realloc free assert getenv stderr stdout stdin size_t ssize_t uint32 uint64 int32 int64 intptr
+uintptr ptrdiff wchar_t int8 uint8 int16 uint16
+agb antb eng macross g_engine g_webcore webcore web
+value values data type types name names text size length count index number item items entry entries
+set get add remove create destroy update init run runs call calls used user users
+must already nothing inside back end start left right current new old next last first
+return based line lines file files code source impl implementation info
+utf8 nullptr null empty max min result second self top lower upper bottom kind root header src var refptr
+nodeof wrapnode iselementnode fromutf8 towstring tostring
+dword hwnd msg wparam lparam argc argv str ptr buf tmp len ref prop tag evt doc args cast
+static_cast push_back push back begin end clear append find assign isempty c_str
+""".split())
+
+SOURCE_EXTS = {".c", ".cc", ".cpp", ".h", ".hpp", ".js", ".idl", ".y", ".in"}
+SKIP_GENERATED = ("src/webcore/buildKJS/", "src/webcore/buildQJS/", "src/webcore/buildANT/")
+
+
+def split_ident(tok):
+    return [p.lower() for p in CAMEL.split(tok) if p]
+
+
+def term_words(text, stop=TERM_STOP_EN, compound_weight=1, split_compounds=True):
+    """Return (term, weight) pairs.
+
+    Compound identifiers keep their original case (AntRuntime, HTMLMediaElement,
+    on_command_dropped, m_frame) because that is the symbol you would grep for;
+    their lower-case sub-words are emitted with weight 1 when asked. Plain
+    words (Node, document) are lower-cased so they do not split the list.
+    """
+    out = []
+    for m in TERM_WORD.finditer(text):
+        raw = m.group(0).strip("-_")
+        if len(raw) < 3:
+            continue
+        parts = split_ident(raw)
+        if parts and parts[0] in ("antb", "agw", "agb", "g"):
+            continue  # project plumbing, not a domain term
+        compound = len(parts) > 1 or "_" in raw
+        if compound:
+            low = raw.lower()
+            if low not in stop:
+                out.append((raw, compound_weight))
+            if split_compounds:
+                for p in parts:
+                    if len(p) >= 3 and p not in stop:
+                        out.append((p, 1))
+        else:
+            for p in parts:
+                if len(p) >= 3 and p not in stop:
+                    out.append((p, 1))
+    return out
+
+
+def term_cn(text):
+    if not jieba:
+        return []
+    out = []
+    for w in jieba.cut(text):
+        w = w.strip()
+        if len(w) >= 2 and CJK_RE.search(w) and w not in TERM_STOP_CN:
+            out.append(w)
+    return out
+
+
+def strip_code(line):
+    s = line.strip()
+    if s.startswith(("//", "/*", "*", "<!--")):
+        return ""
+    code = STRING_RE.sub(" ", s)
+    cut = LINE_COMMENT_RE.search(code)
+    if cut and not re.search(r":$", code[:cut.start()]):
+        code = code[:cut.start()]
+    return code
+
+
+def diff_terms(repo, since, until):
+    """hash -> (term set, term Counter) from added lines of source diffs."""
+    cmd = ["git", "-C", repo, "log", "-p", "-U0", f"--since={since}",
+           "--pretty=format:COMMIT|%h", "--", "src", "include", "examples"]
+    if until:
+        cmd.insert(4, f"--until={until}")
+    raw = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace").stdout
+    out = collections.defaultdict(lambda: collections.Counter())
+    commit = None
+    path = None
+    for line in raw.splitlines():
+        if line.startswith("COMMIT|"):
+            commit, path = line[7:], None
+        elif line.startswith("diff --git "):
+            m = re.search(r" b/(.+)$", line)
+            path = m.group(1) if m else None
+        elif line.startswith("+++ ") or line.startswith("--- "):
+            continue
+        elif line.startswith("+") and commit and path:
+            if re.match(r"\+?\s*#\s*(include|pragma)\b", line):
+                continue
+            if not is_source(path) or path.startswith(SKIP_GENERATED):
+                continue
+            if os.path.splitext(path)[1].lower() not in SOURCE_EXTS:
+                continue
+            code = strip_code(line[1:])
+            for term, weight in term_words(code, TERM_STOP_SRC | TERM_STOP_EN,
+                                           compound_weight=4, split_compounds=False):
+                out[commit][term] = min(out[commit][term] + weight, 8)
+            for term in term_cn(code):
+                out[commit][term] += 1
+    return out
+
+
+def rank_terms(df, tf, n, score=None):
+    score = score or {}
+    return sorted(df.items(), key=lambda kv: (-score.get(kv[0], 0), -kv[1], -tf.get(kv[0], 0), kv[0]))[:n]
+
+
+def format_terms(items, per_line=8):
+    cells = [f"{t}({n})" for t, n in items]
+    lines = []
+    for i in range(0, len(cells), per_line):
+        lines.append("  " + "，".join(cells[i:i + per_line]))
+    return lines or ["  （无）"]
+
+
 def git_commits(repo, since, until):
     cmd = ["git", "-C", repo, "log", f"--since={since}", "--pretty=format:COMMIT|%h|%ad|%s",
            "--date=short", "--name-only"]
@@ -365,6 +533,8 @@ def main():
                     help="keep tools/ pages in per-category file lists (excluded by default)")
     ap.add_argument("--all", action="store_true",
                     help="also count commits that only touch docs/tests/build/vendor files")
+    ap.add_argument("--terms", type=int, default=100,
+                    help="terms per category in the two term lists (0 disables the extraction)")
     args = ap.parse_args()
     if not args.since:
         today = datetime.date.today()
@@ -386,6 +556,15 @@ def main():
     for c in commits:
         c["cat"], c["info"] = classify(c["subject"], c["files"])
         c["comps"] = sorted({comp_of(f) for f in c["files"] if f})
+
+    # Per-category term lists: message terms (subject x3 + body x1) and terms
+    # from added diff lines.
+    msg_terms = {}
+    src_terms = {}
+    if args.terms:
+        src_terms = diff_terms(args.repo, args.since, args.until)
+        for c in commits:
+            msg_terms[c["hash"]] = {t for t, _ in term_words(c["subject"])} | set(term_cn(c["subject"]))
 
     cat_count = collections.Counter(c["cat"] for c in commits)
     comp_count = collections.Counter()
@@ -455,6 +634,21 @@ def main():
                 if f not in files:
                     files.append(f)
         add("主要文件：" + "、".join(f"`{f}`" for f in files[:6]))
+        if args.terms:
+            mdf, mtf, sdf, stf = (collections.Counter() for _ in range(4))
+            for c in rows:
+                m = msg_terms.get(c["hash"], set())
+                mtf.update(m)
+                for t in m:
+                    mdf[t] += 1
+                s = src_terms.get(c["hash"], {})
+                stf.update(s)
+                for t in set(s):
+                    sdf[t] += 1
+            add(f"Top {args.terms} Related terms of Commit Messages：")
+            lines.extend(format_terms(rank_terms(mdf, mtf, args.terms)))
+            add(f"Top {args.terms} Related terms of Source Codes：")
+            lines.extend(format_terms(rank_terms(sdf, stf, args.terms, stf)))
         add("")
 
     report = "\n".join(lines)
