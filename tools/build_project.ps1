@@ -26,8 +26,9 @@
 # build dir (e.g. agave_shell, which is a real browser window) holds the files,
 # the script lists it and stops. Add -StopLockingProcesses to let it kill them.
 #
-# Targets built: libagave.dll / agave_shell.exe / agave_embed.exe /
-# agave_view_host.exe (headless test host) / touchweb.exe
+# Targets built: libagave.dll / agave_shell.exe / agave.exe (taskbar launcher) /
+# agave_render_host.exe / agave_embed.exe / agave_view_host.exe (headless test
+# host) / net_probe_{winhttp,curl}.exe / touchweb.exe
 # (built when OPT_TOUCHWEB was ON at configure time; this script never flips
 # cached options - do that by hand with -Fresh if you really need to).
 #
@@ -61,8 +62,10 @@ $ErrorActionPreference = 'Stop'
 $root  = Split-Path -Parent $PSScriptRoot           # agave repo
 $build = if ([IO.Path]::IsPathRooted($BuildDir)) { $BuildDir } else { Join-Path $root $BuildDir }
 
-$artifacts = @('libagave.dll', 'antjsb.dll', 'agave_shell.exe', 'agave_embed.exe',
-               'agave_view_host.exe', 'touchweb.exe', 'polyfills.js')
+$artifacts = @('libagave.dll', 'antjsb.dll', 'agave_shell.exe', 'agave.exe',
+               'agave_render_host.exe', 'agave_embed.exe', 'agave_view_host.exe',
+               'agave_multiview_probe.exe', 'net_probe_winhttp.exe', 'net_probe_curl.exe',
+               'touchweb.exe', 'polyfills.js')
 
 function Fail([string]$message) {
     Write-Host "build failed: $message" -ForegroundColor Red
