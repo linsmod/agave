@@ -15,7 +15,8 @@
   -Rect crops to a CSS-pixel rect, origin at the viewport's top-left, so one
   element can be captured directly: pass the values of the element's
   getBoundingClientRect() (after scrolling it into view). The file stays device
-  pixels, so a rect on a zoomed page comes out larger than the rect itself.
+  pixels, so a rect on a zoomed page - or on a high-DPI one, see -DeviceScale -
+  comes out larger than the rect itself.
 
 .EXAMPLE
   pwsh -File tools/screenshot.ps1 -Url https://chat.deepseek.com/ -Out debug/ds.png -Wait 9000
@@ -30,6 +31,7 @@ param(
     [string]$Out = 'debug/shot.png',
     [int]$Wait = 8000,          # ms after the load event before capturing
     [string]$Rect,              # x,y,w,h in CSS px (getBoundingClientRect)
+    [int]$DeviceScale = 0,      # display DPI as % of 96 (150 = 150% screen); 0 = 100
     [int]$TimeoutMs = 60000,
     [string]$UserData
 )
@@ -80,6 +82,7 @@ if ($Rect -and $Rect -notmatch '^\s*-?\d+\s*,\s*-?\d+\s*,\s*\d+\s*,\s*\d+\s*$') 
 
 $probeArgs = @('--probe', $Url, '--shot', $capture, '--wait', $Wait, '--timeout', $TimeoutMs)
 if ($Rect) { $probeArgs += @('--shot-rect', ($Rect -replace '\s', '')) }
+if ($DeviceScale -gt 100) { $probeArgs += @('--device-scale', "$DeviceScale") }
 if ($UserData) { $probeArgs += @('--userdata', $UserData) }
 
 $output = & $exe @probeArgs 2>&1

@@ -593,6 +593,46 @@ MACROSS_API void macross_set_dialog_hook(MC_DIALOG_HOOK hook);
 MACROSS_API MC_STATUS macross_view_get_scale_factor(MaCrossView* view, int* precent);
 
 /**
+ * \fn MC_STATUS macross_view_set_device_scale_factor(MaCrossView* view, int precent)
+ *
+ * The display's device pixels per CSS pixel, as a percent: 100 at 96 DPI, 150
+ * on a 150% Windows display (DPI * 100 / 96). It is independent of the page
+ * zoom above; the two multiply:
+ *
+ *     window.devicePixelRatio == scale_precent * device_scale_precent / 10000
+ *     innerWidth             == view_width_px / that ratio
+ *
+ * The engine applies it as layout scale (fonts are laid out and rasterized
+ * larger, not bitmap-scaled), so 100 leaving it alone keeps every existing host
+ * byte-identical. A host that changes it must repaint the whole view; the engine
+ * marks the full surface dirty on its own.
+ *
+ * \param view  	Pointer to an existing webview object.
+ * \param precent   Device pixels per CSS pixel in percent (100 = 96 DPI).
+ *
+ * \return
+ * 		- MC_STATUS_SUCCESS on success.
+ * 		- Other status code on failed.
+ *
+ * \sa macross_view_get_device_scale_factor, macross_view_set_scale_factor
+ */
+MACROSS_API MC_STATUS macross_view_set_device_scale_factor(MaCrossView* view, int precent);
+
+/**
+ * \fn MC_STATUS macross_view_get_device_scale_factor(MaCrossView* view, int* precent)
+ *
+ * \param view  	Pointer to an existing webview object.
+ * \param precent	Pointer to a buffer to receiving the device scale precent.
+ *
+ * \return
+ * 		- MC_STATUS_SUCCESS on success.
+ * 		- Other status code on failed.
+ *
+ * \sa macross_view_set_device_scale_factor
+ */
+MACROSS_API MC_STATUS macross_view_get_device_scale_factor(MaCrossView* view, int* precent);
+
+/**
  * \fn MC_STATUS macross_view_set_view_source(MaCrossView* view, MC_BOOL enable)
  * \brief Set whether web view in view source mode.
  *

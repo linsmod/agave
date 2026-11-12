@@ -59,6 +59,10 @@ build-zig-native\agave_shell.exe --probe <url> [--eval <js>] [--wait ms] [--sett
   那一帧**。
 - `--zoom <percent>`：eval 前调 `agave_webview_set_zoom`（10..500）。和 `--resize` 可叠加；
   用来复测 zoom 下的视口语义（`100vw == innerWidth`，两者都是 CSS px；R70）。
+- `--device-scale <percent>`：显示 DPI，device px per CSS px 的百分比（100 = 96 DPI，150 = 150% 屏）。
+  GUI 自己从 `GetDpiForWindow`/`WM_DPICHANGED` 取，无头探针没有显示器可问，所以显式给。
+  与 `--zoom` **相乘**（`window.devicePixelRatio == zoom × deviceScale`），语义与坑见
+  [design-hidpi.md](design-hidpi.md)、回归 `run_hidpi_tests.ps1`。
 - URL 参数走**地址栏同一套规则**（`normalizeUrl`），所以可以直接传本地路径 / 文件 URL。
 
 **渲染后端开关（S3）**：`agave_shell.exe --backend local|process [url]`（`--probe` 同样适用；壳自身默认 `local`，`tools/agave.ps1` 默认用 `process` 起 GUI），或环境变量 `AGB_VIEW_BACKEND=local|process`（默认 `local`；命令行参数优先，没给参数时才读环境）。
@@ -125,8 +129,8 @@ stderr 会打一行 `[probe] headless window hidden, AGB_PROBE_SHOW=1 to show (p
 扩展名决定编码：`.png` 由壳自己用 libpng 写（默认，不用再转图），`.bmp` 是 32 位 bottom-up
 原始 DIB（`pixel_check.py` 一直读的那个），其它扩展名直接报错而不是写错格式。
 `--shot-rect x,y,w,h` 把捕获裁到一条矩形（**CSS 像素**，原点在视口左上角）——直接抓单个元素：
-`--eval` 里 `scrollIntoView()` 后把 `getBoundingClientRect()` 的四个值传进去即可（`--zoom` 下会自动
-换算成设备像素，所以文件尺寸是 `rect × zoom`）；超出视口的部分会被裁掉，整块都在视口外则报错退出
+`--eval` 里 `scrollIntoView()` 后把 `getBoundingClientRect()` 的四个值传进去即可（`--zoom` / `--device-scale` 下会自动
+换算成设备像素，所以文件尺寸是 `rect × zoom × dpr`）；超出视口的部分会被裁掉，整块都在视口外则报错退出
 （不会留一张看起来像渲染 bug 的空白图）。
 ⚠ 截图路径：`--shot` 由探针进程自己 `fopen` 写文件，**写 `%TEMP%` 下会 `errno 13`（权限）失败**
 （同一路径 PowerShell 能写），所以套件一律把图落到 `build-zig-native\` 或仓库内目录，别用 `$env:TEMP`。

@@ -296,11 +296,22 @@ void ChromeClientMC::focusChangedRect(const IntRect& r)
 	}
 }
 
-//not implement.
+/* Device pixels per CSS pixel: the user's page zoom times this display's device
+ * scale factor (DPI/96), i.e. exactly what innerWidth/clientX divide by. This
+ * is what window.devicePixelRatio, the -webkit-device-pixel-ratio media feature
+ * and the canvas backing store read.
+ *
+ * It used to be a notImplemented() stub returning 1: a 150% monitor then got a
+ * 1x page with dpr 1, so responsive images picked the 1x source, @media
+ * (min-resolution) never matched, and setPageZoomFactor() was invisible to
+ * pages. Returning the frame's factor keeps one scale for layout, rasterization
+ * and JS - see Frame::pageZoomFactor. */
 float ChromeClientMC::scaleFactor()
 {
-    notImplemented();
-    return 1.0f;
+    WebCore::Page* page = webView() ? webView()->page() : 0;
+    WebCore::Frame* frame = page ? page->mainFrame() : 0;
+
+    return frame ? frame->pageZoomFactor() : 1.0f;
 }
 
 bool ChromeClientMC::canTakeFocus(FocusDirection)

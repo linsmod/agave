@@ -108,6 +108,10 @@ public:
 	//page scale
 	int scaleFactor(void);
 	void setScaleFactor(int scale);
+	/* Device pixels per CSS pixel from the display's DPI (100 = 96 DPI). It is
+	 * not the user's zoom: pageZoomFactor() is this times scaleFactor(). */
+	int deviceScaleFactor(void);
+	void setDeviceScaleFactor(int scale);
 	//javascript
 	bool executeScript(const char* script);
 	/* Runs an Editor::execCommand command ("Copy", "SelectAll", ...) on the

@@ -144,6 +144,9 @@ static int localSubmit(void* view, const AgwViewCommand* cmd)
     case AGW_VIEW_CMD_ZOOM:
         macross_view_set_scale_factor(mcv, cmd->a > 0 ? cmd->a : 100);
         return 1;
+    case AGW_VIEW_CMD_DEVICE_SCALE:
+        macross_view_set_device_scale_factor(mcv, cmd->a > 0 ? cmd->a : 100);
+        return 1;
     case AGW_VIEW_CMD_SEARCH:
         if (text && text[0])
             macross_view_search_text(mcv, text,

@@ -120,7 +120,8 @@ enum {
     AGW_CMD_RELOAD, AGW_CMD_STOP, AGW_CMD_EVAL, AGW_CMD_ZOOM,
     AGW_CMD_RESIZE, AGW_CMD_UA, AGW_CMD_DL_DIR, AGW_CMD_MOUSE, AGW_CMD_KEY,
     AGW_CMD_CHAR, AGW_CMD_FOCUS, AGW_CMD_SEARCH, AGW_CMD_CONTEXT,
-    AGW_CMD_DL_CANCEL, AGW_CMD_VISIBLE, AGW_CMD_EDITOR, AGW_CMD_REQUEST_FRAME
+    AGW_CMD_DL_CANCEL, AGW_CMD_VISIBLE, AGW_CMD_EDITOR, AGW_CMD_REQUEST_FRAME,
+    AGW_CMD_DEVICE_SCALE
 };
 
 /* Commands that mean "the user wants the page to change": while one of them
@@ -191,6 +192,7 @@ static const char* agwCommandKindName(int type)
     case AGW_CMD_VISIBLE:   return "visible";
     case AGW_CMD_EDITOR:    return "editor";
     case AGW_CMD_REQUEST_FRAME: return "frame";
+    case AGW_CMD_DEVICE_SCALE:  return "device-scale";
     default:                return "command";
     }
 }
@@ -288,6 +290,10 @@ struct AgaveWebView {
     int                wantWidth;
     int                wantHeight;
     int                zoom;
+    /* Display device pixels per CSS pixel, in percent of 96 DPI. Re-applied to
+     * every new backend view next to the zoom, so a tab created after the window
+     * moved to a high-DPI monitor starts at the right scale. */
+    int                deviceScale;
     int                pendingResize;
     /* Identity used by queued commands. Slots in g_views move when a view is
      * destroyed; this does not. */
@@ -1220,6 +1226,12 @@ static void agwCreateBackendView(AgaveWebView* item, int width, int height, int 
     if (item->zoom != 100)
         agwSubmitSimple(item, AGW_VIEW_CMD_ZOOM, item->zoom, 0, 0, 0);
 
+    /* Same for the display scale: a tab created (or recreated after a crash)
+     * while the window sits on a high-DPI monitor must start scaled, not at
+     * 100% until the next WM_DPICHANGED. */
+    if (item->deviceScale != 100)
+        agwSubmitSimple(item, AGW_VIEW_CMD_DEVICE_SCALE, item->deviceScale, 0, 0, 0);
+
     /* A queued CMD_NAVIGATE will load the URL; doing it here as well made every
      * first navigation fetch the page twice. */
     if (navigateIfUrl && item->url[0] && !item->navigatePending)
@@ -2085,6 +2097,20 @@ static void agwDrainCommands(void)
         case AGW_CMD_ZOOM:
             item->zoom = command.a > 0 ? command.a : 100;
             agwSubmitSimple(item, AGW_VIEW_CMD_ZOOM, item->zoom, 0, 0, 0);
+            if (item->hwnd)
+                InvalidateRect(item->hwnd, NULL, FALSE);
+            break;
+
+        case AGW_CMD_DEVICE_SCALE:
+            /* Display DPI (the window moved to a 150% monitor, or the host set
+             * one up front). Independent of the zoom above - the engine
+             * multiplies them - so this never resets a user zoom and a Ctrl+=
+             * never touches the DPI half. The whole surface changes scale, so
+             * repaint it: the backend marks it dirty too, this covers the gap
+             * between queuing the command and the next painted frame. */
+            item->deviceScale = command.a > 0 ? command.a : 100;
+            agwSubmitSimple(item, AGW_VIEW_CMD_DEVICE_SCALE, item->deviceScale, 0, 0, 0);
+            item->forceFullPaint = 1;
             if (item->hwnd)
                 InvalidateRect(item->hwnd, NULL, FALSE);
             break;
@@ -3725,6 +3751,7 @@ AgaveWebView* agave_webview_create(void* parent, int x, int y, int width, int he
     item->reapEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
 
     item->zoom = 100;
+    item->deviceScale = 100;
     item->wantWidth = width > 0 ? width : 1;
     item->wantHeight = height > 0 ? height : 1;
     item->user = user;
@@ -3958,6 +3985,22 @@ void agave_webview_set_zoom(AgaveWebView* item, int percent)
 int agave_webview_zoom(AgaveWebView* item)
 {
     return item ? item->zoom : 100;
+}
+
+/* Display device pixels per CSS pixel, in percent of 96 DPI (150 on a 150%
+ * Windows display). The engine multiplies it with agave_webview_set_zoom(), so
+ * the two are independent; see macross_view_set_device_scale_factor. */
+void agave_webview_set_device_scale(AgaveWebView* item, int percent)
+{
+    if (!item)
+        return;
+
+    agwPost(AGW_CMD_DEVICE_SCALE, item, NULL, 0, 0, percent, 0);
+}
+
+int agave_webview_device_scale(AgaveWebView* item)
+{
+    return item ? item->deviceScale : 100;
 }
 
 void agave_webview_set_visible(AgaveWebView* item, int visible)

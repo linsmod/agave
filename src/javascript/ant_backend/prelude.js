@@ -425,6 +425,11 @@
         if (name === 'orientation')
           return value === 'portrait' ? vh >= vw : (value === 'landscape' ? vw > vh : false);
         var min = false, max = false, base = name;
+        /* -webkit- is a prefix, not part of the feature name: stripping it first
+         * is what makes (-webkit-min-device-pixel-ratio: 1.5) answer like the CSS
+         * side. The old order left `-webkit-min-…` unmatched and every such query
+         * returned false. */
+        if (base.indexOf('-webkit-') === 0) base = base.slice(8);
         if (base.slice(0, 4) === 'min-') { min = true; base = base.slice(4); }
         else if (base.slice(0, 4) === 'max-') { max = true; base = base.slice(4); }
         if (base === 'resolution') {
@@ -434,6 +439,13 @@
           var want = unit.indexOf('dpi') === 0 ? n / 96
                    : (unit.indexOf('dpcm') === 0 ? n * 2.54 / 96 : n);
           return min ? dpr >= want : (max ? dpr <= want : Math.abs(dpr - want) < 0.01);
+        }
+        /* -webkit-device-pixel-ratio and its min-/max- variants: a plain number
+         * compared against window.devicePixelRatio, like the CSS evaluator. */
+        if (base === 'device-pixel-ratio') {
+          var ratio = parseFloat(value);
+          if (isNaN(ratio)) return false;
+          return min ? dpr >= ratio : (max ? dpr <= ratio : Math.abs(dpr - ratio) < 0.01);
         }
         var actual;
         if (base === 'width' || base === 'device-width') actual = vw;
@@ -702,13 +714,26 @@
 
   }
   if (typeof g.devicePixelRatio === 'undefined') {
-    /* The engine does not expose a DPR to the page (the window binding is not
-     * installed on the global). 1 is correct for 100% zoom / 96 DPI, which is
-     * what the probe uses; a real DPR getter can replace this later. */
+    /* Device pixels per CSS pixel: page zoom * the display's DPI/96 (150% Windows
+     * display = 1.5, and 2.0 at 200% zoom on top of it). The window binding does
+     * not install this on the global, so the engine exposes the value through a
+     * bridge call - the same Chrome::scaleFactor() the CSS
+     * -webkit-device-pixel-ratio media feature reads, so JS and CSS agree.
+     * Until this existed it was a hardcoded 1: every retina branch, `dpr >= 2`
+     * polyfill and srcset pick took the 1x path on a high-DPI screen. */
+    var dprGet = function () {
+      if (typeof g.__agbDevicePixelRatio === 'function') {
+        try {
+          var v = +g.__agbDevicePixelRatio(g.document);
+          if (v > 0) return v;
+        } catch (e) {}
+      }
+      return 1;
+    };
     try {
-      Object.defineProperty(g, 'devicePixelRatio', { get: function () { return 1; }, configurable: true });
+      Object.defineProperty(g, 'devicePixelRatio', { get: dprGet, configurable: true });
     } catch (e) {
-      g.devicePixelRatio = 1;
+      g.devicePixelRatio = dprGet();
     }
   }
   g.__agbSafe = function (fn, label) {

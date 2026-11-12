@@ -679,6 +679,46 @@ static void layoutTab(int index)
                            content.w, content.h);
 }
 
+/* Windows DPI as "percent of 96" - the engine's device pixels per CSS pixel.
+ * Rounded, not truncated: 120 DPI is 125%, 144 is 150%. */
+static int deviceScalePercent(unsigned dpi)
+{
+    if (dpi < 48)
+        dpi = 96;
+
+    return (int)((dpi * 100u + 48u) / 96u);
+}
+
+/* The page half of the window's DPI, pushed to every tab of the active window.
+ * A GUI window has always scaled its own chrome; until this existed the page
+ * stayed at 1 CSS px = 1 device px, so at 150% the toolbar was 1.5x and the
+ * page 0.67x, and window.devicePixelRatio lied (1). The engine multiplies this
+ * with the user zoom, so Ctrl+= stays a zoom (see
+ * docs/design-hidpi.md). Called on tab create and on every DPI change. */
+static void syncTabsDeviceScale(void)
+{
+    int percent;
+    int i;
+
+    if (!g_cur)
+        return;
+
+    percent = deviceScalePercent(g_cur->chrome.theme.dpi);
+
+    /* Once per call, not per tab: "why is this page 1.25x" is otherwise
+     * invisible in the log (the engine has no line for it either). */
+    if (percent != 100)
+        agbLog(AGB_LOG_SHELL, "page device scale %d%% (window dpi %u)",
+               percent, g_cur->chrome.theme.dpi);
+
+    for (i = 0; i < MAX_TABS; ++i) {
+        Tab* tab = &g_tabs[i];
+
+        if (tab->used && tab->view && tab->window == g_cur)
+            agave_webview_set_device_scale(tab->view, percent);
+    }
+}
+
 /* Move a child only when it actually has to move. MoveWindow(..., TRUE) repaints
  * the control every time, and the toolbar is laid out on every WM_SIZE - a load
  * that makes the scrollbar appear/disappear fires those repeatedly, which is why
@@ -2535,7 +2575,13 @@ static void createTab(const char* url)
     strncpy(tab->url, url, MAX_PATH_CHARS - 1);
     ShowWindow(tab->hwnd, SW_HIDE);
 
-    agbLog(AGB_LOG_SHELL, "tab create index=%d url=%s", index, tab->url);
+    /* The page sees the window's DPI from its first layout on, not from the
+     * next WM_DPICHANGED: a tab opened on a 150% monitor must not render at
+     * 100% until the window happens to change monitors. */
+    agave_webview_set_device_scale(tab->view, deviceScalePercent(CHROME->theme.dpi));
+
+    agbLog(AGB_LOG_SHELL, "tab create index=%d dpi=%d%% url=%s", index,
+           deviceScalePercent(CHROME->theme.dpi), tab->url);
 
     /* The GUI saves where a user expects to find downloads; the probe keeps the
      * engine default (<AGB_USERDATA>/downloads) so tests never touch this. */
@@ -3802,6 +3848,10 @@ static LRESULT CALLBACK shellProcInner(HWND hwnd, UINT message, WPARAM wParam, L
 
         uiChromeSetDpi(CHROME, dpi);
         applyEditFonts();
+        /* The page half: chrome metrics just scaled, and every tab of this
+         * window renders its page at the new device scale (text is laid out and
+         * rasterized larger, not stretched). */
+        syncTabsDeviceScale();
 
         if (suggested) {
             SetWindowPos(hwnd, NULL, suggested->left, suggested->top,
@@ -4315,6 +4365,7 @@ static int  g_probeResizeH;
 static int  g_probeResizeDone;    /* the probe window was resized already      */
 static int  g_probeZoom;          /* --zoom <percent>: page zoom before --eval  */
 static int  g_probeZoomDone;
+static int  g_probeDeviceScale;   /* --device-scale <percent>: display DPI/96   */
 
 /* The script --eval/--eval-file asked for: the heap copy when the script came
  * from a file, otherwise the inline buffer. */
@@ -4543,15 +4594,16 @@ static int probeWriteBmp(const char* path, const unsigned char* bits,
     return ok;
 }
 
-/* CSS px -> client (device) px at the probe's zoom, rounding half away from
- * zero. The mirror buffer is device px, while getBoundingClientRect() - the
- * thing a --shot-rect value comes from - is CSS px: at --zoom 125 a 100px box
- * covers 125 mirror pixels. */
-static int probeRectCssToClient(int value, int zoomPercent)
+/* CSS px -> client (device) px at the probe's zoom and device scale, rounding
+ * half away from zero. The mirror buffer is device px, while
+ * getBoundingClientRect() - the thing a --shot-rect value comes from - is CSS
+ * px: at --zoom 125 a 100px box covers 125 mirror pixels, and on a 150% display
+ * (device scale 150) it covers 187.5. */
+static int probeRectCssToClient(int value, int zoomPercent, int deviceScalePercent)
 {
-    long v = (long)value * zoomPercent;
+    long v = (long)value * zoomPercent * deviceScalePercent;
 
-    return (int)((v >= 0 ? v + 50 : v - 50) / 100);
+    return (int)((v >= 0 ? v + 5000 : v - 5000) / 10000);
 }
 
 static int probeCapture(const char* path)
@@ -4589,10 +4641,11 @@ static int probeCapture(const char* path)
     rh = h;
     if (g_probeShotRectSet) {
         int zoom = g_probeZoom > 0 ? g_probeZoom : 100;
-        int x0 = probeRectCssToClient(g_probeShotRect[0], zoom);
-        int y0 = probeRectCssToClient(g_probeShotRect[1], zoom);
-        int x1 = probeRectCssToClient(g_probeShotRect[0] + g_probeShotRect[2], zoom);
-        int y1 = probeRectCssToClient(g_probeShotRect[1] + g_probeShotRect[3], zoom);
+        int deviceScale = g_probeDeviceScale > 0 ? g_probeDeviceScale : 100;
+        int x0 = probeRectCssToClient(g_probeShotRect[0], zoom, deviceScale);
+        int y0 = probeRectCssToClient(g_probeShotRect[1], zoom, deviceScale);
+        int x1 = probeRectCssToClient(g_probeShotRect[0] + g_probeShotRect[2], zoom, deviceScale);
+        int y1 = probeRectCssToClient(g_probeShotRect[1] + g_probeShotRect[3], zoom, deviceScale);
 
         rx = x0;
         ry = y0;
@@ -4603,10 +4656,14 @@ static int probeCapture(const char* path)
         if (ry < 0) { rh += ry; ry = 0; }
 
         if (rx >= w || ry >= h || rw <= 0 || rh <= 0) {
+            int total = zoom * deviceScale / 100;
+
+            if (total < 1)
+                total = 1;
             agbLog(AGB_LOG_PROBE, "shot: rect %d,%d,%d,%d (css px) is outside the %dx%d view",
                    g_probeShotRect[0], g_probeShotRect[1],
                    g_probeShotRect[2], g_probeShotRect[3],
-                   (w * 100 + zoom / 2) / zoom, (h * 100 + zoom / 2) / zoom);
+                   (w * 100 + total / 2) / total, (h * 100 + total / 2) / total);
             return 0;
         }
         if (rx + rw > w) rw = w - rx;
@@ -5328,6 +5385,12 @@ static int probeRun(const char* url)
         return PROBE_EXIT_USAGE;
     }
 
+    /* --device-scale: a headless run has no monitor to ask, so the DPI the GUI
+     * would push through WM_DPICHANGED comes from the command line. Queued
+     * before the navigation, so the first layout already has it. */
+    if (g_probeDeviceScale > 100)
+        agave_webview_set_device_scale(g_probeView, g_probeDeviceScale);
+
     /* AGB_PROBE_SHOW=1 shows the window; debugging aid for load paths that
      * behave differently when the control is never visible. A hidden window
      * gets no WM_PAINT, so this is also what pixel checks need. */
@@ -6017,6 +6080,11 @@ static void probeUsage(void)
             "            after the page settled, then wait 400ms so the engine can\n"
             "            relayout before --eval reads the new viewport\n"
             "  --zoom <percent>  page zoom before --eval (10..500, default 100)\n"
+            "  --device-scale <percent>  display DPI for the page, as device pixels\n"
+            "            per CSS px in percent of 96 DPI (100..500, default 100).\n"
+            "            A GUI window passes its own DPI automatically; this is how\n"
+            "            a headless run exercises 125%%/150%%/200%% displays. It\n"
+            "            multiplies with --zoom (both feed window.devicePixelRatio)\n"
             "  --reload <n>  reload the page n times and run the eval after\n"
             "                every round (page lifecycle comparison)\n"
             "  --offline module fetches are served from the cache only\n"
@@ -7658,6 +7726,18 @@ static void parseShellArgv(void)
                 g_argError = 1;
                 return;
             }
+        } else if (!strcmp(argv[i], "--device-scale") && i + 1 < argc) {
+            /* Display DPI for a headless run: the GUI gets it from
+             * WM_DPICHANGED/GetDpiForWindow, a probe has no monitor to ask. */
+            int percent = atoi(argv[++i]);
+
+            if (percent >= 100 && percent <= 500)
+                g_probeDeviceScale = percent;
+            else {
+                fprintf(stderr, "[shell] --device-scale wants 100..500 (percent), got %s\n", argv[i]);
+                g_argError = 1;
+                return;
+            }
         } else if (!strcmp(argv[i], "--wait") && i + 1 < argc) {
             g_probeWaitMs = atoi(argv[++i]);
             g_probeWaitGiven = 1;
@@ -8339,6 +8419,9 @@ static ShellWindow* createShellWindow(const char* title)
     g_cur = win;
     applyEditFonts();
     applyWindowFrame(win);
+    /* A tab may already exist (WM_CREATE opens the first one) and was scaled
+     * with the pre-window system DPI; give it this window's real DPI. */
+    syncTabsDeviceScale();
 
     /* A first layout before any tab: the toolbar/address EMPTY state is what a
      * handoff-created window shows for a few milliseconds. */
@@ -8892,10 +8975,11 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR commandLine, 
     /* One line that answers "what was I started with": the options that succeed
      * used to leave no trace at all, so a probe run at --zoom 150 or a GUI run
      * with --userdata looked identical to a default start. */
-    agbLog(AGB_LOG_SHELL, "argv url=%s probe=%d zoom=%d resize=%dx%d offline=%d eval=%d bytes keys=%d",
+    agbLog(AGB_LOG_SHELL, "argv url=%s probe=%d zoom=%d device-scale=%d resize=%dx%d offline=%d eval=%d bytes keys=%d",
            g_startupUrl[0] ? g_startupUrl : "(none)",
            g_probeMode,
            g_probeZoom,
+           g_probeDeviceScale,
            g_probeResizeW, g_probeResizeH,
            getenv("AGB_OFFLINE") != NULL,
            (int)strlen(g_probeScript),

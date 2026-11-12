@@ -134,6 +134,23 @@
 - 残留：百度仍没设置 `data-normal-placeholder`（框内暂无占位文案，数据路径另查）；多层
   `background-position/size/repeat` 的 computed 仍只报第一层；`inset: 0` 仍无属性 id（见 capability-gaps）。
 
+### P0-q 高 DPI：页面按 devicePixelRatio 渲染，页面缩放与 DPI 拆分（2026-11-12 已修，R194）
+
+- 现象：系统 150% 缩放下壳 chrome 是 1.5 倍、页面内容只有应得尺寸的 2/3；`window.devicePixelRatio`
+  读到 1，`@media (-webkit-min-device-pixel-ratio: 2)` 永不命中，`dpr>=2` 的 polyfill / srcset 2x 全走 1x。
+- 根因：`ChromeClientMC::scaleFactor()` 是 `notImplemented()` 桩（`DOMWindow::devicePixelRatio()`、
+  `-webkit-device-pixel-ratio`、canvas backing store 都读它），页面侧完全没有 DPI；缩放与 DPI 还挤在
+  同一个 `pageZoomFactor()` 里，一改就互相覆盖。
+- 设计：[design-hidpi.md](design-hidpi.md)（`pageZoomFactor = 用户缩放 × DPI/96`，布局 px = 设备 px，
+  不做绘制变换）。
+- **已完成**：`Frame::deviceScaleFactor()` + `macross_view_set_device_scale_factor` + 控件/协议/render_host
+  打通；GUI 跟 `WM_DPICHANGED`，无头 `--device-scale`；`window.devicePixelRatio` 走
+  `__agbDevicePixelRatio`；`getBoundingClientRect` 与 `@media width/height` 回到 CSS px；缩放/DPI
+  变化重新解析媒体查询；`--shot-rect` 换算含 dpr。验收：`run_hidpi_tests.ps1` 5/5、全量 25 套
+  `ALL SUITES PASSED`。
+- 残留：`screen.width/height` 与 `device-width/device-height` 仍是设备像素；`Range.getBoundingClientRect()`/
+  `getClientRects()` 仍返回布局 px；`srcset` 的 `x` 描述符选源未实现（dpr 正确后才谈得上选对源）。
+
 ### P0-p 输入框半透明阴影每输入一次变黑（2026-11-12 已修，R191）
 
 - 现象：百度搜索框后面的 `box-shadow` 随每次输入变深（最后接近黑色），刷新/全屏重绘恢复。

@@ -17,7 +17,7 @@
 ### 全部跑一遍
 
 ```powershell
-pwsh -File tools/run_all_tests.ps1                          # 24 个离线套件，默认全并行 ≈30 s，退出码 0 = 全绿
+pwsh -File tools/run_all_tests.ps1                          # 25 个离线套件，默认全并行 ≈30 s，退出码 0 = 全绿
 pwsh -File tools/run_all_tests.ps1 -Sequential              # 套件一个一个跑（≈2 min，调试输出用）
 pwsh -File tools/run_all_tests.ps1 -Parallel 8              # 套件间并发度（1..32，缺省=逻辑核数）
 pwsh -File tools/run_all_tests.ps1 -Only process            # 名字含 process 的
@@ -26,7 +26,7 @@ pwsh -File tools/run_all_tests.ps1 -IncludeNetwork -IncludeReal   # 加上真站
 pwsh -File tools/run_all_tests.ps1 -KeepLogs                # 保留每个套件的 stdout/stderr
 ```
 
-默认**全并行**（`-Parallel` 缺省 = 本机逻辑核数，上限 16）：24 个套件同时起，每个套件是独立的
+默认**全并行**（`-Parallel` 缺省 = 本机逻辑核数，上限 16）：25 个套件同时起，每个套件是独立的
 
 > ⚠ **16 路并发下的时序抖动**（2026-11-10 实测）：`run_window_tests`（process 命名 target）、
 > `run_process_backend_tests`（early-eval-after-load-html）、`run_hidden_view_tests`、`run_image_tests` 偶尔各失败 1 条，
@@ -65,7 +65,7 @@ pwsh -File tools/run_all_tests.ps1 -KeepLogs                # 保留每个套件
 套件内的 HTTP/py 服务默认绑随机空闲端口（`-Port` 仍可指定），并发的批跑不再抢 8971/8973/8991…。
 
 > ✅ **2026-11-10**：旧的四个“串行套件”冲突已经全部用隔离消掉，默认整批从 ~250 s 降到
-> **~23–28 s**（20 套件，16 核本机，3 次连跑 23.2/25.9/27.8 s）。`-Sequential` 仍保留（套件一个
+> **~23–28 s**（25 套件，16 核本机，3 次连跑 23.2/25.9/27.8 s）。`-Sequential` 仍保留（套件一个
 > 一个跑，便于看单套件输出），`-Parallel 1` 只影响套件间并发。
 
 **软基线**（2026-11-10 实测，16 核本机；**不是断言**；下表是**单个套件单独跑**的墙钟，
@@ -84,8 +84,9 @@ pwsh -File tools/run_all_tests.ps1 -KeepLogs                # 保留每个套件
 | `run_sticky_tests` | 3.5 s | `run_encoding_tests` | 5 s |
 | `run_selection_tests` | 8 s | `run_binding_semantics_tests` | 3 s |
 | `run_shadow_tests` | 2 s | `run_webp_tests` | 2 s |
+| `run_hidpi_tests` | 3 s | | |
 | `run_singleton_tests` | 2 s | | |
-| **23 套件整批（默认并行）** | **~25 s** | **`-Sequential`（套件逐个）** | **~2 min** |
+| **25 套件整批（默认并行）** | **~25 s** | **`-Sequential`（套件逐个）** | **~2 min** |
 
 规则（软基线，靠人/Agent 判断，不做程序化对比）：集中跑时除了看 PASS，还看每套件秒数——
 **单套件比基线慢 30 s 以上、或整批慢于 ~45 s 就在对话里提示**（AGENTS rule 9），顺带查一下是
@@ -126,6 +127,7 @@ pwsh -File tools/run_all_tests.ps1 -KeepLogs                # 保留每个套件
 | `run_shell_ui_tests.ps1` | shell chrome 的无头离屏渲染（`design-shell-ui.md`）：亮色 / 暗色 / 150% DPI / 暗色+自绘菜单 / 暗色+焦点胶囊五份 PNG；`--ui-shot` 自报 34–61 项断言——标签/关闭/`+`/后退/菜单/地址胶囊/查找按钮/**窗口 min-max-close** 命中、DOWN+UP 回调（`ID_BACK`/切换/关闭/新标签/最大化/关闭窗口）、hover、按钮/标签/内容区几何不重叠、亮暗与 DPI 的像素/度量（tabstrip 40/60、toolbar 44/66、活动标签 surface、状态栏 surface_alt）、**暗色层次**（strip < toolbar、胶囊 < toolbar、hover > 活动标签、焦点环 `#A8C7FA`）、**自绘菜单**（`--ui-menu`：锚定/宽度、子菜单翻转、行/分隔行命中、方向键跳过禁用/分隔行、Right/Left 进出子菜单、点选/点外取消、hover/背景像素、圆形工具栏 hover）、**焦点环**（`--ui-focus`：胶囊填充 + 环像素）；**窗口框架的 NC 点击**不在离屏测试里（需真实 HWND，用 `AGB_SHELL_HIDDEN=1` 手工发 `WM_NCHITTEST`/`WM_NCLBUTTONDOWN`/`WM_LBUTTONUP` 验证；菜单宿主的真实 HWND 路径同理用 `tools/check_shell_menu.ps1`） | 无（不建窗口/引擎/profile；子进程 `AGB_SHELL_OPS=mock`） | `ALL SHELL UI CHECKS PASSED`；每份约 1.2–1.5 s，五份并行 ≈1.5 s |
 | `run_hidden_view_tests.ps1` | 隐藏 view（后台 tab / 最小化窗口）跳过布局与绘制（R150）：`--hide-after` 后定时器继续跑、`document.hidden`/`visibilitychange` 正确、`AGB_LOOP_DEBUG` 的 `[loop] paints=/skips=` 证明 paint 冻结而 skip 增长；无隐藏的对照跑 paint 持续增长；`--hide-after`+`--show-after`+`--shot` 证明回到可见后首帧整幅重绘（隐藏期间改色的方块在截图里必须是新色） | 无（`tools/pages/cap_hidden_view.html`） | `ALL HIDDEN VIEW CHECKS PASSED` |
 | `run_sticky_tests.ps1` | `position:sticky`：视口/内层滚动容器/containing block 边界、命中跟随（R82），几何 + 像素 | 无（期望值来自 Chrome） | `STICKY=PASS` |
+| `run_hidpi_tests.ps1` | **显示 DPI**（`design-hidpi.md`，R194）：`--device-scale 150` 下 `window.devicePixelRatio`=1.5、`innerWidth` 734（1100/1.5）、CSS 矩形仍是 100x100（DOM 报 CSS px）、`-webkit-min-device-pixel-ratio` 的**样式表规则**与 `matchMedia` 一致；`--zoom 200 --device-scale 150` 时两者相乘（dpr 3、dpr>=2 规则生效），证明缩放与 DPI 互不覆盖；`--shot` 断言同一张图里 100 CSS px 的方块占 **150 设备像素**、CSS `left:200px` 从设备 300 开始（是按 DPI 布局而不是整数倍拉伸）；`--shot-rect 200,0,120,60` 产出 180x90 裁图（CSS→设备换算含 dpr）；多一个 `--backend process` 用例证明命令跨控件/渲染进程边界 | 无（`tools/pages/hidpi/hidpi_probe.html`） | `ALL HIDPI CHECKS PASSED`；6 例并行约 3 s |
 | `run_image_tests.ps1` | 图片解码（R136–R140）：切片解码与一次性解码**逐字节同像素**（JPEG + PNG）、**工作线程解出的帧与内联帧逐字节一致**且 paint 里不再解码、大图不再单帧停摆（paint 上限 / rAF gap）、L3 缩放解码的加速比、**拆文档时进行中的解码不崩且队列排空**、**零字节图片资源（204 / `Content-Length: 0` / 截断头）只算坏图不崩、且不会每帧重解**、`AGB_IMG_DECODE_MS=0`/`AGB_IMG_NO_SCALE`/`AGB_IMG_SAMPLE_MAX` 开关有效 | 无（脚本自己用 System.Drawing 生成 4000×3000 JPEG / 3000×2000 PNG 到 `build-zig-native/img_test`；零字节那组自起 `tools/empty_image_server.py`，随机空闲端口） | `IMAGE=PASS` |
 | `run_media_tests.ps1` | 媒体元素 API/几何/传输（play → timeupdate → ended）；有 ffmpeg 走真解码，没有则内部 ticker | 无（ffmpeg 可选） | `MEDIA=PASS` |
 | `run_media_real_tests.ps1` | 真解码回放：`currentTime` 走墙钟、暂停/续播、seek、`ended`、画面与 ffmpeg 同位置解码一致 | ffmpeg（缺失则跳过像素项）、网络（远程样片；`-SkipRemote` 可关） | `MEDIA-REAL=PASS (n skipped)` |
@@ -168,6 +170,7 @@ DIB 重建 + 页面在 1x1 上重排各一次）。
 | 改 ant 内核或桥 | 先 `pwsh -File tools/build_antjsb.ps1`，再上面相关组 + **在 ant 仓库 `H:\ant-v16` 补测试并提交**（铁律 2） |
 | 宿主壳 / 启动流程 / 单实例 / 多窗口 / `--userdata` 语义 | `run_singleton_tests`、`run_window_tests`、`run_process_backend_tests`（launcher 用例） |
 | shell chrome / 工具栏 / 标签条 / 主题 / DPI / 自绘菜单 / `--ui-shot` | `run_shell_ui_tests`（无头离屏；菜单宿主与真实窗口的 EDIT 输入另见 `check_shell_menu.ps1` / 手工 GUI） |
+| 页面 DPI / `devicePixelRatio` / 页面缩放 / `@media` 断点 / `--shot-rect` 换算 | `run_hidpi_tests`、`run_layout_tests`（geometry + zoom 组） |
 
 ## 3. 依赖与坑
 

@@ -209,5 +209,5 @@ H:\ant-v16\build-zig\ant.exe                # REPL
   依赖像素的回归组会报 "probe failed"。所有截图/scratch 都放构建目录
   （`run_media_tests.ps1` / `run_layout_tests.ps1` 已按此约定）。
   格式只认 `.png` / `.bmp`（其它扩展名会明确报错，不再默默写错格式）；`--shot-rect x,y,w,h`
-  直接裁图，坐标是 CSS 像素（`getBoundingClientRect()` 的那套，输出按 `--zoom` 变大）。
+  直接裁图，坐标是 CSS 像素（`getBoundingClientRect()` 的那套，输出按 `--zoom × --device-scale` 变大）。
 - **构建日志别直接进上下文**（几千行）：`*> build.log` 然后 `grep`（脚本自身不落盘，落盘靠调用者重定向）。

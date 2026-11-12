@@ -569,16 +569,22 @@ PassRefPtr<CSSRuleList> DOMWindow::getMatchedCSSRules(Element* elt, const String
     return doc->styleSelector()->styleRulesForElement(elt, authorOnly);
 }
 
+/* window.devicePixelRatio: device pixels per CSS pixel, i.e. page zoom times
+ * the display's DPI/96 (Frame::pageZoomFactor). A document torn down mid-script
+ * has no page left to ask, and a 0 there would make every `dpr >= 2` feature
+ * probe take the "no retina" branch; browsers report 1 in that situation. */
 double DOMWindow::devicePixelRatio() const
 {
     if (!m_frame)
-        return 0.0;
+        return 1.0;
 
     Page* page = m_frame->page();
     if (!page)
-        return 0.0;
+        return 1.0;
 
-    return page->chrome()->scaleFactor();
+    float scale = page->chrome()->scaleFactor();
+
+    return scale > 0.0f ? scale : 1.0;
 }
 
 } // namespace WebCore

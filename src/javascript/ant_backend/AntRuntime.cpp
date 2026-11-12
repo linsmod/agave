@@ -1492,6 +1492,7 @@ int globalCEGetName(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*
 int globalCEDefine(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalCEUpgrade(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalViewportSize(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
+int globalDevicePixelRatio(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalInputValue(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int globalActivateSlot(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
 int imageConstructor(AntbEngine*, AntbValue*, AntbValue**, int, AntbValue*, void*);
@@ -6730,6 +6731,9 @@ static void installGlobalApi(AntbEngine* engine, AntbValue* global)
         antb_set_construct_hook(g_engine, g_constructHookFn);
         antb_define_method(g_engine, global, "__agbViewportWidth", globalViewportSize, (void*)0);
         antb_define_method(g_engine, global, "__agbViewportHeight", globalViewportSize, (void*)1);
+        /* window.devicePixelRatio (prelude getter): the display DPI and zoom the
+         * page is being laid out at, shared with the CSS side. */
+        antb_define_method(g_engine, global, "__agbDevicePixelRatio", globalDevicePixelRatio, NULL);
         /* Direct value access for the prototype-level value accessor (React tracker). */
         antb_define_method(g_engine, global, "__agbInputValue", globalInputValue, NULL);
 
@@ -15009,6 +15013,19 @@ int nodeGetBoundingClientRect(AntbEngine* engine, AntbValue* self, AntbValue**, 
         if (WebCore::Document* doc = n->document())
             if (WebCore::FrameView* v = doc->view())
                 rect.move(-v->contentsX(), -v->contentsY());
+
+        /* Layout px are device px here (the root style zoom is page zoom * the
+         * display's device scale), but the DOM reports CSS px - that is what
+         * Chrome does and what every polyfill measures against. Without this
+         * division a 100px box measured 150 on a 150% display while offsetWidth
+         * and innerWidth had already shrunk, so anything that mixed the two
+         * (inspector anchors, drag offsets, sticky math) was off by the DPI. */
+        if (WebCore::RenderObject* renderer = n->renderer())
+            if (renderer->style()->effectiveZoom() != 1.0f)
+                rect = WebCore::IntRect(WebCore::adjustForAbsoluteZoom(rect.x(), renderer),
+                                        WebCore::adjustForAbsoluteZoom(rect.y(), renderer),
+                                        WebCore::adjustForAbsoluteZoom(rect.width(), renderer),
+                                        WebCore::adjustForAbsoluteZoom(rect.height(), renderer));
     }
 
     {
@@ -15878,6 +15895,37 @@ int globalViewportSize(AntbEngine* engine, AntbValue*, AntbValue** args, int arg
     }
 
     antb_value_assign(out, antb_make_number(engine, (double)value));
+    return 1;
+}
+
+/* __agbDevicePixelRatio(): device pixels per CSS pixel for this document's page
+ * (page zoom * display DPI/96). The prelude installs the window getter on top of
+ * it, because the window binding does not put devicePixelRatio on the global.
+ * Read from Chrome::scaleFactor() - the same value the CSS
+ * -webkit-device-pixel-ratio media feature and the canvas backing store use - so
+ * JS and CSS cannot disagree, and the document argument makes an iframe answer
+ * for its own page. */
+int globalDevicePixelRatio(AntbEngine* engine, AntbValue*, AntbValue** args, int argc,
+                           AntbValue* out, void*)
+{
+    double ratio = 1.0;
+    WebCore::Document* d = g_document;
+
+    if (argc > 0 && args[0]) {
+        WebCore::Node* node = nodeOf(args[0]);
+
+        if (node && node->document())
+            d = node->document();
+    }
+
+    if (d && d->frame() && d->frame()->page()) {
+        float scale = d->frame()->page()->chrome()->scaleFactor();
+
+        if (scale > 0.0f)
+            ratio = (double)scale;
+    }
+
+    antb_value_assign(out, antb_make_number(engine, ratio));
     return 1;
 }
 

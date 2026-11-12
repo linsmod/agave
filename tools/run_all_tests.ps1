@@ -90,6 +90,7 @@ $suites = @(
     'run_worker_tests',
     'run_image_tests',
     'run_layout_tests',
+    'run_hidpi_tests',
     'run_selection_tests',
     'run_media_tests'
 )

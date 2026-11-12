@@ -475,6 +475,27 @@ MC_STATUS macross_view_get_scale_factor(MaCrossView* view, int* scale)
 	return MC_STATUS_SUCCESS;
 }
 
+/* Display DPI: device pixels per CSS pixel, in percent of 96 DPI. Kept apart
+ * from the page zoom above so a monitor change and Ctrl+= cannot overwrite each
+ * other; the engine multiplies them (Frame::pageZoomFactor). */
+MC_STATUS macross_view_set_device_scale_factor(MaCrossView* view, int scale)
+{
+	if (!view)
+		return MC_STATUS_FAILED;
+
+	view->view->setDeviceScaleFactor(scale);
+	return MC_STATUS_SUCCESS;
+}
+
+MC_STATUS macross_view_get_device_scale_factor(MaCrossView* view, int* scale)
+{
+	if (!view || !scale)
+		return MC_STATUS_FAILED;
+
+	*scale = view->view->deviceScaleFactor();
+	return MC_STATUS_SUCCESS;
+}
+
 MC_STATUS macross_view_set_view_source(MaCrossView* view, MC_BOOL enable)
 {
 	if (!view)

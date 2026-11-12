@@ -40,9 +40,15 @@ typedef enum {
     AGW_VIEW_CMD_CONTEXT_MENU,  /* a = modifier, c = x, d = y */
     AGW_VIEW_CMD_SERVICE_REPLY, /* a = id, b = status, text = payload (B4) */
     AGW_VIEW_CMD_EDITOR,        /* text = Editor::execCommand name, e.g. "Copy" */
-    AGW_VIEW_CMD_FRAME          /* layout+paint+publish one frame even while the
+    AGW_VIEW_CMD_FRAME,         /* layout+paint+publish one frame even while the
                                  * view is hidden (cold tab switch: the host wants
                                  * a frame before it shows the view) */
+    AGW_VIEW_CMD_DEVICE_SCALE   /* a = device pixels per CSS pixel, percent of
+                                 * 96 DPI (150 = 150% display). Multiplies with
+                                 * ZOOM; a view that never receives it stays at
+                                 * 100, so the two cannot overwrite each other.
+                                 * Appended last on purpose: the older commands
+                                 * keep their wire values. */
 } AgwViewCommandKind;
 
 typedef struct {

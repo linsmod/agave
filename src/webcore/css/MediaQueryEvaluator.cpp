@@ -48,6 +48,7 @@
 #include "MediaQuery.h"
 #include "MediaQueryExp.h"
 #include "Page.h"
+#include "RenderObject.h"
 #include "RenderStyle.h"
 #include "PlatformScreen.h"
 #include <wtf/HashMap.h>
@@ -337,12 +338,28 @@ static bool device_widthMediaFeatureEval(CSSValue* value, RenderStyle* style, Pa
     return true;
 }
 
+/* @media width/height are CSS px. The viewport is measured in device px, and the
+ * page scale (user zoom * display DPI/96) turns one into the other - the same
+ * conversion window.innerWidth uses (see __agbViewportWidth in AntRuntime.cpp).
+ * Comparing device px against CSS-px breakpoints reported 1100 instead of 734 on
+ * a 150% display, so a "mobile" breakpoint never matched on a high-DPI screen. */
+static int viewportLengthInCssPx(int value, Page* page)
+{
+    Frame* frame = page ? page->mainFrame() : 0;
+    Document* doc = frame ? frame->document() : 0;
+
+    if (doc && doc->renderer())
+        return adjustForAbsoluteZoom(value, doc->renderer());
+
+    return value;
+}
+
 static bool heightMediaFeatureEval(CSSValue* value, RenderStyle* style, Page* page,  MediaFeaturePrefix op)
 {
     FrameView* view = page->mainFrame()->view();
     
     if (value)
-        return value->isPrimitiveValue() && cmpvalue(view->visibleHeight(), static_cast<CSSPrimitiveValue*>(value)->computeLengthInt(style), op);
+        return value->isPrimitiveValue() && cmpvalue(viewportLengthInCssPx(view->visibleHeight(), page), static_cast<CSSPrimitiveValue*>(value)->computeLengthInt(style), op);
 
     return view->visibleHeight() != 0;
 }
@@ -352,7 +369,7 @@ static bool widthMediaFeatureEval(CSSValue* value, RenderStyle* style, Page* pag
     FrameView* view = page->mainFrame()->view();
     
     if (value)
-        return value->isPrimitiveValue() && cmpvalue(view->visibleWidth(), static_cast<CSSPrimitiveValue*>(value)->computeLengthInt(style), op);
+        return value->isPrimitiveValue() && cmpvalue(viewportLengthInCssPx(view->visibleWidth(), page), static_cast<CSSPrimitiveValue*>(value)->computeLengthInt(style), op);
 
     return view->visibleWidth() != 0;
 }

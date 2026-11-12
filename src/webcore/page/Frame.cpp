@@ -722,7 +722,50 @@ int Frame::zoomFactor() const
 
 float Frame::pageZoomFactor() const
 {
-  return d->m_pageFactor;
+  return d->m_pageFactor * d->m_deviceScale;
+}
+
+float Frame::deviceScaleFactor() const
+{
+  return d->m_deviceScale;
+}
+
+/* The device scale is the display's DPI/96. It is applied exactly like page
+ * zoom - the root style zoom becomes pageZoomFactor() = zoom * deviceScale, so
+ * layout runs in device pixels and a 16px CSS font is laid out (and therefore
+ * rasterized) at 24px on a 150% monitor instead of being scaled up as a bitmap
+ * after the fact. Everything that turns layout px back into CSS px divides by
+ * pageZoomFactor() and so picks the device half up for free: innerWidth,
+ * clientX/pageX, elementFromPoint, the DOM API coordinates.
+ *
+ * That also means the paint path needs no transform: hit testing, damage
+ * rects, scrollbars and the host's mirror buffer already live in the one
+ * coordinate space, which is what keeps a device scale change from rippling
+ * through the shell. */
+bool Frame::setDeviceScaleFactor(float scale)
+{
+    if (scale <= 0.0f)
+        scale = 1.0f;
+    if (d->m_deviceScale == scale)
+        return false;
+
+    d->m_deviceScale = scale;
+
+    if (d->m_doc) {
+        /* A DPI change moves the CSS viewport (@media width/height are CSS px)
+         * and -webkit-device-pixel-ratio, so the selector has to be re-resolved,
+         * not just the render tree restyled. */
+        d->m_doc->viewportSizeChanged();
+        d->m_doc->recalcStyle(Node::Force);
+    }
+
+    for (Frame* child = tree()->firstChild(); child; child = child->tree()->nextSibling())
+        child->setDeviceScaleFactor(d->m_deviceScale);
+
+    if (d->m_doc && d->m_doc->renderer() && d->m_doc->renderer()->needsLayout())
+        view()->layout();
+
+    return true;
 }
 
 bool Frame::setPageZoomFactor(float scale)
@@ -741,8 +784,14 @@ bool Frame::setPageZoomFactor(float scale)
     }
 #endif
 	d->m_pageFactor = scale;
-	if (d->m_doc)
+	if (d->m_doc) {
+		/* Page zoom also moves the CSS viewport: @media width/height and the vw/vh
+		 * variables are resolved from it, so the selector has to be re-resolved
+		 * (recalcStyle alone keeps the previous breakpoints - the -webkit-
+		 * device-pixel-ratio rules kept their load-time answer after a zoom). */
+		d->m_doc->viewportSizeChanged();
 		d->m_doc->recalcStyle(Node::Force);
+	}
 
 	for (Frame* child = tree()->firstChild(); child; child = child->tree()->nextSibling())
 		child->setPageZoomFactor(d->m_pageFactor);
@@ -2087,6 +2136,7 @@ FramePrivate::FramePrivate(Page* page, Frame* parent, Frame* thisFrame, HTMLFram
     , m_jscript(0)
     , m_zoomFactor(parent ? parent->d->m_zoomFactor : 100)
 	, m_pageFactor(parent ? parent->d->m_pageFactor : 1.0f)
+    , m_deviceScale(parent ? parent->d->m_deviceScale : 1.0f)
     , m_selectionController(thisFrame)
     , m_caretBlinkTimer(thisFrame, &Frame::caretBlinkTimerFired)
     , m_editor(thisFrame)

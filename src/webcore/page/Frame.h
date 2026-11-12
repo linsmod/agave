@@ -225,7 +225,18 @@ public:
     int zoomFactor() const; // FIXME: This is a multiplier for text size only; needs a better name.
 
 	bool setPageZoomFactor(float scale);
+	/* Device pixels per CSS pixel: the user's page zoom times the display's
+	 * device scale factor (DPI/96). Layout works in device pixels, so this is
+	 * also the divisor that turns a layout rect into CSS px for the DOM
+	 * (innerWidth, clientX, elementFromPoint) and the multiplier the root
+	 * style zoom is set to (Document::setZoom). */
 	float pageZoomFactor() const;
+
+	/* The device half of pageZoomFactor(): 1.0 at 96 DPI, 1.5 at 150%. The
+	 * host sets it (macross_view_set_device_scale_factor); like page zoom it
+	 * scales layout and repaints every frame, but it is not the user's zoom. */
+	bool setDeviceScaleFactor(float scale);
+	float deviceScaleFactor() const;
 
     bool prohibitsScrolling() const;
     void setProhibitsScrolling(const bool);

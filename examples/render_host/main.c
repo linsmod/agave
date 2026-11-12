@@ -619,6 +619,11 @@ static int executeCommand(const AgwIpcCommand* cmd)
     case AGW_VIEW_CMD_ZOOM:
         macross_view_set_scale_factor(g_view, cmd->a > 0 ? cmd->a : 100);
         return 1;
+    case AGW_VIEW_CMD_DEVICE_SCALE:
+        /* Display DPI half of devicePixelRatio. Independent of the user zoom
+         * above; the engine multiplies them (Frame::pageZoomFactor). */
+        macross_view_set_device_scale_factor(g_view, cmd->a > 0 ? cmd->a : 100);
+        return 1;
     case AGW_VIEW_CMD_CONTEXT_MENU: {
         MC_CONTEXT_EVENT event;
 

@@ -38,10 +38,11 @@
 | [design-shell-singleton.md](design-shell-singleton.md) | **单实例 shell**（设计记录）：一个 profile 一个浏览器进程、第二次启动的命令接力协议（`--new-tab`/`--new-window`）、同进程多窗口模型、失败模式 | 改启动流程/多窗口/`--userdata` 语义、加第二个实例才发现的行为 |
 | [design-shell-ui.md](design-shell-ui.md) | **壳 UI 组件化 + 平台 ops**（设计记录）：`UiChrome/UiWidgets/UiTheme` 分层、自绘 `UiMenu`/`UiMenuHost`（Chrome 形状菜单、分层弹窗）、`shell_ops_t` OS 缝合口、亮暗/DPI 主题、无头 `--ui-shot` 验证 | 改工具栏/标签栏/主题/DPI、改菜单、加壳 UI 控件、把 OS 调用从 shell 里挪走 |
 | [design-css-background-layers.md](design-css-background-layers.md) | **CSS 多背景层 + 逐层渐变**（设计记录）：渐变从 `RenderStyle` 单值迁到 `BackgroundLayer`、`background` 简写 `<box>` 语义、圆角渐变填充、box-shadow spread、textarea 占位符；只做百度输入框可用的标准子集 | 改背景绘制 / 渐变 / box-shadow / 控件占位符 |
+| [design-hidpi.md](design-hidpi.md) | **显示 DPI：页面按 devicePixelRatio 渲染**（设计记录）：`pageZoomFactor = pageZoom × deviceScale`、布局 px = 设备 px、为什么不加绘制变换、各层改动、`--device-scale`、已知边界 | 改 DPI/缩放/`devicePixelRatio`/`@media` 断点/`--shot-rect` 换算 |
 | [dev-onboarding.md](dev-onboarding.md) | 代码在哪、**我要改 X 去哪**、症状→先查哪 | 第一次改代码，或换子系统 |
 | [dev-build-and-run.md](dev-build-and-run.md) | 工具链、构建路径、改什么重编什么、产物拓扑、环境坑 | 编不动 / 跑不起来 |
 | [dev-debugging.md](dev-debugging.md) | 无头探针、日志、环境变量全表、cdb、噪音对照、A/B、Chrome 对拍 | 页面不对、崩了、卡住、想查 Chrome 怎么算 |
-| [dev-tests.md](dev-tests.md) | **测试清单**：24 个 `run_*.ps1` 套件的覆盖/依赖/判据、改动→该跑哪些、加回归页的写法、fixture 在哪 | 改完代码要验证 / 想知道有没有现成测试 |
+| [dev-tests.md](dev-tests.md) | **测试清单**：25 个 `run_*.ps1` 套件的覆盖/依赖/判据、改动→该跑哪些、加回归页的写法、fixture 在哪 | 改完代码要验证 / 想知道有没有现成测试 |
 | [dev-conventions.md](dev-conventions.md) | 提交信息、回归页、文档更新、代码风格 | 提交前 |
 | [hist-lessons.md](hist-lessons.md) | R 系列经验库：现象 → 根因 → 修法 → 验证 | 遇到眼熟的 bug、想推翻旧结论 |
 | [plan-roadmap.md](plan-roadmap.md) | 待办与验收标准（P0/P1/P2） | 想知道"接下来做什么" |

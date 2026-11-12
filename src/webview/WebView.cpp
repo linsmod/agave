@@ -944,6 +944,33 @@ void WebView::setScaleFactor(int scale)
 		firstLayout();
 }
 
+int WebView::deviceScaleFactor(void)
+{
+	return (int)(d->m_frame->deviceScaleFactor()*100.0f + 0.5f);
+}
+
+/* A display DPI change. The buffer keeps its device-pixel size; what changes is
+ * how many CSS px fit in it (fewer at 150%) and how large a CSS font is
+ * rasterized. Repainting the whole surface is deliberate: every box and every
+ * glyph moves, and the host's mirror would otherwise keep the old scale in
+ * whatever area no invalidation happened to cover. */
+void WebView::setDeviceScaleFactor(int scale)
+{
+	if (scale < 10) scale = 10;
+	if (scale > 500) scale = 500;
+
+	if (d->m_frame->setDeviceScaleFactor((float)scale/100.0f)) {
+		d->m_frameView->resize(d->m_width, d->m_height);
+
+		/* Only when there is something to repaint: a view created at a high DPI
+		 * gets its scale before the first document exists, and a dirty rect then
+		 * made the first frame paint a tree that is not there yet
+		 * ("Frame::paint with nil renderer"). */
+		if (d->m_frame->document() && d->m_frame->document()->renderer())
+			updateRect(0, 0, d->m_width, d->m_height);
+	}
+}
+
 bool WebView::search(const char *str, bool forward, bool caseSens, bool wrap)
 {
     if (!d->m_frame->page() || !d->m_frame->page()->mainFrame())

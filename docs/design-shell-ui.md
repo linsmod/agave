@@ -77,7 +77,7 @@ UI 侧的具体症状：
 | `profile_root` | `AGB_USERDATA` → `%APPDATA%\AgaveShell` → `%LOCALAPPDATA%\AgaveShellData` → exe 旁 | 书签/历史/会话根 |
 | `downloads_dir` | `%USERPROFILE%\Downloads` | 下载面板落点 |
 | `system_is_dark` | `HKCU\…\Themes\Personalize\AppsUseLightTheme==0` | chrome 暗色主题 |
-| `dpi_for_window` | `GetDpiForWindow`（动态解析；回退 `GetDeviceCaps`） | 每窗口 DPI |
+| `dpi_for_window` | `GetDpiForWindow`（动态解析；回退 `GetDeviceCaps`） | 每窗口 DPI（chrome 度量 + **页面**的 device scale，后者见 [design-hidpi.md](design-hidpi.md)） |
 | `enable_dpi_awareness` | `SetProcessDpiAwarenessContext(PER_MONITOR_AWARE_V2)`（回退 `SetProcessDPIAware`） | 启动时一次性 |
 | `prepare_frame` | `DwmExtendFrameIntoClientArea`（1,1,1,1）+ `DWMWA_WINDOW_CORNER_PREFERENCE=ROUND` + `DWMWA_BORDER_COLOR=NONE`（后两个 Win11 22000+，动态）+ `DWMWA_TRANSITIONS_FORCEDISABLED=TRUE` | 保留阴影/缩放/Snap，让客户区盖满窗口、去掉白边；关掉最大/还原过渡以免动画中露出经典 frame |
 | `message_box` | `MessageBoxA` + flags 映射 | `alert/confirm` |

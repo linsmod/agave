@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<!-- Display DPI fixture (docs/design-hidpi.md). Every box is positioned in CSS
+     px; at device scale 150 the engine must lay each one out 1.5x further out in
+     device px, so a screenshot proves the page really renders at the DPI instead
+     of being stretched afterwards.
+
+     Colours are picked to be unambiguous under the pixel check:
+       #box     red    at CSS 0,0    100x100  -> device 0..150
+       #target  green  at CSS 200,0  120x60   -> device 300..480 (also the click
+                                                and --shot-rect subject)
+       #cnv     blue   at CSS 0,200  150x100  -> device 0..225, y 300..450
+       #half    blue   at CSS 0,400  50% wide -> device 0..550 at 150% -->
+<html>
+<head>
+<meta charset="utf-8">
+<title>hidpi</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #ffffff; }
+  #box    { position: absolute; left: 0;     top: 0;   width: 100px; height: 100px; background: #ff0000; }
+  #target { position: absolute; left: 200px; top: 0;   width: 120px; height: 60px;  background: #00c000; }
+  #cnv    { position: absolute; left: 0;     top: 200px; width: 150px; height: 100px; }
+  #half   { position: absolute; left: 0;     top: 400px; width: 50%; height: 20px;  background: #0000ff; }
+  #mq     { position: absolute; left: 0;     top: 460px; width: 40px; height: 10px; background: #111111; }
+  /* The CSS side of the same question the JS side asks: -webkit-device-pixel-ratio
+   * is evaluated in C++ (MediaQueryEvaluator) from Chrome::scaleFactor(), so this
+   * pair proves the stylesheet and window.devicePixelRatio agree.
+   *   dpr 1   -> #111111   1.5 -> rgb(1, 2, 3)   2+ -> rgb(4, 5, 6) */
+  @media (-webkit-min-device-pixel-ratio: 1.5) { #mq { background: rgb(1, 2, 3); } }
+  @media (-webkit-min-device-pixel-ratio: 2)   { #mq { background: rgb(4, 5, 6); } }
+</style>
+</head>
+<body>
+<div id="box"></div>
+<div id="target"></div>
+<canvas id="cnv" width="150" height="100"></canvas>
+<div id="half"></div>
+<div id="mq"></div>
+<script>
+  window.__clicks = 0;
+  document.getElementById('target').addEventListener('click', function () {
+    window.__clicks++;
+  });
+
+  /* A canvas backing store is created at CSS size * devicePixelRatio, with the
+   * context pre-scaled by the same factor: filling at 0,0 covers the element
+   * either way, so the assertion is that the fill actually happens (a broken
+   * scale would leave the canvas blank or mis-sized, not just soft). */
+  var ctx = document.getElementById('cnv').getContext('2d');
+  if (ctx) {
+    ctx.fillStyle = '#0000ff';
+    ctx.fillRect(0, 0, 150, 100);
+  }
+</script>
+</body>
+</html>

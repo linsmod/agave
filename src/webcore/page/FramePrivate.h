@@ -78,6 +78,10 @@ namespace WebCore {
 
         int m_zoomFactor;
 		float m_pageFactor;
+        /* Display device pixels per CSS pixel (DPI/96). Separate from
+         * m_pageFactor so a page zoom never changes devicePixelRatio's device
+         * half and a monitor change never changes the user's zoom. */
+        float m_deviceScale;
 
         TextGranularity m_selectionGranularity;
 
