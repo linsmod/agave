@@ -674,6 +674,12 @@ ant 自身 CLI / 基础设施的开关（`ANT_MANIFEST_URL`、`ANT_SANDBOX_*`、
   回归：`pwsh -File tools\run_worker_tests.ps1`。
 - **网络卡点**：`AGB_NET_LOG=1` 看卡在 crack/connected/sending 哪一步；WinHTTP `SendRequest` 偶发长滞是
   WPAD/PAC 环境抖动，同刻 GUI 正常≠代码回归，先重试。
+  先分清是哪套栈的问题，再动浏览器：`build-zig-native\net_probe_winhttp.exe <url>` 与
+  `net_probe_curl.exe <url>` 是同一 GET 的两份最小实现（`OPT_SHELL=ON` 时构建）。双击看弹框，或
+  `NET_PROBE_CONSOLE=1` 在控制台看结果；curl 失败时附带最后一段 libcurl trace。
+  注意两者的代理来源不同：WinHTTP 只看 `netsh winhttp` 配置（默认直连），curl 会读 `http_proxy`
+  / `https_proxy` 环境变量——环境里若是 `http://http=host:port;https=...` 这种 WinINet 格式，
+  curl 直接报 5（proxy syntax），浏览器用 curl 后端时也会同样失败。
 - **字体**：`AGB_FONT_LOG=1`；回归页 `tools/pages/iconfont_render.html`，
   `agave_view_host.exe <file-url> out.bmp` 出图核对字形，链路见 [arch-web-font.md](arch-web-font.md)。
 

@@ -140,6 +140,23 @@ if (OPT_SHELL AND WIN32)
     # gdiplus is the antialiased painter (rounded pills, vector icons, text).
     target_link_libraries(agave_shell PRIVATE ${LIB_NAME} dist user32 gdi32 shell32 comdlg32 gdiplus)
 
+    # Taskbar-pinnable launcher: starts agave_shell.exe next to it with
+    # --backend process and forwards the arguments. Windows cannot pin a .bat,
+    # and this bypasses SmartScreen's ShellExecute check for the unsigned shell.
+    add_executable(agave_launcher WIN32 ${PROJ_ROOT}/examples/launcher/main.c)
+    set_target_properties(agave_launcher PROPERTIES OUTPUT_NAME agave)
+    target_link_libraries(agave_launcher PRIVATE user32)
+
+    # Network comparison probes: the same GET through WinHTTP (the native
+    # backend) and the bundled curl, so a machine-specific network difference
+    # (proxy, TLS, HTTP/2, firewall) is visible without rebuilding the shell.
+    add_executable(net_probe_winhttp WIN32 ${PROJ_ROOT}/examples/net_probe/winhttp_probe.c)
+    target_link_libraries(net_probe_winhttp PRIVATE winhttp user32 shell32)
+    add_executable(net_probe_curl WIN32 ${PROJ_ROOT}/examples/net_probe/curl_probe.c)
+    target_include_directories(net_probe_curl PRIVATE ${PROJ_ROOT}/dist/include)
+    target_compile_definitions(net_probe_curl PRIVATE CURL_STATICLIB)
+    target_link_libraries(net_probe_curl PRIVATE dist user32 shell32 ws2_32 crypt32)
+
     # Engine side of the B2 process backend: one console process per view, no
     # window; the pixels land in the control's shared section (AgwViewIpc.h).
     add_executable(agave_render_host ${PROJ_ROOT}/examples/render_host/main.c)
