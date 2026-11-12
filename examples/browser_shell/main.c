@@ -7337,9 +7337,14 @@ static int uiShotMain(void)
                 uiCheck("pixel-status-zoom",
                         sameColor(shotPixel((const unsigned char*)bubbleBits,
                                             bubble->w, bubble->h,
+                                            /* Inside the pill's left padding:
+                                             * the centre holds the "110%" text,
+                                             * and a glyph landing on the sample
+                                             * point made this check depend on
+                                             * how text is rasterized. */
                                             chrome.statusbar.zoom.x -
                                                 chrome.statusbar.rect.x +
-                                                chrome.statusbar.zoom.w / 2,
+                                                uiThemeScale(&chrome.theme, 5),
                                             bubble->h / 2),
                                   chrome.theme.accent_soft));
                 SelectObject(bubbleDc, bubbleOld);

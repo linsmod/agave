@@ -151,6 +151,19 @@
 - 残留：`screen.width/height` 与 `device-width/device-height` 仍是设备像素；`Range.getBoundingClientRect()`/
   `getClientRects()` 仍返回布局 px；`srcset` 的 `x` 描述符选源未实现（dpr 正确后才谈得上选对源）。
 
+### P0-t shell chrome 文字发虚（2026-11-12 已修，R197）
+
+- 现象：真实窗口里标签标题/地址胶囊/菜单/状态栏的文字比 Chrome 和页面文字虚，亮色主题下特别明显，
+  暗色下几乎看不出。
+- 根因：①painter 的 `PixelOffsetModeHalf`（形状要让 1px 边落在像素中心）对文字同样生效，每个字形被采样
+  在半个像素偏移上 → grid fitting 失效、笔画一圈灰晕；②文字用灰度 AA（`AntiAliasGridFit`），
+  Windows/Chrome 这里是 ClearType。
+- 修法：`uiTextW()` 画字前后临时切 `PixelOffsetModeNone` + `ClearTypeGridFit`；`makeGdiFont()` 的
+  `lfQuality` 改 `CLEARTYPE_QUALITY`，原生 EDIT 与自绘 chrome 统一（[design-shell-ui.md](design-shell-ui.md) §6）。
+- 验收：120 DPI 同一块标题裁剪 满强度笔画 95→114、灰晕 132→42；`run_shell_ui_tests` 5/5、
+  `check_shell_menu.ps1` 21/21、`check_shell_frame.ps1` PASS。
+- 顺带：`pixel-status-zoom` 原来取缩放胶囊正中（那里是 "110%" 文字），改成取左侧 padding。
+
 ### P0-s app 菜单加主题切换（2026-11-12 已做，R196）
 
 - 需求：shell 菜单里能切亮/暗，不重启、记住选择。

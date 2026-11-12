@@ -361,9 +361,17 @@ Noto Sans SC → Segoe UI → Arial` 取第一个装得上的。GDI+ 的 `DrawSt
 脚本 family 链接，指定 Segoe UI 画中文会掉到系统替换字体，同一行里英文一个样、
 中文另一个样；YaHei 和随构建拷贝的 Noto Sans SC 都是全字库。`uiSpaceInit()` 还会
 私有注册 `<exe>\fonts\*.ttf`（和引擎 `FontCachePS.cpp` 同一批文件），所以
-`--ui-shot`（不启引擎）和没装中文字体的系统也一致。GDI（`EDIT` 控件）与 GDI+ 都用
-灰度抗锯齿（`ANTIALIASED_QUALITY` / `AntiAliasGridFit`）。
+`--ui-shot`（不启引擎）和没装中文字体的系统也一致。
 标签 13px、地址 14px、状态 11px（@96，随 DPI 缩放）。
+
+**文字抗锯齿**（R197）：GDI+ 一侧 `TextRenderingHintClearTypeGridFit`，GDI 一侧
+`CLEARTYPE_QUALITY`——两边必须是同一种，否则地址胶囊（原生 `EDIT`，GDI）和标签标题
+（GDI+）一行里两种质感。ClearType 要求不透明底：`EDIT` 画在 `WM_CTLCOLOREDIT`
+返回的不透明胶囊刷上。
+⚠ **画文字必须临时关掉 `PixelOffsetModeHalf`**：painter 默认给形状用它（让 1px 边落在
+像素中心），但同一个模式会让每个字形被采样在半个像素的偏移上，grid fitting 失效 ——
+笔画周围一圈均匀灰晕，就是"文字发虚"（亮色主题下最刺眼，暗色下几乎看不出）。
+`uiTextW()` 因此只在 `GdipDrawString` 前后切换 `PixelOffsetModeNone`，画完恢复。
 
 ## 7 无头 UI 验证（`--ui-shot`）
 

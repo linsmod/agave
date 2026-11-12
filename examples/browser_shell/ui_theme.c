@@ -77,10 +77,14 @@ static HFONT makeGdiFont(int pixelHeight, int weight, const wchar_t* face)
     lf.lfCharSet = DEFAULT_CHARSET;
     lf.lfOutPrecision = OUT_DEFAULT_PRECIS;
     lf.lfClipPrecision = CLIP_DEFAULT_PRECIS;
-    /* Grayscale AA, matching the GDI+ side (TextRenderingHintAntiAliasGridFit,
-     * R167/#12). ClearType made the EDIT controls cluster-coloured while the
-     * self-drawn chrome next to them was grayscale. */
-    lf.lfQuality = ANTIALIASED_QUALITY;
+    /* ClearType, the same subpixel AA the chrome's GDI+ text now uses: R167
+     * chose grayscale here so the EDITs would not be cluster-coloured next to a
+     * grayscale chrome, but a grayscale chrome next to ClearType Windows text
+     * reads as faded/fuzzy (2026-11-12). Both sides are ClearType now, so the
+     * address pill and the tab titles share one look. The EDITs always sit on an
+     * opaque pill (WM_CTLCOLOREDIT returns the fill brush), which ClearType
+     * requires. */
+    lf.lfQuality = CLEARTYPE_QUALITY;
     lf.lfPitchAndFamily = DEFAULT_PITCH | FF_DONTCARE;
     wcsncpy(lf.lfFaceName, face, LF_FACESIZE - 1);
 
@@ -816,7 +820,32 @@ void uiTextW(UiPainter* p, const wchar_t* text, UiRect r, GpFont* font,
     box.Width = (REAL)r.w;
     box.Height = (REAL)r.h;
 
-    GdipDrawString(p->g, text, -1, font, &box, format, (GpBrush*)brush);
+    /* Two things decide how crisp chrome text looks, and both were wrong:
+     *
+     *  - PixelOffsetModeHalf (which the shapes use so their edges land on pixel
+     *    centres) shifts every glyph by half a pixel. That defeats grid fitting
+     *    and produces the uniform grey halo that reads as "fuzzy" - painfully so
+     *    in light mode, where dark-on-light fringes are far more visible than
+     *    bright-on-dark (2026-11-12).
+     *  - The hint was AntiAliasGridFit (grayscale). Windows itself draws this
+     *    text with ClearType, and so does Chrome; grayscale leaves the stems
+     *    thin/faded next to the native EDIT controls. ClearTypeGridFit gives the
+     *    subpixel-sharp stems, which is what a user compares against Chrome.
+     *
+     * Shapes keep Half + AntiAlias (the painter's defaults); restore both after
+     * the glyphs so a row's text cannot change how the next icon is drawn. */
+    {
+        GpPixelOffsetMode savedOffset = PixelOffsetModeHalf;
+        TextRenderingHint savedHint = TextRenderingHintAntiAliasGridFit;
+
+        GdipGetPixelOffsetMode(p->g, &savedOffset);
+        GdipGetTextRenderingHint(p->g, &savedHint);
+        GdipSetPixelOffsetMode(p->g, PixelOffsetModeNone);
+        GdipSetTextRenderingHint(p->g, TextRenderingHintClearTypeGridFit);
+        GdipDrawString(p->g, text, -1, font, &box, format, (GpBrush*)brush);
+        GdipSetTextRenderingHint(p->g, savedHint);
+        GdipSetPixelOffsetMode(p->g, savedOffset);
+    }
 }
 
 void uiText(UiPainter* p, const char* utf8, UiRect r, GpFont* font,
