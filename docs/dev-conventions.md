@@ -64,3 +64,19 @@
 5. `git status` 干净（`debug/`、`build-zig-native/`、`*.log` 都不该出现）。
 6. 改了 ant（桥/内核）：先在 `H:\ant-v16` **提交**（`git -C H:\ant-v16 status` 干净），
    再在 agave 提交重建后的 `3rdparty/ant/{bin,lib,include}`；两边都干净才算完成。
+
+## 6. 月度提交回顾
+
+按问题域和组件统计一段时间的提交：
+
+```powershell
+python tools/commit_report.py                                  # 本月，只算源码提交
+python tools/commit_report.py --since 2026-10-01 --until 2026-11-01 --out report.md
+python tools/commit_report.py --all                            # 连文档/测试/构建一起算
+python tools/commit_report.py --json rows.json                 # 逐提交的分类与组件
+```
+
+- 默认**只看源码**：只保留 `src/`、`include/`、`examples/` 里的文件（`.md`、`.cmake`、构建脚本不算），
+  纯文档/测试夹具/发布件提交直接排除；混在同一个提交里的文档改动也不计。
+- 组件映射规则在脚本顶部的 `COMPONENT_RULES`：先按目录，再按目录内文件名细分；媒体、Frame、SVG、
+  表单、Ant 绑定这类**跨目录组件**用固定文件集合合并。文件计数按“提交×组件”去重，不按文件数。
