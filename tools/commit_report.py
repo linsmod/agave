@@ -571,7 +571,9 @@ def main():
         global jieba
         jieba = None
     if args.terms and not jieba:
-        print("warning: jieba not installed, Chinese terms fall back to 2/3-grams", file=sys.stderr)
+        print("warning: jieba not installed, Chinese terms fall back to 2/3-grams.\n"
+              "         Use a Python that has jieba (on this machine: `py tools/commit_report.py ...`)\n"
+              "         or `python -m pip install jieba`.", file=sys.stderr)
     if not args.since:
         today = datetime.date.today()
         args.since = today.replace(day=1).isoformat()

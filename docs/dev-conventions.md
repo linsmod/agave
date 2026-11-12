@@ -70,11 +70,19 @@
 按问题域和组件统计一段时间的提交：
 
 ```powershell
-python tools/commit_report.py                                  # 本月，只算源码提交
-python tools/commit_report.py --since 2026-10-01 --until 2026-11-01 --out report.md
-python tools/commit_report.py --all                            # 连文档/测试/构建一起算
-python tools/commit_report.py --json rows.json                 # 逐提交的分类与组件
+py tools/commit_report.py                                      # 本月，只算源码提交（py 指向装了 jieba 的 3.10）
+py tools/commit_report.py --since 2026-10-01 --until 2026-11-01 --out report.md
+py tools/commit_report.py --all                                # 连文档/测试/构建一起算
+py tools/commit_report.py --json rows.json                     # 逐提交的分类与组件
 ```
+
+> 中文分词依赖 `jieba`，只是锦上添花：没有它也能跑，只是退回 2/3-gram。
+> - 本机 `python` 是 MSYS2 的 3.12，**没有 pip**（`python -m pip` 直接报 No module named pip，
+>   `python -m ensurepip` 在这里也失败），别拿它跑本脚本；
+> - 用 `py`（`py -0p` 里默认 3.10 = `H:\Python\Python310`，已装 jieba），或显式写
+>   `H:\Python\Python310\python.exe`；
+> - 要给某个 Python 装：`python -m pip install jieba`（有 pip 时）；MSYS2 的 python 建议
+>   先 `pacman -S mingw-w64-x86_64-python-pip`（本机 pacman 源签名有问题，能装则装）。
 
 - 默认**只看源码**：只保留 `src/`、`include/`、`examples/` 里的文件（`.md`、`.cmake`、构建脚本不算），
   纯文档/测试夹具/发布件提交直接排除；混在同一个提交里的文档改动也不计。
