@@ -346,6 +346,16 @@ toolbar 更暗；`--ui-shot` 用亮度关系断言它们（`dark-strip-darker` /
 `AGB_SHELL_THEME=light|dark|auto`（默认 `auto`，只影响 chrome，不改页面
 `prefers-color-scheme`；页面仍由 `AGB_COLOR_SCHEME` 控制）。
 
+**运行时切换**（设置入口在 app 菜单）：`☰ → Theme → System | Light | Dark`，
+三行互斥、当前项打勾，父行右侧显示当前值（`Theme   System ›`）。选择会：
+① 立刻重设所有窗口的 chrome（`rethemeShellWindow()`，换 `UiTheme`/重排/重画，不动页面）；
+② 写 `<profile>/theme.txt`（`system|light|dark`），下次启动读回；
+③ 打两行日志 `theme <old> -> <new>` 和 `retheme window kind=<kind>`。
+优先级：`AGB_SHELL_THEME`（脚本/自动化）> `theme.txt` > 跟随系统
+（`system_is_dark` = 注册表 AppMode，`WM_SETTINGCHANGE` 时重取）。
+⚠ 页面不跟：`prefers-color-scheme` 由 `AGB_COLOR_SCHEME` 在文档级读一次，
+切换浏览器主题不会改它（Chrome 在 Windows 上同样只跟系统）。
+
 字体：**一个 family 同时覆盖中英**——按 `Microsoft YaHei UI → Microsoft YaHei →
 Noto Sans SC → Segoe UI → Arial` 取第一个装得上的。GDI+ 的 `DrawString` 不做跨
 脚本 family 链接，指定 Segoe UI 画中文会掉到系统替换字体，同一行里英文一个样、

@@ -154,6 +154,11 @@ int uiMenuMeasure(const UiMenu* menu, const UiTheme* theme,
         if (item->shortcut)
             uiMeasureText(theme, theme->font_ui, item->shortcut, &shortcut_w, NULL);
 
+        /* Theme-style rows: a value on the right AND a submenu chevron. Both
+         * columns have to be reserved, or the text runs under the arrow. */
+        if (item->submenu && shortcut_w > 0)
+            shortcut_w += scale(theme, 16) + scale(theme, 8);
+
         if (shortcut_w > right_col)
             right_col = shortcut_w;
 
@@ -204,6 +209,18 @@ static int addPanel(UiMenuSession* session, const UiTheme* theme,
                     const UiMenu* menu, int parent, int parent_item,
                     int x, int y, const UiRect* work);
 
+static int panelDepth(const UiMenuSession* session, int panel)
+{
+    int depth = 0;
+
+    while (panel >= 0 && depth <= UI_MENU_MAX_LEVELS) {
+        panel = session->panels[panel].parent;
+        ++depth;
+    }
+
+    return depth;
+}
+
 static void layoutChildren(UiMenuSession* session, const UiTheme* theme,
                            int index, const UiRect* work)
 {
@@ -220,8 +237,15 @@ static void layoutChildren(UiMenuSession* session, const UiTheme* theme,
         if (!item->submenu || isSeparator(item))
             continue;
 
-        if (session->count >= UI_MENU_MAX_LEVELS)
+        /* Capacity is panels, depth is levels: a menu with three submenus is
+         * three siblings (depth 2), not three levels deep. Running the old
+         * single counter out of levels stopped after the second sibling, so the
+         * third submenu never got a panel and hovering it opened nothing. */
+        if (session->count >= UI_MENU_MAX_PANELS)
             return;
+
+        if (panelDepth(session, index) + 1 >= UI_MENU_MAX_LEVELS)
+            continue;
 
         if (!uiMenuMeasure(item->submenu, theme, &child_w, &child_h))
             continue;
@@ -257,7 +281,7 @@ static int addPanel(UiMenuSession* session, const UiTheme* theme,
 
     (void)work;
 
-    if (index >= UI_MENU_MAX_LEVELS)
+    if (index >= UI_MENU_MAX_PANELS)
         return -1;
 
     if (!uiMenuMeasure(menu, theme, &width, &height))
@@ -806,14 +830,23 @@ static void paintPanel(UiPainter* painter, const UiTheme* theme,
                           (panel->has_icon ? theme->menu_icon_col : 0);
             int tail = any_submenu ? scale(theme, 18) : 0;
             int shortcut_w = 0;
-            int gap = tail > 0 ? scale(theme, 8) : 0;
+            /* A submenu row keeps its chevron in the right-most column, so its
+             * shortcut (the current value, e.g. Theme -> "System") sits to the
+             * LEFT of the arrow instead of on top of it. */
+            int arrow_col = (any_submenu && item->submenu) ? scale(theme, 18) : 0;
+            int gap;
 
             if (item->shortcut) {
                 uiMeasureText(theme, theme->font_ui, item->shortcut,
                               &shortcut_w, NULL);
-                if (shortcut_w > tail)
+
+                if (item->submenu)
+                    tail += shortcut_w + scale(theme, 8);
+                else if (shortcut_w > tail)
                     tail = shortcut_w;
             }
+
+            gap = tail > 0 ? scale(theme, 8) : 0;
 
             {
                 int label_w = rect.x + rect.w - theme->menu_pad_x - tail - gap -
@@ -830,7 +863,8 @@ static void paintPanel(UiPainter* painter, const UiTheme* theme,
 
             if (item->shortcut && shortcut_w > 0) {
                 uiText(painter, item->shortcut,
-                       uiRectMake(rect.x + rect.w - theme->menu_pad_x - shortcut_w,
+                       uiRectMake(rect.x + rect.w - theme->menu_pad_x - arrow_col -
+                                      shortcut_w,
                                   top, shortcut_w, height),
                        theme->font_ui,
                        isEnabled(item) ? theme->menu_shortcut

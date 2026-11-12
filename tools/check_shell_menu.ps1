@@ -161,6 +161,43 @@ try {
     Check 'app-menu-chose-item' ($log -match 'app menu choice=1')
     Check 'bookmark-added' (Test-Path (Join-Path $profileDir 'bookmarks.txt')) 
 
+    # ---- Theme switch (keyboard path through the real popup) --------------
+    # The window starts with whatever theme the OS/env asks for; pick the OTHER
+    # one so the switch has to re-theme, and check all three effects: the log
+    # (menu -> preference -> window), and the remembered choice in theme.txt.
+    Start-Sleep -Milliseconds 300
+    $startKind = if ($log -match 'window ready .*theme=(light|dark)') { $Matches[1] } else { 'light' }
+    $wantPref = if ($startKind -eq 'dark') { 'light' } else { 'dark' }
+    $wantRow = if ($startKind -eq 'dark') { 1 } else { 2 }   # System=0, Light=1, Dark=2
+
+    [void][MenuCheck]::PostMessage($hwnd, 0x0200, [IntPtr]::Zero, (Lp $menuX $menuY))
+    [void][MenuCheck]::PostMessage($hwnd, 0x0201, [IntPtr]1, (Lp $menuX $menuY))
+    [void][MenuCheck]::PostMessage($hwnd, 0x0202, [IntPtr]::Zero, (Lp $menuX $menuY))
+    $popupT = Wait-Class 'AgaveShellMenuPopup'
+    Check 'theme-menu-popup' ($popupT -ne [IntPtr]::Zero)
+
+    if ($popupT -ne [IntPtr]::Zero) {
+        # End (Settings) -> Up (Theme) -> Right (open submenu, first row) ->
+        # Home (System), then Down onto the wanted row and Return to choose.
+        foreach ($vk in @(0x23, 0x26, 0x27, 0x24)) {
+            [void][MenuCheck]::PostMessage($popupT, 0x0100, [IntPtr]$vk, [IntPtr]::Zero)
+            Start-Sleep -Milliseconds 120
+        }
+        for ($k = 0; $k -lt $wantRow; $k++) {
+            [void][MenuCheck]::PostMessage($popupT, 0x0100, [IntPtr]0x28, [IntPtr]::Zero)
+            Start-Sleep -Milliseconds 120
+        }
+        [void][MenuCheck]::PostMessage($popupT, 0x0100, [IntPtr]0x0D, [IntPtr]::Zero)
+        Start-Sleep -Milliseconds 600
+    }
+
+    $log = if (Test-Path $errFile) { Get-Content $errFile -Raw } else { '' }
+    Check 'theme-switch-logged' ($log -match ("theme \w+ -> " + $wantPref))
+    Check 'theme-window-rethemed' ($log -match ("retheme window kind=" + $wantPref))
+    $themeFile = Join-Path $profileDir 'theme.txt'
+    Check 'theme-persisted' ((Test-Path $themeFile) -and
+                             ((Get-Content $themeFile -Raw).Trim() -eq $wantPref))
+
     # Page context menu: real right click on the control's HWND.
     $view = [MenuCheck]::FindWindowExW($hwnd, [IntPtr]::Zero, 'AgaveWebViewControl', $null)
     Check 'view-control-found' ($view -ne [IntPtr]::Zero)
@@ -219,6 +256,29 @@ try {
         $closed = $proc.HasExited
     }
     Check 'shell-exits-clean' $closed
+
+    # The remembered choice must survive a restart: a second shell on the same
+    # profile logs `theme pref=<want> (file)` before it creates the window.
+    if ($closed) {
+        $errFile2 = Join-Path $profileDir 'err2.txt'
+        $outFile2 = Join-Path $profileDir 'out2.txt'
+        $script:proc = Start-Process -FilePath $exe -PassThru -WorkingDirectory $root `
+            -ArgumentList @('--userdata', $profileDir, 'about:blank') `
+            -RedirectStandardOutput $outFile2 -RedirectStandardError $errFile2
+
+        $hwnd2 = Wait-Class 'AgaveShellWindow'
+        Start-Sleep -Milliseconds 700
+        $log2 = if (Test-Path $errFile2) { Get-Content $errFile2 -Raw } else { '' }
+        Check 'theme-restored-on-restart' ($hwnd2 -ne [IntPtr]::Zero -and
+            ($log2 -match ("theme pref=" + $wantPref + " \(file\)")))
+
+        if ($hwnd2 -ne [IntPtr]::Zero) {
+            [void][MenuCheck]::PostMessage($hwnd2, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)
+            for ($i = 0; $i -lt 40 -and -not $script:proc.HasExited; $i++) {
+                Start-Sleep -Milliseconds 100
+            }
+        }
+    }
 
     if ($failed -ne 0) { exit 1 }
     Write-Host 'MENU-HOST=PASS'

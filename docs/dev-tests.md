@@ -141,7 +141,9 @@ pwsh -File tools/run_all_tests.ps1 -KeepLogs                # 保留每个套件
 （`DwmExtendFrameIntoClientArea` 成功；客户区覆盖整个窗口，白边不靠改颜色）。
 需要真实 HWND，所以不放进 probe-only 的默认回归。
 同一个启动方式下，`pwsh -File tools/check_shell_menu.ps1` 验证自绘菜单的分层弹窗
-路径：`☰` 打开应用菜单 → 首行点击生效；页面右键打开上下文菜单 → Esc 关闭；
+路径：`☰` 打开应用菜单 → 首行点击生效；**主题切换**（键盘 End/Up/Right/Home/Down/Return
+走 `Theme` 子菜单，断言 `theme <old> -> <new>`、`retheme window kind=`、`theme.txt`
+落盘、重启后 `theme pref=… (file)` 读回）；页面右键打开上下文菜单 → Esc 关闭；
 `WM_CLOSE` 干净退出。`pwsh -File tools/check_shell_tabsearch.ps1` 验证标签条的
 v 入口打开"搜索标签"弹层、Esc 关闭；`pwsh -File tools/check_shell_findbar.ps1`
 验证查找栏是浮层（页面不被压高）。三者都约 2–3 s。

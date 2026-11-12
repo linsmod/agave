@@ -19,7 +19,12 @@
 #include "ui_theme.h"
 
 #define UI_MENU_MAX_ITEMS  24
+/* Nesting depth of a session (root = 1, a submenu = 2, ...) - NOT the number of
+ * panels: every submenu of a menu is a sibling panel, and counting them against
+ * the depth silently dropped the third submenu (R196). */
 #define UI_MENU_MAX_LEVELS 3
+/* Panels a session can hold: the root plus one per submenu row. */
+#define UI_MENU_MAX_PANELS 8
 
 typedef enum {
     UI_MENU_ICON_NONE = 0,
@@ -67,9 +72,9 @@ typedef struct {
 } UiMenuPanel;
 
 typedef struct {
-    UiMenuPanel panels[UI_MENU_MAX_LEVELS];
+    UiMenuPanel panels[UI_MENU_MAX_PANELS];
     int         count;
-    int         visible[UI_MENU_MAX_LEVELS];
+    int         visible[UI_MENU_MAX_PANELS];
     int         hover_panel;  /* -1 when the pointer is outside every panel */
     int         hover_item;
     int         key_panel;    /* keyboard selection, -1 when the mouse owns */

@@ -390,12 +390,133 @@ static void loadHistory(void)
     agbLog(AGB_LOG_SHELL, "history loaded: %d entr%s from %s",
            g_historyCount, g_historyCount == 1 ? "y" : "ies", path);
 }
+
+/* ------------------------------------------------------------------------- */
+/* theme preference                                                          */
+/* ------------------------------------------------------------------------- */
+/* Chrome's three appearance choices, switchable from the app menu at runtime:
+ * "System" follows the OS (the shell already re-themes on WM_SETTINGCHANGE),
+ * "Light"/"Dark" pin the chrome. The choice is remembered in
+ * <profile>/theme.txt; AGB_SHELL_THEME still overrides it, so scripts and the
+ * UI regression keep a deterministic shell. The PAGE's prefers-color-scheme is
+ * not touched: it follows AGB_COLOR_SCHEME (see applySystemColorScheme), which
+ * the engine reads once per document. */
+enum { SHELL_THEME_SYSTEM = 0, SHELL_THEME_LIGHT, SHELL_THEME_DARK };
+
+static int g_themePref = SHELL_THEME_SYSTEM;
+
+static int themePrefFromName(const char* name, int* out)
+{
+    if (!name || !name[0])
+        return 0;
+
+    if (!_stricmp(name, "system") || !_stricmp(name, "auto")) {
+        *out = SHELL_THEME_SYSTEM;
+        return 1;
+    }
+    if (!_stricmp(name, "light")) {
+        *out = SHELL_THEME_LIGHT;
+        return 1;
+    }
+    if (!_stricmp(name, "dark")) {
+        *out = SHELL_THEME_DARK;
+        return 1;
+    }
+
+    return 0;
+}
+
+static const char* themePrefName(int pref)
+{
+    switch (pref) {
+    case SHELL_THEME_LIGHT: return "light";
+    case SHELL_THEME_DARK:  return "dark";
+    default:                return "system";
+    }
+}
+
+/* What the menu shows: the stored name is lowercase for the file, the label is
+ * what a user reads. */
+static const char* themePrefLabel(int pref)
+{
+    switch (pref) {
+    case SHELL_THEME_LIGHT: return "Light";
+    case SHELL_THEME_DARK:  return "Dark";
+    default:                return "System";
+    }
+}
+
+static void themePrefLoad(void)
+{
+    char path[MAX_PATH_CHARS];
+    char line[64];
+    char* end;
+    int pref = SHELL_THEME_SYSTEM;
+    const char* env;
+    const char* source = "default";
+    FILE* file;
+
+    statePath(path, sizeof(path), "theme.txt");
+    file = fopen(path, "rb");
+
+    if (file) {
+        if (fgets(line, sizeof(line), file)) {
+            end = line + strlen(line);
+
+            while (end > line && (end[-1] == '\n' || end[-1] == '\r'))
+                *--end = 0;
+
+            if (themePrefFromName(line, &pref))
+                source = "file";
+            else
+                agbLog(AGB_LOG_SHELL, "theme.txt: unknown value '%s' (using system)", line);
+        }
+
+        fclose(file);
+    }
+
+    /* The environment is the automation override and wins over the file. */
+    env = getenv("AGB_SHELL_THEME");
+
+    if (env && env[0]) {
+        int fromEnv;
+
+        if (themePrefFromName(env, &fromEnv)) {
+            pref = fromEnv;
+            source = "env";
+        } else {
+            agbLog(AGB_LOG_SHELL, "AGB_SHELL_THEME='%s' ignored (want system|light|dark)", env);
+        }
+    }
+
+    g_themePref = pref;
+    agbLog(AGB_LOG_SHELL, "theme pref=%s (%s)", themePrefName(g_themePref), source);
+}
+
+static void themePrefSave(void)
+{
+    char path[MAX_PATH_CHARS];
+    FILE* file;
+
+    statePath(path, sizeof(path), "theme.txt");
+    file = fopen(path, "wb");
+
+    if (!file) {
+        agbLog(AGB_LOG_SHELL, "theme: cannot write %s", path);
+        return;
+    }
+
+    fprintf(file, "%s\n", themePrefName(g_themePref));
+    fclose(file);
+}
+
 /* Profile-backed shell state. Both the GUI and the probe need it: the probe
  * reads history/bookmarks too (a probe run could otherwise not verify that the
  * files are loaded), and it must not re-implement the profile layout. */
 static void shellStateInit(void)
 {
     dataDirInit();
+    themePrefLoad();
     loadBookmarks();
     loadHistory();
 }
@@ -2800,11 +2921,41 @@ static void updateToolbarState(void)
 /* menu                                                                      */
 /* ------------------------------------------------------------------------- */
 
+static void rethemeShellWindow(ShellWindow* win);
+
+/* The menu's Theme rows. Remember the choice, then re-theme every window (the
+ * menu can be opened from any of them). A window already showing the resulting
+ * kind is left alone, so picking Light while the OS is light changes nothing on
+ * screen - but it is still the remembered preference, and rethemeShellWindow()
+ * logs nothing in that case. */
+static void applyThemePref(int pref)
+{
+    ShellWindow* previous = g_cur;
+    int before = g_themePref;
+    int i;
+
+    g_themePref = pref;
+    agbLog(AGB_LOG_SHELL, "theme %s -> %s (%s)",
+           themePrefName(before), themePrefName(pref),
+           before == pref ? "unchanged" : "menu");
+
+    if (pref != before)
+        themePrefSave();
+
+    for (i = 0; i < MAX_SHELL_WINDOWS; ++i) {
+        if (g_windows[i].used)
+            rethemeShellWindow(&g_windows[i]);
+    }
+
+    g_cur = previous;
+}
+
 static void showMainMenu(void)
 {
     UiMenu root;
     UiMenu bookmarks;
     UiMenu history;
+    UiMenu theme;
     POINT anchor;
     int choice;
     int i;
@@ -2832,9 +2983,19 @@ static void showMainMenu(void)
         uiMenuAdd(&history, "(empty)", NULL, 0, UI_MENU_ITEM_DISABLED,
                   UI_MENU_ICON_NONE, NULL);
 
+    /* Appearance: three exclusive rows, check mark on the active one. Ids
+     * 20..22 sit below the bookmark (100+) and history (200+) ranges, like the
+     * root's own commands. */
+    uiMenuInit(&theme);
+    uiMenuAdd(&theme, "System", NULL, 20, 0,
+              g_themePref == SHELL_THEME_SYSTEM ? UI_MENU_ICON_CHECK : UI_MENU_ICON_NONE, NULL);
+    uiMenuAdd(&theme, "Light", NULL, 21, 0,
+              g_themePref == SHELL_THEME_LIGHT ? UI_MENU_ICON_CHECK : UI_MENU_ICON_NONE, NULL);
+    uiMenuAdd(&theme, "Dark", NULL, 22, 0,
+              g_themePref == SHELL_THEME_DARK ? UI_MENU_ICON_CHECK : UI_MENU_ICON_NONE, NULL);
+
     uiMenuInit(&root);
-    uiMenuAdd(&root, "Add bookmark", "Ctrl+D", 1, 0, UI_MENU_ICON_NONE, NULL);
-    uiMenuAdd(&root, "Bookmarks", NULL, 0, 0, UI_MENU_ICON_NONE, &bookmarks);
+    uiMenuAdd(&root, "Add bookmark", "Ctrl+D", 1, 0, UI_MENU_ICON_NONE, NULL);    uiMenuAdd(&root, "Bookmarks", NULL, 0, 0, UI_MENU_ICON_NONE, &bookmarks);
     uiMenuAdd(&root, "History", NULL, 0, 0, UI_MENU_ICON_NONE, &history);
     uiMenuAdd(&root, "Downloads", "Ctrl+J", 10, 0, UI_MENU_ICON_DOWNLOAD, NULL);
     uiMenuAddSeparator(&root);
@@ -2849,6 +3010,10 @@ static void showMainMenu(void)
     uiMenuAdd(&root, "注入 vConsole", NULL, 8, 0, UI_MENU_ICON_NONE, NULL);
     uiMenuAdd(&root, "注入 inspector.js", NULL, 9, 0, UI_MENU_ICON_NONE, NULL);
     uiMenuAddSeparator(&root);
+    /* The current choice rides on the row's right edge, like a shortcut: the
+     * submenu itself is one click away and the check mark is only visible after
+     * opening it. */
+    uiMenuAdd(&root, "Theme", themePrefLabel(g_themePref), 0, 0, UI_MENU_ICON_NONE, &theme);
     /* Settings has no page yet; about:blank is the honest placeholder. */
     uiMenuAdd(&root, "Settings", NULL, 11, 0, UI_MENU_ICON_NONE, NULL);
 
@@ -2916,6 +3081,9 @@ static void showMainMenu(void)
      * downloads, so the menu entry and the shortcut cannot drift apart. */
     case 10: navigateActive("agave://downloads", 1, "menu downloads"); break;
     case 11: navigateActive("about:blank", 1, "menu settings"); break;
+    case 20: applyThemePref(SHELL_THEME_SYSTEM); break;
+    case 21: applyThemePref(SHELL_THEME_LIGHT); break;
+    case 22: applyThemePref(SHELL_THEME_DARK); break;
     default: break;
     }
 }
@@ -3213,11 +3381,9 @@ static void handleShellCommand(int id, const char* source)
 
 static UiThemeKind shellThemeKind(void)
 {
-    const char* setting = getenv("AGB_SHELL_THEME");
-
-    if (setting && !_stricmp(setting, "dark"))
+    if (g_themePref == SHELL_THEME_DARK)
         return UI_THEME_DARK;
-    if (setting && !_stricmp(setting, "light"))
+    if (g_themePref == SHELL_THEME_LIGHT)
         return UI_THEME_LIGHT;
 
     return shellOps()->system_is_dark(NULL) ? UI_THEME_DARK : UI_THEME_LIGHT;
@@ -3333,6 +3499,9 @@ static void rethemeShellWindow(ShellWindow* win)
 
     if (kind == win->chrome.theme.kind)
         return;
+
+    agbLog(AGB_LOG_SHELL, "retheme window kind=%s",
+           kind == UI_THEME_DARK ? "dark" : "light");
 
     dpi = win->chrome.theme.dpi;
     callbacks = win->chrome.cb;
@@ -6276,8 +6445,10 @@ static void shotFillModel(UiChromeModel* model)
 static UiMenu g_shotMenuRoot;
 static UiMenu g_shotMenuBookmarks;
 static UiMenu g_shotMenuHistory;
+static UiMenu g_shotMenuTheme;
 static UiMenuSession g_shotMenu;
 static int g_shotMenuHoverItem = -1;
+static int g_shotMenuThemeItem = -1;
 
 static void shotBuildMenu(UiChrome* chrome, HDC dc, int width, int height)
 {
@@ -6331,6 +6502,16 @@ static void shotBuildMenu(UiChrome* chrome, HDC dc, int width, int height)
     uiMenuAdd(&g_shotMenuRoot, "注入 inspector.js", NULL, 9, 0,
               UI_MENU_ICON_NONE, NULL);
     uiMenuAddSeparator(&g_shotMenuRoot);
+
+    /* Theme submenu: exclusive rows with a check mark on the active one (the
+     * offscreen run has no profile, so "System" is the choice). */
+    uiMenuInit(&g_shotMenuTheme);
+    uiMenuAdd(&g_shotMenuTheme, "System", NULL, 20, 0, UI_MENU_ICON_CHECK, NULL);
+    uiMenuAdd(&g_shotMenuTheme, "Light", NULL, 21, 0, UI_MENU_ICON_NONE, NULL);
+    uiMenuAdd(&g_shotMenuTheme, "Dark", NULL, 22, 0, UI_MENU_ICON_NONE, NULL);
+
+    g_shotMenuThemeItem = uiMenuAdd(&g_shotMenuRoot, "Theme", "System", 0, 0,
+                                    UI_MENU_ICON_NONE, &g_shotMenuTheme);
     uiMenuAdd(&g_shotMenuRoot, "Settings", NULL, 11, 0, UI_MENU_ICON_NONE, NULL);
 
     uiMenuSessionBegin(&g_shotMenu, &g_shotMenuRoot, &chrome->theme, ax, ay,
@@ -6766,6 +6947,60 @@ static int uiShotMain(void)
                                     chrome.toolbar.reload.rect.y +
                                         chrome.toolbar.reload.rect.h / 2),
                           chrome.theme.button_hover));
+
+        /* --- theme submenu: exclusive rows, checked active one, choosing ----- */
+        if (root) {
+            const UiMenuItem* themeRow = &root->menu->items[g_shotMenuThemeItem];
+            const UiMenu* themeMenu = themeRow->submenu;
+            int checked = 0;
+            int checkedItem = -1;
+            int t;
+
+            uiCheck("menu-theme-row", g_shotMenuThemeItem > 0 &&
+                                      themeMenu == &g_shotMenuTheme &&
+                                      themeRow->label && !strcmp(themeRow->label, "Theme"));
+
+            for (t = 0; themeMenu && t < themeMenu->count; ++t) {
+                if (themeMenu->items[t].icon == UI_MENU_ICON_CHECK) {
+                    ++checked;
+                    checkedItem = t;
+                }
+            }
+
+            uiCheck("menu-theme-exclusive", themeMenu && themeMenu->count == 3 &&
+                                            checked == 1 && checkedItem == 0);
+
+            /* Hovering the row opens its panel; clicking "Dark" chooses id 22. */
+            g_shotMenu.key_panel = -1;
+            g_shotMenu.key_item = -1;
+            uiMenuSessionMove(&g_shotMenu, &chrome.theme,
+                              root->rect.x + 30,
+                              (root->item_top[g_shotMenuThemeItem] +
+                               root->item_bottom[g_shotMenuThemeItem]) / 2);
+
+            {
+                const UiMenuPanel* tp = NULL;
+                int panel;
+
+                for (panel = 1; panel < g_shotMenu.count; ++panel) {
+                    if (g_shotMenu.visible[panel]) {
+                        tp = uiMenuSessionPanel(&g_shotMenu, panel);
+                        break;
+                    }
+                }
+
+                uiCheck("menu-theme-opens", tp != NULL);
+
+                if (tp) {
+                    chosen = 0;
+                    uiCheck("menu-theme-choose",
+                            uiMenuSessionClick(&g_shotMenu, &chrome.theme,
+                                               tp->rect.x + 30,
+                                               (tp->item_top[2] + tp->item_bottom[2]) / 2,
+                                               &chosen) == 1 && chosen == 22);
+                }
+            }
+        }
 
         bounds = uiMenuSessionBounds(&g_shotMenu);
         uiCheck("menu-bounds", bounds.w > 0 && bounds.h > 0 &&

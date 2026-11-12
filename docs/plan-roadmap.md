@@ -151,6 +151,17 @@
 - 残留：`screen.width/height` 与 `device-width/device-height` 仍是设备像素；`Range.getBoundingClientRect()`/
   `getClientRects()` 仍返回布局 px；`srcset` 的 `x` 描述符选源未实现（dpr 正确后才谈得上选对源）。
 
+### P0-s app 菜单加主题切换（2026-11-12 已做，R196）
+
+- 需求：shell 菜单里能切亮/暗，不重启、记住选择。
+- 实现：`☰ → Theme → System | Light | Dark`（互斥勾选，父行右侧显示当前值），
+  选择后立即重设所有窗口 chrome（`rethemeShellWindow`），写 `<profile>/theme.txt`；
+  优先级 `AGB_SHELL_THEME` > `theme.txt` > 跟随系统（[design-shell-ui.md](design-shell-ui.md) §6）。
+- 附带修掉 `UI_MENU_MAX_LEVELS` 当容量用导致**第三个子菜单永远打不开**（R196），
+  以及"值 + 子菜单箭头"同行时绘制重叠。
+- 验收：`--ui-shot --ui-menu` 120 项（新增 4 项 theme 断言）、
+  `tools/check_shell_menu.ps1` 21/21（含重启后读回）、`run_shell_ui_tests` 5/5。
+
 ### P0-r 163 导航"登录"高亮不是纯色：`background` 简写没重置渐变（2026-11-12 已修，R195）
 
 - 现象：`#js_N_navHighlight.ntes-nav-login-active` 在 Chrome 是纯色 `#f70e0e`，agave 是暗红渐变；
