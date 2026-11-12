@@ -104,7 +104,7 @@ pwsh -File tools/run_all_tests.ps1 -KeepLogs                # 保留每个套件
 
 | 脚本 | 覆盖 | 依赖 | 判据 / 输出 |
 |---|---|---|---|
-| `run_layout_tests.ps1` | **主回归**：`tools/pages/layout/*.html` 全部与 headless Chrome 比几何（`data-case`）、几组像素断言（变换重绘、变换文字、背景、**多层背景/渐变描边/阴影 spread/textarea 占位符**（R189）、圆角、滚动条隐藏、vw/vh/resize、CSSOM、computed 简写序列化、flex computed、DOM 生命周期）、**文字灰度抗锯齿**（`tools/font_aa_check.py` + `tools/pages/font_antialias.html`，R167） | Chrome、python `websockets` | 每组打印 `N/N checks ok`，最后 `LAYOUT=PASS`；失败打印 `LAYOUT=FAIL (n)`；约 8 s |
+| `run_layout_tests.ps1` | **主回归**：`tools/pages/layout/*.html` 全部与 headless Chrome 比几何（`data-case`）、几组像素断言（变换重绘、变换文字、背景、**多层背景/渐变描边/阴影 spread/textarea 占位符**（R189）、**box-shadow 连续重绘不叠加变黑**（R191）、圆角、滚动条隐藏、vw/vh/resize、CSSOM、computed 简写序列化、flex computed、DOM 生命周期）、**文字灰度抗锯齿**（`tools/font_aa_check.py` + `tools/pages/font_antialias.html`，R167） | Chrome、python `websockets` | 每组打印 `N/N checks ok`，最后 `LAYOUT=PASS`；失败打印 `LAYOUT=FAIL (n)`；约 8 s |
 | `run_inspector_tests.ps1` | 注入 `inspector.js`：菜单项、行命中、元素信息 JSON、剪贴板；真实 `WM_RBUTTONDOWN/UP`（页面 contextmenu 必须被取消、壳的原生菜单不弹）与真实左键点击；剪贴板走 per-case `AGB_CLIPBOARD_FILE`，鼠标事件发送后要看到 `[ui] mouse down …` 才继续，失败重发 | 无 | `inspector: n/n checks passed`；四个探针并行、鼠标用例顺序驱动，约 7 s |
 | `run_nav_tests.ps1` | `[nav]` 通道八项：链接点击 / 脚本跳转 / 历史后退 / meta refresh / `window.open` / 表单提交 / 302 / `AGB_NAV_LOG=0` 静音 | 自起 python http.server（8973） | `ALL NAV CHECKS PASSED (n cases)` |
 | `run_xhr_tests.ps1` | XHR 投递重入（R94）、`responseText` UTF-8 解码（R96）、响应头/`statusText`/`readyState`/`overrideMimeType` 与 Chrome 对拍（R97）、**同一响应多条 `Set-Cookie` 全部可见**（R190，`tools/multi_cookie_server.py`） | 自起静态服务（8991）+ 多 cookie 服务 | `ALL XHR CHECKS PASSED` |

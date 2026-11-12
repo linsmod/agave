@@ -278,6 +278,10 @@ DOM attach（Element::attach / Text::attach）
 - **`box-shadow` 的 spread**：`ShadowData` 有 `spread`；`paintBoxShadow()` 把绘制形状
   外扩并同步收放四个圆角半径。Picasso 的 `clipOut` 是 no-op，内层靠“背景色随后覆盖”
   隐藏，因此扩散环直接填 `boxShadow()->color` 而不是黑色（R189）。
+- **box-shadow 的部分重绘**：Picasso 合成阴影时 blur 会溢出 paint clip，脏矩形边界的
+  半透明阴影会被反复叠加而变黑（R191）。`RenderBox::paintBoxDecorations()` 现在只在
+  `paintInfo.rect` 完整包含阴影可见外接矩形时画阴影，否则把整块阴影排进下一帧脏矩形，
+  由背景重置后只画一次。
 - **样式变化 ≠ 布局**：`FrameView::needsLayout()` 不再把 `document()->hasChangedChild()`
   当布局请求；`layoutIfNeededRecursive()` 先 `recalcStyle()`，之后只有真的
   `needsLayout()` 才布局。内联样式写入按 `InlineStyleChange` 标记（不是 `FullStyleChange`），

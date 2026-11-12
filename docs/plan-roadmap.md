@@ -134,6 +134,17 @@
 - 残留：百度仍没设置 `data-normal-placeholder`（框内暂无占位文案，数据路径另查）；多层
   `background-position/size/repeat` 的 computed 仍只报第一层；`inset: 0` 仍无属性 id（见 capability-gaps）。
 
+### P0-p 输入框半透明阴影每输入一次变黑（2026-11-12 已修，R191）
+
+- 现象：百度搜索框后面的 `box-shadow` 随每次输入变深（最后接近黑色），刷新/全屏重绘恢复。
+- 根因：Picasso 合成阴影时 blur 溢出 paint clip，输入框部分重绘把半透明阴影反复画在旧像素上，
+  脏矩形外的旧影子不会被背景重置，alpha 逐次叠加。
+- 修法：`RenderBox::paintBoxDecorations()` 只在本次脏矩形完整包含阴影可见外接矩形时画阴影，
+  否则把整块阴影排进下一帧脏矩形（下一帧背景先重置、阴影只叠一次）。
+- 验收：`tools/pages/layout/shadow_repaint.html`（40 次改值后与静止框阴影像素一致）接进
+  `run_layout_tests` 像素组；`LAYOUT=PASS`；全量 24 套件 29.5 s（`run_hang_recovery_tests`
+  并行偶发、单跑 7 s 全绿）；百度连续输入 30 字符后阴影像素不加深。
+
 ### P0-o 百度搜索框 Enter / 内联事件 / 子资源 Cookie（2026-11-12 已修，R190）
 
 - 现象：Enter 只往 `wd` 里塞 `%0A%0A`（不搜索）；`<textarea onkeydown>` 不执行；`BAIDUID`

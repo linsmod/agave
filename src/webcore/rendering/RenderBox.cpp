@@ -400,7 +400,27 @@ void RenderBox::paintBoxDecorations(PaintInfo& paintInfo, int tx, int ty)
 
     // FIXME: Should eventually give the theme control over whether the box shadow should paint, since controls could have
     // custom shadows of their own.
-    paintBoxShadow(paintInfo.context, tx, ty, w, h, style());
+    /* picasso composites a blurred shadow outside the paint clip, so a partial
+     * repaint that covers only part of the shadow re-applies its alpha over
+     * last frame's pixels (Baidu's search box darkened with every keystroke).
+     * Paint it only when this pass covers the whole visible shadow; otherwise
+     * ask for the full shadow rect in the next frame, where the background is
+     * repainted underneath it exactly once. */
+    if (ShadowData* shadow = style()->boxShadow()) {
+        IntRect shadowRect(tx, ty, w, h);
+        shadowRect.move(shadow->x, shadow->y);
+        shadowRect.inflate(shadow->blur + max(0, shadow->spread));
+        if (FrameView* frameView = view() ? view()->frameView() : 0) {
+            IntRect visible = shadowRect;
+            visible.intersect(IntRect(0, 0, frameView->width(), frameView->height()));
+            if (!visible.isEmpty()) {
+                if (paintInfo.rect.contains(visible))
+                    paintBoxShadow(paintInfo.context, tx, ty, w, h, style());
+                else
+                    view()->repaintViewRectangle(visible);
+            }
+        }
+    }
 
     // If we have a native theme appearance, paint that before painting our background.
     // The theme will tell us whether or not we should also paint the CSS background.

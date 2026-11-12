@@ -120,6 +120,9 @@ try {
     Start-ShotCase 'background_layers' $url 800 200 @() 'background_layers.png'
     Start-EvalCase 'background_layers_computed' $url (Join-Path $root 'tools/pages/layout/check_background_layers.js') 600 200
 
+    $url = & $pageUrl 'tools/pages/layout/shadow_repaint.html'
+    Start-ShotCase 'shadow_repaint' $url 2500 300 @() 'shadow_repaint.png'
+
     $url = & $pageUrl 'tools/pages/layout/border_radius.html'
     Start-ShotCase 'border_radius' $url 1000 100 @() 'radius.bmp'
 
@@ -246,6 +249,11 @@ try {
         '22,60,ff0000', '324,60,0000ff', '170,22,7f0080', '170,60,ffffff',
         '80,137,00ff00', '80,130,ffffff', '80,170,ffffff',
         '26,246,200,290,a9a9a9,15')
+
+    # Repainting the input 40 times must not darken its translucent shadow:
+    # the two identical boxes must have the same shadow pixels.
+    Pixel-Check 'shadow repaint' $shots['shadow_repaint'] @(
+        '240,90,d7d7d7', '240,220,e6e6e6', '240,225,ededed')
 
     Pixel-Check 'border radius' $shots['border_radius'] @(
         '21,21,ffffff', '120,44,f9fafb', '21,89,ffffff', '120,111,f9fafb',
