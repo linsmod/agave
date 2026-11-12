@@ -22,6 +22,10 @@
 #include "PlatformString.h"
 #include "FormData.h"
 
+#if ENABLE(ANTJS)
+#include "AntRuntime.h"
+#endif
+
 #include <stdlib.h>
 #include <string>
 
@@ -152,9 +156,30 @@ void fillResponse(ResourceResponse& out, const KURL& url, const Net::Response& i
         String::fromUTF8(in.header("Content-Type").c_str())));
 
     for (size_t i = 0; i < in.headers.size(); ++i) {
-        out.setHTTPHeaderField(String::fromUTF8(in.headers[i].first.c_str()),
-                               String::fromUTF8(in.headers[i].second.c_str()));
+        String name = String::fromUTF8(in.headers[i].first.c_str());
+        String value = String::fromUTF8(in.headers[i].second.c_str());
+        /* Set-Cookie is the one header that legitimately repeats: ResourceResponse
+         * stores headers in a map, so a plain setHTTPHeaderField() kept only the
+         * last cookie of a multi-cookie response (Baidu sends BAIDUID together
+         * with several others from hector.baidu.com). Keep every value, newline
+         * separated; the ant cookie jar parses one per line. */
+        if (equalIgnoringCase(name, "Set-Cookie")) {
+            String existing = out.httpHeaderField(name);
+            if (!existing.isEmpty())
+                value = existing + "\n" + value;
+        }
+        out.setHTTPHeaderField(name, value);
     }
+#if ENABLE(ANTJS)
+    /* The ant cookie jar is what document.cookie reads; feed it every response
+     * (the old XHR-only path never saw cookies set by <script>/<img> responses). */
+    {
+        String setCookie = out.httpHeaderField("Set-Cookie");
+        if (!setCookie.isEmpty())
+            AntRuntime::addCookiesFromResponse(url.url().utf8().data(),
+                                               setCookie.utf8().data());
+    }
+#endif
 }
 
 bool isRedirectStatus(int status)

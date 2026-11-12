@@ -52,7 +52,7 @@ $list = @(
     @{ Name = 'backspace';    Extra = @('--keys', 'abc{backspace}');   Eval = 'probeExit(reportTyping())'; Expect = 'value=ab len=2' },
     @{ Name = 'tab + filter'; Extra = @('--keys', '{tab}a1');          Eval = "probeExit(reportTyping() + ' active=' + document.activeElement.id)"; Expect = 'filter=1.*active=filter' },
     @{ Name = 'arrow trap';   Extra = @('--keys', '{tab}{left}1');     Eval = "probeExit(reportTyping() + ' active=' + document.activeElement.id)"; Expect = 'filter=1.*active=filter' },
-    @{ Name = 'textarea';     Extra = @('--keys', '{tab}{tab}ab{enter}cd'); Eval = "probeExit('area=' + JSON.stringify(area.value))"; Expect = 'area="ab\\ncd"' },
+    @{ Name = 'textarea';     Extra = @('--keys', '{tab}{tab}ab{enter}cd'); Eval = "probeExit('area=' + JSON.stringify(area.value) + ' areakp=' + areaKp)"; Expect = 'area="ab\\ncd" areakp=1' },
     # IME: WM_IME_CHAR per UTF-16 code unit - the path a Chinese IME uses.
     @{ Name = 'ime cjk';      Extra = @('--ime', '中文输入');          Eval = "probeExit('value=' + text.value + ' len=' + text.value.length)"; Expect = 'value=中文输入 len=4' },
     @{ Name = 'ime emoji';    Extra = @('--ime', '😀');                Eval = "probeExit('value=' + text.value + ' len=' + text.value.length)"; Expect = 'value=😀 len=2' },
@@ -65,6 +65,23 @@ foreach ($c in $list) {
     $jobs += Start-TestProbe -Run $run -Name $c.Name -Url $page -Eval $c.Eval `
         -Extra $c.Extra -Wait 300 -Settle 300 -Timeout 25000
 }
+
+# Inline `onkeydown="…"` / `onclick="…"` content attributes: under the ant
+# backend these used to be parsed but never compiled/registered. Dispatch the
+# events from the page instead of typing, so the case does not depend on the
+# probe window keeping keyboard focus while other probes run.
+$inlinePage = 'file:///' + ((Join-Path $PSScriptRoot 'pages\cap_inline_events.html') -replace '\\', '/')
+$inlineCheck = @'
+var t = document.getElementById('t'), p = document.getElementById('p'), b = document.getElementById('b');
+t.dispatchEvent(new Event('keydown'));
+var pe = new Event('keydown'); pe.keyCode = 13; p.dispatchEvent(pe);
+b.dispatchEvent(new Event('click'));
+probeExit('hits=' + (window.hits || 0) + ' phits=' + (window.phits || 0) +
+          ' clicked=' + (window.clicked || 0));
+'@
+$jobs += Start-TestProbe -Run $run -Name 'inline handler' -Url $inlinePage `
+    -Eval $inlineCheck -Wait 300 -Settle 300 -Timeout 25000
+$list += @{ Name = 'inline handler'; Expect = 'hits=1 phits=1 clicked=1' }
 
 # Caret geometry: a text field's caret is as tall as the *text*, not as the
 # input box / line box. AGB_CARET_DEBUG=1 paints it red regardless of focus and

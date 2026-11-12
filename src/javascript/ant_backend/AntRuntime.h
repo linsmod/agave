@@ -157,6 +157,20 @@ void setFilename(const char* name);
  * addEventListener(). Called from EventTargetNode::dispatchEvent(). */
 void dispatchEvent(void* node, void* event);
 
+/* Compiles an inline `onclick="..."`-style content attribute into a function
+ * and registers it as the element's handler (the same table nodeSetter uses for
+ * `el.onclick = fn`). `eventName` is the attribute name ("onclick"), `code` the
+ * attribute text; empty code removes the handler. Called from
+ * Document::createHTMLEventListener, which otherwise has no ant backend. */
+void setInlineEventHandler(void* node, const char* eventName, const char* code, size_t codeLen);
+
+/* Set-Cookie from ANY resource response (document, script, image, XHR). The
+ * ant cookie jar is separate from WebCore's, and only the XHR path used to feed
+ * it; cookies set by a script response (Baidu's BAIDUID from hector.baidu.com)
+ * were therefore invisible to document.cookie. `url` is the response URL,
+ * `setCookie` the newline-joined header (see fillResponse). */
+void addCookiesFromResponse(const char* url, const char* setCookie);
+
 /* Page lifecycle events (commit, realm start/stop, bindDocument, pagehide/
  * unload/DOMContentLoaded/load) are emitted through agbLog() on the
  * AGB_LOG_EVT channel (AgbLog.h) so one run explains its own timeline;

@@ -1577,6 +1577,10 @@ bool EventHandler::handleCharacterEvent(const PlatformKeyboardEvent& keyEvent)
     if (keyEvent.text().isEmpty())
         return false;
 
+    /* Enter reaches this path as CR (keypress charCode 13, like Chrome); the
+     * editing default and beforeinput data use LF. */
+    String insertText = keyEvent.text() == "\r" ? String("\n") : keyEvent.text();
+
     /* textInput (which the bridge exposes to pages as `beforeinput`) is
      * dispatched here, and it answers two different questions:
      *   - notCancelled: the page did not preventDefault the insertion;
@@ -1585,7 +1589,7 @@ bool EventHandler::handleCharacterEvent(const PlatformKeyboardEvent& keyEvent)
      * to inserting the text itself, or preventDefault would do nothing. */
     {
         bool inserted = false;
-        bool notCancelled = handleTextInputEvent(keyEvent.text(), keypress.get(),
+        bool notCancelled = handleTextInputEvent(insertText, keypress.get(),
                                                  false, false, &inserted);
 
         if (!notCancelled)

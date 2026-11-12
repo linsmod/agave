@@ -61,6 +61,7 @@
 #include "Page.h"
 #include "Pasteboard.h"
 #include "Range.h"
+#include "RenderTextControl.h"
 #include "ReplaceSelectionCommand.h"
 #include "SelectionController.h"
 #include "Text.h"
@@ -1503,7 +1504,28 @@ bool Editor::insertLineBreak()
     if (!shouldInsertText("\n", m_frame->selectionController()->toRange().get(), EditorInsertActionTyped))
         return true;
 
+    /* Plain-text controls (textarea): InsertLineBreakCommand's text-node path
+     * can leave the caret before the merged "\n" (positionAfterNode() then
+     * canonicalises to the old offset), so remember the caret and move it one
+     * past the newline afterwards. Rich text keeps the command's own caret. */
+    RenderTextControl* control = 0;
+    int caret = -1;
+
+    if (!canEditRichly()) {
+        Node* focused = m_frame->document() ? m_frame->document()->focusedNode() : 0;
+        if (focused && focused->renderer()
+            && (focused->renderer()->isTextArea() || focused->renderer()->isTextField())) {
+            control = static_cast<RenderTextControl*>(focused->renderer());
+            caret = control->selectionStart();
+        }
+    }
+
     TypingCommand::insertLineBreak(m_frame->document());
+    if (control && caret >= 0) {
+        control->ensureTrailingLineBreak();
+        control->setSelectionStart(caret + 1);
+        control->setSelectionEnd(caret + 1);
+    }
     revealSelectionAfterEditingOperation();
     return true;
 }

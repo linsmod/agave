@@ -46,16 +46,19 @@ $run = New-TestRun -Suite 'xhr'
 
 if ($Port -le 0) { $Port = Get-TestFreePort }
 $slowPort = Get-TestFreePort
+$cookiePort = Get-TestFreePort
 
 $server = Start-Process -FilePath 'python' -WindowStyle Hidden -PassThru `
     -ArgumentList '-m', 'http.server', "$Port", '--bind', '127.0.0.1', '--directory', $pageDir
 $slow = Start-Process -FilePath 'python' -WindowStyle Hidden -PassThru `
     -ArgumentList (Join-Path $root 'tools/slow_xhr_server.py'), "$slowPort", $pageDir
+$cookie = Start-Process -FilePath 'python' -WindowStyle Hidden -PassThru `
+    -ArgumentList (Join-Path $root 'tools/multi_cookie_server.py'), "$cookiePort"
 
 $failed = 0
 
 function Stop-Servers {
-    foreach ($p in @($server, $slow)) {
+    foreach ($p in @($server, $slow, $cookie)) {
         if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
     }
 }
@@ -75,7 +78,7 @@ function Check-Case {
     param($Case, $Result)
 
     if ($Result.Code -ne 0) {
-        $failed++
+        $script:failed++
         Write-Host "FAIL  $($Case.Page): probe exit $($Result.Code)"
         return
     }
@@ -90,12 +93,13 @@ function Check-Case {
         Write-Host "FAIL  $($Case.Page): matched forbidden '$($Case.Forbid)'"
         $missing++
     }
-    if ($missing) { $failed++ } else { Write-Host "PASS  $($Case.Page) ($($Case.What))" }
+    if ($missing) { $script:failed++ } else { Write-Host "PASS  $($Case.Page) ($($Case.What))" }
 }
 
 try {
     if (-not (Wait-Server $Port 'xhr_reentry.html')) { throw "test server did not come up on port $Port" }
     if (-not (Wait-Server $slowPort 'xhr_frame_cancel.html')) { throw "slow xhr server did not come up on port $slowPort" }
+    if (-not (Wait-Server $cookiePort 'cap_multi_cookie.html')) { throw "cookie server did not come up on port $cookiePort" }
 
     $cases = @(
         @{ Page = 'xhr_reentry.html'; Check = 'check_xhr_reentry.js'; Wait = 1200; Settle = 300
@@ -143,6 +147,12 @@ try {
         @{ Page = 'xhr_frame_cancel.html'; Check = 'check_xhr_frame_cancel.js'; Wait = 3000; Settle = 300
            Port = $slowPort; What = 'frame work is cancelled with its document'
            Needles = @('fired=0') }
+
+        # Repeated Set-Cookie headers from one response (the header map used to
+        # keep only the last value; Baidu's BAIDUID came from such a response).
+        @{ Page = 'cap_multi_cookie.html'; Check = 'check_multi_cookie.js'; Wait = 1200; Settle = 300
+           Port = $cookiePort; What = 'every Set-Cookie value survives'
+           Needles = @('cookieA=1', 'cookieB=1') }
     )
 
     $jobs = @()
@@ -165,7 +175,7 @@ try {
     $legacy = $results[5]
     if ($legacy.Text -notmatch [regex]::Escape('shift_jis=椿Δ')) {
         Write-Host 'NOTE  cap_textdecoder_legacy.html: shift_jis changed - check the R97 known divergence'
-        $failed++
+        $script:failed++
     }
 } finally {
     Stop-Servers

@@ -63,10 +63,10 @@ static const KeyEntry keyEntries[] = {
     { KEY_PERIOD, CtrlKey,        	  "Cancel"                                      },
     { KEY_TAB,    0,                  "InsertTab"                                   },
     { KEY_TAB,    ShiftKey,           "InsertBacktab"                               },
-    { KEY_ENTER, 0,                  "InsertNewline"                               },
-    { KEY_ENTER, CtrlKey,            "InsertNewline"                               },
-    { KEY_ENTER, AltKey,             "InsertNewline"                               },
-    { KEY_ENTER, AltKey | ShiftKey,  "InsertNewline"                               },
+    /* Enter is NOT a keydown editing command: Win32 delivers its WM_CHAR, and
+     * the browser order is keydown -> keypress -> default insertion. Inserting
+     * here skipped the keypress (pages that search on keypress never ran) and
+     * then inserted again on the character, so one Enter produced two "\n". */
 
     { 'C',       CtrlKey,            "Copy"                                        },
     { 'V',       CtrlKey,            "Paste"                                       },

@@ -134,6 +134,22 @@
 - 残留：百度仍没设置 `data-normal-placeholder`（框内暂无占位文案，数据路径另查）；多层
   `background-position/size/repeat` 的 computed 仍只报第一层；`inset: 0` 仍无属性 id（见 capability-gaps）。
 
+### P0-o 百度搜索框 Enter / 内联事件 / 子资源 Cookie（2026-11-12 已修，R190）
+
+- 现象：Enter 只往 `wd` 里塞 `%0A%0A`（不搜索）；`<textarea onkeydown>` 不执行；`BAIDUID`
+  缺失 → 页面 `Cookie.get("BAIDUID").match` 抛错、`data-normal-placeholder` 永远为空。
+- 根因：`Document::createHTMLEventListener()` 在 ant 下返回 0；Enter 被映射成 keydown 的
+  `InsertNewline` 且 WM_CHAR 的 CR 被过滤（无 keypress）；`InsertLineBreakCommand` 把 `\n`
+  克隆一次；`HTTPHeaderMap` 覆盖重复 `Set-Cookie` 且只有 XHR 响应进 ant cookie jar。
+- **已完成**：内联 `on*` 属性编译注册；Enter 走 keypress(13)/单换行/新行光标；重复
+  `Set-Cookie` 拼接 + 所有资源响应入库；`Element.scrollTo/scrollBy`、`navigator.mediaCapabilities`/
+  `bluetooth` 桩。
+- 验收：`run_typing_tests`（11 项，含 `areakp=1` 与 inline handler）、`run_xhr_tests` 的
+  `cap_multi_cookie.html`（A/B 两条 Set-Cookie）、`run_layout_tests` LAYOUT=PASS、
+  `run_binding_semantics_tests` 205/205；百度 placeholder 出现、`BAIDUID` 可见、`[con-error]` 清零。
+- 残留：百度 Enter 仍未触发搜索结果导航（页面自身搜索状态/建议列表路径，keypress 已到达页面）；
+  Worker 的 `Buffer`/terminate 报错需按 hectorstatic 的 worker 协议另查。
+
 ### P0-c DOMContentLoaded 双发（**已完成**）
 
 - 现状：`Document::finishedParsing()` 派发一次（进 ant 监听表），`FrameLoaderClientMC::dispatchDidFinishDocumentLoad()`

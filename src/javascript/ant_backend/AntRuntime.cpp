@@ -1663,8 +1663,26 @@ struct XhrJob : public WebCore::ResourceHandleClient {
         {
             WebCore::String setCookie = response.httpHeaderField("Set-Cookie");
 
-            if (!setCookie.isEmpty())
-                setCookieForDocument(g_document, std::string(setCookie.utf8().data()));
+            if (!setCookie.isEmpty()) {
+                /* fillResponse() joins repeated Set-Cookie headers with '\n'
+                 * (HTTPHeaderMap can only hold one value per name). One line is
+                 * one cookie: a response that set BAIDUID plus neighbours used
+                 * to keep only the last one. */
+                std::string all = setCookie.utf8().data();
+                size_t start = 0;
+
+                while (start <= all.size()) {
+                    size_t end = all.find('\n', start);
+
+                    if (end == std::string::npos)
+                        end = all.size();
+                    if (end > start)
+                        setCookieForDocument(g_document, all.substr(start, end - start));
+                    if (end == all.size())
+                        break;
+                    start = end + 1;
+                }
+            }
         }
     }
 
@@ -2506,9 +2524,9 @@ static std::string cookieHeaderForDocument(WebCore::Document* document)
     }
     return out;
 }
-static void setCookieForDocument(WebCore::Document* document, const std::string& text)
+static void setCookieForHost(const std::string& defaultHost, const std::string& text)
 {
-    std::string host = hostOfDocument(document);
+    std::string host = defaultHost;
     CookieEntry entry;
     std::string expires;
     bool expired = false;
@@ -2565,6 +2583,44 @@ static void setCookieForDocument(WebCore::Document* document, const std::string&
     if (!expired)
         jar.push_back(entry);
     saveCookies();
+}
+
+static void setCookieForDocument(WebCore::Document* document, const std::string& text)
+{
+    setCookieForHost(hostOfDocument(document), text);
+}
+
+/* Called from ResourceHandleNet::fillResponse for every response (main
+ * document, scripts, images, XHR). The default domain is the RESPONSE host
+ * (hector.baidu.com), not the document host; Domain= still overrides it. */
+void addCookiesFromResponseImpl(const char* url, const char* setCookie)
+{
+    std::string host;
+    std::string all;
+    size_t start = 0;
+
+    if (!url || !setCookie)
+        return;
+
+    {
+        WebCore::KURL kurl(url);
+        host = std::string(kurl.host().utf8().data());
+    }
+    if (host.empty())
+        return;
+
+    all = setCookie;
+    while (start <= all.size()) {
+        size_t end = all.find('\n', start);
+
+        if (end == std::string::npos)
+            end = all.size();
+        if (end > start)
+            setCookieForHost(host, all.substr(start, end - start));
+        if (end == all.size())
+            break;
+        start = end + 1;
+    }
 }
 /* A getter that returns 1 without touching `out` leaves the property
  * undefined; where the DOM says "null" (document.body before <body> is
@@ -7455,8 +7511,7 @@ static AntbValue* findNodeEventHandler(WebCore::Node* n, const char* type)
 }
 
 static int setNodeEventHandler(WebCore::Node* n, const char* type, const AntbValue* value)
-{
-    std::vector<Listener>* list;
+{    std::vector<Listener>* list;
 
     if (!n || !type || !g_engine)
         return 0;
@@ -7504,9 +7559,6 @@ static int setNodeEventHandler(WebCore::Node* n, const char* type, const AntbVal
     return 1;
 }
 
-
-/* Document-scoped listeners were dropped per document: see
- * releaseAllRealmListeners()/releaseRealmListeners(). */
 
 /* "div#app" / "img#qr" / "document" for a [gap-jsdom] line. Only called when
  * a gap is reported for the first time, never on the hot path. */
@@ -19706,6 +19758,61 @@ int docGetElementById(AntbEngine* engine, AntbValue* self, AntbValue** args, int
 } /* namespace */
 
 namespace AntRuntime {
+
+/* Public entry for ResourceHandleNet::fillResponse (the helper above lives in
+ * the anonymous namespace because it shares the cookie jar internals). */
+void addCookiesFromResponse(const char* url, const char* setCookie)
+{
+    addCookiesFromResponseImpl(url, setCookie);
+}
+
+/* Inline content attributes (`onkeydown="…"`) are compiled when the attribute
+ * is parsed; the function body sees `this` (the element) and `event`, exactly
+ * like a browser. WebCore's legacy path went through KJSProxy, which this
+ * build does not have, so Document::createHTMLEventListener used to return 0:
+ * Baidu's textarea `onkeydown="if (event.keyCode===13) event.preventDefault()"`
+ * never ran and Enter inserted a newline instead of searching. */
+void setInlineEventHandler(void* node, const char* eventName, const char* code, size_t codeLen)
+{
+    WebCore::Node* n = static_cast<WebCore::Node*>(node);
+    const char* type;
+
+    if (!n || !eventName || !g_engine)
+        return;
+
+    type = eventName;
+    if (type[0] == 'o' && type[1] == 'n')
+        type += 2;
+
+    if (!code || !codeLen) {
+        setNodeEventHandler(n, type, NULL);
+        return;
+    }
+
+    {
+        std::string src = "(function(event){";
+        char* err = NULL;
+        AntbValue* fn;
+
+        src.append(code, codeLen);
+        src += "\n})";
+
+        fn = antb_eval(g_engine, src.data(), (int)src.size(), &err);
+        if (!fn) {
+            if (err) {
+                /* A broken inline handler must not abort the page parse. */
+                if (getenv("AGB_EVT_DEBUG"))
+                    agbLog(AGB_LOG_EVT, "inline %s parse error: %s", eventName, err);
+                free(err);
+            }
+            return;
+        }
+        if (antb_is_function(fn))
+            setNodeEventHandler(n, type, fn);
+        antb_value_release(fn);
+    }
+}
+
 
 void dispatchWindowEvent(const char* type)
 {

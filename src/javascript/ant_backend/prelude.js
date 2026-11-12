@@ -96,6 +96,31 @@
         write: function () { return _agbClipboardResult(false); }
       };
     }
+    /* navigator.mediaCapabilities: Chrome has it on every page; feature
+     * detectors read `.encodingInfo`/`.decodingInfo` and call them. Report the
+     * codecs as unsupported instead of throwing a TypeError. */
+    if (!g.navigator.mediaCapabilities && typeof g.Promise === 'function') {
+      var _agbMediaCapInfo = function () {
+        return g.Promise.resolve({ supported: false, smooth: false, powerEfficient: false });
+      };
+      g.navigator.mediaCapabilities = {
+        decodingInfo: _agbMediaCapInfo,
+        encodingInfo: _agbMediaCapInfo,
+        addEventListener: function () {},
+        removeEventListener: function () {}
+      };
+    }
+    /* navigator.bluetooth: present in desktop Chrome; the probe/embedder has no
+     * radio. getAvailability answers false and requestDevice rejects rather
+     * than making `navigator.bluetooth.getAvailability` a TypeError. */
+    if (!g.navigator.bluetooth && typeof g.Promise === 'function') {
+      g.navigator.bluetooth = {
+        getAvailability: function () { return g.Promise.resolve(false); },
+        requestDevice: function () {
+          return g.Promise.reject(new Error('Bluetooth is not supported in this build'));
+        }
+      };
+    }
   }
   {
     var _origin = g.location && g.location.origin ? g.location.origin : '';
@@ -1104,6 +1129,41 @@
     installFullscreen();
     try { setTimeout(installFullscreen, 0); } catch (e) { /* no timers yet */ }
     g.__agbInstallFullscreen = installFullscreen;
+  })();
+
+  /* Element.scrollTo()/scrollBy(): the 2008 Element IDL has no scroll API, but
+   * pages call it on any scroll container (Baidu's telemetry creates a
+   * `<t_in>` element and immediately calls scrollTo(0,0)). scrollTop/scrollLeft
+   * already route to RenderLayer, so the polyfill just forwards to them. */
+  (function () {
+    function installElementScroll() {
+      var elementProto = g.Element && g.Element.prototype;
+      if (!elementProto || elementProto.scrollTo) return;
+
+      function coords(x, y) {
+        if (x && typeof x === 'object') return { left: x.left, top: x.top };
+        return { left: x, top: y };
+      }
+      Object.defineProperty(elementProto, 'scrollTo', {
+        configurable: true, writable: true,
+        value: function (x, y) {
+          var c = coords(x, y);
+          if (c.left != null) this.scrollLeft = Number(c.left) || 0;
+          if (c.top != null) this.scrollTop = Number(c.top) || 0;
+        }
+      });
+      Object.defineProperty(elementProto, 'scrollBy', {
+        configurable: true, writable: true,
+        value: function (x, y) {
+          var c = coords(x, y);
+          if (c.left != null) this.scrollLeft = (Number(this.scrollLeft) || 0) + (Number(c.left) || 0);
+          if (c.top != null) this.scrollTop = (Number(this.scrollTop) || 0) + (Number(c.top) || 0);
+        }
+      });
+    }
+    installElementScroll();
+    try { setTimeout(installElementScroll, 0); } catch (e) { /* no timers yet */ }
+    g.__agbInstallElementScroll = installElementScroll;
   })();
 
   /* Fullscreen: requestFullscreen()/exitFullscreen()/document.fullscreenElement

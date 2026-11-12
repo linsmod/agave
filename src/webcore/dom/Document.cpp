@@ -2828,6 +2828,16 @@ bool Document::hasWindowEventListener(const AtomicString &eventType)
 
 PassRefPtr<EventListener> Document::createHTMLEventListener(const String& functionName, const String& code, Node *node)
 {
+#if ENABLE(ANTJS)
+    /* The ant backend has no KJSProxy: inline `onclick="…"` attributes are
+     * compiled into the same handler table `el.onclick = fn` uses. */
+    if (node) {
+        CString name = functionName.utf8();
+        CString body = code.utf8();
+        AntRuntime::setInlineEventHandler(node, name.data(), body.data(), body.length());
+        return 0;
+    }
+#endif
     if (Frame* frm = frame())
 #if ENABLE(KJS)
         if (KJSProxy* proxy = frm->scriptProxy())

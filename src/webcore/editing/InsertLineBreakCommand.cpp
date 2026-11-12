@@ -97,6 +97,7 @@ void InsertLineBreakCommand::doApply()
         styleNode = styleNode->parentNode()->parentNode();
     RenderObject* styleRenderer = styleNode->renderer();
     bool useBreakElement = !styleRenderer || !styleRenderer->style()->preserveNewline();
+    bool atEndOfParagraph = false;
 
     RefPtr<Node> nodeToInsert;
     if (useBreakElement)
@@ -123,9 +124,18 @@ void InsertLineBreakCommand::doApply()
             // There aren't any VisiblePositions like this yet.
             ASSERT_NOT_REACHED();
     } else if (isEndOfParagraph(caret) && !lineBreakExistsAtPosition(caret)) {
+        atEndOfParagraph = true;
         insertNodeAt(nodeToInsert.get(), pos);
-        insertNodeBefore(nodeToInsert->cloneNode(false).get(), nodeToInsert.get());
-        VisiblePosition endingPosition(Position(nodeToInsert.get(), 0));
+        /* A <br> at the end of a paragraph needs a companion so the empty line
+         * is visible, but a plain-text control (textarea, white-space:
+         * pre-wrap) inserts a literal "\n" text node: cloning it produced TWO
+         * newlines per Enter (Baidu's search box grew "x\n\n" on one key). */
+        if (useBreakElement)
+            insertNodeBefore(nodeToInsert->cloneNode(false).get(), nodeToInsert.get());
+        /* The caret goes after the literal newline, not before it: otherwise
+         * the next typed character lands on the previous line ("ab{enter}cd"
+         * became "abcd\n" instead of "ab\ncd"). */
+        VisiblePosition endingPosition(Position(nodeToInsert.get(), useBreakElement ? 0 : 1));
         setEndingSelection(Selection(endingPosition));
     } else if (pos.offset() <= pos.node()->caretMinOffset()) {
         // Insert node before downstream position, and place caret there as well. 
@@ -171,6 +181,22 @@ void InsertLineBreakCommand::doApply()
         setEndingSelection(Selection(endingPosition, DOWNSTREAM));
     }
 
+    /* Plain text: leave the caret after the literal newline. The branch above
+     * may have placed it before the inserted node (end-of-textarea typing then
+     * appended to the old line: "ab{enter}cd" became "abcd\n"). */
+    if (!useBreakElement && nodeToInsert->parentNode()) {
+        /* insertNodeAt() may merge the literal "\n" into the preceding text
+         * node, so the node-based position canonicalises to before the
+         * newline. At the end of a plain-text control the caret belongs at
+         * the end of the block. */
+        Position after = atEndOfParagraph
+            ? Position(nodeToInsert->parentNode(), maxDeepOffset(nodeToInsert->parentNode()))
+            : positionAfterNode(nodeToInsert.get());
+        VisiblePosition afterVisible(after, DOWNSTREAM);
+        if (afterVisible.isNotNull())
+            setEndingSelection(Selection(afterVisible));
+    }
+
     // Handle the case where there is a typing style.
     // FIXME: Improve typing style.
     // See this bug: <rdar://problem/3769899> Implementation of typing style needs improvement
@@ -184,7 +210,8 @@ void InsertLineBreakCommand::doApply()
         setEndingSelection(selectionBeforeStyle);
     }
 
-    rebalanceWhitespace();
+    if (useBreakElement)
+        rebalanceWhitespace();
 }
 
 }

@@ -839,24 +839,34 @@ bool WebView::textInput(const char* text)
 
     /* WM_CHAR also carries the control characters TranslateMessage produces
      * for Backspace (0x08), Enter (0x0D), Tab (0x09) and Ctrl+letter
-     * (0x01..0x1A). Those are editing commands, handled from the keydown, and
-     * must never be inserted as text: the old code appended them to the
-     * field's value, so pressing Backspace left a literal 0x08 behind. */
+     * (0x01..0x1A). Editing commands (Backspace/Delete/Tab) are handled from
+     * the keydown and must not be inserted as text. Enter is different: it HAS
+     * a keypress in the browser order (keydown -> keypress -> default insert)
+     * and pages search from it, so it goes through the character path as "\n"
+     * and Enter was removed from the keydown command map. */
     String typed;
+    bool typedEnter = false;
     for (unsigned i = 0; i < str.length(); ++i) {
         UChar c = str[i];
-        if (c >= 0x20 && c != 0x7F)
+        if (c == '\r' || c == '\n')
+            typedEnter = true;
+        else if (c >= 0x20 && c != 0x7F)
             typed.append(c);
     }
-    if (typed.isEmpty())
-        return false;
+    if (typed.isEmpty()) {
+        if (!typedEnter)
+            return false;
+        /* CR, not LF: the keypress charCode/keyCode for Enter is 13. The
+         * insertion path normalizes it back to "\n". */
+        typed = "\r";
+    }
 
     /* A character is a keypress. The page sees the event first - charCode and
      * keyCode now carry the real character - and its default action inserts
      * the text through the normal editing path, so the caret, the selection
      * and "insert at the caret" behave like in any other browser. The old code
      * appended to input->value() directly, which ignored both. */
-    PlatformKeyboardEvent pressEvent(true, virtualKeyForCharacter(typed[0]), 0);
+    PlatformKeyboardEvent pressEvent(true, typed == "\r" ? 0x0D : virtualKeyForCharacter(typed[0]), 0);
     pressEvent.setText(typed);
 
     if (frame->eventHandler()->handleCharacterEvent(pressEvent))

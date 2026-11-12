@@ -597,9 +597,21 @@ String RenderTextControl::finishText(Vector<UChar>& result) const
     return String::adopt(result);
 }
 
-String RenderTextControl::text()
+void RenderTextControl::ensureTrailingLineBreak()
 {
-    if (!m_innerText)
+    if (!m_multiLine || !m_innerText)
+        return;
+    if (!text().endsWith("\n"))
+        return;
+    if (m_innerText->lastChild() && m_innerText->lastChild()->hasTagName(brTag))
+        return;
+
+    ExceptionCode ec = 0;
+    m_innerText->appendChild(new HTMLBRElement(document()), ec);
+}
+
+String RenderTextControl::text()
+{    if (!m_innerText)
         return "";
  
     Frame* frame = document()->frame();

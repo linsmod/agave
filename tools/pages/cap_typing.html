@@ -46,6 +46,10 @@ text.addEventListener('keypress', function (e) {
 text.addEventListener('input', function () {
   snap('i');
 });
+var areaKp = 0;
+area.addEventListener('keypress', function (e) {
+  if (e.keyCode === 13) areaKp = 1;
+});
 
 /* A phone-field style filter: refuse anything that is not a digit, from the
  * keydown, before the character can be inserted. */
@@ -71,7 +75,7 @@ window.reportTyping = function () {
     'len=' + text.value.length,
     'filter=' + filter.value,
     'events=' + events.join(','),
-    'area=' + area.value
+    'area=' + area.value + ' areakp=' + areaKp
   ].join(' ');
   return document.title;
 };

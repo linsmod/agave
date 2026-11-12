@@ -75,6 +75,10 @@ public:
 
     void subtreeHasChanged();
     String text();
+    /* A textarea whose value ends in "\n" needs a trailing <br> so the empty
+     * last line (and a caret after the newline) exists in the render tree.
+     * setInnerText() does this on value changes; typing a newline needs it too. */
+    void ensureTrailingLineBreak();
     String textWithHardLineBreaks();
     void forwardEvent(Event*);
     void selectionChanged(bool userTriggered);
