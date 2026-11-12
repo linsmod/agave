@@ -5733,7 +5733,7 @@ static int probeRun(const char* url)
                     "&& (document.URL.length > 0) "
                     "&& (document.URL !== 'about:blank') "
                     "&& (document.documentElement !== null) "
-                    "&& (document.documentElement.innerHTML.length > 0));"
+                    "&& (document.documentElement.firstChild !== null));"
                     "if (window.__agbDocOk) {"
                     " window.probeExit = function (result) {"
                     "  agavePostMessage('__agb_exit__' + (result === undefined ? '' : String(result)));"
