@@ -489,11 +489,18 @@ public:
     bool isBackgroundCompositeSet() const { return m_compositeSet; }
     bool isBackgroundSizeSet() const { return m_backgroundSizeSet; }
     
-    void setBackgroundImage(CachedImage* i) { m_image = i; m_imageSet = true; }
+    /* One image per layer. Setting one kind clears the other: a layer holds
+     * either a CachedImage or a gradient, never both. Without the clear, a
+     * later `background: <color>` (or `background-image: none|initial`, or a
+     * plain url() after a gradient) only reset m_image and the earlier rule's
+     * gradient kept painting AND kept showing up in getComputedStyle - 163's
+     * `.ntes-nav-login-active` stayed a dark gradient instead of the flat
+     * #f70e0e the second rule asks for (R195). */
+    void setBackgroundImage(CachedImage* i) { m_image = i; m_gradient = 0; m_imageSet = true; }
     /* CSS gradients are not CachedImages, but they are one background image
      * layer: keep them on the layer so comma-separated backgrounds keep one
      * gradient per layer (setBackgroundImage also marks the layer as set). */
-    void setBackgroundGradient(PassRefPtr<CSSGradientValue> g) { m_gradient = g; m_imageSet = true; }
+    void setBackgroundGradient(PassRefPtr<CSSGradientValue> g) { m_gradient = g; m_image = 0; m_imageSet = true; }
     void setBackgroundXPosition(const Length& l) { m_xPosition = l; m_xPosSet = true; }
     void setBackgroundYPosition(const Length& l) { m_yPosition = l; m_yPosSet = true; }
     void setBackgroundAttachment(bool b) { m_bgAttachment = b; m_attachmentSet = true; }

@@ -5492,6 +5492,7 @@ CSSValue* CSSParser::parseGradientFunction(Value* functionValue)
     CSSGradientValue* gradient;
     String fname;
     bool radial;
+    bool legacyKeyword;
     unsigned i = 0;
     float centerX = 0.5f, centerY = 0.5f;
 
@@ -5512,7 +5513,24 @@ CSSValue* CSSParser::parseGradientFunction(Value* functionValue)
         return 0;
 
     fname = domString(functionValue->function->name).lower();
-    radial = fname.startsWith(String("radial"));
+    /* -webkit-radial-gradient(): the prefix is in front of "radial", so a
+     * startsWith("radial") test missed it and the value was parsed as a linear
+     * gradient (wrong geometry, no centre). */
+    radial = fname.find(String("radial")) >= 0;
+
+    /* Other engines' prefixed gradients are invalid in Chrome and must be
+     * invalid here too: treating them as an image let a declaration Chrome
+     * ignores win the cascade. */
+    if (fname.startsWith(String("-moz-")) || fname.startsWith(String("-o-"))
+        || fname.startsWith(String("-ms-")))
+        return 0;
+
+    /* Which grammar: Chrome keeps the 2011 form (a bare `top`/`left` instead of
+     * `to top`) only under the -webkit- prefix. The unprefixed
+     * `linear-gradient(top, …)` is invalid there (devtools flags it), so
+     * rejecting it is what makes the cascade land on the same declaration as
+     * Chrome - 163's nav rule ends with exactly that value (R195). */
+    legacyKeyword = fname.startsWith(String("-webkit-"));
 
     gradient = new CSSGradientValue();
     if (radial)
@@ -5609,6 +5627,29 @@ CSSValue* CSSParser::parseGradientFunction(Value* functionValue)
             if (radial && (word == "circle" || word == "ellipse" || word == "closest-side"
                            || word == "farthest-side" || word == "closest-corner"
                            || word == "farthest-corner" || word == "contain" || word == "cover")) {
+                ++i;
+                continue;
+            }
+
+            /* 2011 linear syntax: a bare side keyword names where the gradient
+             * STARTS, so `top` is `to bottom` (180deg) and `left` is `to right`
+             * (90deg). Only the -webkit- name accepts it; the unprefixed
+             * function is invalid (see legacyKeyword above). The same keyword is
+             * only valid for radial as `at <position>`, handled above. */
+            if (word == "top" || word == "bottom" || word == "left"
+                || word == "right" || word == "center") {
+                if (!legacyKeyword || radial)
+                    return 0;
+
+                if (word == "left")
+                    gradient->setAngle(90.0f);
+                else if (word == "right")
+                    gradient->setAngle(270.0f);
+                else if (word == "top")
+                    gradient->setAngle(180.0f);
+                else if (word == "bottom")
+                    gradient->setAngle(0.0f);
+
                 ++i;
                 continue;
             }
@@ -5773,8 +5814,22 @@ bool CSSParser::parseBackgroundImage(CSSValue*& value)
 
         if (fname.endsWith(String("gradient("))) {
             value = parseGradientFunction(val);
-            if (!value)
-                value = new CSSImageValue();   /* unsupported syntax: paint nothing */
+            if (!value) {
+                /* CSS: an invalid value makes the declaration invalid, so an
+                 * EARLIER declaration in the same rule keeps its image. Painting
+                 * nothing instead silently overrode that earlier image (a
+                 * `url(png)` followed by another engine's gradient lost the PNG).
+                 *
+                 * The one exception is Chrome's 2011 `-webkit-gradient(linear, …)`
+                 * form: Chrome accepts it, we cannot rasterize it yet, so keep the
+                 * old "valid but empty" behaviour - dropping the declaration would
+                 * also throw away the colour of a `background: <gradient> #eee`
+                 * shorthand (see docs/arch-capability-gaps.md). */
+                if (fname.startsWith(String("-webkit-gradient")))
+                    value = new CSSImageValue();
+                else
+                    return false;
+            }
             return true;
         }
     }

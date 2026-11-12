@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<!-- Cascade regression for background layers (R195). The visual symptom was
+     163's `#js_N_navHighlight.ntes-nav-login-active` staying a dark gradient
+     although a later rule sets `background: #f70e0e`: a `background` shorthand
+     (or `background-image: none|initial`, or a plain url()) must reset the
+     image layer completely, including the gradient half.
+
+     img kinds are asserted through getComputedStyle by
+     tools/pages/check_background_override.js. -->
+<html>
+<head>
+<meta charset="utf-8">
+<title>background override</title>
+<style>
+  div { width: 60px; height: 30px; }
+
+  /* c1: the netease shape - two rules, same selector, the later `background`
+     (colour only) resets the gradient. Chrome: flat #f70e0e, image none. */
+  #c1 {
+    background-color: #cd0c0c;
+    background-image: -webkit-gradient(linear, left top, left bottom, from(#cd0c0c), to(#a20000));
+    background-image: -webkit-linear-gradient(top, #cd0c0c, #a20000);
+  }
+  #c1 {
+    border-color: #f70e0e;
+    background: #f70e0e;
+  }
+
+  /* c2 control: the image is set last, so it must survive. */
+  #c2 {
+    background: #f70e0e;
+    background-image: -webkit-linear-gradient(top, #cd0c0c, #a20000);
+  }
+
+  /* c3: equal-specificity classes in two rules, later one wins. */
+  .k1 { background-color: #cd0c0c; background-image: -webkit-linear-gradient(top, #cd0c0c, #a20000); }
+  .k2 { background: #f70e0e; }
+
+  /* c4: another engine's gradient is invalid, so the declaration is dropped and
+     the earlier url() in the same rule keeps the image (it used to be replaced
+     by an empty image, i.e. the PNG disappeared). */
+  #c4 {
+    background-image: url(png_fallback.png);
+    background-image: -moz-linear-gradient(top, #123456, #654321);
+  }
+
+  /* c5: a plain url() after a gradient replaces it (one image per layer). */
+  #c5 {
+    background-image: -webkit-linear-gradient(top, #cd0c0c, #a20000);
+    background-image: url(png_fallback.png);
+  }
+
+  /* c6: the 2011 unprefixed syntax is invalid in Chrome (devtools flags it), so
+     it must not override the -webkit- form that precedes it. */
+  #c6 {
+    background-image: -webkit-linear-gradient(left, #cd0c0c, #a20000);
+    background-image: linear-gradient(top, #123456, #654321);
+  }
+</style>
+</head>
+<body>
+<div id="c1"></div>
+<div id="c2"></div>
+<div id="c3" class="k1 k2"></div>
+<div id="c4"></div>
+<div id="c5"></div>
+<div id="c6"></div>
+</body>
+</html>

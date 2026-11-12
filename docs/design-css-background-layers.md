@@ -66,6 +66,9 @@ CSSParser::parseBackgroundShorthand
 CSSStyleSelector::HANDLE_BACKGROUND_VALUE
   └─ 按值逐个 BackgroundLayer::setBackgroundImage / setBackgroundClip / ...
        └─ 渐变：BackgroundLayer::setBackgroundGradient(gradient)
+       └─ 一层只有一张图：setBackgroundImage 清 gradient，setBackgroundGradient 清 image
+          （否则 `background: <color>` 补出的 `background-image: initial` 只清 url 不清渐变，
+          R195 的 163 导航高亮就是这个）
 RenderBox::paintBackgrounds（递归到 next，尾部先画）
   └─ paintBackgroundExtended(layer)
        ├─ 最底层：背景色

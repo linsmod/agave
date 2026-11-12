@@ -120,6 +120,11 @@ try {
     Start-ShotCase 'background_layers' $url 800 200 @() 'background_layers.png'
     Start-EvalCase 'background_layers_computed' $url (Join-Path $root 'tools/pages/layout/check_background_layers.js') 600 200
 
+    # R195: a later `background: <color>` (or an invalid gradient) must reset the
+    # image layer, gradient included.
+    $url = & $pageUrl 'tools/pages/css_background_override.html'
+    Start-EvalCase 'background_override' $url (Join-Path $root 'tools/pages/check_background_override.js') 500 150
+
     $url = & $pageUrl 'tools/pages/layout/shadow_repaint.html'
     Start-ShotCase 'shadow_repaint' $url 2500 300 @() 'shadow_repaint.png'
 
@@ -376,6 +381,15 @@ try {
         'bg.image=2', 'bg.clip=padding-box, border-box',
         'bg.origin=padding-box, border-box', 'bg.shadowSpread=ok',
         'bg.placeholderAttr=ok', 'bg.dpr=ok')
+
+    # Chrome values (tools/chrome_probe.py on the same page): only c2 keeps a
+    # gradient, c4/c5 keep the url(), and the 2011 unprefixed c6 declaration is
+    # invalid in Chrome, so the -webkit- form before it stays.
+    Needles 'background override cascade' $res['background_override'] @(
+        'c1 img=none bg=rgb(247, 14, 14)',
+        'c2 img=gradient bg=rgb(247, 14, 14)',
+        'c3 img=none bg=rgb(247, 14, 14)',
+        'c4 img=url', 'c5 img=url', 'c6 img=gradient')
 
     Needles 'flex computed' $res['flexom'] @(
         'a.flex=2 3 40px', 'a.grow=2', 'a.shrink=3',

@@ -5190,9 +5190,9 @@ void CSSStyleSelector::mapBackgroundImage(BackgroundLayer* layer, CSSValue* valu
      * test: gradients are CSS_CUSTOM values, so a primitive-only guard would
      * drop them from the `background` shorthand as well. */
     if (value->isGradientValue()) {
+        /* setBackgroundGradient also drops the layer's CachedImage: the layer is
+         * an image layer with exactly one image, and it has no CachedImage now. */
         layer->setBackgroundGradient(static_cast<CSSGradientValue*>(value));
-        /* The layer is an image layer, but it has no CachedImage. */
-        layer->setBackgroundImage(RenderStyle::initialBackgroundImage());
         return;
     }
 

@@ -151,6 +151,22 @@
 - 残留：`screen.width/height` 与 `device-width/device-height` 仍是设备像素；`Range.getBoundingClientRect()`/
   `getClientRects()` 仍返回布局 px；`srcset` 的 `x` 描述符选源未实现（dpr 正确后才谈得上选对源）。
 
+### P0-r 163 导航"登录"高亮不是纯色：`background` 简写没重置渐变（2026-11-12 已修，R195）
+
+- 现象：`#js_N_navHighlight.ntes-nav-login-active` 在 Chrome 是纯色 `#f70e0e`，agave 是暗红渐变；
+  computed `background-image` 仍是 `linear-gradient(...)`，虽然后一条同名规则写了 `background:#f70e0e`。
+- 根因：R189 把渐变存进 `BackgroundLayer::m_gradient`，但 `setBackgroundImage()` 只清 `m_image`，
+  于是简写补出来的 `background-image: initial` 对渐变无效；另外渐变解析太宽容，Chrome 判无效的
+  `linear-gradient(top,…)`（2011 语法）与 `-moz-/-o-/-ms-` 前缀都会被当成渐变，无效值还被当成
+  "有效但空"覆盖早先的 url()。
+- 修法/设计：[hist-lessons.md](hist-lessons.md) R195；`BackgroundLayer` 立"一层只有一张图"不变量，
+  `parseGradientFunction()`/`parseBackgroundImage()` 按 Chrome 的语法与"无效声明丢弃"语义收紧。
+- 验收：`tools/pages/css_background_override.html`（6 例，`run_layout_tests` 的
+  `background override cascade`，与 `chrome_probe.py` 逐字段一致，LAYOUT=PASS）；真实 163 页面
+  强制登录态 computed `bg=rgb(247,14,14) image=none`、截图 4/4 点为 `#f70e0e`。
+- 残留：`-webkit-gradient(linear, …)`（2011 形式）仍画不出来（按"有效但空"处理，避免丢简写里的颜色）；
+  老站点只写这一种形式时背景为空，见 capability-gaps。
+
 ### P0-p 输入框半透明阴影每输入一次变黑（2026-11-12 已修，R191）
 
 - 现象：百度搜索框后面的 `box-shadow` 随每次输入变深（最后接近黑色），刷新/全屏重绘恢复。
